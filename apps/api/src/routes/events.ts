@@ -96,13 +96,16 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     const sourcePrefix = params.get("sourcePrefix");
     const teamId = params.get("teamId");
     const status = params.get("status");
+    const scheduled = params.get("scheduled");
     const after = params.get("after");
     const limit = Number(params.get("limit") ?? 100);
     const order = params.get("order");
     const descending = order === "desc";
     const all = params.get("all") === "1";
+    const scheduledOnly = scheduled === "1" || scheduled === "true";
     const user = c.get("user") as { username?: string } | undefined;
     const isRunnerRequest = user?.username === "runner";
+    const now = Date.now();
 
     const whereClauses: any[] = [];
 
@@ -131,18 +134,29 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       whereClauses.push(eq(schema.events.status, status));
     }
 
+    if (scheduledOnly && !status) {
+      whereClauses.push(eq(schema.events.status, "PENDING"));
+    }
+
     if (agentName) {
-      const now = Date.now();
       if (isRunnerRequest) {
         const receiptClauses: any[] = [
           eq(schema.eventReceipts.agent_name, agentName),
-          or(
-            isNull(schema.events.deliver_at),
-            lte(schema.events.deliver_at, now),
-          ),
         ];
+        if (scheduledOnly) {
+          receiptClauses.push(gt(schema.events.deliver_at, now));
+        } else {
+          receiptClauses.push(
+            or(
+              isNull(schema.events.deliver_at),
+              lte(schema.events.deliver_at, now),
+            ),
+          );
+        }
         if (status) {
           receiptClauses.push(eq(schema.eventReceipts.status, status));
+        } else if (scheduledOnly) {
+          receiptClauses.push(eq(schema.eventReceipts.status, "PENDING"));
         }
         if (channelId) {
           receiptClauses.push(eq(schema.events.channel_id, channelId));
@@ -189,42 +203,44 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
           receiptStatus: string;
         }>;
 
-        const pendingDeliveredIds = joinedRows
-          .filter((row) => row.receiptStatus === "PENDING")
-          .map((row) => row.event.id);
-        if (pendingDeliveredIds.length > 0) {
-          orm
-            .update(schema.eventReceipts)
-            .set({ status: "DELIVERED", delivered_at: now })
-            .where(
-              and(
-                eq(schema.eventReceipts.agent_name, agentName),
-                eq(schema.eventReceipts.status, "PENDING"),
-                inArray(schema.eventReceipts.event_id, pendingDeliveredIds),
-              ),
-            )
-            .run();
-
-          const uniqueEventIds = [...new Set(pendingDeliveredIds)];
-          for (const eventId of uniqueEventIds) {
-            const pendingCountRow = orm
-              .select({
-                count: sql<number>`count(*)`,
-              })
-              .from(schema.eventReceipts)
+        if (!scheduledOnly) {
+          const pendingDeliveredIds = joinedRows
+            .filter((row) => row.receiptStatus === "PENDING")
+            .map((row) => row.event.id);
+          if (pendingDeliveredIds.length > 0) {
+            orm
+              .update(schema.eventReceipts)
+              .set({ status: "DELIVERED", delivered_at: now })
               .where(
                 and(
-                  eq(schema.eventReceipts.event_id, eventId),
+                  eq(schema.eventReceipts.agent_name, agentName),
                   eq(schema.eventReceipts.status, "PENDING"),
+                  inArray(schema.eventReceipts.event_id, pendingDeliveredIds),
                 ),
               )
-              .get() as { count: number } | undefined;
-            if ((pendingCountRow?.count ?? 0) === 0) {
-              orm
-                .update(schema.events)
-                .set({ status: "DELIVERED" })
-                .where(eq(schema.events.id, eventId))
-                .run();
+              .run();
+
+            const uniqueEventIds = [...new Set(pendingDeliveredIds)];
+            for (const eventId of uniqueEventIds) {
+              const pendingCountRow = orm
+                .select({
+                  count: sql<number>`count(*)`,
+                })
+                .from(schema.eventReceipts)
+                .where(
+                  and(
+                    eq(schema.eventReceipts.event_id, eventId),
+                    eq(schema.eventReceipts.status, "PENDING"),
+                  ),
+                )
+                .get() as { count: number } | undefined;
+              if ((pendingCountRow?.count ?? 0) === 0) {
+                orm
+                  .update(schema.events)
+                  .set({ status: "DELIVERED" })
+                  .where(eq(schema.events.id, eventId))
+                  .run();
+              }
             }
           }
         }
@@ -268,11 +284,15 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       const agentVisibility = or(...(visibilityClauses as [any, ...any[]]));
       if (agentVisibility) whereClauses.push(agentVisibility);
       whereClauses.push(
-        or(
-          isNull(schema.events.deliver_at),
-          lte(schema.events.deliver_at, now),
-        ) as any,
+        (scheduledOnly
+          ? gt(schema.events.deliver_at, now)
+          : or(
+              isNull(schema.events.deliver_at),
+              lte(schema.events.deliver_at, now),
+            )) as any,
       );
+    } else if (scheduledOnly) {
+      whereClauses.push(gt(schema.events.deliver_at, now));
     }
 
     const whereExpr =

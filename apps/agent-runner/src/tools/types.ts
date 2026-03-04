@@ -14,6 +14,7 @@ export type RunnerToolDeps = {
 /** Context passed to each tool's execute function. */
 export type ExecuteContext = {
   agent: Agent;
+  triggerEvent: Event;
   channelId?: string;
   injectionEnv: Record<string, string>;
   apiFetch: (path: string, init?: RequestInit) => Promise<Response>;

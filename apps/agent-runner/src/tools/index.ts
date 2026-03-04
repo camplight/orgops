@@ -3,10 +3,10 @@ import { createWrapExecute, toolDefToLlmTool } from "./types";
 import { shellToolDefs, execute as executeShell } from "./shell";
 import { fsToolDefs, execute as executeFs } from "./fs";
 import { procToolDefs, execute as executeProc } from "./proc";
-import { collabToolDefs, execute as executeCollab } from "./collab";
+import { eventsToolDefs, execute as executeEvents } from "./events";
 import type { ExecuteContext, RunnerToolDeps } from "./types";
 
-const allToolDefs = [...shellToolDefs, ...fsToolDefs, ...procToolDefs, ...collabToolDefs];
+const allToolDefs = [...shellToolDefs, ...fsToolDefs, ...procToolDefs, ...eventsToolDefs];
 
 export function createRunnerTools(deps: RunnerToolDeps): Record<string, LlmTool> {
   const wrapExecute = createWrapExecute(deps);
@@ -27,7 +27,7 @@ export async function executeTool(
   if (tool === "shell_run") return executeShell(ctx, args);
   if (tool.startsWith("fs_")) return executeFs(ctx, tool, args);
   if (tool.startsWith("proc_")) return executeProc(ctx, tool, args);
-  if (tool.startsWith("collab_")) return executeCollab(ctx, tool, args);
+  if (tool.startsWith("events_")) return executeEvents(ctx, tool, args);
   return { error: `Unsupported tool: ${tool}` };
 }
 
@@ -35,4 +35,4 @@ export type { ExecuteContext, RunnerToolDeps } from "./types";
 export { shellToolDefs } from "./shell";
 export { fsToolDefs } from "./fs";
 export { procToolDefs } from "./proc";
-export { collabToolDefs } from "./collab";
+export { eventsToolDefs } from "./events";

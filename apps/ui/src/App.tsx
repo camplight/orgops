@@ -27,7 +27,8 @@ const DEFAULT_EVENT_FILTERS = {
   source: "",
   status: "",
   teamId: "",
-  auditOnly: false
+  auditOnly: false,
+  scheduledOnly: false,
 };
 
 export default function App() {
@@ -219,6 +220,7 @@ export default function App() {
     if (eventFilters.status) params.set("status", eventFilters.status);
     if (eventFilters.teamId) params.set("teamId", eventFilters.teamId);
     if (eventFilters.auditOnly) params.set("typePrefix", "audit.");
+    if (eventFilters.scheduledOnly) params.set("scheduled", "1");
     const list = await fetchAllEvents(params);
     data.setEvents(list);
   }, [eventFilters, data.setEvents, fetchAllEvents]);

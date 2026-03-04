@@ -16,6 +16,7 @@ export type EventRow = {
   type: string;
   source: string;
   createdAt?: number;
+  deliverAt?: number;
   channelId?: string;
   teamId?: string;
   payload?: unknown;

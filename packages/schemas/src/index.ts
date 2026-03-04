@@ -1,6 +1,12 @@
 import { z } from "zod";
 
-export const EventStatusSchema = z.enum(["PENDING", "DELIVERED", "ACKED", "FAILED", "DEAD"]);
+export const EventStatusSchema = z.enum([
+  "PENDING",
+  "DELIVERED",
+  "ACKED",
+  "FAILED",
+  "DEAD",
+]);
 
 export const EventSchema = z.object({
   id: z.string().optional(),
@@ -12,7 +18,7 @@ export const EventSchema = z.object({
   parentEventId: z.string().optional(),
   deliverAt: z.number().optional(),
   status: EventStatusSchema.optional(),
-  idempotencyKey: z.string().optional()
+  idempotencyKey: z.string().optional(),
 });
 
 export const AgentSchema = z.object({
@@ -25,7 +31,9 @@ export const AgentSchema = z.object({
   soulPath: z.string(),
   workspacePath: z.string(),
   desiredState: z.enum(["RUNNING", "STOPPED"]).optional(),
-  runtimeState: z.enum(["STARTING", "RUNNING", "STOPPED", "CRASHED"]).optional()
+  runtimeState: z
+    .enum(["STARTING", "RUNNING", "STOPPED", "CRASHED"])
+    .optional(),
 });
 
 export const ModelSchema = z.object({
@@ -33,12 +41,12 @@ export const ModelSchema = z.object({
   provider: z.string(),
   modelName: z.string(),
   enabled: z.boolean(),
-  defaults: z.record(z.unknown()).default({})
+  defaults: z.record(z.unknown()).default({}),
 });
 
 export const AuthLoginSchema = z.object({
   username: z.string().min(1),
-  password: z.string().min(1)
+  password: z.string().min(1),
 });
 
 export type EventInput = z.infer<typeof EventSchema>;

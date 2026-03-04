@@ -6,7 +6,7 @@ describe("schemas", () => {
     const parsed = EventSchema.safeParse({
       type: "message.created",
       payload: { text: "hello" },
-      source: "human:admin"
+      source: "human:admin",
     });
     expect(parsed.success).toBe(true);
   });

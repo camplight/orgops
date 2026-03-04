@@ -125,6 +125,14 @@ describe("agent runner", () => {
       source: "agent:coordinator",
       channelId: "chan-1",
     };
+    const agentThreadReply: Event = {
+      id: "evt-thread-reply",
+      type: "message.created",
+      payload: { text: "done", inReplyTo: "evt-user" },
+      source: "agent:coordinator",
+      channelId: "chan-1",
+      parentEventId: "evt-user",
+    };
     const highHopCount: Event = {
       id: "evt-hop",
       type: "message.created",
@@ -137,6 +145,7 @@ describe("agent runner", () => {
     expect(await shouldHandleEvent(agent, ownEvent)).toBe(false);
     expect(await shouldHandleEvent(agent, otherAgentChannelEvent)).toBe(false);
     expect(await shouldHandleEvent(agent, addressedByMention)).toBe(true);
+    expect(await shouldHandleEvent(agent, agentThreadReply)).toBe(false);
     expect(await shouldHandleEvent(agent, highHopCount)).toBe(false);
     expect(await shouldHandleEvent(agent, userEvent)).toBe(true);
   });

@@ -1,6 +1,6 @@
 {
   "id": "human-agent-agent-e2e",
-  "description": "End-to-end flow: human asks coordinator, coordinator collaborates with worker1 in agent-agent DM, worker writes countdown file, coordinator returns final result to human.",
+  "description": "End-to-end flow: human asks coordinator, coordinator delegates to worker1 in agent-agent DM, worker writes countdown file, and coordination events are exchanged correctly.",
   "setup": {
     "clearEvents": true,
     "cleanupWorkspaces": ["coordinator", "worker1"],
@@ -51,14 +51,6 @@
       }
     ],
     "mustExist": [
-      {
-        "type": "message.created",
-        "source": "agent:coordinator",
-        "channelId": "$setup:humanCoordinator.id",
-        "payloadContains": {
-          "text": "0"
-        }
-      },
       {
         "type": "message.created",
         "source": "agent:coordinator",

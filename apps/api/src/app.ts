@@ -1,10 +1,22 @@
 import { Hono } from "hono";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { and, eq, inArray } from "drizzle-orm";
 
-import { createDrizzleDb, openDb, migrate, schema, type OrgOpsDb } from "@orgops/db";
+import {
+  createDrizzleDb,
+  openDb,
+  migrate,
+  schema,
+  type OrgOpsDb,
+} from "@orgops/db";
 import { EventBus } from "@orgops/event-bus";
 import { AuthLoginSchema, EventSchema } from "@orgops/schemas";
 import { listSkills, resolveSkillRoots } from "@orgops/skills";
@@ -45,11 +57,14 @@ export function createApp(config: AppConfig = {}) {
   })();
   const DATA_DIR = (() => {
     if (!config.dataDir) return join(PROJECT_ROOT, ".orgops-data");
-    return config.dataDir.startsWith("/") ? config.dataDir : resolve(PROJECT_ROOT, config.dataDir);
+    return config.dataDir.startsWith("/")
+      ? config.dataDir
+      : resolve(PROJECT_ROOT, config.dataDir);
   })();
   const dbPath = (() => {
     if (!config.dbPath) return join(DATA_DIR, "orgops.sqlite");
-    if (config.dbPath === ":memory:" || config.dbPath.startsWith("/")) return config.dbPath;
+    if (config.dbPath === ":memory:" || config.dbPath.startsWith("/"))
+      return config.dbPath;
     return resolve(PROJECT_ROOT, config.dbPath);
   })();
   const db = config.db ?? openDb(dbPath);
@@ -59,14 +74,19 @@ export function createApp(config: AppConfig = {}) {
   const bus = new EventBus<WsServerMessage>();
   const sessions = new Map<string, { username: string }>();
 
-  const ADMIN_USER = config.adminUser ?? process.env.ORGOPS_ADMIN_USER ?? "admin";
-  const ADMIN_PASS = config.adminPass ?? process.env.ORGOPS_ADMIN_PASS ?? "admin";
+  const ADMIN_USER =
+    config.adminUser ?? process.env.ORGOPS_ADMIN_USER ?? "admin";
+  const ADMIN_PASS =
+    config.adminPass ?? process.env.ORGOPS_ADMIN_PASS ?? "admin";
   const RUNNER_TOKEN =
     config.runnerToken ?? process.env.ORGOPS_RUNNER_TOKEN ?? "dev-runner-token";
 
   const FILES_DIR = join(PROJECT_ROOT, "files");
   const EVENT_TYPES_DIR = join(PROJECT_ROOT, "event-types");
-  const SKILL_ROOTS = resolveSkillRoots({ projectRoot: PROJECT_ROOT, env: process.env });
+  const SKILL_ROOTS = resolveSkillRoots({
+    projectRoot: PROJECT_ROOT,
+    env: process.env,
+  });
   let lastEventCreatedAt = 0;
 
   mkdirSync(FILES_DIR, { recursive: true });
@@ -137,7 +157,9 @@ export function createApp(config: AppConfig = {}) {
 
   function resolveWorkspacePath(workspacePath: string) {
     if (!workspacePath) return workspacePath;
-    return workspacePath.startsWith("/") ? workspacePath : resolve(PROJECT_ROOT, workspacePath);
+    return workspacePath.startsWith("/")
+      ? workspacePath
+      : resolve(PROJECT_ROOT, workspacePath);
   }
 
   function loadSoulContents(path: string | null | undefined) {
@@ -168,7 +190,7 @@ export function createApp(config: AppConfig = {}) {
       failCount: row.fail_count ?? 0,
       lastError: row.last_error ?? undefined,
       idempotencyKey: row.idempotency_key ?? undefined,
-      createdAt: row.created_at
+      createdAt: row.created_at,
     };
   }
 
@@ -188,7 +210,7 @@ export function createApp(config: AppConfig = {}) {
       bus.publish(topic, {
         type: "event",
         topic,
-        data: event
+        data: event,
       });
     }
   }
@@ -197,7 +219,7 @@ export function createApp(config: AppConfig = {}) {
     bus.publish(`process:${processId}`, {
       type: "process_output",
       topic: `process:${processId}`,
-      data: payload
+      data: payload,
     });
   }
 
@@ -213,14 +235,15 @@ export function createApp(config: AppConfig = {}) {
           .where(
             and(
               inArray(schema.teamMemberships.team_id, teamIds),
-              eq(schema.teamMemberships.member_type, "AGENT")
-            )
+              eq(schema.teamMemberships.member_type, "AGENT"),
+            ),
           )
           .all();
         for (const member of members) recipients.add(member.memberId);
       };
 
-      const channelId = typeof input.channelId === "string" ? input.channelId : "";
+      const channelId =
+        typeof input.channelId === "string" ? input.channelId : "";
       if (channelId) {
         const channelAgentSubscribers = orm
           .select({ subscriberId: schema.channelSubscriptions.subscriber_id })
@@ -228,11 +251,12 @@ export function createApp(config: AppConfig = {}) {
           .where(
             and(
               eq(schema.channelSubscriptions.channel_id, channelId),
-              eq(schema.channelSubscriptions.subscriber_type, "AGENT")
-            )
+              eq(schema.channelSubscriptions.subscriber_type, "AGENT"),
+            ),
           )
           .all();
-        for (const subscriber of channelAgentSubscribers) recipients.add(subscriber.subscriberId);
+        for (const subscriber of channelAgentSubscribers)
+          recipients.add(subscriber.subscriberId);
 
         const channelTeamSubscribers = orm
           .select({ subscriberId: schema.channelSubscriptions.subscriber_id })
@@ -240,11 +264,13 @@ export function createApp(config: AppConfig = {}) {
           .where(
             and(
               eq(schema.channelSubscriptions.channel_id, channelId),
-              eq(schema.channelSubscriptions.subscriber_type, "TEAM")
-            )
+              eq(schema.channelSubscriptions.subscriber_type, "TEAM"),
+            ),
           )
           .all();
-        collectTeamAgents(channelTeamSubscribers.map((row) => row.subscriberId));
+        collectTeamAgents(
+          channelTeamSubscribers.map((row) => row.subscriberId),
+        );
       }
 
       const teamId = typeof input.teamId === "string" ? input.teamId : "";
@@ -273,27 +299,30 @@ export function createApp(config: AppConfig = {}) {
       fail_count: 0,
       last_error: null,
       idempotency_key: input.idempotencyKey ?? null,
-      created_at: createdAt
+      created_at: createdAt,
     };
     const recipientAgents = resolveRecipientAgents();
     if (recipientAgents.length > 0 && input.status === undefined) {
       row.status = "PENDING";
     }
-    orm.insert(schema.events).values({
-      id: row.id,
-      type: row.type,
-      payload_json: row.payload_json,
-      source: row.source,
-      channel_id: row.channel_id,
-      team_id: row.team_id,
-      parent_event_id: row.parent_event_id,
-      deliver_at: row.deliver_at,
-      status: row.status,
-      fail_count: row.fail_count,
-      last_error: row.last_error,
-      idempotency_key: row.idempotency_key,
-      created_at: row.created_at
-    }).run();
+    orm
+      .insert(schema.events)
+      .values({
+        id: row.id,
+        type: row.type,
+        payload_json: row.payload_json,
+        source: row.source,
+        channel_id: row.channel_id,
+        team_id: row.team_id,
+        parent_event_id: row.parent_event_id,
+        deliver_at: row.deliver_at,
+        status: row.status,
+        fail_count: row.fail_count,
+        last_error: row.last_error,
+        idempotency_key: row.idempotency_key,
+        created_at: row.created_at,
+      })
+      .run();
     if (recipientAgents.length > 0) {
       orm
         .insert(schema.eventReceipts)
@@ -302,8 +331,8 @@ export function createApp(config: AppConfig = {}) {
             event_id: row.id,
             agent_name: agentName,
             status: row.status === "DELIVERED" ? "DELIVERED" : "PENDING",
-            delivered_at: row.status === "DELIVERED" ? row.created_at : null
-          }))
+            delivered_at: row.status === "DELIVERED" ? row.created_at : null,
+          })),
         )
         .onConflictDoNothing()
         .run();
@@ -319,7 +348,7 @@ export function createApp(config: AppConfig = {}) {
     sessions,
     AuthLoginSchema,
     jsonResponse,
-    requireAuth
+    requireAuth,
   });
 
   registerModelsRoutes(app as any, { orm, jsonResponse, parseJson });
@@ -334,7 +363,7 @@ export function createApp(config: AppConfig = {}) {
     resolveWorkspacePath,
     loadSoulContents,
     writeSoulContents,
-    insertEvent
+    insertEvent,
   });
 
   registerCollabRoutes(app as any, { orm, jsonResponse });
@@ -347,7 +376,7 @@ export function createApp(config: AppConfig = {}) {
     EventSchema,
     readdirSync,
     readFileSync,
-    EVENT_TYPES_DIR
+    EVENT_TYPES_DIR,
   });
 
   registerRuntimeRoutes(app as any, {
@@ -355,7 +384,7 @@ export function createApp(config: AppConfig = {}) {
     FILES_DIR,
     jsonResponse,
     publishProcessOutput,
-    insertEvent
+    insertEvent,
   });
 
   registerSkillsRoutes(app as any, { SKILL_ROOTS, jsonResponse, listSkills });
@@ -365,10 +394,15 @@ export function createApp(config: AppConfig = {}) {
     jsonResponse,
     requireAuth,
     requireRunnerAuth,
-    insertEvent
+    insertEvent,
   });
 
-  registerWebhookRoutes(app as any, { orm, jsonResponse, parseJsonSafe, insertEvent });
+  registerWebhookRoutes(app as any, {
+    orm,
+    jsonResponse,
+    parseJsonSafe,
+    insertEvent,
+  });
 
   registerWsRoutes(app as any, { bus });
 

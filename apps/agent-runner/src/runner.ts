@@ -180,6 +180,7 @@ async function handleEvent(agent: Agent, event: Event) {
   const soul = loadSoul(agent.soulPath);
   const allSkills = listSkills(SKILL_ROOTS);
   const enabledSkillSet = new Set(agent.enabledSkills ?? []);
+  enabledSkillSet.add("local-memory");
   const selectedSkills = allSkills.filter((skill) =>
     enabledSkillSet.has(skill.name),
   );
@@ -197,15 +198,18 @@ async function handleEvent(agent: Agent, event: Event) {
     "- Skills are available as files and should be read explicitly with fs_read before use when needed.",
     "",
     "Tools and channels:",
-    "- Use tools directly: shell_run, fs_read/fs_write/fs_list/fs_stat/fs_mkdir/fs_rm/fs_move, proc_* and collab_*.",
-    "- For agent-to-agent direct messaging use collab_dm_send.",
-    "- For replies in the current channel use collab_dm_reply or collab_channel_send.",
-    "- Use payload.inReplyTo and parentEventId to keep threads coherent.",
+    "- Use tools directly: shell_run, fs_read/fs_write/fs_list/fs_stat/fs_mkdir/fs_rm/fs_move, proc_* and events_*.",
+    "- For agent-to-agent direct messaging use events_dm_send.",
+    "- For replies in the current channel use events_dm_reply or events_channel_send.",
+    "- For self-reminders/continuations use events_schedule_self.",
+    "- For delayed follow-ups, set deliverAt (unix ms) on events send/reply tools.",
+    "- Propagate payload.originChannelId for delegated work so validated handoffs can return to origin channel.",
+    "- Only the origin agent should post final handoff to payload.originChannelId; collaborators should reply in current channel.",
     "",
     "Response ownership:",
     "- Decide whether the runner should emit a final message reply for this step.",
     "- Return `[REPLY] <text>` to instruct the runner to emit a message.created reply.",
-    "- Return `[NO_REPLY]` when you already sent the needed message via collab tools or intentionally want silence.",
+    "- Return `[NO_REPLY]` when you already sent the needed message via events tools or intentionally want silence.",
     "- If no directive is provided, runner defaults to reply behavior.",
     "- Avoid duplicate final responses: do not both send via tool and also return `[REPLY]` with the same content.",
     "",
@@ -227,6 +231,7 @@ async function handleEvent(agent: Agent, event: Event) {
 
   const executeCtx = {
     agent,
+    triggerEvent: event,
     channelId,
     injectionEnv,
     apiFetch,
@@ -256,13 +261,11 @@ async function handleEvent(agent: Agent, event: Event) {
     await emitEvent({
       type: "task.created",
       payload: {
-        inReplyTo: event.id,
         eventType: event.type,
         toolResultCount,
       },
       source: `agent:${agent.name}`,
       channelId,
-      parentEventId: event.id,
     });
   }
 
@@ -274,29 +277,30 @@ async function handleEvent(agent: Agent, event: Event) {
     await emitEvent({
       type: "audit.response.skipped",
       payload: {
-        inReplyTo: event.id,
         eventType: event.type,
         reason: "agent_requested_no_reply",
         note: directive.text || undefined
       },
       source: `agent:${agent.name}`,
-      channelId,
-      parentEventId: event.id
+      channelId
     });
     return;
   }
 
+  const originChannelId =
+    typeof event.payload?.originChannelId === "string"
+      ? event.payload.originChannelId.trim()
+      : "";
   await emitEvent({
     type: "message.created",
     payload: {
       text: directive.text,
-      inReplyTo: event.id,
       eventType: event.type,
       hopCount: Number(event.payload?.hopCount ?? 0) + 1,
+      ...(originChannelId ? { originChannelId } : {}),
     },
     source: `agent:${agent.name}`,
     channelId,
-    parentEventId: event.id,
   });
 }
 
@@ -360,8 +364,15 @@ export async function loop() {
   while (true) {
     try {
       const agents = await listAgents();
-      for (const agent of agents) {
-        await pollAgent(agent);
+      const results = await Promise.allSettled(
+        agents.map(async (agent) => {
+          await pollAgent(agent);
+        }),
+      );
+      for (const result of results) {
+        if (result.status === "rejected") {
+          console.error(result.reason);
+        }
       }
     } catch (error) {
       console.error(error);

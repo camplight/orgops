@@ -11,6 +11,7 @@ type EventFilters = {
   status: string;
   teamId: string;
   auditOnly: boolean;
+  scheduledOnly: boolean;
 };
 
 type EventsScreenProps = {
@@ -39,7 +40,8 @@ const DEFAULT_FILTERS: EventFilters = {
   source: "",
   status: "",
   teamId: "",
-  auditOnly: false
+  auditOnly: false,
+  scheduledOnly: false,
 };
 
 export function EventsScreen({
@@ -186,6 +188,14 @@ export function EventsScreen({
             />
             Audit only
           </label>
+          <label className="flex items-center gap-2 text-sm text-slate-300">
+            <input
+              type="checkbox"
+              checked={filters.scheduledOnly}
+              onChange={(e) => onFiltersChange({ ...filters, scheduledOnly: e.target.checked })}
+            />
+            Scheduled only
+          </label>
         </div>
         <div className="mt-3 flex gap-2">
           <Button onClick={onApplyFilters}>Apply</Button>
@@ -260,6 +270,7 @@ export function EventsScreen({
                     {sortLabel("status", "Status")}
                   </button>
                 </th>
+                <th className="px-2 py-2">Deliver At</th>
                 <th className="px-2 py-2">Payload</th>
                 <th className="px-2 py-2">Error</th>
               </tr>
@@ -274,6 +285,9 @@ export function EventsScreen({
                   <td className="px-2 py-2 text-slate-300">{event.source}</td>
                   <td className="px-2 py-2 text-slate-400">{getDestinationLabel(event)}</td>
                   <td className="px-2 py-2 text-slate-300">{event.status ?? "-"}</td>
+                  <td className="px-2 py-2 whitespace-nowrap text-slate-400">
+                    {event.deliverAt ? formatTimestamp(event.deliverAt) : "-"}
+                  </td>
                   <td className="px-2 py-2 max-w-[480px]">
                     <pre className="text-xs text-slate-400 whitespace-pre-wrap break-words">
                       {JSON.stringify(event.payload ?? {}, null, 2)}

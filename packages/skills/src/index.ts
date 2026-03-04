@@ -71,7 +71,13 @@ export function loadSkillMeta(skillDir: string, location: string): SkillMeta | n
   const content = readFileSync(skillPath, "utf-8");
   const match = content.match(FRONTMATTER_RE);
   if (!match) return null;
-  const meta = YAML.parse(match[1]) as Record<string, unknown>;
+  let meta: Record<string, unknown>;
+  try {
+    meta = YAML.parse(match[1]) as Record<string, unknown>;
+  } catch {
+    // Malformed frontmatter should not break skills loading globally.
+    return null;
+  }
   const name = meta?.name ? String(meta.name) : "";
   const description = meta?.description ? String(meta.description) : "";
   if (!name || !description) return null;
