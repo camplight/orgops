@@ -1,0 +1,99 @@
+{
+  "id": "human-agent-agent-e2e",
+  "description": "End-to-end flow: human asks coordinator, coordinator collaborates with worker1 in agent-agent DM, worker writes countdown file, coordinator returns final result to human.",
+  "setup": {
+    "clearEvents": true,
+    "cleanupWorkspaces": ["coordinator", "worker1"],
+    "ensureDirectChannels": [
+      {
+        "alias": "humanCoordinator",
+        "participants": [
+          { "subscriberType": "HUMAN", "subscriberId": "scenario" },
+          { "subscriberType": "AGENT", "subscriberId": "coordinator" }
+        ],
+        "description": "Scenario human coordinator channel"
+      },
+      {
+        "alias": "coordinatorWorker",
+        "participants": [
+          { "subscriberType": "AGENT", "subscriberId": "coordinator" },
+          { "subscriberType": "AGENT", "subscriberId": "worker1" }
+        ],
+        "description": "Scenario coordinator worker channel"
+      }
+    ]
+  },
+  "polling": {
+    "timeoutMs": 60000,
+    "intervalMs": 1500
+  },
+  "trigger": {
+    "type": "message.created",
+    "source": "human:scenario",
+    "channelId": "$setup:humanCoordinator.id",
+    "payload": {
+      "text": "@Coordinator coordinate with @worker1 in your direct channel. Ask worker1 to count down from a random number between 1 and 10 down to 0 and save the full countdown to .orgops-data/workspaces/worker1/countdown.txt. Then report the final countdown result back here to me with the final number."
+    }
+  },
+  "assertions": {
+    "mustExistSequence": [
+      {
+        "alias": "coordinatorToWorker",
+        "type": "message.created",
+        "source": "agent:coordinator",
+        "channelId": "$setup:coordinatorWorker.id"
+      },
+      {
+        "alias": "workerToCoordinator",
+        "type": "message.created",
+        "source": "agent:worker1",
+        "channelId": "$setup:coordinatorWorker.id"
+      }
+    ],
+    "mustExist": [
+      {
+        "type": "message.created",
+        "source": "agent:coordinator",
+        "channelId": "$setup:humanCoordinator.id",
+        "payloadContains": {
+          "text": "0"
+        }
+      },
+      {
+        "type": "message.created",
+        "source": "agent:coordinator",
+        "channelId": "$setup:humanCoordinator.id",
+        "payloadContains": {
+          "text": "0"
+        }
+      }
+    ],
+    "atLeastOne": [
+      {
+        "type": "message.created",
+        "source": "agent:worker1",
+        "channelId": "$setup:coordinatorWorker.id",
+        "payloadContains": {
+          "text": "0"
+        }
+      }
+    ],
+    "mustNotExist": [
+      {
+        "type": "message.created",
+        "source": "agent:coordinator",
+        "channelId": "$setup:humanCoordinator.id",
+        "payloadRegex": {
+          "text": "^\\s*\\[\\{\\\"toolCallId\\\""
+        }
+      }
+    ],
+    "fileChecks": [
+      {
+        "path": ".orgops-data/workspaces/worker1/countdown.txt",
+        "mustContain": ["0"],
+        "mustMatchRegex": ["\\n?0\\s*$"]
+      }
+    ]
+  }
+}

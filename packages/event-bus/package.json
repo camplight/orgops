@@ -1,0 +1,9 @@
+{
+  "name": "@orgops/event-bus",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "lint": "bun run --silent tsc -p tsconfig.json --noEmit"
+  }
+}

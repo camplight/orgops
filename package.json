@@ -1,0 +1,24 @@
+{
+  "name": "orgops",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "bun run --env-file ../../.env --cwd apps/api dev",
+    "dev:all": "concurrently -k \"bun run --env-file ../../.env --cwd apps/api dev\" \"bun run --env-file ../../.env --cwd apps/agent-runner dev\" \"bun run --env-file ../../.env --cwd apps/ui dev\"",
+    "build": "bun run --cwd apps/ui build",
+    "prod:all": "bun run build && concurrently -k \"bun run --env-file ../../.env --cwd apps/api start\" \"bun run --env-file ../../.env --cwd apps/agent-runner start\" \"bun run --env-file ../../.env --cwd apps/ui preview\"",
+    "test": "bun test",
+    "lint": "bun run lint:all",
+    "lint:all": "bun run --cwd apps/api lint && bun run --cwd apps/agent-runner lint && bun run --cwd apps/ui lint && bun run --cwd packages/db lint && bun run --cwd packages/schemas lint && bun run --cwd packages/event-bus lint && bun run --cwd packages/llm lint && bun run --cwd packages/crypto lint && bun run --cwd packages/skills lint && bun run --cwd packages/events-scenario-tests lint",
+    "scenario:test": "bun run --cwd packages/events-scenario-tests run",
+    "scenario:test:countdown": "bun run --cwd packages/events-scenario-tests run:countdown"
+  },
+  "devDependencies": {
+    "bun-types": "^1.3.9",
+    "concurrently": "^9.0.1",
+    "typescript": "^5.5.4"
+  }
+}

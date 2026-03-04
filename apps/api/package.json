@@ -1,0 +1,20 @@
+{
+  "name": "@orgops/api",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "src/server.ts",
+  "scripts": {
+    "dev": "bun run src/server.ts",
+    "start": "bun run src/server.ts",
+    "lint": "bun run --silent tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@orgops/db": "workspace:*",
+    "@orgops/event-bus": "workspace:*",
+    "@orgops/crypto": "workspace:*",
+    "@orgops/schemas": "workspace:*",
+    "@orgops/skills": "workspace:*",
+    "drizzle-orm": "^0.44.6",
+    "hono": "^4.5.0"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "@orgops/events-scenario-tests",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "run": "bun run src/index.ts",
+    "run:countdown": "bun run src/index.ts --scenario coordinator-worker-countdown",
+    "lint": "bun run --silent tsc -p tsconfig.json --noEmit"
+  }
+}

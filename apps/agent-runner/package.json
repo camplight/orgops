@@ -1,0 +1,17 @@
+{
+  "name": "@orgops/agent-runner",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "start": "bun run src/index.ts",
+    "lint": "bun run --silent tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@orgops/llm": "workspace:*",
+    "@orgops/schemas": "workspace:*",
+    "@orgops/skills": "workspace:*",
+    "zod": "^3.23.8"
+  }
+}

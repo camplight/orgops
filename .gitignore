@@ -1,0 +1,6 @@
+node_modules
+dist
+.DS_Store
+.orgops-data/
+files/
+.env
