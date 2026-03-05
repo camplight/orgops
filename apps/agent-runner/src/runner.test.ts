@@ -220,6 +220,55 @@ describe("agent runner", () => {
     expect(requests[0]?.body.deliverAt).toBeLessThanOrEqual(after + 30_000);
   });
 
+  it("allows zero-delay scheduling for immediate trigger", async () => {
+    const requests: Array<{ path: string; body: any }> = [];
+    const before = Date.now();
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async (path: string, init?: RequestInit) => {
+        requests.push({
+          path,
+          body: JSON.parse(String(init?.body ?? "{}")),
+        });
+        return new Response(JSON.stringify({ id: "evt-scheduled" }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        });
+      },
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+    };
+
+    await executeTool(ctx, "events_schedule_self", {
+      text: "run now",
+      delaySeconds: 0,
+    });
+
+    const after = Date.now();
+    expect(requests.length).toBe(1);
+    expect(requests[0]?.path).toBe("/api/events");
+    expect(requests[0]?.body.type).toBe("agent.scheduled.trigger");
+    expect(requests[0]?.body.deliverAt).toBeGreaterThanOrEqual(before);
+    expect(requests[0]?.body.deliverAt).toBeLessThanOrEqual(after);
+  });
+
   it("parses explicit response directives", () => {
     expect(parseResponseDirective("[REPLY] hello")).toEqual({
       mode: "reply",

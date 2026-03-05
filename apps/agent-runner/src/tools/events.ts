@@ -4,8 +4,8 @@ import type { ExecuteContext, ToolDef } from "./types";
 const scheduleOptionsSchema = z.object({
   deliverAt: z.number().int().optional(),
   deliverAtIso: z.string().min(1).optional(),
-  delayMs: z.number().int().positive().optional(),
-  delaySeconds: z.number().int().positive().optional(),
+  delayMs: z.number().int().nonnegative().optional(),
+  delaySeconds: z.number().int().nonnegative().optional(),
 });
 
 const dmSendSchema = z.object({
