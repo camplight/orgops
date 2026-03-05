@@ -32,6 +32,12 @@ export function createWrapExecute(deps: RunnerToolDeps): CreateExecuteFn {
   const { agent, event, channelId, runTool, apiFetch, emitEvent } = deps;
   return (toolName: string) => async (args: Record<string, unknown>) => {
     try {
+      await emitEvent({
+        type: "audit.tool.started",
+        payload: { tool: toolName, args },
+        source: `agent:${agent.name}`,
+        ...(channelId ? { channelId } : {}),
+      });
       const output = await runTool(toolName, args);
       if (output && typeof output === "object" && "error" in output) {
         await apiFetch(`/api/events/${event.id}/fail`, {
@@ -50,6 +56,12 @@ export function createWrapExecute(deps: RunnerToolDeps): CreateExecuteFn {
       });
       return output;
     } catch (error) {
+      await emitEvent({
+        type: "audit.tool.failed",
+        payload: { tool: toolName, args, error: String(error) },
+        source: `agent:${agent.name}`,
+        ...(channelId ? { channelId } : {}),
+      });
       await apiFetch(`/api/events/${event.id}/fail`, {
         method: "POST",
         headers: { "content-type": "application/json" },

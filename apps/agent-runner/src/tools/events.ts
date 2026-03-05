@@ -1,22 +1,26 @@
 import { z } from "zod";
 import type { ExecuteContext, ToolDef } from "./types";
 
+const scheduleOptionsSchema = z.object({
+  deliverAt: z.number().int().optional(),
+  deliverAtIso: z.string().min(1).optional(),
+  delayMs: z.number().int().positive().optional(),
+  delaySeconds: z.number().int().positive().optional(),
+});
+
 const dmSendSchema = z.object({
   agentName: z.string().min(1),
   text: z.string().min(1),
-  deliverAt: z.number().int().optional(),
-});
+}).merge(scheduleOptionsSchema);
 
 const dmReplySchema = z.object({
   text: z.string().min(1),
-  deliverAt: z.number().int().optional(),
-});
+}).merge(scheduleOptionsSchema);
 
 const channelSendSchema = z.object({
   channelId: z.string().min(1),
   text: z.string().min(1),
-  deliverAt: z.number().int().optional(),
-});
+}).merge(scheduleOptionsSchema);
 
 const channelMessagesSchema = z.object({
   channelId: z.string().min(1),
@@ -24,26 +28,50 @@ const channelMessagesSchema = z.object({
   after: z.number().int().min(0).optional(),
 });
 
-const scheduleSelfSchema = z.object({
-  text: z.string().min(1),
-  deliverAt: z.number().int(),
-  channelId: z.string().min(1).optional(),
-});
+const scheduleSelfSchema = z
+  .object({
+    text: z.string().min(1),
+    channelId: z.string().min(1).optional(),
+  })
+  .merge(scheduleOptionsSchema)
+  .superRefine((value, ctx) => {
+    const keys = [
+      value.deliverAt !== undefined ? "deliverAt" : null,
+      value.deliverAtIso !== undefined ? "deliverAtIso" : null,
+      value.delayMs !== undefined ? "delayMs" : null,
+      value.delaySeconds !== undefined ? "delaySeconds" : null,
+    ].filter(Boolean);
+    if (keys.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "Provide one scheduling field: deliverAt, deliverAtIso, delayMs, or delaySeconds.",
+      });
+      return;
+    }
+    if (keys.length > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "Provide only one scheduling field: deliverAt, deliverAtIso, delayMs, or delaySeconds.",
+      });
+    }
+  });
 
 export const eventsToolDefs: ToolDef[] = [
   [
     "events_dm_send",
-    "Send a direct message to another agent using a direct channel.",
+    "Send a direct message to another agent. Optional scheduling via deliverAt, deliverAtIso, delayMs, or delaySeconds.",
     dmSendSchema,
   ],
   [
     "events_dm_reply",
-    "Reply in the current direct-message channel.",
+    "Reply in the current direct-message channel. Optional scheduling via deliverAt, deliverAtIso, delayMs, or delaySeconds.",
     dmReplySchema,
   ],
   [
     "events_channel_send",
-    "Send a message event to a specific channel.",
+    "Send a message event to a specific channel. Optional scheduling via deliverAt, deliverAtIso, delayMs, or delaySeconds.",
     channelSendSchema,
   ],
   [
@@ -53,7 +81,7 @@ export const eventsToolDefs: ToolDef[] = [
   ],
   [
     "events_schedule_self",
-    "Schedule a delayed message for this agent in the current (or specified) channel.",
+    "Schedule an internal delayed trigger for this agent (not a user-visible message) using exactly one of deliverAt, deliverAtIso, delayMs, or delaySeconds.",
     scheduleSelfSchema,
   ],
 ];
@@ -94,10 +122,45 @@ async function sendMessage(
         ...(originChannelId ? { originChannelId } : {}),
         ...(originAgentName ? { originAgentName } : {}),
       },
-      ...(deliverAt ? { deliverAt } : {}),
+      ...(deliverAt !== undefined ? { deliverAt } : {}),
     }),
   });
   return response.json();
+}
+
+function resolveDeliverAt(input: {
+  deliverAt?: number;
+  deliverAtIso?: string;
+  delayMs?: number;
+  delaySeconds?: number;
+}): number | undefined {
+  const providedKeys = [
+    input.deliverAt !== undefined ? "deliverAt" : null,
+    input.deliverAtIso !== undefined ? "deliverAtIso" : null,
+    input.delayMs !== undefined ? "delayMs" : null,
+    input.delaySeconds !== undefined ? "delaySeconds" : null,
+  ].filter(Boolean);
+
+  if (providedKeys.length === 0) return undefined;
+  if (providedKeys.length > 1) {
+    throw new Error(
+      "Provide only one scheduling field: deliverAt, deliverAtIso, delayMs, or delaySeconds.",
+    );
+  }
+
+  if (input.deliverAt !== undefined) return input.deliverAt;
+  if (input.deliverAtIso !== undefined) {
+    const parsed = Date.parse(input.deliverAtIso);
+    if (!Number.isFinite(parsed)) {
+      throw new Error(
+        `Invalid deliverAtIso value: ${input.deliverAtIso}. Use ISO-8601 format.`,
+      );
+    }
+    return Math.floor(parsed);
+  }
+  if (input.delayMs !== undefined) return Date.now() + input.delayMs;
+  if (input.delaySeconds !== undefined) return Date.now() + input.delaySeconds * 1000;
+  return undefined;
 }
 
 function ensureAgentMention(text: string, agentName: string) {
@@ -136,6 +199,7 @@ export async function execute(
 ): Promise<unknown> {
   if (tool === "events_dm_send") {
     const parsed = dmSendSchema.parse(args);
+    const deliverAt = resolveDeliverAt(parsed);
     const channelId = await ensureDirectChannel(ctx, parsed.agentName);
     const text = ensureAgentMention(parsed.text, parsed.agentName);
     const originChannelId = resolveOriginChannelId(ctx);
@@ -146,13 +210,14 @@ export async function execute(
       text,
       originChannelId,
       originAgentName,
-      parsed.deliverAt,
+      deliverAt,
     );
     return { channelId, event };
   }
 
   if (tool === "events_dm_reply") {
     const parsed = dmReplySchema.parse(args);
+    const deliverAt = resolveDeliverAt(parsed);
     if (!ctx.channelId) {
       return { error: "No current channelId. Use events_dm_send instead." };
     }
@@ -169,13 +234,14 @@ export async function execute(
       text,
       originChannelId,
       originAgentName,
-      parsed.deliverAt,
+      deliverAt,
     );
     return { channelId: ctx.channelId, event };
   }
 
   if (tool === "events_channel_send") {
     const parsed = channelSendSchema.parse(args);
+    const deliverAt = resolveDeliverAt(parsed);
     const triggerAgent = agentNameFromSource(ctx.triggerEvent.source);
     const originChannelId = resolveOriginChannelId(ctx);
     const originAgentName = resolveOriginAgentName(ctx);
@@ -197,7 +263,7 @@ export async function execute(
       text,
       originChannelId,
       originAgentName,
-      parsed.deliverAt,
+      deliverAt,
     );
     return { channelId, event };
   }
@@ -216,20 +282,26 @@ export async function execute(
 
   if (tool === "events_schedule_self") {
     const parsed = scheduleSelfSchema.parse(args);
+    const deliverAt = resolveDeliverAt(parsed);
     const channelId = parsed.channelId ?? ctx.channelId;
     if (!channelId) {
       return { error: "No current channelId. Provide channelId explicitly." };
     }
-    const originChannelId = resolveOriginChannelId(ctx);
-    const originAgentName = resolveOriginAgentName(ctx);
-    const event = await sendMessage(
-      ctx,
-      channelId,
-      parsed.text,
-      originChannelId,
-      originAgentName,
-      parsed.deliverAt,
-    );
+    const response = await ctx.apiFetch("/api/events", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        type: "agent.scheduled.trigger",
+        source: "system:scheduler",
+        channelId,
+        payload: {
+          text: parsed.text,
+          targetAgentName: ctx.agent.name,
+        },
+        ...(deliverAt !== undefined ? { deliverAt } : {}),
+      }),
+    });
+    const event = await response.json();
     return { channelId, event };
   }
 

@@ -846,6 +846,99 @@ describe("api app", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("hides future scheduled events from non-runner event feeds", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token"
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" })
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const createAgentRes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "agent-future",
+        modelId: "openai:gpt-4o-mini",
+        workspacePath: ".orgops-data/workspaces/agent-future",
+        soulContents: ""
+      })
+    });
+    expect(createAgentRes.status).toBe(201);
+
+    const createChannelRes = await app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ name: "future-schedule-channel" })
+    });
+    expect(createChannelRes.status).toBe(201);
+    const channel = (await createChannelRes.json()) as { id: string };
+
+    const subscribeRes = await app.request(`http://localhost/api/channels/${channel.id}/subscribe`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ subscriberType: "AGENT", subscriberId: "agent-future" })
+    });
+    expect(subscribeRes.status).toBe(200);
+
+    const immediateRes = await app.request("http://localhost/api/events", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        type: "message.created",
+        payload: { text: "immediate message" },
+        source: "human:admin",
+        channelId: channel.id
+      })
+    });
+    expect(immediateRes.status).toBe(201);
+    const immediateEvent = (await immediateRes.json()) as { id: string };
+
+    const futureRes = await app.request("http://localhost/api/events", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        type: "message.created",
+        payload: { text: "future reminder" },
+        source: "agent:agent-future",
+        channelId: channel.id,
+        deliverAt: Date.now() + 60_000
+      })
+    });
+    expect(futureRes.status).toBe(201);
+    const futureEvent = (await futureRes.json()) as { id: string };
+
+    const uiFeedRes = await app.request(
+      `http://localhost/api/events?channelId=${channel.id}&limit=50`,
+      { headers: { cookie } }
+    );
+    expect(uiFeedRes.status).toBe(200);
+    const uiFeed = (await uiFeedRes.json()) as Array<{ id: string }>;
+    expect(uiFeed.some((row) => row.id === immediateEvent.id)).toBe(true);
+    expect(uiFeed.some((row) => row.id === futureEvent.id)).toBe(false);
+
+    const scheduledRes = await app.request(
+      `http://localhost/api/events?channelId=${channel.id}&scheduled=1&limit=50`,
+      { headers: { cookie } }
+    );
+    expect(scheduledRes.status).toBe(200);
+    const scheduled = (await scheduledRes.json()) as Array<{ id: string }>;
+    expect(scheduled.some((row) => row.id === futureEvent.id)).toBe(true);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("cleans an agent workspace directory", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");

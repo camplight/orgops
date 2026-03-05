@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { EventRow } from "../types";
@@ -10,6 +10,7 @@ type ChatScreenProps = {
     id: string;
     label: string;
     meta?: string;
+    participantsText?: string;
   }[];
   activeTargetId: string | null;
   events: EventRow[];
@@ -18,6 +19,61 @@ type ChatScreenProps = {
   onMessageTextChange: (value: string) => void;
   onSendMessage: () => Promise<void>;
 };
+
+const INDICATOR_GRACE_MS = 4000;
+
+function getAgentNameFromSource(source: string | undefined) {
+  if (!source?.startsWith("agent:")) return null;
+  return source.slice("agent:".length).trim() || null;
+}
+
+function asObject(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return value as Record<string, unknown>;
+}
+
+function toSentenceCase(value: string) {
+  if (!value) return value;
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function humanizeEventType(type: string) {
+  return type
+    .split(".")
+    .map((part) => part.replace(/[_-]+/g, " "))
+    .join(" ");
+}
+
+function isTerminalAgentEvent(event: EventRow) {
+  if (event.type === "message.created") return true;
+  return /(completed|complete|done|finished|failed|error|cancelled|canceled|skipped|exited)$/i.test(
+    event.type
+  );
+}
+
+function toInlineAgentStatus(event: EventRow): string {
+  const payload = asObject(event.payload);
+  const tool =
+    typeof payload.tool === "string"
+      ? payload.tool
+      : typeof payload.toolName === "string"
+        ? payload.toolName
+        : null;
+  if (tool) {
+    return `using ${tool.replace(/[_-]+/g, " ")}`;
+  }
+
+  if (typeof payload.status === "string" && payload.status.trim()) {
+    return payload.status.trim().toLowerCase();
+  }
+
+  if (typeof payload.phase === "string" && payload.phase.trim()) {
+    return payload.phase.trim().toLowerCase();
+  }
+
+  if (event.type === "message.created") return "writing";
+  return `processing ${humanizeEventType(event.type)}`;
+}
 
 export function ChatScreen({
   targetOptions,
@@ -28,6 +84,7 @@ export function ChatScreen({
   onMessageTextChange,
   onSendMessage
 }: ChatScreenProps) {
+  const [nowTick, setNowTick] = useState(0);
   const messageEvents = useMemo(
     () =>
       events
@@ -41,8 +98,95 @@ export function ChatScreen({
     [events]
   );
   const activeTarget = targetOptions.find((target) => target.id === activeTargetId) ?? null;
+  const activeChannelParticipants =
+    activeTargetId?.startsWith("channel:") ? activeTarget?.participantsText : undefined;
+  const latestHumanMessage = useMemo(() => {
+    const humanMessages = messageEvents.filter((event) => event.source.startsWith("human:"));
+    return humanMessages[humanMessages.length - 1] ?? null;
+  }, [messageEvents]);
+  const latestHumanMessageCreatedAt = latestHumanMessage?.createdAt ?? 0;
+  const activityEvents = useMemo(
+    () =>
+      events
+        .filter((event) => {
+          if (!latestHumanMessage) return false;
+          if ((event.createdAt ?? 0) < latestHumanMessageCreatedAt) return false;
+          if (event.id === latestHumanMessage.id) return false;
+          const sourceAgent = getAgentNameFromSource(event.source);
+          if (sourceAgent) return true;
+          return event.type === "agent.scheduled.trigger";
+        })
+        .sort((left, right) => {
+          const leftTs = left.createdAt ?? 0;
+          const rightTs = right.createdAt ?? 0;
+          if (leftTs !== rightTs) return leftTs - rightTs;
+          return left.id.localeCompare(right.id);
+        }),
+    [events, latestHumanMessage, latestHumanMessageCreatedAt]
+  );
+  const typingIndicators = useMemo(() => {
+    const stateByAgent = new Map<
+      string,
+      { status: string; latestActivityAt: number; latestTerminalAt: number | null }
+    >();
+    for (const event of activityEvents) {
+      const agentName = getAgentNameFromSource(event.source);
+      if (!agentName) continue;
+      const ts = event.createdAt ?? 0;
+      const status = toInlineAgentStatus(event);
+      const existing = stateByAgent.get(agentName);
+      if (!existing) {
+        stateByAgent.set(agentName, {
+          status,
+          latestActivityAt: isTerminalAgentEvent(event) ? 0 : ts,
+          latestTerminalAt: isTerminalAgentEvent(event) ? ts : null
+        });
+        continue;
+      }
+
+      if (isTerminalAgentEvent(event)) {
+        if (!existing.latestTerminalAt || ts >= existing.latestTerminalAt) {
+          stateByAgent.set(agentName, {
+            ...existing,
+            latestTerminalAt: ts
+          });
+        }
+        continue;
+      }
+
+      if (ts >= existing.latestActivityAt) {
+        stateByAgent.set(agentName, {
+          status,
+          latestActivityAt: ts,
+          latestTerminalAt: existing.latestTerminalAt
+        });
+      }
+    }
+
+    const now = Date.now();
+    return [...stateByAgent.entries()]
+      .filter(([, value]) => {
+        if (value.latestActivityAt <= 0) return false;
+        if (value.latestTerminalAt === null) return true;
+        if (value.latestTerminalAt < value.latestActivityAt) return true;
+        return now - value.latestTerminalAt <= INDICATOR_GRACE_MS;
+      })
+      .sort((left, right) => right[1].latestActivityAt - left[1].latestActivityAt)
+      .map(([agentName, value]) => ({
+        agentName,
+        status: value.status,
+        at: value.latestActivityAt
+      }));
+  }, [activityEvents, nowTick]);
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const lastMessageId = messageEvents[messageEvents.length - 1]?.id ?? null;
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setNowTick((prev) => prev + 1);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if (!activeTargetId || !messagesContainerRef.current) {
@@ -68,7 +212,7 @@ export function ChatScreen({
         </div>
       </Card>
 
-      <Card title={activeTarget ? `Chat: ${activeTarget.label}` : "Chat"}>
+      <Card title="Messages">
         {!activeTarget && (
           <div className="text-slate-500 text-sm">
             Select where to send your message.
@@ -77,6 +221,12 @@ export function ChatScreen({
 
         {activeTarget && (
           <div className="space-y-4">
+            {activeChannelParticipants && (
+              <div className="rounded border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-300">
+                <span className="text-slate-400">Participants:</span>{" "}
+                {activeChannelParticipants}
+              </div>
+            )}
             <div ref={messagesContainerRef} className="space-y-2 text-sm max-h-96 overflow-auto">
               {messageEvents.map((event) => (
                 <div key={event.id} className="border-b border-slate-800 pb-2">
@@ -127,6 +277,14 @@ export function ChatScreen({
                   <div className="text-slate-500 text-xs">
                     {event.source} • {formatTimestamp(event.createdAt)}
                   </div>
+                </div>
+              ))}
+              {typingIndicators.map((indicator) => (
+                <div
+                  key={`indicator-${indicator.agentName}`}
+                  className="rounded border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-400 italic"
+                >
+                  {indicator.agentName} is {toSentenceCase(indicator.status)}...
                 </div>
               ))}
               {messageEvents.length === 0 && (

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { readFileSync, writeFileSync } from "node:fs";
 
 import { schema, type OrgOpsDrizzleDb } from "@orgops/db";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, gt, sql } from "drizzle-orm";
 
 type RuntimeDeps = {
   orm: OrgOpsDrizzleDb;
@@ -72,7 +72,30 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
       .where(clauses.length > 0 ? and(...clauses) : undefined)
       .orderBy(desc(schema.processes.started_at))
       .all();
-    return jsonResponse(c, rows);
+    const outputStats = orm
+      .select({
+        process_id: schema.processOutput.process_id,
+        output_count: sql<number>`count(*)`,
+        last_output_at: sql<number>`max(${schema.processOutput.ts})`,
+      })
+      .from(schema.processOutput)
+      .groupBy(schema.processOutput.process_id)
+      .all();
+    const statsByProcess = new Map(
+      outputStats.map((row) => [row.process_id, row]),
+    );
+    const enrichedRows = rows.map((row) => {
+      const stats = statsByProcess.get(row.id);
+      return {
+        ...row,
+        output_count: Number(stats?.output_count ?? 0),
+        last_output_at:
+          stats?.last_output_at === undefined || stats?.last_output_at === null
+            ? null
+            : Number(stats.last_output_at),
+      };
+    });
+    return jsonResponse(c, enrichedRows);
   });
 
   app.post("/api/processes", async (c) => {
@@ -93,6 +116,44 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
       })
       .run();
     return jsonResponse(c, { ok: true }, 201);
+  });
+
+  app.delete("/api/processes", (c) => {
+    const rows = orm
+      .select({
+        id: schema.processes.id,
+        pid: schema.processes.pid,
+        state: schema.processes.state,
+      })
+      .from(schema.processes)
+      .all();
+    let terminatedCount = 0;
+    for (const row of rows) {
+      if (
+        row.pid !== null &&
+        row.pid !== undefined &&
+        (row.state === "RUNNING" || row.state === "STARTING")
+      ) {
+        try {
+          process.kill(row.pid, "SIGTERM");
+          terminatedCount += 1;
+        } catch {
+          // Process already ended or cannot be signaled.
+        }
+      }
+    }
+    orm.delete(schema.processOutput).run();
+    orm.delete(schema.processes).run();
+    insertEvent({
+      type: "processes.cleared",
+      payload: { terminatedCount, clearedCount: rows.length },
+      source: "system",
+    });
+    return jsonResponse(c, {
+      ok: true,
+      clearedCount: rows.length,
+      terminatedCount,
+    });
   });
 
   app.post("/api/processes/:id/output", async (c) => {
@@ -140,12 +201,45 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
 
   app.get("/api/processes/:id/output", (c) => {
     const processId = c.req.param("id");
-    const rows = orm
-      .select()
-      .from(schema.processOutput)
-      .where(eq(schema.processOutput.process_id, processId))
-      .orderBy(asc(schema.processOutput.seq))
-      .all();
+    const url = new URL(c.req.url);
+    const params = url.searchParams;
+    const afterSeqParam = params.get("afterSeq");
+    const limitParam = params.get("limit");
+    const tailParam = params.get("tail");
+    const afterSeq =
+      afterSeqParam && Number.isFinite(Number(afterSeqParam))
+        ? Number(afterSeqParam)
+        : null;
+    const parsedLimit =
+      limitParam && Number.isFinite(Number(limitParam))
+        ? Number(limitParam)
+        : null;
+    const limit = Math.max(1, Math.min(5000, parsedLimit ?? 2000));
+    const tail = tailParam === "1";
+    const whereClause =
+      afterSeq !== null
+        ? and(
+            eq(schema.processOutput.process_id, processId),
+            gt(schema.processOutput.seq, afterSeq),
+          )
+        : eq(schema.processOutput.process_id, processId);
+    const rows =
+      tail && afterSeq === null
+        ? orm
+            .select()
+            .from(schema.processOutput)
+            .where(whereClause)
+            .orderBy(desc(schema.processOutput.seq))
+            .limit(limit)
+            .all()
+            .reverse()
+        : orm
+            .select()
+            .from(schema.processOutput)
+            .where(whereClause)
+            .orderBy(asc(schema.processOutput.seq))
+            .limit(limit)
+            .all();
     return jsonResponse(c, rows);
   });
 }

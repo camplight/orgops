@@ -7,6 +7,7 @@ import type {
   EventRow,
   EventTypeInfo,
   ProcessRow,
+  ProcessOutputRow,
   SecretRow,
   SkillMeta,
   Team,
@@ -24,7 +25,7 @@ export function useOrgOpsData(authenticated: boolean) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [threads, setThreads] = useState<Thread[]>([]);
   const [processes, setProcesses] = useState<ProcessRow[]>([]);
-  const [processOutput, setProcessOutput] = useState<Record<string, unknown[]>>({});
+  const [processOutput, setProcessOutput] = useState<Record<string, ProcessOutputRow[]>>({});
   const [secrets, setSecrets] = useState<SecretRow[]>([]);
   const [channelEvents, setChannelEvents] = useState<EventRow[]>([]);
   const [channelParticipants, setChannelParticipants] = useState<ChannelParticipant[]>([]);
@@ -84,7 +85,9 @@ export function useOrgOpsData(authenticated: boolean) {
   }, []);
 
   const loadProcessOutput = useCallback(async (id: string) => {
-    const output = await apiJson<unknown[]>(`/api/processes/${id}/output`);
+    const output = await apiJson<ProcessOutputRow[]>(
+      `/api/processes/${id}/output?tail=1&limit=2000`
+    );
     setProcessOutput((prev) => ({ ...prev, [id]: output }));
   }, []);
 

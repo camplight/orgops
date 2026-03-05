@@ -18,7 +18,6 @@ const SKILL_ROOTS = resolveSkillRoots({
   env: process.env,
 });
 
-const cursors = new Map<string, number>();
 const heartbeats = new Map<string, number>();
 const HEARTBEAT_INTERVAL_MS = 5000;
 
@@ -139,6 +138,11 @@ export function parseResponseDirective(rawText: string): ResponseDirective {
 export async function shouldHandleEvent(agent: Agent, event: Event) {
   if (event.type?.startsWith("agent.control.")) return false;
   if (event.source === `agent:${agent.name}`) return false;
+  const targetAgentName =
+    typeof event.payload?.targetAgentName === "string"
+      ? event.payload.targetAgentName.trim()
+      : "";
+  if (targetAgentName && targetAgentName !== agent.name) return false;
   const hopCount = Number(event.payload?.hopCount ?? 0);
   if (Number.isFinite(hopCount) && hopCount >= 3) return false;
   if (!event.channelId) return false;
@@ -190,6 +194,8 @@ async function handleEvent(agent: Agent, event: Event) {
         `${skill.name} | ${skill.description} | ${skill.location} | ${join(skill.path, "SKILL.md")}`,
     )
     .join("\n");
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
   const runnerGuidance = [
     "Runner environment contract:",
     "- You are running inside OrgOps agent-runner and receive one triggering event at a time from a channel.",
@@ -202,7 +208,12 @@ async function handleEvent(agent: Agent, event: Event) {
     "- For agent-to-agent direct messaging use events_dm_send.",
     "- For replies in the current channel use events_dm_reply or events_channel_send.",
     "- For self-reminders/continuations use events_schedule_self.",
-    "- For delayed follow-ups, set deliverAt (unix ms) on events send/reply tools.",
+    "- events_schedule_self creates an internal scheduled trigger event (type agent.scheduled.trigger), not a visible chat message by itself.",
+    "- When handling agent.scheduled.trigger, execute the instruction in payload.text, then send any needed user-facing messages/tools yourself.",
+    "- For delayed follow-ups prefer relative delaySeconds/delayMs.",
+    "- Absolute scheduling also supports deliverAtIso (ISO-8601) or deliverAt (unix ms).",
+    "- Use exactly one scheduling field per events tool call.",
+    `- Current UTC time is ${nowIso} (${nowMs} unix ms).`,
     "- Propagate payload.originChannelId for delegated work so validated handoffs can return to origin channel.",
     "- Only the origin agent should post final handoff to payload.originChannelId; collaborators should reply in current channel.",
     "",
@@ -331,20 +342,10 @@ async function pollAgent(agent: Agent) {
     });
     heartbeats.set(agent.name, now);
   }
-  const cursor = cursors.get(agent.name) ?? 0;
-  const baseQuery = `agentName=${encodeURIComponent(agent.name)}&status=PENDING&limit=50`;
-  const res = await apiFetch(`/api/events?${baseQuery}&after=${cursor}`);
-  let events = (await res.json()) as Event[];
-  if (events.length === 0 && cursor > 0) {
-    // Recover from stale in-memory cursors when event history is cleared between scenario runs.
-    const fallbackRes = await apiFetch(`/api/events?${baseQuery}&after=0`);
-    events = (await fallbackRes.json()) as Event[];
-  }
+  const query = `agentName=${encodeURIComponent(agent.name)}&status=PENDING&limit=50`;
+  const res = await apiFetch(`/api/events?${query}`);
+  const events = (await res.json()) as Event[];
   for (const event of events) {
-    cursors.set(
-      agent.name,
-      Math.max(cursors.get(agent.name) ?? 0, event.createdAt ?? 0),
-    );
     if (!(await shouldHandleEvent(agent, event))) {
       continue;
     }

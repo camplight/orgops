@@ -1,6 +1,6 @@
 ---
 name: slack
-description: Slack skill: per-agent Slack app participation (send/reply/DM/history/search) + Socket Mode listener that emits orgops events.
+description: "Slack skill: per-agent Slack app participation (send/reply/DM/history/search) + Socket Mode listener that emits orgops events."
 metadata: {"openclaw":{"requires":{"env":["ORGOPS_RUNNER_TOKEN"]}}}
 ---
 # Slack skill

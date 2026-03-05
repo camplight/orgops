@@ -1,7 +1,10 @@
 import { useEffect, useRef } from "react";
 import type { EventRow } from "../types";
 
-type ProcessOutputMessage = { topic: string; data: { text?: string } };
+type ProcessOutputMessage = {
+  topic: string;
+  data: { seq?: number; stream?: string; text?: string; ts?: number };
+};
 
 type UseWebSocketOptions = {
   authenticated: boolean;

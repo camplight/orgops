@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { createRunnerTools } from "./tools";
+import { executeTool } from "./tools";
 import {
   buildModelMessages,
   parseResponseDirective,
@@ -140,6 +141,20 @@ describe("agent runner", () => {
       source: "agent:coordinator",
       channelId: "chan-1",
     };
+    const targetedToOtherAgent: Event = {
+      id: "evt-target-other",
+      type: "agent.scheduled.trigger",
+      payload: { text: "run later", targetAgentName: "worker1" },
+      source: "system:scheduler",
+      channelId: "chan-1",
+    };
+    const targetedToThisAgent: Event = {
+      id: "evt-target-this",
+      type: "agent.scheduled.trigger",
+      payload: { text: "run later", targetAgentName: "tester" },
+      source: "system:scheduler",
+      channelId: "chan-1",
+    };
 
     expect(await shouldHandleEvent(agent, controlEvent)).toBe(false);
     expect(await shouldHandleEvent(agent, ownEvent)).toBe(false);
@@ -147,7 +162,62 @@ describe("agent runner", () => {
     expect(await shouldHandleEvent(agent, addressedByMention)).toBe(true);
     expect(await shouldHandleEvent(agent, agentThreadReply)).toBe(false);
     expect(await shouldHandleEvent(agent, highHopCount)).toBe(false);
+    expect(await shouldHandleEvent(agent, targetedToOtherAgent)).toBe(false);
+    expect(await shouldHandleEvent(agent, targetedToThisAgent)).toBe(true);
     expect(await shouldHandleEvent(agent, userEvent)).toBe(true);
+  });
+
+  it("schedules internal self trigger event instead of visible message", async () => {
+    const requests: Array<{ path: string; body: any }> = [];
+    const before = Date.now();
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async (path: string, init?: RequestInit) => {
+        requests.push({
+          path,
+          body: JSON.parse(String(init?.body ?? "{}")),
+        });
+        return new Response(JSON.stringify({ id: "evt-scheduled" }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        });
+      },
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+    };
+
+    await executeTool(ctx, "events_schedule_self", {
+      text: "remind me",
+      delaySeconds: 30,
+    });
+
+    const after = Date.now();
+    expect(requests.length).toBe(1);
+    expect(requests[0]?.path).toBe("/api/events");
+    expect(requests[0]?.body.type).toBe("agent.scheduled.trigger");
+    expect(requests[0]?.body.source).toBe("system:scheduler");
+    expect(requests[0]?.body.channelId).toBe("chan-1");
+    expect(requests[0]?.body.payload?.text).toBe("remind me");
+    expect(requests[0]?.body.payload?.targetAgentName).toBe("tester");
+    expect(requests[0]?.body.deliverAt).toBeGreaterThanOrEqual(before + 30_000);
+    expect(requests[0]?.body.deliverAt).toBeLessThanOrEqual(after + 30_000);
   });
 
   it("parses explicit response directives", () => {

@@ -16,9 +16,15 @@ import {
   ProfileScreen
 } from "./screens";
 import { useAuth, useOrgOpsData, useWebSocket } from "./hooks";
-import type { EventRow, TeamMember } from "./types";
+import type { EventRow, ProcessOutputRow, TeamMember } from "./types";
 
 type ChatTarget = { kind: "channel"; id: string };
+
+function formatParticipantLabel(subscriberType: string, subscriberId: string) {
+  if (subscriberType === "HUMAN") return `${subscriberId} (human)`;
+  if (subscriberType === "AGENT") return `${subscriberId} (agent)`;
+  return `${subscriberId} (${subscriberType.toLowerCase()})`;
+}
 
 const DEFAULT_EVENT_FILTERS = {
   agentName: "",
@@ -72,11 +78,30 @@ export default function App() {
   }, [appendUniqueEvent, data.setEvents, eventMatchesChatTarget]);
 
   const handleProcessOutput = useCallback(
-    (processId: string, msgData: { text?: string }[]) => {
-      const entry = Array.isArray(msgData) ? msgData : [msgData];
+    (processId: string, msgData: ProcessOutputRow[]) => {
+      const incoming = Array.isArray(msgData) ? msgData : [msgData];
       data.setProcessOutput((prev) => ({
         ...prev,
-        [processId]: [...(prev[processId] ?? []), ...entry]
+        [processId]: (() => {
+          const base = prev[processId] ?? [];
+          const baseSeq = base[base.length - 1]?.seq ?? 0;
+          const normalized = incoming.map((entry, index) => ({
+            ...entry,
+            seq:
+              typeof entry.seq === "number" && Number.isFinite(entry.seq)
+                ? entry.seq
+                : baseSeq + index + 1,
+            stream: entry.stream ?? "STDOUT",
+            text: typeof entry.text === "string" ? entry.text : String(entry.text ?? "")
+          }));
+          return [...base, ...normalized]
+            .sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))
+            .filter((entry, index, list) => {
+              if (index === 0) return true;
+              return entry.seq !== list[index - 1]?.seq;
+            })
+            .slice(-5000);
+        })()
       }));
     },
     [data.setProcessOutput]
@@ -87,7 +112,7 @@ export default function App() {
     onAgentStatus: handleAgentStatus,
     onEvent: handleWsEvent,
     onProcessOutput: (processId, d) =>
-      handleProcessOutput(processId, [d as { text?: string }]),
+      handleProcessOutput(processId, [d as ProcessOutputRow]),
     activeChannelId,
     activeProcessId
   });
@@ -406,12 +431,12 @@ export default function App() {
             ...data.channels.map((channel) => ({
               id: `channel:${channel.id}`,
               label: `Channel: ${channel.name}`,
-              meta:
-                channel.kind?.includes("DM") || channel.kind === "DIRECT_GROUP"
-                  ? (channel.participants ?? [])
-                      .map((participant) => `${participant.subscriberType}:${participant.subscriberId}`)
-                      .join(" | ")
-                  : channel.description ?? undefined
+              meta: channel.description ?? undefined,
+              participantsText: (channel.participants ?? [])
+                .map((participant) =>
+                  formatParticipantLabel(participant.subscriberType, participant.subscriberId)
+                )
+                .join(" | ")
             }))
           ]}
           events={chatEvents}
@@ -446,9 +471,20 @@ export default function App() {
           activeProcessId={activeProcessId}
           onSelectProcess={async (id) => {
             setActiveProcessId(id);
-            data.loadProcessOutput(id);
+            if (id) {
+              await data.loadProcessOutput(id);
+            }
           }}
           onRefresh={data.refreshProcesses}
+          onClearAll={async () => {
+            await data.apiFetch("/api/processes", {
+              method: "DELETE",
+              headers: data.getApiHeaders()
+            });
+            setActiveProcessId(null);
+            data.setProcessOutput({});
+            data.setProcesses([]);
+          }}
         />
       )}
 

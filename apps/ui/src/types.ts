@@ -85,9 +85,23 @@ export type ProcessRow = {
   agent_name: string;
   channel_id?: string;
   cmd: string;
+  cwd?: string;
+  pid?: number;
   state: string;
+  exit_code?: number;
   started_at: number;
   ended_at?: number;
+  output_count?: number;
+  last_output_at?: number;
+};
+
+export type ProcessOutputRow = {
+  id?: string;
+  process_id?: string;
+  seq: number;
+  stream: "STDOUT" | "STDERR" | string;
+  text: string;
+  ts?: number;
 };
 
 export type SecretRow = {

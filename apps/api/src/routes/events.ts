@@ -138,6 +138,15 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       whereClauses.push(eq(schema.events.status, "PENDING"));
     }
 
+    if (!isRunnerRequest && !scheduledOnly) {
+      whereClauses.push(
+        or(
+          isNull(schema.events.deliver_at),
+          lte(schema.events.deliver_at, now),
+        ) as any,
+      );
+    }
+
     if (agentName) {
       if (isRunnerRequest) {
         const receiptClauses: any[] = [

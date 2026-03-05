@@ -40,6 +40,7 @@ export function AgentsScreen({
   const [selectedAgentName, setSelectedAgentName] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [form, setForm] = useState<AgentForm>(DEFAULT_AGENT_FORM);
+  const [isFormDirty, setIsFormDirty] = useState(false);
 
   const selectedAgent = useMemo(
     () => agents.find((agent) => agent.name === selectedAgentName) ?? null,
@@ -47,11 +48,9 @@ export function AgentsScreen({
   );
 
   useEffect(() => {
-    if (isCreating) {
-      setForm(DEFAULT_AGENT_FORM);
-      return;
-    }
+    if (isCreating) return;
     if (!selectedAgent) return;
+    if (isFormDirty) return;
     setForm({
       name: selectedAgent.name,
       modelId: selectedAgent.modelId ?? "openai:gpt-4o-mini",
@@ -61,17 +60,19 @@ export function AgentsScreen({
       soulContents: selectedAgent.soulContents ?? "",
       enabledSkills: selectedAgent.enabledSkills ?? []
     });
-  }, [isCreating, selectedAgent]);
+  }, [isCreating, selectedAgent, isFormDirty]);
 
   const handleNewAgent = () => {
     setSelectedAgentName(null);
     setIsCreating(true);
     setForm(DEFAULT_AGENT_FORM);
+    setIsFormDirty(false);
   };
 
   const handleSelectAgent = (name: string) => {
     setSelectedAgentName(name);
     setIsCreating(false);
+    setIsFormDirty(false);
   };
 
   const handleSubmit = async () => {
@@ -88,6 +89,7 @@ export function AgentsScreen({
       });
       setIsCreating(false);
       setSelectedAgentName(form.name.trim());
+      setIsFormDirty(false);
       return;
     }
     if (!selectedAgent) return;
@@ -97,9 +99,11 @@ export function AgentsScreen({
       soulContents: form.soulContents,
       enabledSkills: form.enabledSkills
     });
+    setIsFormDirty(false);
   };
 
   const toggleSkill = (skillName: string) => {
+    setIsFormDirty(true);
     setForm((prev) => {
       const exists = prev.enabledSkills.includes(skillName);
       if (exists) {
@@ -153,7 +157,10 @@ export function AgentsScreen({
               <Input
                 value={form.name}
                 disabled={!isCreating}
-                onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
+                onChange={(e) => {
+                  setIsFormDirty(true);
+                  setForm((prev) => ({ ...prev, name: e.target.value }));
+                }}
                 placeholder="Agent name"
               />
             </div>
@@ -161,9 +168,10 @@ export function AgentsScreen({
               <div className="text-sm text-slate-400">Model</div>
               <Input
                 value={form.modelId}
-                onChange={(e) =>
-                  setForm((prev) => ({ ...prev, modelId: e.target.value }))
-                }
+                onChange={(e) => {
+                  setIsFormDirty(true);
+                  setForm((prev) => ({ ...prev, modelId: e.target.value }));
+                }}
                 placeholder="openai:gpt-4o-mini"
               />
             </div>
@@ -171,9 +179,10 @@ export function AgentsScreen({
               <div className="text-sm text-slate-400">Workspace directory</div>
               <Input
                 value={form.workspacePath}
-                onChange={(e) =>
-                  setForm((prev) => ({ ...prev, workspacePath: e.target.value }))
-                }
+                onChange={(e) => {
+                  setIsFormDirty(true);
+                  setForm((prev) => ({ ...prev, workspacePath: e.target.value }));
+                }}
                 placeholder=".orgops-data/workspaces/agent-name"
               />
             </div>
@@ -204,9 +213,10 @@ export function AgentsScreen({
               <Textarea
                 rows={12}
                 value={form.soulContents}
-                onChange={(e) =>
-                  setForm((prev) => ({ ...prev, soulContents: e.target.value }))
-                }
+                onChange={(e) => {
+                  setIsFormDirty(true);
+                  setForm((prev) => ({ ...prev, soulContents: e.target.value }));
+                }}
                 placeholder="System-level guidance and behavior instructions."
               />
             </div>
