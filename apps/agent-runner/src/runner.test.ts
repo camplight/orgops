@@ -269,6 +269,170 @@ describe("agent runner", () => {
     expect(requests[0]?.body.deliverAt).toBeLessThanOrEqual(after);
   });
 
+  it("emits custom channel events via events_emit", async () => {
+    const requests: Array<{ path: string; body: any }> = [];
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        soulContents: "role prompt",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async (path: string, init?: RequestInit) => {
+        requests.push({
+          path,
+          body: JSON.parse(String(init?.body ?? "{}")),
+        });
+        return new Response(JSON.stringify({ id: "evt-custom" }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        });
+      },
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+    };
+
+    await executeTool(ctx, "events_emit", {
+      type: "custom.workflow.progressed",
+      payload: { step: "diff-ready" },
+    });
+
+    expect(requests.length).toBe(1);
+    expect(requests[0]?.path).toBe("/api/events");
+    expect(requests[0]?.body.type).toBe("custom.workflow.progressed");
+    expect(requests[0]?.body.channelId).toBe("chan-1");
+    expect(requests[0]?.body.source).toBe("agent:tester");
+    expect(requests[0]?.body.payload).toEqual({ step: "diff-ready" });
+  });
+
+  it("searches events globally via events_search", async () => {
+    const requests: Array<{ path: string; body: any }> = [];
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        soulContents: "role prompt",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async (path: string, init?: RequestInit) => {
+        requests.push({
+          path,
+          body: JSON.parse(String(init?.body ?? "{}")),
+        });
+        return new Response(JSON.stringify([{ id: "evt-1" }, { id: "evt-2" }]), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+    };
+
+    const result = (await executeTool(ctx, "events_search", {
+      typePrefix: "slack.",
+      order: "desc",
+      limit: 20,
+    })) as { events: Array<{ id: string }> };
+
+    expect(requests.length).toBe(1);
+    expect(requests[0]?.path).toContain("/api/events?");
+    expect(requests[0]?.path).toContain("typePrefix=slack.");
+    expect(requests[0]?.path).toContain("order=desc");
+    expect(requests[0]?.path).toContain("limit=20");
+    expect(result.events).toHaveLength(2);
+  });
+
+  it("lists channels via events_channels_list", async () => {
+    const requests: Array<{ path: string; body: any }> = [];
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        soulContents: "role prompt",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async (path: string, init?: RequestInit) => {
+        requests.push({
+          path,
+          body: JSON.parse(String(init?.body ?? "{}")),
+        });
+        return new Response(
+          JSON.stringify([
+            {
+              id: "chan-a",
+              name: "slack:T1:C1",
+              kind: "GROUP",
+              participants: [{ subscriberType: "AGENT", subscriberId: "tester" }],
+            },
+            {
+              id: "chan-b",
+              name: "main",
+              kind: "GROUP",
+              participants: [{ subscriberType: "HUMAN", subscriberId: "admin" }],
+            },
+          ]),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      },
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+    };
+
+    const result = (await executeTool(ctx, "events_channels_list", {
+      nameContains: "slack:",
+      participantType: "agent",
+      participantId: "tester",
+      limit: 10,
+    })) as { channels: Array<{ id: string }>; totalMatched: number };
+
+    expect(requests.length).toBe(1);
+    expect(requests[0]?.path).toBe("/api/channels");
+    expect(result.totalMatched).toBe(1);
+    expect(result.channels[0]?.id).toBe("chan-a");
+  });
+
   it("parses explicit response directives", () => {
     expect(parseResponseDirective("[REPLY] hello")).toEqual({
       mode: "reply",

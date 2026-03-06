@@ -4,9 +4,8 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
-  writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { and, eq, inArray } from "drizzle-orm";
 
@@ -160,20 +159,6 @@ export function createApp(config: AppConfig = {}) {
     return workspacePath.startsWith("/")
       ? workspacePath
       : resolve(PROJECT_ROOT, workspacePath);
-  }
-
-  function loadSoulContents(path: string | null | undefined) {
-    if (!path) return "";
-    try {
-      return readFileSync(path, "utf-8");
-    } catch {
-      return "";
-    }
-  }
-
-  function writeSoulContents(path: string, contents: string) {
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, contents ?? "", "utf-8");
   }
 
   function eventRowToApi(row: any) {
@@ -361,8 +346,6 @@ export function createApp(config: AppConfig = {}) {
     parseStringArraySafe,
     getDefaultSoulPath,
     resolveWorkspacePath,
-    loadSoulContents,
-    writeSoulContents,
     insertEvent,
   });
 

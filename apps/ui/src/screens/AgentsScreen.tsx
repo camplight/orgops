@@ -23,8 +23,8 @@ type AgentsScreenProps = {
   skills: SkillMeta[];
   onCreateAgent: (agent: AgentForm) => Promise<void>;
   onUpdateAgent: (name: string, agent: Omit<AgentForm, "name">) => Promise<void>;
-  onStartAgent: (name: string) => void;
-  onStopAgent: (name: string) => void;
+  onStartAgent: (name: string) => Promise<void>;
+  onStopAgent: (name: string) => Promise<void>;
   onCleanupAgentWorkspace: (name: string) => Promise<void>;
 };
 
@@ -41,6 +41,12 @@ export function AgentsScreen({
   const [isCreating, setIsCreating] = useState(false);
   const [form, setForm] = useState<AgentForm>(DEFAULT_AGENT_FORM);
   const [isFormDirty, setIsFormDirty] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<{
+    kind: "success" | "error";
+    message: string;
+  } | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isTogglingRuntime, setIsTogglingRuntime] = useState(false);
 
   const selectedAgent = useMemo(
     () => agents.find((agent) => agent.name === selectedAgentName) ?? null,
@@ -67,43 +73,83 @@ export function AgentsScreen({
     setIsCreating(true);
     setForm(DEFAULT_AGENT_FORM);
     setIsFormDirty(false);
+    setSaveStatus(null);
   };
 
   const handleSelectAgent = (name: string) => {
     setSelectedAgentName(name);
     setIsCreating(false);
     setIsFormDirty(false);
+    setSaveStatus(null);
   };
 
   const handleSubmit = async () => {
     if (!form.name.trim() || !form.modelId.trim() || !form.workspacePath.trim()) {
       return;
     }
-    if (isCreating) {
-      await onCreateAgent({
-        ...form,
-        name: form.name.trim(),
+    setIsSubmitting(true);
+    setSaveStatus(null);
+    try {
+      if (isCreating) {
+        const normalizedName = form.name.trim();
+        await onCreateAgent({
+          ...form,
+          name: normalizedName,
+          modelId: form.modelId.trim(),
+          workspacePath: form.workspacePath.trim(),
+          soulContents: form.soulContents
+        });
+        setIsCreating(false);
+        setSelectedAgentName(normalizedName);
+        setIsFormDirty(false);
+        setSaveStatus({
+          kind: "success",
+          message: `Agent "${normalizedName}" was saved successfully.`
+        });
+        return;
+      }
+      if (!selectedAgent) return;
+      await onUpdateAgent(selectedAgent.name, {
         modelId: form.modelId.trim(),
         workspacePath: form.workspacePath.trim(),
-        soulContents: form.soulContents
+        soulContents: form.soulContents,
+        enabledSkills: form.enabledSkills
       });
-      setIsCreating(false);
-      setSelectedAgentName(form.name.trim());
       setIsFormDirty(false);
-      return;
+      setSaveStatus({
+        kind: "success",
+        message: `Agent "${selectedAgent.name}" was saved successfully.`
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to save agent.";
+      setSaveStatus({ kind: "error", message });
+    } finally {
+      setIsSubmitting(false);
     }
+  };
+
+  const handleToggleRuntime = async () => {
     if (!selectedAgent) return;
-    await onUpdateAgent(selectedAgent.name, {
-      modelId: form.modelId.trim(),
-      workspacePath: form.workspacePath.trim(),
-      soulContents: form.soulContents,
-      enabledSkills: form.enabledSkills
-    });
-    setIsFormDirty(false);
+    const isRunning = selectedAgent.runtimeState === "RUNNING";
+    setIsTogglingRuntime(true);
+    setSaveStatus(null);
+    try {
+      if (isRunning) {
+        await onStopAgent(selectedAgent.name);
+      } else {
+        await onStartAgent(selectedAgent.name);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to update agent state.";
+      setSaveStatus({ kind: "error", message });
+    } finally {
+      setIsTogglingRuntime(false);
+    }
   };
 
   const toggleSkill = (skillName: string) => {
     setIsFormDirty(true);
+    setSaveStatus(null);
     setForm((prev) => {
       const exists = prev.enabledSkills.includes(skillName);
       if (exists) {
@@ -159,6 +205,7 @@ export function AgentsScreen({
                 disabled={!isCreating}
                 onChange={(e) => {
                   setIsFormDirty(true);
+                  setSaveStatus(null);
                   setForm((prev) => ({ ...prev, name: e.target.value }));
                 }}
                 placeholder="Agent name"
@@ -170,6 +217,7 @@ export function AgentsScreen({
                 value={form.modelId}
                 onChange={(e) => {
                   setIsFormDirty(true);
+                  setSaveStatus(null);
                   setForm((prev) => ({ ...prev, modelId: e.target.value }));
                 }}
                 placeholder="openai:gpt-4o-mini"
@@ -181,6 +229,7 @@ export function AgentsScreen({
                 value={form.workspacePath}
                 onChange={(e) => {
                   setIsFormDirty(true);
+                  setSaveStatus(null);
                   setForm((prev) => ({ ...prev, workspacePath: e.target.value }));
                 }}
                 placeholder=".orgops-data/workspaces/agent-name"
@@ -215,33 +264,57 @@ export function AgentsScreen({
                 value={form.soulContents}
                 onChange={(e) => {
                   setIsFormDirty(true);
+                  setSaveStatus(null);
                   setForm((prev) => ({ ...prev, soulContents: e.target.value }));
                 }}
                 placeholder="System-level guidance and behavior instructions."
               />
             </div>
+            {isFormDirty && (
+              <div className="text-sm text-amber-300">Unsaved changes.</div>
+            )}
+            {saveStatus && (
+              <div
+                className={`text-sm ${
+                  saveStatus.kind === "success" ? "text-emerald-300" : "text-rose-400"
+                }`}
+              >
+                {saveStatus.message}
+              </div>
+            )}
             <div className="flex flex-wrap gap-2">
               <Button
                 onClick={handleSubmit}
                 disabled={
-                  !form.name.trim() || !form.modelId.trim() || !form.workspacePath.trim()
+                  isSubmitting ||
+                  (!isCreating && !isFormDirty) ||
+                  !form.name.trim() ||
+                  !form.modelId.trim() ||
+                  !form.workspacePath.trim()
                 }
               >
-                {isCreating ? "Create Agent" : "Save Details"}
+                {isSubmitting
+                  ? isCreating
+                    ? "Creating..."
+                    : "Saving..."
+                  : isCreating
+                    ? "Create Agent"
+                    : "Save Details"}
               </Button>
               {!isCreating && selectedAgent && (
                 <>
                   <Button
                     variant="secondary"
-                    onClick={() => onStartAgent(selectedAgent.name)}
+                    onClick={handleToggleRuntime}
+                    disabled={isTogglingRuntime}
                   >
-                    Start
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    onClick={() => onStopAgent(selectedAgent.name)}
-                  >
-                    Stop
+                    {isTogglingRuntime
+                      ? selectedAgent.runtimeState === "RUNNING"
+                        ? "Stopping..."
+                        : "Starting..."
+                      : selectedAgent.runtimeState === "RUNNING"
+                        ? "Stop"
+                        : "Start"}
                   </Button>
                   <Button
                     variant="secondary"

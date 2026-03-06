@@ -1,4 +1,11 @@
-import { emitOrgOpsEvent, getAgent, getEnvForAgent, parseArgs } from "./_shared";
+import {
+  emitOrgOpsEvent,
+  ensureOrgOpsChannelSubscription,
+  getAgent,
+  getEnvForAgent,
+  parseArgs,
+  slackApi,
+} from "./_shared";
 
 // Minimal Slack Socket Mode client (no external deps)
 // References:
@@ -6,12 +13,27 @@ import { emitOrgOpsEvent, getAgent, getEnvForAgent, parseArgs } from "./_shared"
 // - apps.connections.open
 
 type OpenResp = { url: string };
+type AuthTestResp = { user_id?: string; bot_id?: string };
 
 type SocketEnvelope = {
   envelope_id: string;
   type: string;
   payload?: any;
   accepts_response_payload?: boolean;
+};
+
+type SlackIdentity = {
+  userId: string;
+  botId?: string;
+};
+
+type OrgOpsEventRow = {
+  id: string;
+  type: string;
+  source: string;
+  channelId?: string;
+  payload?: Record<string, unknown>;
+  createdAt?: number;
 };
 
 async function slackOpenSocket(appToken: string): Promise<string> {
@@ -28,12 +50,64 @@ async function slackOpenSocket(appToken: string): Promise<string> {
   return (json as OpenResp).url;
 }
 
+async function slackAuthTest(botToken: string): Promise<SlackIdentity> {
+  const res = await fetch("https://slack.com/api/auth.test", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${botToken}`,
+      "content-type": "application/x-www-form-urlencoded",
+    },
+    body: "",
+  });
+  const json = (await res.json()) as any;
+  if (!json?.ok) {
+    throw new Error(`auth.test failed: ${json?.error ?? "unknown"}`);
+  }
+  const userId = String((json as AuthTestResp).user_id ?? "").trim();
+  const botIdRaw = String((json as AuthTestResp).bot_id ?? "").trim();
+  if (!userId) {
+    throw new Error("auth.test returned empty user_id");
+  }
+  return { userId, ...(botIdRaw ? { botId: botIdRaw } : {}) };
+}
+
 async function ackEnvelope(ws: WebSocket, envelopeId: string) {
   ws.send(JSON.stringify({ envelope_id: envelopeId }));
 }
 
 function toOrgOpsChannelId(teamId: string, channelId: string) {
   return `slack:${teamId}:${channelId}`;
+}
+
+function parseOrgOpsSlackChannelId(orgopsChannelId: string) {
+  const parts = orgopsChannelId.split(":");
+  if (parts.length !== 3 || parts[0] !== "slack") return null;
+  return {
+    teamId: parts[1] ?? "",
+    channelId: parts[2] ?? "",
+  };
+}
+
+async function emitSlackEventToOrgOps(
+  agent: string,
+  input: {
+    type: "slack.message.created" | "slack.app_mention";
+    teamId: string;
+    slackChannelId: string;
+    payload: Record<string, unknown>;
+  },
+) {
+  const orgopsChannelId = toOrgOpsChannelId(input.teamId, input.slackChannelId);
+  await ensureOrgOpsChannelSubscription({
+    channelId: orgopsChannelId,
+    agentName: agent,
+  });
+  await emitOrgOpsEvent({
+    type: input.type,
+    source: `slack:${input.teamId}:${agent}`,
+    channelId: orgopsChannelId,
+    payload: input.payload,
+  });
 }
 
 async function handleSlackEvent(agent: string, event: any) {
@@ -53,10 +127,10 @@ async function handleSlackEvent(agent: string, event: any) {
 
     if (!channelId || !userId || !ts) return;
 
-    await emitOrgOpsEvent({
+    await emitSlackEventToOrgOps(agent, {
       type: "slack.message.created",
-      source: `slack:${teamId}:${agent}`,
-      channelId: toOrgOpsChannelId(teamId, channelId),
+      teamId,
+      slackChannelId: channelId,
       payload: {
         teamId,
         channelId,
@@ -80,10 +154,10 @@ async function handleSlackEvent(agent: string, event: any) {
 
     if (!channelId || !userId || !ts) return;
 
-    await emitOrgOpsEvent({
+    await emitSlackEventToOrgOps(agent, {
       type: "slack.app_mention",
-      source: `slack:${teamId}:${agent}`,
-      channelId: toOrgOpsChannelId(teamId, channelId),
+      teamId,
+      slackChannelId: channelId,
       payload: {
         teamId,
         channelId,
@@ -98,14 +172,139 @@ async function handleSlackEvent(agent: string, event: any) {
   }
 }
 
+function messageMentionsSelf(inner: any, selfUserId: string) {
+  const text = String(inner?.text ?? "");
+  if (!text) return false;
+  return text.includes(`<@${selfUserId}>`);
+}
+
+async function handleSlackEventWithIdentity(
+  agent: string,
+  identity: SlackIdentity,
+  event: any,
+) {
+  const teamId = String(event?.team_id ?? event?.team ?? "");
+  const inner = event?.event;
+  if (!teamId || !inner) return;
+
+  if (inner.type === "message") {
+    const isBotMessage = inner.subtype === "bot_message" || Boolean(inner.bot_id);
+    const senderUserId = String(inner.user ?? "").trim();
+    const senderBotId = String(inner.bot_id ?? "").trim();
+    const isSelfMessage =
+      senderUserId === identity.userId ||
+      Boolean(identity.botId) && senderBotId === identity.botId;
+
+    if (isSelfMessage) return;
+    if (isBotMessage && !messageMentionsSelf(inner, identity.userId)) return;
+
+    const channelId = String(inner.channel ?? "");
+    const text = String(inner.text ?? "");
+    const ts = String(inner.ts ?? "");
+    const threadTs = inner.thread_ts ? String(inner.thread_ts) : undefined;
+    const userId = senderUserId || senderBotId;
+
+    if (!channelId || !userId || !ts) return;
+
+    await emitSlackEventToOrgOps(agent, {
+      type: "slack.message.created",
+      teamId,
+      slackChannelId: channelId,
+      payload: {
+        teamId,
+        channelId,
+        channelType: inner.channel_type ?? undefined,
+        userId,
+        text,
+        ts,
+        threadTs,
+        raw: inner,
+      },
+    });
+    return;
+  }
+
+  return handleSlackEvent(agent, event);
+}
+
+async function listRecentOrgOpsAgentMessages(
+  agent: string,
+  after: number,
+): Promise<OrgOpsEventRow[]> {
+  const apiUrl = process.env.ORGOPS_API_URL ?? "http://localhost:8787";
+  const token = process.env.ORGOPS_RUNNER_TOKEN;
+  if (!token) throw new Error("Missing ORGOPS_RUNNER_TOKEN");
+
+  const query = new URLSearchParams();
+  query.set("source", `agent:${agent}`);
+  query.set("type", "message.created");
+  query.set("order", "asc");
+  query.set("after", String(after));
+  query.set("limit", "200");
+
+  const res = await fetch(`${apiUrl}/api/events?${query.toString()}`, {
+    headers: { "x-orgops-runner-token": token },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Failed to list orgops events: ${res.status} ${text}`);
+  }
+  return (await res.json()) as OrgOpsEventRow[];
+}
+
+async function bridgeOrgOpsMessagesToSlack(
+  agent: string,
+  botToken: string,
+  cursor: { afterCreatedAt: number },
+) {
+  const events = await listRecentOrgOpsAgentMessages(agent, cursor.afterCreatedAt);
+  if (!Array.isArray(events) || events.length === 0) return;
+
+  let maxCreatedAt = cursor.afterCreatedAt;
+  for (const event of events) {
+    const createdAt = Number(event.createdAt ?? 0);
+    if (Number.isFinite(createdAt) && createdAt > maxCreatedAt) {
+      maxCreatedAt = createdAt;
+    }
+
+    const channelId = String(event.channelId ?? "");
+    const parsed = parseOrgOpsSlackChannelId(channelId);
+    if (!parsed || !parsed.channelId) continue;
+
+    const text = String(event.payload?.text ?? "").trim();
+    if (!text) continue;
+
+    const threadTsRaw = event.payload?.threadTs;
+    const threadTs =
+      typeof threadTsRaw === "string" && threadTsRaw.trim()
+        ? threadTsRaw.trim()
+        : undefined;
+
+    const body: Record<string, unknown> = {
+      channel: parsed.channelId,
+      text,
+    };
+    if (threadTs) body.thread_ts = threadTs;
+
+    await slackApi(botToken, "chat.postMessage", body);
+  }
+
+  cursor.afterCreatedAt = maxCreatedAt;
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const agent = getAgent(args);
 
+  const botToken = getEnvForAgent(agent, "SLACK_BOT_TOKEN");
   const appToken = getEnvForAgent(agent, "SLACK_APP_TOKEN");
+  const identity = await slackAuthTest(botToken);
   const url = await slackOpenSocket(appToken);
+  const bridgeCursor = { afterCreatedAt: Date.now() };
 
-  console.log(`Socket Mode connected for agent=${agent}`);
+  console.log(
+    `Socket Mode connected for agent=${agent} as user=${identity.userId}`,
+  );
 
   const ws = new WebSocket(url);
 
@@ -123,7 +322,7 @@ async function main() {
       await ackEnvelope(ws, env.envelope_id);
 
       if (env.type === "events_api") {
-        await handleSlackEvent(agent, env.payload);
+        await handleSlackEventWithIdentity(agent, identity, env.payload);
       }
     } catch (err) {
       console.error("socket message handling error", err);
@@ -139,8 +338,11 @@ async function main() {
     console.error("ws error", e);
   });
 
-  // keep alive
-  setInterval(() => {}, 60_000);
+  setInterval(() => {
+    bridgeOrgOpsMessagesToSlack(agent, botToken, bridgeCursor).catch((err) => {
+      console.error("orgops->slack bridge error", err);
+    });
+  }, 1500);
 }
 
 main().catch((err) => {

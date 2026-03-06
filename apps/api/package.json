@@ -4,7 +4,7 @@
   "type": "module",
   "main": "src/server.ts",
   "scripts": {
-    "dev": "bun run src/server.ts",
+    "dev": "bun --watch run src/server.ts",
     "start": "bun run src/server.ts",
     "lint": "bun run --silent tsc -p tsconfig.json --noEmit"
   },

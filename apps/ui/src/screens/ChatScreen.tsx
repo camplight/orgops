@@ -18,6 +18,7 @@ type ChatScreenProps = {
   onSelectTarget: (id: string) => void;
   onMessageTextChange: (value: string) => void;
   onSendMessage: () => Promise<void>;
+  onClearMessages: () => Promise<void>;
 };
 
 const INDICATOR_GRACE_MS = 4000;
@@ -82,7 +83,8 @@ export function ChatScreen({
   messageText,
   onSelectTarget,
   onMessageTextChange,
-  onSendMessage
+  onSendMessage,
+  onClearMessages
 }: ChatScreenProps) {
   const [nowTick, setNowTick] = useState(0);
   const messageEvents = useMemo(
@@ -299,7 +301,21 @@ export function ChatScreen({
                 value={messageText}
                 onChange={(e) => onMessageTextChange(e.target.value)}
               />
-              <Button onClick={onSendMessage}>Send message</Button>
+              <div className="flex items-center gap-2">
+                <Button onClick={onSendMessage}>Send message</Button>
+                <Button
+                  variant="secondary"
+                  className="bg-rose-900 text-rose-100 hover:bg-rose-800"
+                  onClick={async () => {
+                    if (!confirm("Clear all messages in this channel? This cannot be undone.")) {
+                      return;
+                    }
+                    await onClearMessages();
+                  }}
+                >
+                  Clear messages
+                </Button>
+              </div>
             </div>
           </div>
         )}

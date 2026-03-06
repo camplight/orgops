@@ -15,8 +15,6 @@ type AgentsDeps = {
   parseStringArraySafe: (input: string | null | undefined) => string[];
   getDefaultSoulPath: (agentName: string) => string;
   resolveWorkspacePath: (workspacePath: string) => string;
-  loadSoulContents: (path: string | null | undefined) => string;
-  writeSoulContents: (path: string, contents: string) => void;
   insertEvent: (input: any) => any;
 };
 
@@ -29,8 +27,6 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     parseStringArraySafe,
     getDefaultSoulPath,
     resolveWorkspacePath,
-    loadSoulContents,
-    writeSoulContents,
     insertEvent
   } = deps;
 
@@ -46,7 +42,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         modelId: row.model_id,
         systemInstructions: row.system_instructions,
         soulPath: row.soul_path,
-        soulContents: loadSoulContents(row.soul_path),
+        soulContents: row.soul_contents ?? "",
         enabledSkills: parseStringArraySafe(row.enabled_skills_json),
         workspacePath: row.workspace_path,
         desiredState: row.desired_state,
@@ -71,7 +67,6 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       return jsonResponse(c, { error: "workspacePath is required" }, 400);
     }
     const soulContents = typeof body.soulContents === "string" ? body.soulContents : "";
-    writeSoulContents(soulPath, soulContents);
     const enabledSkills = Array.isArray(body.enabledSkills)
       ? body.enabledSkills.filter((item: unknown): item is string => typeof item === "string")
       : [];
@@ -85,6 +80,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         model_id: body.modelId,
         system_instructions: body.systemInstructions ?? "",
         soul_path: soulPath,
+        soul_contents: soulContents,
         workspace_path: workspacePath,
         enabled_skills_json: JSON.stringify(enabledSkills),
         desired_state: body.desiredState ?? "RUNNING",
@@ -108,7 +104,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       modelId: row.model_id,
       systemInstructions: row.system_instructions,
       soulPath: row.soul_path,
-      soulContents: loadSoulContents(row.soul_path),
+      soulContents: row.soul_contents ?? "",
       enabledSkills: parseStringArraySafe(row.enabled_skills_json),
       workspacePath: row.workspace_path,
       desiredState: row.desired_state,
@@ -132,9 +128,6 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       body.workspacePath !== undefined
         ? resolveWorkspacePath(String(body.workspacePath))
         : (existing.workspace_path as string);
-    if (typeof body.soulContents === "string") {
-      writeSoulContents(soulPath, body.soulContents);
-    }
     const enabledSkillsJson = Array.isArray(body.enabledSkills)
       ? JSON.stringify(body.enabledSkills.filter((item: unknown): item is string => typeof item === "string"))
       : null;
@@ -146,6 +139,10 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         model_id: body.modelId ?? existing.model_id,
         system_instructions: body.systemInstructions ?? existing.system_instructions,
         soul_path: soulPath ?? existing.soul_path,
+        soul_contents:
+          typeof body.soulContents === "string"
+            ? body.soulContents
+            : existing.soul_contents,
         workspace_path: workspacePath,
         enabled_skills_json: enabledSkillsJson ?? existing.enabled_skills_json,
         desired_state: body.desiredState ?? existing.desired_state,

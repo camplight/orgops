@@ -22,10 +22,42 @@ const channelSendSchema = z.object({
   text: z.string().min(1),
 }).merge(scheduleOptionsSchema);
 
+const emitSchema = z.object({
+  type: z.string().min(1),
+  payload: z.unknown().optional(),
+  channelId: z.string().min(1).optional(),
+  teamId: z.string().min(1).optional(),
+  parentEventId: z.string().min(1).optional(),
+  idempotencyKey: z.string().min(1).optional(),
+}).merge(scheduleOptionsSchema);
+
 const channelMessagesSchema = z.object({
   channelId: z.string().min(1),
   limit: z.number().int().min(1).max(500).optional(),
   after: z.number().int().min(0).optional(),
+});
+
+const searchSchema = z.object({
+  channelId: z.string().min(1).optional(),
+  type: z.string().min(1).optional(),
+  typePrefix: z.string().min(1).optional(),
+  source: z.string().min(1).optional(),
+  sourcePrefix: z.string().min(1).optional(),
+  teamId: z.string().min(1).optional(),
+  status: z.string().min(1).optional(),
+  after: z.number().int().min(0).optional(),
+  limit: z.number().int().min(1).max(500).optional(),
+  order: z.enum(["asc", "desc"]).optional(),
+  scheduled: z.boolean().optional(),
+  all: z.boolean().optional(),
+});
+
+const channelsListSchema = z.object({
+  kind: z.string().min(1).optional(),
+  nameContains: z.string().min(1).optional(),
+  participantType: z.string().min(1).optional(),
+  participantId: z.string().min(1).optional(),
+  limit: z.number().int().min(1).max(500).optional(),
 });
 
 const scheduleSelfSchema = z
@@ -75,9 +107,24 @@ export const eventsToolDefs: ToolDef[] = [
     channelSendSchema,
   ],
   [
+    "events_emit",
+    "Emit a custom event by type to a channel/team (or current channel). Optional scheduling via deliverAt, deliverAtIso, delayMs, or delaySeconds.",
+    emitSchema,
+  ],
+  [
     "events_channel_messages",
     "Get message.created events from a channel.",
     channelMessagesSchema,
+  ],
+  [
+    "events_search",
+    "Search events across all visible channels with optional filters (type/source/team/status/time/order).",
+    searchSchema,
+  ],
+  [
+    "events_channels_list",
+    "List channels and participants, with optional filters by kind/name/participant.",
+    channelsListSchema,
   ],
   [
     "events_schedule_self",
@@ -278,6 +325,89 @@ export async function execute(
     const response = await ctx.apiFetch(`/api/events?${query.toString()}`);
     const events = (await response.json()) as unknown[];
     return { channelId: parsed.channelId, events };
+  }
+
+  if (tool === "events_search") {
+    const parsed = searchSchema.parse(args);
+    const query = new URLSearchParams();
+    if (parsed.channelId) query.set("channelId", parsed.channelId);
+    if (parsed.type) query.set("type", parsed.type);
+    if (parsed.typePrefix) query.set("typePrefix", parsed.typePrefix);
+    if (parsed.source) query.set("source", parsed.source);
+    if (parsed.sourcePrefix) query.set("sourcePrefix", parsed.sourcePrefix);
+    if (parsed.teamId) query.set("teamId", parsed.teamId);
+    if (parsed.status) query.set("status", parsed.status);
+    if (parsed.after !== undefined) query.set("after", String(parsed.after));
+    if (parsed.limit !== undefined) query.set("limit", String(parsed.limit));
+    if (parsed.order) query.set("order", parsed.order);
+    if (parsed.scheduled !== undefined) query.set("scheduled", parsed.scheduled ? "1" : "0");
+    if (parsed.all !== undefined) query.set("all", parsed.all ? "1" : "0");
+    const response = await ctx.apiFetch(`/api/events?${query.toString()}`);
+    const events = (await response.json()) as unknown[];
+    return { filters: parsed, events };
+  }
+
+  if (tool === "events_channels_list") {
+    const parsed = channelsListSchema.parse(args);
+    const response = await ctx.apiFetch("/api/channels");
+    const channels = (await response.json()) as Array<{
+      id: string;
+      name?: string;
+      kind?: string;
+      participants?: Array<{ subscriberType?: string; subscriberId?: string }>;
+    }>;
+    const participantType = parsed.participantType?.toUpperCase();
+    const filtered = channels.filter((channel) => {
+      if (parsed.kind && channel.kind !== parsed.kind) return false;
+      if (parsed.nameContains && !String(channel.name ?? "").includes(parsed.nameContains)) {
+        return false;
+      }
+      if (!participantType && !parsed.participantId) return true;
+      const participants = channel.participants ?? [];
+      return participants.some((participant) => {
+        const typeMatches =
+          !participantType ||
+          String(participant.subscriberType ?? "").toUpperCase() === participantType;
+        const idMatches =
+          !parsed.participantId || participant.subscriberId === parsed.participantId;
+        return typeMatches && idMatches;
+      });
+    });
+    const limited = parsed.limit ? filtered.slice(0, parsed.limit) : filtered;
+    return { channels: limited, totalMatched: filtered.length };
+  }
+
+  if (tool === "events_emit") {
+    const parsed = emitSchema.parse(args);
+    const deliverAt = resolveDeliverAt(parsed);
+    const defaultChannelId = ctx.channelId;
+    const targetChannelId = parsed.channelId?.trim() || defaultChannelId;
+    if (!targetChannelId && !parsed.teamId) {
+      return {
+        error:
+          "No target destination. Provide channelId/teamId or call from an event with channel context.",
+      };
+    }
+    const response = await ctx.apiFetch("/api/events", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        type: parsed.type.trim(),
+        payload: parsed.payload ?? {},
+        source: `agent:${ctx.agent.name}`,
+        ...(targetChannelId ? { channelId: targetChannelId } : {}),
+        ...(parsed.teamId ? { teamId: parsed.teamId } : {}),
+        ...(parsed.parentEventId ? { parentEventId: parsed.parentEventId } : {}),
+        ...(parsed.idempotencyKey ? { idempotencyKey: parsed.idempotencyKey } : {}),
+        ...(deliverAt !== undefined ? { deliverAt } : {}),
+      }),
+    });
+    const event = await response.json();
+    return {
+      event,
+      channelId: targetChannelId,
+      teamId: parsed.teamId,
+    };
   }
 
   if (tool === "events_schedule_self") {

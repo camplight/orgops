@@ -236,6 +236,16 @@ export default function App() {
     username
   ]);
 
+  const handleClearChatMessages = useCallback(async () => {
+    if (!activeChatTarget) return;
+    await apiFetch(`/api/channels/${activeChatTarget.id}/messages`, {
+      method: "DELETE",
+      headers: getApiHeaders()
+    });
+    const list = await loadChatEventsForTarget(activeChatTarget);
+    setChatEvents(list);
+  }, [activeChatTarget, loadChatEventsForTarget]);
+
   const handleApplyEventFilters = useCallback(async () => {
     const params = new URLSearchParams();
     if (eventFilters.agentName) params.set("agentName", eventFilters.agentName);
@@ -268,8 +278,8 @@ export default function App() {
       method: "DELETE",
       headers: getApiHeaders()
     });
-    data.setEvents([]);
-  }, [data.setEvents]);
+    await data.refreshEvents();
+  }, [data.refreshEvents]);
 
   if (!authChecked) {
     return (
@@ -320,12 +330,12 @@ export default function App() {
             });
             data.refreshDashboard();
           }}
-          onStartAgent={(name) =>
-            data.apiFetch(`/api/agents/${name}/start`, { method: "POST" })
-          }
-          onStopAgent={(name) =>
-            data.apiFetch(`/api/agents/${name}/stop`, { method: "POST" })
-          }
+          onStartAgent={async (name) => {
+            await data.apiFetch(`/api/agents/${name}/start`, { method: "POST" });
+          }}
+          onStopAgent={async (name) => {
+            await data.apiFetch(`/api/agents/${name}/stop`, { method: "POST" });
+          }}
           onCleanupAgentWorkspace={async (name) => {
             await data.apiFetch(`/api/agents/${name}/cleanup-workspace`, { method: "POST" });
           }}
@@ -447,6 +457,7 @@ export default function App() {
           onSelectTarget={handleSelectChatTarget}
           onMessageTextChange={setMessageText}
           onSendMessage={handleSendMessage}
+          onClearMessages={handleClearChatMessages}
         />
       )}
 

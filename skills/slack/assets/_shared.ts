@@ -97,3 +97,68 @@ export async function emitOrgOpsEvent(input: {
   }
   return (await res.json().catch(() => ({}))) as unknown;
 }
+
+export async function ensureOrgOpsChannelSubscription(input: {
+  channelId: string;
+  agentName: string;
+}) {
+  const apiUrl = process.env.ORGOPS_API_URL ?? "http://localhost:8787";
+  const token = process.env.ORGOPS_RUNNER_TOKEN;
+  if (!token) throw new Error("Missing ORGOPS_RUNNER_TOKEN");
+
+  const listRes = await fetch(`${apiUrl}/api/channels`, {
+    headers: {
+      "x-orgops-runner-token": token
+    }
+  });
+  if (!listRes.ok) {
+    const text = await listRes.text().catch(() => "");
+    throw new Error(`Failed to list orgops channels: ${listRes.status} ${text}`);
+  }
+  const existingChannels = (await listRes.json().catch(() => [])) as Array<{
+    name?: string;
+  }>;
+  const alreadyExists = existingChannels.some((channel) => channel.name === input.channelId);
+
+  if (!alreadyExists) {
+    const createRes = await fetch(`${apiUrl}/api/channels`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orgops-runner-token": token
+      },
+      body: JSON.stringify({
+        name: input.channelId,
+        description: "Auto-created Slack bridge channel"
+      })
+    });
+    if (!createRes.ok && createRes.status !== 409) {
+      const text = await createRes.text().catch(() => "");
+      const duplicateName =
+        text.includes("UNIQUE constraint failed: channels.name") ||
+        text.includes("constraint failed: channels.name");
+      if (!duplicateName) {
+        throw new Error(`Failed to ensure orgops channel: ${createRes.status} ${text}`);
+      }
+    }
+  }
+
+  const subscribeRes = await fetch(
+    `${apiUrl}/api/channels/${encodeURIComponent(input.channelId)}/subscribe`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orgops-runner-token": token
+      },
+      body: JSON.stringify({
+        subscriberType: "AGENT",
+        subscriberId: input.agentName
+      })
+    }
+  );
+  if (!subscribeRes.ok) {
+    const text = await subscribeRes.text().catch(() => "");
+    throw new Error(`Failed to subscribe agent to orgops channel: ${subscribeRes.status} ${text}`);
+  }
+}

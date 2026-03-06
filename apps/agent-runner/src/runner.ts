@@ -1,9 +1,10 @@
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { generate } from "@orgops/llm";
 import { listSkills, resolveSkillRoots } from "@orgops/skills";
 import { createRunnerTools, executeTool } from "./tools";
 import type { Agent, Event } from "./types";
+import { buildRunnerGuidance } from "./prompt";
 
 const API_URL = process.env.ORGOPS_API_URL ?? "http://localhost:8787";
 const PROJECT_ROOT = (() => {
@@ -156,14 +157,6 @@ export async function shouldHandleEvent(agent: Agent, event: Event) {
   return true;
 }
 
-function loadSoul(path: string) {
-  try {
-    return readFileSync(path, "utf-8");
-  } catch {
-    return "";
-  }
-}
-
 async function getPackageSecretsEnv(
   agentName: string,
 ): Promise<Record<string, string>> {
@@ -181,7 +174,7 @@ async function handleEvent(agent: Agent, event: Event) {
   const channelId = event.channelId;
   if (!channelId) return;
   const injectionEnv = await getPackageSecretsEnv(agent.name);
-  const soul = loadSoul(agent.soulPath);
+  const soul = typeof agent.soulContents === "string" ? agent.soulContents : "";
   const allSkills = listSkills(SKILL_ROOTS);
   const enabledSkillSet = new Set(agent.enabledSkills ?? []);
   enabledSkillSet.add("local-memory");
@@ -196,38 +189,7 @@ async function handleEvent(agent: Agent, event: Event) {
     .join("\n");
   const nowMs = Date.now();
   const nowIso = new Date(nowMs).toISOString();
-  const runnerGuidance = [
-    "Runner environment contract:",
-    "- You are running inside OrgOps agent-runner and receive one triggering event at a time from a channel.",
-    "- The runner executes your tool calls and records audit events for observability.",
-    "- The runner does not orchestrate your collaboration; you must decide delegation, waiting, and completion behavior.",
-    "- Skills are available as files and should be read explicitly with fs_read before use when needed.",
-    "",
-    "Tools and channels:",
-    "- Use tools directly: shell_run, fs_read/fs_write/fs_list/fs_stat/fs_mkdir/fs_rm/fs_move, proc_* and events_*.",
-    "- For agent-to-agent direct messaging use events_dm_send.",
-    "- For replies in the current channel use events_dm_reply or events_channel_send.",
-    "- For self-reminders/continuations use events_schedule_self.",
-    "- events_schedule_self creates an internal scheduled trigger event (type agent.scheduled.trigger), not a visible chat message by itself.",
-    "- When handling agent.scheduled.trigger, execute the instruction in payload.text, then send any needed user-facing messages/tools yourself.",
-    "- For delayed follow-ups prefer relative delaySeconds/delayMs.",
-    "- Absolute scheduling also supports deliverAtIso (ISO-8601) or deliverAt (unix ms).",
-    "- Use exactly one scheduling field per events tool call.",
-    `- Current UTC time is ${nowIso} (${nowMs} unix ms).`,
-    "- Propagate payload.originChannelId for delegated work so validated handoffs can return to origin channel.",
-    "- Only the origin agent should post final handoff to payload.originChannelId; collaborators should reply in current channel.",
-    "",
-    "Response ownership:",
-    "- Decide whether the runner should emit a final message reply for this step.",
-    "- Return `[REPLY] <text>` to instruct the runner to emit a message.created reply.",
-    "- Return `[NO_REPLY]` when you already sent the needed message via events tools or intentionally want silence.",
-    "- If no directive is provided, runner defaults to reply behavior.",
-    "- Avoid duplicate final responses: do not both send via tool and also return `[REPLY]` with the same content.",
-    "",
-    "Output quality:",
-    "- Final user-facing text must be concise and human-readable.",
-    "- Never emit raw tool JSON as prose.",
-  ].join("\n");
+  const runnerGuidance = buildRunnerGuidance(nowMs, nowIso);
   const system = [
     agent.systemInstructions,
     `Workspace:\n${agent.workspacePath}\n\n`,

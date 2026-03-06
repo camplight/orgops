@@ -92,7 +92,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     const agentName = params.get("agentName");
     const type = params.get("type");
     const typePrefix = params.get("typePrefix");
-    const source = params.get("source");
+    const sourceFilter = params.get("source");
     const sourcePrefix = params.get("sourcePrefix");
     const teamId = params.get("teamId");
     const status = params.get("status");
@@ -121,8 +121,8 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     if (typePrefix) {
       whereClauses.push(like(schema.events.type, `${typePrefix}%`));
     }
-    if (source) {
-      whereClauses.push(eq(schema.events.source, source));
+    if (sourceFilter) {
+      whereClauses.push(eq(schema.events.source, sourceFilter));
     }
     if (sourcePrefix) {
       whereClauses.push(like(schema.events.source, `${sourcePrefix}%`));
@@ -179,8 +179,8 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
         if (typePrefix) {
           receiptClauses.push(like(schema.events.type, `${typePrefix}%`));
         }
-        if (source) {
-          receiptClauses.push(eq(schema.events.source, source));
+        if (sourceFilter) {
+          receiptClauses.push(eq(schema.events.source, sourceFilter));
         }
         if (sourcePrefix) {
           receiptClauses.push(like(schema.events.source, `${sourcePrefix}%`));
@@ -324,8 +324,112 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
   });
 
   app.delete("/api/events", (c) => {
-    orm.delete(schema.events).run();
-    return jsonResponse(c, { ok: true });
+    const url = new URL(c.req.url);
+    const params = url.searchParams;
+    const channelId = params.get("channelId");
+    const type = params.get("type");
+    const sourceFilter = params.get("source");
+    const teamId = params.get("teamId");
+    const status = params.get("status");
+
+    const whereClauses: any[] = [];
+    if (channelId) {
+      whereClauses.push(eq(schema.events.channel_id, channelId));
+    }
+    if (type) {
+      whereClauses.push(eq(schema.events.type, type));
+    }
+    if (sourceFilter) {
+      whereClauses.push(eq(schema.events.source, sourceFilter));
+    }
+    if (teamId) {
+      whereClauses.push(eq(schema.events.team_id, teamId));
+    }
+    if (status) {
+      whereClauses.push(eq(schema.events.status, status));
+    }
+
+    const whereExpr =
+      whereClauses.length > 0
+        ? and(...(whereClauses as [any, ...any[]]))
+        : undefined;
+    const deletedCount =
+      whereExpr === undefined
+        ? ((orm
+            .select({ count: sql<number>`count(*)` })
+            .from(schema.events)
+            .get() as { count: number } | undefined)?.count ?? 0)
+        : ((orm
+            .select({ count: sql<number>`count(*)` })
+            .from(schema.events)
+            .where(whereExpr)
+            .get() as { count: number } | undefined)?.count ?? 0);
+
+    if (whereExpr === undefined) {
+      orm.delete(schema.events).run();
+    } else {
+      orm.delete(schema.events).where(whereExpr).run();
+    }
+
+    const user = c.get("user") as { username?: string } | undefined;
+    const auditSource =
+      user?.username && user.username !== "runner"
+        ? `human:${user.username}`
+        : "system";
+    insertEvent({
+      type: "audit.events.cleared",
+      source: auditSource,
+      channelId: channelId ?? undefined,
+      payload: {
+        scope: whereExpr ? "filtered" : "all",
+        deletedCount,
+        filters: {
+          channelId: channelId ?? undefined,
+          type: type ?? undefined,
+          source: sourceFilter ?? undefined,
+          teamId: teamId ?? undefined,
+          status: status ?? undefined,
+        },
+      },
+    });
+    return jsonResponse(c, { ok: true, deletedCount });
+  });
+
+  app.delete("/api/channels/:channelId/messages", (c) => {
+    const channelId = c.req.param("channelId");
+    const whereExpr = and(
+      eq(schema.events.channel_id, channelId),
+      eq(schema.events.type, "message.created"),
+    );
+    const deletedCount =
+      (orm
+        .select({ count: sql<number>`count(*)` })
+        .from(schema.events)
+        .where(whereExpr)
+        .get() as { count: number } | undefined)?.count ?? 0;
+
+    orm.delete(schema.events).where(whereExpr).run();
+
+    const user = c.get("user") as { username?: string } | undefined;
+    const source =
+      user?.username && user.username !== "runner"
+        ? `human:${user.username}`
+        : "system";
+    insertEvent({
+      type: "audit.events.cleared",
+      source,
+      channelId,
+      payload: {
+        scope: "channel_messages",
+        deletedCount,
+        filters: {
+          channelId,
+          type: "message.created",
+        },
+      },
+    });
+
+    return jsonResponse(c, { ok: true, channelId, deletedCount });
   });
 
   app.post("/api/events/:id/ack", (c) => {

@@ -13,6 +13,7 @@ It provides:
 - A **Socket Mode** listener (one process per agent) that converts Slack events into OrgOps events:
   - `slack.message.created`
   - `slack.app_mention`
+  - and bridges agent `message.created` replies from OrgOps `slack:*` channels back to Slack via `chat.postMessage`
 
 ## Secrets
 
@@ -66,6 +67,22 @@ bun run skills/slack/assets/post-message.ts -- --agent worker1 --channel C123 --
 bun run skills/slack/assets/reply.ts -- --agent worker1 --channel C123 --thread-ts 1710000000.000100 --text "reply"
 ```
 
+### Reply from OrgOps Slack events (recommended)
+
+For inbound `slack.message.created` / `slack.app_mention` events, use this helper so
+you can reply directly back to Slack from event fields:
+
+```bash
+bun run skills/slack/assets/respond-to-event.ts -- --agent worker1 --orgops-channel-id slack:T123:C456 --event-ts 1710000000.000100 --text "Working on it"
+```
+
+Notes:
+
+- `--orgops-channel-id` format is `slack:<teamId>:<channelId>`.
+- Use `--thread-ts` when present (or `--event-ts` to reply in thread anchored to the incoming event timestamp).
+- If neither `--thread-ts` nor `--event-ts` is provided, this posts a normal channel/DM message.
+- When responding to Slack-triggered events, prefer Slack post/reply via this script and return `[NO_REPLY]` so you do not also emit a duplicate OrgOps chat reply.
+
 ### Open a DM
 
 ```bash
@@ -109,7 +126,14 @@ This will emit OrgOps events via the Events API:
 - `slack.message.created`
 - `slack.app_mention`
 
+When emitting, the listener now auto-ensures an OrgOps channel named
+`slack:<teamId>:<channelId>` exists and subscribes the target agent, so incoming
+Slack events are routable to the runner without manual channel setup.
+
 Notes:
 
 - v1 keeps lifecycle management simple: you run this as an explicit sidecar process.
 - v2 can integrate with OrgOps process/websocket infra for supervision.
+- Listener now acts as a bidirectional bridge:
+  - Slack inbound -> OrgOps `slack.*` events
+  - OrgOps agent replies in `slack:<teamId>:<channelId>` -> Slack messages

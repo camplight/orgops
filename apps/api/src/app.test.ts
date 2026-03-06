@@ -7,6 +7,56 @@ import { openDb } from "@orgops/db";
 import { createApp } from "./app";
 
 describe("api app", () => {
+  it("stores and updates agent soul contents in database", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token"
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" })
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const createAgentRes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "soul-agent",
+        modelId: "openai:gpt-4o-mini",
+        workspacePath: ".orgops-data/workspaces/soul-agent",
+        soulContents: "initial soul"
+      })
+    });
+    expect(createAgentRes.status).toBe(201);
+
+    const patchRes = await app.request("http://localhost/api/agents/soul-agent", {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        soulContents: "updated soul from db"
+      })
+    });
+    expect(patchRes.status).toBe(200);
+
+    const getRes = await app.request("http://localhost/api/agents/soul-agent", {
+      headers: { cookie }
+    });
+    expect(getRes.status).toBe(200);
+    const agent = (await getRes.json()) as { soulContents?: string };
+    expect(agent.soulContents).toBe("updated soul from db");
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("authenticates and creates events", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");
@@ -787,8 +837,195 @@ describe("api app", () => {
       headers: { cookie }
     });
     expect(listRes.status).toBe(200);
-    const list = (await listRes.json()) as unknown[];
-    expect(list.length).toBe(0);
+    const list = (await listRes.json()) as Array<{ type: string; payload?: unknown }>;
+    expect(list.length).toBe(1);
+    expect(list[0]?.type).toBe("audit.events.cleared");
+    const payload = (list[0]?.payload ?? {}) as { scope?: string; deletedCount?: number };
+    expect(payload.scope).toBe("all");
+    expect(payload.deletedCount).toBe(1);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("clears only matching events when delete filters are provided", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token"
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" })
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const eventInputs = [
+      {
+        type: "message.created",
+        payload: { text: "delete me 1" },
+        source: "human:admin",
+        channelId: "channel-a"
+      },
+      {
+        type: "message.created",
+        payload: { text: "delete me 2" },
+        source: "human:admin",
+        channelId: "channel-a"
+      },
+      {
+        type: "agent.scheduled.trigger",
+        payload: { reason: "keep different type" },
+        source: "system",
+        channelId: "channel-a"
+      },
+      {
+        type: "message.created",
+        payload: { text: "keep different channel" },
+        source: "human:admin",
+        channelId: "channel-b"
+      }
+    ];
+
+    for (const input of eventInputs) {
+      const createRes = await app.request("http://localhost/api/events", {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify(input)
+      });
+      expect(createRes.status).toBe(201);
+    }
+
+    const clearRes = await app.request(
+      "http://localhost/api/events?channelId=channel-a&type=message.created",
+      {
+        method: "DELETE",
+        headers: { cookie }
+      }
+    );
+    expect(clearRes.status).toBe(200);
+
+    const channelARes = await app.request(
+      "http://localhost/api/events?channelId=channel-a&all=1&order=asc",
+      {
+        headers: { cookie }
+      }
+    );
+    expect(channelARes.status).toBe(200);
+    const channelAEvents = (await channelARes.json()) as Array<{ type: string; payload?: unknown }>;
+    const channelATypes = channelAEvents.map((event) => event.type);
+    expect(channelATypes.includes("agent.scheduled.trigger")).toBe(true);
+    expect(channelATypes.includes("audit.events.cleared")).toBe(true);
+    expect(channelAEvents.length).toBe(2);
+    const auditEvent = channelAEvents.find((event) => event.type === "audit.events.cleared");
+    const auditPayload = (auditEvent?.payload ?? {}) as { scope?: string; deletedCount?: number };
+    expect(auditPayload.scope).toBe("filtered");
+    expect(auditPayload.deletedCount).toBe(2);
+
+    const channelBRes = await app.request(
+      "http://localhost/api/events?channelId=channel-b&all=1&order=asc",
+      {
+        headers: { cookie }
+      }
+    );
+    expect(channelBRes.status).toBe(200);
+    const channelBEvents = (await channelBRes.json()) as Array<{ type: string }>;
+    expect(channelBEvents.length).toBe(1);
+    expect(channelBEvents[0]?.type).toBe("message.created");
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("clears only channel messages via dedicated endpoint and leaves audit trace", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token"
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" })
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const createEvents = [
+      {
+        type: "message.created",
+        payload: { text: "delete me 1" },
+        source: "human:admin",
+        channelId: "chat-a"
+      },
+      {
+        type: "message.created",
+        payload: { text: "delete me 2" },
+        source: "human:admin",
+        channelId: "chat-a"
+      },
+      {
+        type: "agent.scheduled.trigger",
+        payload: { reason: "keep non-message event" },
+        source: "system",
+        channelId: "chat-a"
+      },
+      {
+        type: "message.created",
+        payload: { text: "different channel" },
+        source: "human:admin",
+        channelId: "chat-b"
+      }
+    ];
+    for (const input of createEvents) {
+      const createRes = await app.request("http://localhost/api/events", {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify(input)
+      });
+      expect(createRes.status).toBe(201);
+    }
+
+    const clearRes = await app.request("http://localhost/api/channels/chat-a/messages", {
+      method: "DELETE",
+      headers: { cookie }
+    });
+    expect(clearRes.status).toBe(200);
+    const clearBody = (await clearRes.json()) as { deletedCount?: number };
+    expect(clearBody.deletedCount).toBe(2);
+
+    const chatARes = await app.request("http://localhost/api/events?channelId=chat-a&all=1&order=asc", {
+      headers: { cookie }
+    });
+    expect(chatARes.status).toBe(200);
+    const chatAEvents = (await chatARes.json()) as Array<{ type: string; payload?: unknown }>;
+    const chatATypes = chatAEvents.map((event) => event.type);
+    expect(chatATypes.includes("agent.scheduled.trigger")).toBe(true);
+    expect(chatATypes.includes("audit.events.cleared")).toBe(true);
+    expect(chatATypes.includes("message.created")).toBe(false);
+
+    const auditEvent = chatAEvents.find((event) => event.type === "audit.events.cleared");
+    const payload = (auditEvent?.payload ?? {}) as { scope?: string; deletedCount?: number };
+    expect(payload.scope).toBe("channel_messages");
+    expect(payload.deletedCount).toBe(2);
+
+    const chatBRes = await app.request("http://localhost/api/events?channelId=chat-b&all=1&order=asc", {
+      headers: { cookie }
+    });
+    expect(chatBRes.status).toBe(200);
+    const chatBEvents = (await chatBRes.json()) as Array<{ type: string }>;
+    expect(chatBEvents.length).toBe(1);
+    expect(chatBEvents[0]?.type).toBe("message.created");
 
     rmSync(dataDir, { recursive: true, force: true });
   });

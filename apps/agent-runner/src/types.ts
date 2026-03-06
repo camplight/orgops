@@ -2,6 +2,7 @@ export type Agent = {
   name: string;
   systemInstructions: string;
   soulPath: string;
+  soulContents?: string;
   enabledSkills?: string[];
   workspacePath: string;
   modelId: string;
