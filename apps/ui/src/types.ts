@@ -9,6 +9,7 @@ export type Agent = {
   soulContents?: string;
   enabledSkills?: string[];
   workspacePath?: string;
+  allowOutsideWorkspace?: boolean;
 };
 
 export type EventRow = {

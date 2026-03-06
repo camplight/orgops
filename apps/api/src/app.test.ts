@@ -33,6 +33,7 @@ describe("api app", () => {
         name: "soul-agent",
         modelId: "openai:gpt-4o-mini",
         workspacePath: ".orgops-data/workspaces/soul-agent",
+        allowOutsideWorkspace: true,
         soulContents: "initial soul"
       })
     });
@@ -42,7 +43,8 @@ describe("api app", () => {
       method: "PATCH",
       headers: { "content-type": "application/json", cookie },
       body: JSON.stringify({
-        soulContents: "updated soul from db"
+        soulContents: "updated soul from db",
+        allowOutsideWorkspace: false
       })
     });
     expect(patchRes.status).toBe(200);
@@ -51,8 +53,12 @@ describe("api app", () => {
       headers: { cookie }
     });
     expect(getRes.status).toBe(200);
-    const agent = (await getRes.json()) as { soulContents?: string };
+    const agent = (await getRes.json()) as {
+      soulContents?: string;
+      allowOutsideWorkspace?: boolean;
+    };
     expect(agent.soulContents).toBe("updated soul from db");
+    expect(agent.allowOutsideWorkspace).toBe(false);
 
     rmSync(dataDir, { recursive: true, force: true });
   });

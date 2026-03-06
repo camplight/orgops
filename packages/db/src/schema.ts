@@ -23,6 +23,9 @@ export const agents = sqliteTable("agents", {
   soul_path: text("soul_path").notNull(),
   soul_contents: text("soul_contents").notNull().default(""),
   workspace_path: text("workspace_path").notNull(),
+  allow_outside_workspace: integer("allow_outside_workspace")
+    .notNull()
+    .default(0),
   desired_state: text("desired_state").notNull().default("RUNNING"),
   runtime_state: text("runtime_state").notNull().default("STOPPED"),
   last_heartbeat_at: integer("last_heartbeat_at"),

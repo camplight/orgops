@@ -153,8 +153,6 @@ async function sendMessage(
   ctx: ExecuteContext,
   channelId: string,
   text: string,
-  originChannelId?: string,
-  originAgentName?: string,
   deliverAt?: number,
 ) {
   const response = await ctx.apiFetch("/api/events", {
@@ -166,8 +164,6 @@ async function sendMessage(
       channelId,
       payload: {
         text,
-        ...(originChannelId ? { originChannelId } : {}),
-        ...(originAgentName ? { originAgentName } : {}),
       },
       ...(deliverAt !== undefined ? { deliverAt } : {}),
     }),
@@ -221,24 +217,6 @@ function agentNameFromSource(source: string | undefined): string | null {
   return name || null;
 }
 
-function resolveOriginChannelId(ctx: ExecuteContext): string | undefined {
-  const fromPayload =
-    typeof ctx.triggerEvent.payload?.originChannelId === "string"
-      ? ctx.triggerEvent.payload.originChannelId.trim()
-      : "";
-  if (fromPayload) return fromPayload;
-  return ctx.triggerEvent.channelId;
-}
-
-function resolveOriginAgentName(ctx: ExecuteContext): string | undefined {
-  const fromPayload =
-    typeof ctx.triggerEvent.payload?.originAgentName === "string"
-      ? ctx.triggerEvent.payload.originAgentName.trim()
-      : "";
-  if (fromPayload) return fromPayload;
-  return ctx.agent.name;
-}
-
 export async function execute(
   ctx: ExecuteContext,
   tool: string,
@@ -249,14 +227,10 @@ export async function execute(
     const deliverAt = resolveDeliverAt(parsed);
     const channelId = await ensureDirectChannel(ctx, parsed.agentName);
     const text = ensureAgentMention(parsed.text, parsed.agentName);
-    const originChannelId = resolveOriginChannelId(ctx);
-    const originAgentName = resolveOriginAgentName(ctx);
     const event = await sendMessage(
       ctx,
       channelId,
       text,
-      originChannelId,
-      originAgentName,
       deliverAt,
     );
     return { channelId, event };
@@ -273,14 +247,10 @@ export async function execute(
       triggerAgent && triggerAgent !== ctx.agent.name
         ? ensureAgentMention(parsed.text, triggerAgent)
         : parsed.text;
-    const originChannelId = resolveOriginChannelId(ctx);
-    const originAgentName = resolveOriginAgentName(ctx);
     const event = await sendMessage(
       ctx,
       ctx.channelId,
       text,
-      originChannelId,
-      originAgentName,
       deliverAt,
     );
     return { channelId: ctx.channelId, event };
@@ -290,14 +260,7 @@ export async function execute(
     const parsed = channelSendSchema.parse(args);
     const deliverAt = resolveDeliverAt(parsed);
     const triggerAgent = agentNameFromSource(ctx.triggerEvent.source);
-    const originChannelId = resolveOriginChannelId(ctx);
-    const originAgentName = resolveOriginAgentName(ctx);
-    const channelId =
-      parsed.channelId === originChannelId &&
-      originAgentName &&
-      ctx.agent.name !== originAgentName
-        ? (ctx.channelId ?? parsed.channelId)
-        : parsed.channelId;
+    const channelId = parsed.channelId;
     const text =
       channelId === ctx.channelId &&
       triggerAgent &&
@@ -308,8 +271,6 @@ export async function execute(
       ctx,
       channelId,
       text,
-      originChannelId,
-      originAgentName,
       deliverAt,
     );
     return { channelId, event };

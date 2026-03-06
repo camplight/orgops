@@ -45,6 +45,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         soulContents: row.soul_contents ?? "",
         enabledSkills: parseStringArraySafe(row.enabled_skills_json),
         workspacePath: row.workspace_path,
+        allowOutsideWorkspace: Boolean(row.allow_outside_workspace),
         desiredState: row.desired_state,
         runtimeState: row.runtime_state,
         lastHeartbeatAt: row.last_heartbeat_at,
@@ -70,6 +71,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     const enabledSkills = Array.isArray(body.enabledSkills)
       ? body.enabledSkills.filter((item: unknown): item is string => typeof item === "string")
       : [];
+    const allowOutsideWorkspace = Boolean(body.allowOutsideWorkspace);
     orm
       .insert(schema.agents)
       .values({
@@ -82,6 +84,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         soul_path: soulPath,
         soul_contents: soulContents,
         workspace_path: workspacePath,
+        allow_outside_workspace: allowOutsideWorkspace ? 1 : 0,
         enabled_skills_json: JSON.stringify(enabledSkills),
         desired_state: body.desiredState ?? "RUNNING",
         runtime_state: body.runtimeState ?? "STOPPED",
@@ -107,6 +110,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       soulContents: row.soul_contents ?? "",
       enabledSkills: parseStringArraySafe(row.enabled_skills_json),
       workspacePath: row.workspace_path,
+      allowOutsideWorkspace: Boolean(row.allow_outside_workspace),
       desiredState: row.desired_state,
       runtimeState: row.runtime_state,
       lastHeartbeatAt: row.last_heartbeat_at,
@@ -131,6 +135,10 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     const enabledSkillsJson = Array.isArray(body.enabledSkills)
       ? JSON.stringify(body.enabledSkills.filter((item: unknown): item is string => typeof item === "string"))
       : null;
+    const allowOutsideWorkspace =
+      body.allowOutsideWorkspace !== undefined
+        ? (body.allowOutsideWorkspace ? 1 : 0)
+        : null;
     orm
       .update(schema.agents)
       .set({
@@ -144,6 +152,8 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
             ? body.soulContents
             : existing.soul_contents,
         workspace_path: workspacePath,
+        allow_outside_workspace:
+          allowOutsideWorkspace ?? existing.allow_outside_workspace,
         enabled_skills_json: enabledSkillsJson ?? existing.enabled_skills_json,
         desired_state: body.desiredState ?? existing.desired_state,
         runtime_state: body.runtimeState ?? existing.runtime_state,

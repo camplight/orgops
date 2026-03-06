@@ -16,6 +16,7 @@ export type ExecuteContext = {
   agent: Agent;
   triggerEvent: Event;
   channelId?: string;
+  extraAllowedRoots?: string[];
   injectionEnv: Record<string, string>;
   apiFetch: (path: string, init?: RequestInit) => Promise<Response>;
   emitEvent: (event: unknown) => Promise<void>;

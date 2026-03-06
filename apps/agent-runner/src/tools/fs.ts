@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { ExecuteContext, ToolDef } from "./types";
-import { resolve } from "node:path";
+import { resolveAgentPath } from "./path-access";
 
 export const fsToolDefs: ToolDef[] = [
   ["fs_read", "Read a file.", z.object({ path: z.string() })],
@@ -30,7 +30,7 @@ export async function execute(
   const rawTo = String(args.to ?? "");
   const toWorkspacePath = (value: string) => {
     if (!value) return value;
-    return value.startsWith("/") ? value : resolve(ctx.agent.workspacePath, value);
+    return resolveAgentPath(ctx.agent, value, ctx.extraAllowedRoots ?? []);
   };
   const path = toWorkspacePath(rawPath);
   const to = toWorkspacePath(rawTo);

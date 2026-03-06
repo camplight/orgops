@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { z } from "zod";
 import type { ExecuteContext, ToolDef } from "./types";
+import { resolveAgentPath } from "./path-access";
 
 const envSchema = z.record(z.string(), z.string()).optional();
 
@@ -21,7 +22,12 @@ export async function execute(
   args: Record<string, unknown>,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const cmd = String(args.cmd ?? "");
-  const cwd = String(args.cwd ?? ctx.agent.workspacePath);
+  const requestedCwd = String(args.cwd ?? ctx.agent.workspacePath);
+  const cwd = resolveAgentPath(
+    ctx.agent,
+    requestedCwd,
+    ctx.extraAllowedRoots ?? [],
+  );
   const env = (args.env ?? {}) as Record<string, string>;
   const startTs = Date.now();
   const result = spawnSync("/bin/bash", ["-lc", cmd], {

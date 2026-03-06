@@ -5,6 +5,7 @@ export type Agent = {
   soulContents?: string;
   enabledSkills?: string[];
   workspacePath: string;
+  allowOutsideWorkspace?: boolean;
   modelId: string;
   desiredState: string;
   runtimeState: string;

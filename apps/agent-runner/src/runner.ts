@@ -193,6 +193,7 @@ async function handleEvent(agent: Agent, event: Event) {
   const system = [
     agent.systemInstructions,
     `Workspace:\n${agent.workspacePath}\n\n`,
+    `Allow outside workspace:\n${agent.allowOutsideWorkspace ? "enabled" : "disabled"}\n\n`,
     soul ? `Soul:\n${soul}` : "",
     runnerGuidance,
     "Use skills:\n" + skillIndex,
@@ -206,6 +207,7 @@ async function handleEvent(agent: Agent, event: Event) {
     agent,
     triggerEvent: event,
     channelId,
+    extraAllowedRoots: selectedSkills.map((skill) => skill.path),
     injectionEnv,
     apiFetch,
     emitEvent,
@@ -260,17 +262,12 @@ async function handleEvent(agent: Agent, event: Event) {
     return;
   }
 
-  const originChannelId =
-    typeof event.payload?.originChannelId === "string"
-      ? event.payload.originChannelId.trim()
-      : "";
   await emitEvent({
     type: "message.created",
     payload: {
       text: directive.text,
       eventType: event.type,
       hopCount: Number(event.payload?.hopCount ?? 0) + 1,
-      ...(originChannelId ? { originChannelId } : {}),
     },
     source: `agent:${agent.name}`,
     channelId,

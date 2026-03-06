@@ -6,6 +6,7 @@ type AgentForm = {
   name: string;
   modelId: string;
   workspacePath: string;
+  allowOutsideWorkspace: boolean;
   soulContents: string;
   enabledSkills: string[];
 };
@@ -14,6 +15,7 @@ const DEFAULT_AGENT_FORM: AgentForm = {
   name: "",
   modelId: "openai:gpt-4o-mini",
   workspacePath: ".orgops-data/workspaces/default",
+  allowOutsideWorkspace: false,
   soulContents: "",
   enabledSkills: []
 };
@@ -63,6 +65,7 @@ export function AgentsScreen({
       workspacePath:
         selectedAgent.workspacePath ??
         `.orgops-data/workspaces/${selectedAgent.name}`,
+      allowOutsideWorkspace: Boolean(selectedAgent.allowOutsideWorkspace),
       soulContents: selectedAgent.soulContents ?? "",
       enabledSkills: selectedAgent.enabledSkills ?? []
     });
@@ -97,6 +100,7 @@ export function AgentsScreen({
           name: normalizedName,
           modelId: form.modelId.trim(),
           workspacePath: form.workspacePath.trim(),
+          allowOutsideWorkspace: form.allowOutsideWorkspace,
           soulContents: form.soulContents
         });
         setIsCreating(false);
@@ -112,6 +116,7 @@ export function AgentsScreen({
       await onUpdateAgent(selectedAgent.name, {
         modelId: form.modelId.trim(),
         workspacePath: form.workspacePath.trim(),
+        allowOutsideWorkspace: form.allowOutsideWorkspace,
         soulContents: form.soulContents,
         enabledSkills: form.enabledSkills
       });
@@ -235,6 +240,21 @@ export function AgentsScreen({
                 placeholder=".orgops-data/workspaces/agent-name"
               />
             </div>
+            <label className="flex items-center gap-2 rounded border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-300">
+              <input
+                type="checkbox"
+                checked={form.allowOutsideWorkspace}
+                onChange={(e) => {
+                  setIsFormDirty(true);
+                  setSaveStatus(null);
+                  setForm((prev) => ({
+                    ...prev,
+                    allowOutsideWorkspace: e.target.checked
+                  }));
+                }}
+              />
+              <span>Allow access outside workspace (full host filesystem)</span>
+            </label>
             <div className="space-y-2">
               <div className="text-sm text-slate-400">Enabled skills</div>
               <div className="grid gap-2 sm:grid-cols-2">
