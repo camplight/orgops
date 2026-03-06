@@ -9,7 +9,6 @@ type EventFilters = {
   type: string;
   source: string;
   status: string;
-  teamId: string;
   auditOnly: boolean;
   scheduledOnly: boolean;
 };
@@ -39,7 +38,6 @@ const DEFAULT_FILTERS: EventFilters = {
   type: "",
   source: "",
   status: "",
-  teamId: "",
   auditOnly: false,
   scheduledOnly: false,
 };
@@ -166,11 +164,6 @@ export function EventsScreen({
             placeholder="Status"
             value={filters.status}
             onChange={(e) => onFiltersChange({ ...filters, status: e.target.value })}
-          />
-          <Input
-            placeholder="Team ID"
-            value={filters.teamId}
-            onChange={(e) => onFiltersChange({ ...filters, teamId: e.target.value })}
           />
           <Input
             placeholder="Payload contains (client-side)"

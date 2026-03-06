@@ -7,6 +7,7 @@ import {
   text,
   uniqueIndex
 } from "drizzle-orm/sqlite-core";
+import { CHANNEL_KINDS } from "./channel-kinds";
 
 export const migrations = sqliteTable("migrations", {
   id: text("id").primaryKey(),
@@ -59,7 +60,7 @@ export const channels = sqliteTable("channels", {
   id: text("id").primaryKey(),
   name: text("name").notNull().unique(),
   description: text("description"),
-  kind: text("kind").notNull().default("GROUP"),
+  kind: text("kind").notNull().default(CHANNEL_KINDS.GROUP),
   direct_participant_key: text("direct_participant_key"),
   created_at: integer("created_at").notNull()
 }, (table) => ({
@@ -107,7 +108,6 @@ export const events = sqliteTable(
     payload_json: text("payload_json").notNull(),
     source: text("source").notNull(),
     channel_id: text("channel_id"),
-    team_id: text("team_id"),
     parent_event_id: text("parent_event_id"),
     deliver_at: integer("deliver_at"),
     status: text("status").notNull().default("PENDING"),

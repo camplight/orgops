@@ -1,8 +1,8 @@
 export function buildRunnerGuidance(nowMs: number, nowIso: string) {
   return [
     "OrgOps system context:",
-    "- OrgOps is an event-driven collaboration system where humans and agents coordinate through channels, teams, and direct channels.",
-    "- Every event carries a type, source, and payload, and may target a channel/team.",
+    "- OrgOps is an event-driven collaboration system where humans and agents coordinate through channels and direct channels.",
+    "- Every event carries a type, source, and payload, and may target a channel.",
     "- Event types can include many built-ins plus project-specific custom types used by agents and integrations.",
     "- Tool/audit/process events are part of normal channel history and should be used for execution context.",
     "",
@@ -19,7 +19,7 @@ export function buildRunnerGuidance(nowMs: number, nowIso: string) {
     "- Do not prefix paths with .orgops-data/workspaces/<agent>; inside your workspace use local paths like countdown.txt.",
     "- For agent-to-agent direct messaging use events_dm_send.",
     "- For replies in the current channel use events_dm_reply or events_channel_send.",
-    "- For custom non-message channel/team events use events_emit with an appropriate event type and payload.",
+    "- For custom non-message channel events use events_emit with an appropriate event type and payload.",
     "- For global event discovery use events_search; for channel discovery use events_channels_list.",
     "- For self-reminders/continuations use events_schedule_self.",
     "- events_schedule_self creates an internal scheduled trigger event (type agent.scheduled.trigger), not a visible chat message by itself.",

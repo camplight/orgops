@@ -53,6 +53,13 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     const parsed = EventSchema.safeParse(body);
     if (!parsed.success)
       return jsonResponse(c, { error: "Invalid payload" }, 400);
+    if (Object.prototype.hasOwnProperty.call(body, "teamId")) {
+      return jsonResponse(
+        c,
+        { error: "teamId is no longer supported. Use channelId." },
+        400,
+      );
+    }
 
     const type = parsed.data.type ?? body?.type;
     const requestedSource = parsed.data.source ?? body?.source;
@@ -94,7 +101,6 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     const typePrefix = params.get("typePrefix");
     const sourceFilter = params.get("source");
     const sourcePrefix = params.get("sourcePrefix");
-    const teamId = params.get("teamId");
     const status = params.get("status");
     const scheduled = params.get("scheduled");
     const after = params.get("after");
@@ -126,9 +132,6 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     }
     if (sourcePrefix) {
       whereClauses.push(like(schema.events.source, `${sourcePrefix}%`));
-    }
-    if (teamId) {
-      whereClauses.push(eq(schema.events.team_id, teamId));
     }
     if (status && !(agentName && isRunnerRequest)) {
       whereClauses.push(eq(schema.events.status, status));
@@ -185,10 +188,6 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
         if (sourcePrefix) {
           receiptClauses.push(like(schema.events.source, `${sourcePrefix}%`));
         }
-        if (teamId) {
-          receiptClauses.push(eq(schema.events.team_id, teamId));
-        }
-
         const joinedQuery = orm
           .select({
             event: schema.events,
@@ -269,23 +268,9 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
         )
         .all();
       const channelIds = agentChannels.map((row) => row.channelId);
-      const agentTeams = orm
-        .select({ teamId: schema.teamMemberships.team_id })
-        .from(schema.teamMemberships)
-        .where(
-          and(
-            eq(schema.teamMemberships.member_type, "AGENT"),
-            eq(schema.teamMemberships.member_id, agentName),
-          ),
-        )
-        .all();
-      const teamIds = agentTeams.map((row) => row.teamId);
       const visibilityClauses: any[] = [];
       if (channelIds.length > 0) {
         visibilityClauses.push(inArray(schema.events.channel_id, channelIds));
-      }
-      if (teamIds.length > 0) {
-        visibilityClauses.push(inArray(schema.events.team_id, teamIds));
       }
       if (visibilityClauses.length === 0) {
         return jsonResponse(c, []);
@@ -329,7 +314,6 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     const channelId = params.get("channelId");
     const type = params.get("type");
     const sourceFilter = params.get("source");
-    const teamId = params.get("teamId");
     const status = params.get("status");
 
     const whereClauses: any[] = [];
@@ -341,9 +325,6 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     }
     if (sourceFilter) {
       whereClauses.push(eq(schema.events.source, sourceFilter));
-    }
-    if (teamId) {
-      whereClauses.push(eq(schema.events.team_id, teamId));
     }
     if (status) {
       whereClauses.push(eq(schema.events.status, status));
@@ -387,7 +368,6 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
           channelId: channelId ?? undefined,
           type: type ?? undefined,
           source: sourceFilter ?? undefined,
-          teamId: teamId ?? undefined,
           status: status ?? undefined,
         },
       },

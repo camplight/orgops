@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import { generate } from "@orgops/llm";
 import { listSkills, resolveSkillRoots } from "@orgops/skills";
 import { createRunnerTools, executeTool } from "./tools";
+import { stopAllRunningProcesses } from "./tools/proc";
 import type { Agent, Event } from "./types";
 import { buildRunnerGuidance } from "./prompt";
 
@@ -321,7 +322,17 @@ async function pollAgent(agent: Agent) {
 }
 
 export async function loop() {
-  while (true) {
+  let shuttingDown = false;
+  let shutdownSignal: NodeJS.Signals | null = null;
+  const onShutdownSignal = (signal: NodeJS.Signals) => {
+    shuttingDown = true;
+    shutdownSignal = signal;
+  };
+  const onSigint = () => onShutdownSignal("SIGINT");
+  const onSigterm = () => onShutdownSignal("SIGTERM");
+  process.once("SIGINT", onSigint);
+  process.once("SIGTERM", onSigterm);
+  while (!shuttingDown) {
     try {
       const agents = await listAgents();
       const results = await Promise.allSettled(
@@ -337,6 +348,15 @@ export async function loop() {
     } catch (error) {
       console.error(error);
     }
+    if (shuttingDown) break;
     await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  process.off("SIGINT", onSigint);
+  process.off("SIGTERM", onSigterm);
+  const processShutdownSummary = await stopAllRunningProcesses();
+  if (processShutdownSummary.processCount > 0) {
+    console.log(
+      `runner shutdown (${shutdownSignal ?? "STOP"}): stopped ${processShutdownSummary.terminated} process(es), killed ${processShutdownSummary.killed}`,
+    );
   }
 }

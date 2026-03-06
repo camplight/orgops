@@ -14,7 +14,6 @@ export const EventSchema = z.object({
   payload: z.unknown(),
   source: z.string(),
   channelId: z.string().optional(),
-  teamId: z.string().optional(),
   parentEventId: z.string().optional(),
   deliverAt: z.number().optional(),
   status: EventStatusSchema.optional(),

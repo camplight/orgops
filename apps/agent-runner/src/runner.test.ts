@@ -6,6 +6,7 @@ import {
   parseResponseDirective,
   shouldHandleEvent,
 } from "./runner";
+import { stopAllRunningProcesses } from "./tools/proc";
 import type { Agent, Event } from "./types";
 
 describe("agent runner", () => {
@@ -400,7 +401,7 @@ describe("agent runner", () => {
             {
               id: "chan-a",
               name: "slack:T1:C1",
-              kind: "GROUP",
+              kind: "INTEGRATION_BRIDGE",
               participants: [{ subscriberType: "AGENT", subscriberId: "tester" }],
             },
             {
@@ -446,5 +447,57 @@ describe("agent runner", () => {
       mode: "reply",
       text: "plain text",
     });
+  });
+
+  it("gracefully terminates spawned processes during shutdown", async () => {
+    const requests: Array<{ path: string; body: any }> = [];
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      extraAllowedRoots: [],
+      apiFetch: async (path: string, init?: RequestInit) => {
+        requests.push({
+          path,
+          body: JSON.parse(String(init?.body ?? "{}")),
+        });
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        });
+      },
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+    };
+
+    const started = (await executeTool(ctx, "proc_start", {
+      cmd: "sleep 30",
+    })) as { processId: string };
+    expect(typeof started.processId).toBe("string");
+
+    const summary = await stopAllRunningProcesses(4000);
+    expect(summary.processCount).toBeGreaterThanOrEqual(1);
+    expect(summary.terminated + summary.killed).toBeGreaterThanOrEqual(1);
+
+    const exitRequest = requests.find((request) =>
+      request.path.includes(`/api/processes/${started.processId}/exit`),
+    );
+    expect(exitRequest).toBeDefined();
+    expect(exitRequest?.body.state).toBe("TERMINATED");
   });
 });

@@ -26,7 +26,6 @@ const emitSchema = z.object({
   type: z.string().min(1),
   payload: z.unknown().optional(),
   channelId: z.string().min(1).optional(),
-  teamId: z.string().min(1).optional(),
   parentEventId: z.string().min(1).optional(),
   idempotencyKey: z.string().min(1).optional(),
 }).merge(scheduleOptionsSchema);
@@ -43,7 +42,6 @@ const searchSchema = z.object({
   typePrefix: z.string().min(1).optional(),
   source: z.string().min(1).optional(),
   sourcePrefix: z.string().min(1).optional(),
-  teamId: z.string().min(1).optional(),
   status: z.string().min(1).optional(),
   after: z.number().int().min(0).optional(),
   limit: z.number().int().min(1).max(500).optional(),
@@ -108,7 +106,7 @@ export const eventsToolDefs: ToolDef[] = [
   ],
   [
     "events_emit",
-    "Emit a custom event by type to a channel/team (or current channel). Optional scheduling via deliverAt, deliverAtIso, delayMs, or delaySeconds.",
+    "Emit a custom event by type to a channel (or current channel). Optional scheduling via deliverAt, deliverAtIso, delayMs, or delaySeconds.",
     emitSchema,
   ],
   [
@@ -118,7 +116,7 @@ export const eventsToolDefs: ToolDef[] = [
   ],
   [
     "events_search",
-    "Search events across all visible channels with optional filters (type/source/team/status/time/order).",
+    "Search events across all visible channels with optional filters (type/source/status/time/order).",
     searchSchema,
   ],
   [
@@ -296,7 +294,6 @@ export async function execute(
     if (parsed.typePrefix) query.set("typePrefix", parsed.typePrefix);
     if (parsed.source) query.set("source", parsed.source);
     if (parsed.sourcePrefix) query.set("sourcePrefix", parsed.sourcePrefix);
-    if (parsed.teamId) query.set("teamId", parsed.teamId);
     if (parsed.status) query.set("status", parsed.status);
     if (parsed.after !== undefined) query.set("after", String(parsed.after));
     if (parsed.limit !== undefined) query.set("limit", String(parsed.limit));
@@ -343,10 +340,10 @@ export async function execute(
     const deliverAt = resolveDeliverAt(parsed);
     const defaultChannelId = ctx.channelId;
     const targetChannelId = parsed.channelId?.trim() || defaultChannelId;
-    if (!targetChannelId && !parsed.teamId) {
+    if (!targetChannelId) {
       return {
         error:
-          "No target destination. Provide channelId/teamId or call from an event with channel context.",
+          "No target destination. Provide channelId or call from an event with channel context.",
       };
     }
     const response = await ctx.apiFetch("/api/events", {
@@ -357,7 +354,6 @@ export async function execute(
         payload: parsed.payload ?? {},
         source: `agent:${ctx.agent.name}`,
         ...(targetChannelId ? { channelId: targetChannelId } : {}),
-        ...(parsed.teamId ? { teamId: parsed.teamId } : {}),
         ...(parsed.parentEventId ? { parentEventId: parsed.parentEventId } : {}),
         ...(parsed.idempotencyKey ? { idempotencyKey: parsed.idempotencyKey } : {}),
         ...(deliverAt !== undefined ? { deliverAt } : {}),
@@ -367,7 +363,6 @@ export async function execute(
     return {
       event,
       channelId: targetChannelId,
-      teamId: parsed.teamId,
     };
   }
 

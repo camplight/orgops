@@ -168,7 +168,6 @@ export function createApp(config: AppConfig = {}) {
       payload: parseJson(row.payload_json, {}),
       source: row.source,
       channelId: row.channel_id ?? undefined,
-      teamId: row.team_id ?? undefined,
       parentEventId: row.parent_event_id ?? undefined,
       deliverAt: row.deliver_at ?? undefined,
       status: row.status,
@@ -184,9 +183,6 @@ export function createApp(config: AppConfig = {}) {
     const topics = new Set<string>(["org:events"]);
     if (event.channelId) {
       topics.add(`channel:${event.channelId}`);
-    }
-    if (event.teamId) {
-      topics.add(`team:${event.teamId}`);
     }
     if (typeof event.source === "string" && event.source.startsWith("agent:")) {
       topics.add(event.source);
@@ -212,21 +208,6 @@ export function createApp(config: AppConfig = {}) {
     const resolveRecipientAgents = (): string[] => {
       const recipients = new Set<string>();
 
-      const collectTeamAgents = (teamIds: string[]) => {
-        if (teamIds.length === 0) return;
-        const members = orm
-          .select({ memberId: schema.teamMemberships.member_id })
-          .from(schema.teamMemberships)
-          .where(
-            and(
-              inArray(schema.teamMemberships.team_id, teamIds),
-              eq(schema.teamMemberships.member_type, "AGENT"),
-            ),
-          )
-          .all();
-        for (const member of members) recipients.add(member.memberId);
-      };
-
       const channelId =
         typeof input.channelId === "string" ? input.channelId : "";
       if (channelId) {
@@ -242,25 +223,6 @@ export function createApp(config: AppConfig = {}) {
           .all();
         for (const subscriber of channelAgentSubscribers)
           recipients.add(subscriber.subscriberId);
-
-        const channelTeamSubscribers = orm
-          .select({ subscriberId: schema.channelSubscriptions.subscriber_id })
-          .from(schema.channelSubscriptions)
-          .where(
-            and(
-              eq(schema.channelSubscriptions.channel_id, channelId),
-              eq(schema.channelSubscriptions.subscriber_type, "TEAM"),
-            ),
-          )
-          .all();
-        collectTeamAgents(
-          channelTeamSubscribers.map((row) => row.subscriberId),
-        );
-      }
-
-      const teamId = typeof input.teamId === "string" ? input.teamId : "";
-      if (teamId) {
-        collectTeamAgents([teamId]);
       }
       return [...recipients];
     };
@@ -277,7 +239,6 @@ export function createApp(config: AppConfig = {}) {
       payload_json: payloadJson,
       source: input.source,
       channel_id: input.channelId ?? null,
-      team_id: input.teamId ?? null,
       parent_event_id: input.parentEventId ?? null,
       deliver_at: input.deliverAt ?? null,
       status,
@@ -298,7 +259,6 @@ export function createApp(config: AppConfig = {}) {
         payload_json: row.payload_json,
         source: row.source,
         channel_id: row.channel_id,
-        team_id: row.team_id,
         parent_event_id: row.parent_event_id,
         deliver_at: row.deliver_at,
         status: row.status,

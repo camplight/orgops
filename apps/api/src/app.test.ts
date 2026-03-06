@@ -480,7 +480,7 @@ describe("api app", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  it("deletes teams and removes related memberships/subscriptions", async () => {
+  it("deletes teams and removes related memberships", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");
     const { app } = createApp({
@@ -517,24 +517,6 @@ describe("api app", () => {
     );
     expect(addMemberRes.status).toBe(200);
 
-    const createChannelRes = await app.request("http://localhost/api/channels", {
-      method: "POST",
-      headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({ name: "team-channel" })
-    });
-    expect(createChannelRes.status).toBe(201);
-    const createChannelBody = (await createChannelRes.json()) as { id: string };
-
-    const subscribeRes = await app.request(
-      `http://localhost/api/channels/${createChannelBody.id}/subscribe`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json", cookie },
-        body: JSON.stringify({ subscriberType: "TEAM", subscriberId: createTeamBody.id })
-      }
-    );
-    expect(subscribeRes.status).toBe(200);
-
     const deleteRes = await app.request(`http://localhost/api/teams/${createTeamBody.id}`, {
       method: "DELETE",
       headers: { cookie }
@@ -555,6 +537,46 @@ describe("api app", () => {
     );
     const members = await membersRes.json();
     expect(members).toEqual([]);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("rejects TEAM channel subscriptions", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token"
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" })
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const createChannelRes = await app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ name: "team-targeted-channel" })
+    });
+    expect(createChannelRes.status).toBe(201);
+    const createChannelBody = (await createChannelRes.json()) as { id: string };
+
+    const subscribeRes = await app.request(
+      `http://localhost/api/channels/${createChannelBody.id}/subscribe`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ subscriberType: "TEAM", subscriberId: "team-1" })
+      }
+    );
+    expect(subscribeRes.status).toBe(400);
 
     const participantsRes = await app.request(
       `http://localhost/api/channels/${createChannelBody.id}/participants`,
@@ -704,6 +726,52 @@ describe("api app", () => {
     const body = (await deleteRes.json()) as { ok: boolean; deleted: boolean };
     expect(body.ok).toBe(true);
     expect(body.deleted).toBe(false);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("allows explicit integration bridge kind and rejects direct kinds via /api/channels", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token"
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" })
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const createSlackBridgeRes = await app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ name: "slack:T1:C123", kind: "INTEGRATION_BRIDGE" })
+    });
+    expect(createSlackBridgeRes.status).toBe(201);
+    const createdSlackBridge = (await createSlackBridgeRes.json()) as { id: string };
+
+    const channelsRes = await app.request("http://localhost/api/channels", {
+      headers: { cookie }
+    });
+    expect(channelsRes.status).toBe(200);
+    const channels = (await channelsRes.json()) as Array<{ id: string; kind: string }>;
+    expect(channels.find((channel) => channel.id === createdSlackBridge.id)?.kind).toBe(
+      "INTEGRATION_BRIDGE"
+    );
+
+    const invalidCreateRes = await app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ name: "bad-direct", kind: "HUMAN_AGENT_DM" })
+    });
+    expect(invalidCreateRes.status).toBe(400);
 
     rmSync(dataDir, { recursive: true, force: true });
   });

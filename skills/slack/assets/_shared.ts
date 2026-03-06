@@ -129,7 +129,8 @@ export async function ensureOrgOpsChannelSubscription(input: {
       },
       body: JSON.stringify({
         name: input.channelId,
-        description: "Auto-created Slack bridge channel"
+        description: "Auto-created integration bridge channel",
+        kind: "INTEGRATION_BRIDGE"
       })
     });
     if (!createRes.ok && createRes.status !== 409) {

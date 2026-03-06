@@ -113,6 +113,20 @@ bun run skills/slack/assets/list-channels.ts -- --agent worker1 --types public_c
 bun run skills/slack/assets/user-info.ts -- --agent worker1 --user U123
 ```
 
+### Find user (username/display name -> user id)
+
+Requires bot scope: `users:read`
+
+```bash
+bun run skills/slack/assets/find-user.ts -- --agent worker1 --username outbounder
+```
+
+You can also search by display name:
+
+```bash
+bun run skills/slack/assets/find-user.ts -- --agent worker1 --display-name "Outbounder"
+```
+
 ## Socket Mode listener (event-driven)
 
 Run one listener process per agent:

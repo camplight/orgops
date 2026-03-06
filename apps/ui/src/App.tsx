@@ -26,13 +26,25 @@ function formatParticipantLabel(subscriberType: string, subscriberId: string) {
   return `${subscriberId} (${subscriberType.toLowerCase()})`;
 }
 
+function isDirectMessageChannel(channel: { kind?: string; directParticipantKey?: string }) {
+  if (channel.directParticipantKey) return true;
+  return (
+    channel.kind === "HUMAN_AGENT_DM" ||
+    channel.kind === "AGENT_AGENT_DM" ||
+    channel.kind === "DIRECT_GROUP"
+  );
+}
+
+function isSlackBridgeChannel(channel: { kind?: string }) {
+  return channel.kind === "INTEGRATION_BRIDGE";
+}
+
 const DEFAULT_EVENT_FILTERS = {
   agentName: "",
   channelId: "",
   type: "",
   source: "",
   status: "",
-  teamId: "",
   auditOnly: false,
   scheduledOnly: false,
 };
@@ -43,6 +55,7 @@ export default function App() {
   const [activeProcessId, setActiveProcessId] = useState<string | null>(null);
   const [activeChannelId, setActiveChannelId] = useState<string | null>(null);
   const [activeChatTarget, setActiveChatTarget] = useState<ChatTarget | null>(null);
+  const [activeChatSelectionId, setActiveChatSelectionId] = useState<string | null>(null);
   const [chatEvents, setChatEvents] = useState<EventRow[]>([]);
   const [messageText, setMessageText] = useState("");
   const [eventFilters, setEventFilters] = useState(DEFAULT_EVENT_FILTERS);
@@ -205,6 +218,7 @@ export default function App() {
       if (!id || (kind !== "agent" && kind !== "channel")) return;
       const channelId = kind === "channel" ? id : await ensureDirectChannel(id);
       const nextTarget: ChatTarget = { kind: "channel", id: channelId };
+      setActiveChatSelectionId(value);
       setActiveChannelId(channelId);
       setActiveChatTarget(nextTarget);
       const list = await loadChatEventsForTarget(nextTarget);
@@ -253,7 +267,6 @@ export default function App() {
     if (eventFilters.type) params.set("type", eventFilters.type);
     if (eventFilters.source) params.set("source", eventFilters.source);
     if (eventFilters.status) params.set("status", eventFilters.status);
-    if (eventFilters.teamId) params.set("teamId", eventFilters.teamId);
     if (eventFilters.auditOnly) params.set("typePrefix", "audit.");
     if (eventFilters.scheduledOnly) params.set("scheduled", "1");
     const list = await fetchAllEvents(params);
@@ -432,27 +445,33 @@ export default function App() {
         <ChatScreen
           targetOptions={[
             ...data.agents
-              .filter((agent) => agent.runtimeState === "RUNNING")
+              .filter(
+                (agent) =>
+                  agent.runtimeState === "RUNNING" ||
+                  activeChatSelectionId === `agent:${agent.name}`
+              )
               .map((agent) => ({
                 id: `agent:${agent.name}`,
                 label: `DM Agent: ${agent.name}`,
                 meta: "Creates/uses a direct channel"
               })),
-            ...data.channels.map((channel) => ({
-              id: `channel:${channel.id}`,
-              label: `Channel: ${channel.name}`,
-              meta: channel.description ?? undefined,
-              participantsText: (channel.participants ?? [])
-                .map((participant) =>
-                  formatParticipantLabel(participant.subscriberType, participant.subscriberId)
-                )
-                .join(" | ")
-            }))
+            ...data.channels
+              .filter(
+                (channel) => !isDirectMessageChannel(channel) && !isSlackBridgeChannel(channel)
+              )
+              .map((channel) => ({
+                id: `channel:${channel.id}`,
+                label: `Channel: ${channel.name}`,
+                meta: channel.description ?? undefined,
+                participantsText: (channel.participants ?? [])
+                  .map((participant) =>
+                    formatParticipantLabel(participant.subscriberType, participant.subscriberId)
+                  )
+                  .join(" | ")
+              }))
           ]}
           events={chatEvents}
-          activeTargetId={
-            activeChatTarget ? `${activeChatTarget.kind}:${activeChatTarget.id}` : null
-          }
+          activeTargetId={activeChatSelectionId}
           messageText={messageText}
           onSelectTarget={handleSelectChatTarget}
           onMessageTextChange={setMessageText}

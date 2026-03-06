@@ -1,7 +1,13 @@
 import type { Hono } from "hono";
 import { createHash, randomUUID } from "node:crypto";
 
-import { schema, type OrgOpsDrizzleDb } from "@orgops/db";
+import {
+  CHANNEL_KINDS,
+  isChannelKind,
+  schema,
+  type ChannelKind,
+  type OrgOpsDrizzleDb
+} from "@orgops/db";
 import { and, asc, eq } from "drizzle-orm";
 
 type CollabDeps = {
@@ -12,11 +18,18 @@ type CollabDeps = {
 export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
   const { orm, jsonResponse } = deps;
   const DIRECT_CHANNEL_PARTICIPANT_TYPES = new Set(["HUMAN", "AGENT"]);
-  const DIRECT_CHANNEL_KIND = {
-    humanAgent: "HUMAN_AGENT_DM",
-    agentAgent: "AGENT_AGENT_DM",
-    group: "DIRECT_GROUP",
+  const DIRECT_CHANNEL_KIND: Record<
+    "humanAgent" | "agentAgent" | "group",
+    ChannelKind
+  > = {
+    humanAgent: CHANNEL_KINDS.HUMAN_AGENT_DM,
+    agentAgent: CHANNEL_KINDS.AGENT_AGENT_DM,
+    group: CHANNEL_KINDS.DIRECT_GROUP
   } as const;
+  const CREATABLE_CHANNEL_KINDS = new Set<ChannelKind>([
+    CHANNEL_KINDS.GROUP,
+    CHANNEL_KINDS.INTEGRATION_BRIDGE
+  ]);
 
   function normalizeDirectParticipants(input: unknown) {
     if (!Array.isArray(input) || input.length < 2) return [];
@@ -279,7 +292,7 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
         }));
       return {
         ...channel,
-        kind: channel.kind ?? "GROUP",
+        kind: channel.kind ?? CHANNEL_KINDS.GROUP,
         directParticipantKey: channel.direct_participant_key ?? undefined,
         participants,
       };
@@ -291,6 +304,20 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
     const body = await c.req.json();
     const name = typeof body.name === "string" ? body.name.trim() : "";
     if (!name) return jsonResponse(c, { error: "Name is required" }, 400);
+    const requestedKindRaw =
+      typeof body.kind === "string" ? body.kind.trim().toUpperCase() : "";
+    const requestedKind = isChannelKind(requestedKindRaw)
+      ? requestedKindRaw
+      : CHANNEL_KINDS.GROUP;
+    if (!CREATABLE_CHANNEL_KINDS.has(requestedKind)) {
+      return jsonResponse(
+        c,
+        {
+          error: `Invalid channel kind. Allowed values: ${[...CREATABLE_CHANNEL_KINDS].join(", ")}`
+        },
+        400
+      );
+    }
     const id = randomUUID();
     orm
       .insert(schema.channels)
@@ -298,7 +325,7 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
         id,
         name,
         description: body.description ?? null,
-        kind: "GROUP",
+        kind: requestedKind,
         direct_participant_key: null,
         created_at: Date.now(),
       })
@@ -425,12 +452,21 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
   app.post("/api/channels/:id/subscribe", async (c) => {
     const id = c.req.param("id");
     const body = await c.req.json();
+    const subscriberType = String(body.subscriberType ?? "").trim().toUpperCase();
+    const subscriberId = String(body.subscriberId ?? "").trim();
+    if (subscriberType !== "AGENT" || !subscriberId) {
+      return jsonResponse(
+        c,
+        { error: "Only AGENT channel subscriptions are supported" },
+        400,
+      );
+    }
     orm
       .insert(schema.channelSubscriptions)
       .values({
         channel_id: id,
-        subscriber_type: body.subscriberType,
-        subscriber_id: body.subscriberId,
+        subscriber_type: subscriberType,
+        subscriber_id: subscriberId,
       })
       .onConflictDoNothing()
       .run();

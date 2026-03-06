@@ -23,8 +23,77 @@ export const procToolDefs: ToolDef[] = [
 
 const processes = new Map<
   string,
-  { proc: ReturnType<typeof spawn>; seq: number }
+  {
+    proc: ReturnType<typeof spawn>;
+    seq: number;
+    agentName: string;
+    channelId?: string;
+    apiFetch: ExecuteContext["apiFetch"];
+    emitAudit: ExecuteContext["emitAudit"];
+    finalized: Promise<void>;
+  }
 >();
+
+const PROCESS_SHUTDOWN_TIMEOUT_MS = 5000;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForFinalization(
+  finalized: Promise<void>,
+  timeoutMs: number,
+): Promise<boolean> {
+  const timeout = sleep(timeoutMs).then(() => false);
+  const complete = finalized.then(() => true);
+  return Promise.race([complete, timeout]);
+}
+
+async function signalAndWaitForExit(
+  processId: string,
+  signal: NodeJS.Signals,
+  timeoutMs: number,
+): Promise<boolean> {
+  const entry = processes.get(processId);
+  if (!entry) return true;
+  if (entry.proc.exitCode !== null || entry.proc.signalCode !== null) {
+    return waitForFinalization(entry.finalized, timeoutMs);
+  }
+  try {
+    entry.proc.kill(signal);
+  } catch {
+    // Process may already be gone.
+  }
+  return waitForFinalization(entry.finalized, timeoutMs);
+}
+
+export async function stopAllRunningProcesses(
+  timeoutMs = PROCESS_SHUTDOWN_TIMEOUT_MS,
+): Promise<{ processCount: number; terminated: number; killed: number }> {
+  const snapshot = [...processes.keys()];
+  let terminated = 0;
+  let killed = 0;
+  for (const processId of snapshot) {
+    const terminatedGracefully = await signalAndWaitForExit(
+      processId,
+      "SIGTERM",
+      timeoutMs,
+    );
+    if (terminatedGracefully) {
+      terminated += 1;
+      continue;
+    }
+    const terminatedAfterKill = await signalAndWaitForExit(
+      processId,
+      "SIGKILL",
+      timeoutMs,
+    );
+    if (terminatedAfterKill) {
+      killed += 1;
+    }
+  }
+  return { processCount: snapshot.length, terminated, killed };
+}
 
 export async function execute(
   ctx: ExecuteContext,
@@ -45,7 +114,19 @@ export async function execute(
       cwd,
       env: { ...process.env, ...ctx.injectionEnv, ...env },
     });
-    processes.set(processId, { proc: child, seq: 0 });
+    let finalize = () => {};
+    const finalized = new Promise<void>((resolve) => {
+      finalize = resolve;
+    });
+    processes.set(processId, {
+      proc: child,
+      seq: 0,
+      agentName: ctx.agent.name,
+      channelId: ctx.channelId,
+      apiFetch: ctx.apiFetch,
+      emitAudit: ctx.emitAudit,
+      finalized,
+    });
     await ctx.apiFetch("/api/processes", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -100,24 +181,31 @@ export async function execute(
 
     child.stdout?.on("data", (chunk) => void handleChunk("STDOUT", chunk));
     child.stderr?.on("data", (chunk) => void handleChunk("STDERR", chunk));
-    child.on("exit", async (code) => {
-      await ctx.apiFetch(`/api/processes/${processId}/exit`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
+    child.on("exit", async (code, signal) => {
+      const exitState = signal ? "TERMINATED" : "EXITED";
+      try {
+        await ctx.apiFetch(`/api/processes/${processId}/exit`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            exitCode: code ?? null,
+            state: exitState,
+            endedAt: Date.now(),
+            source: `agent:${ctx.agent.name}`,
+          }),
+        });
+        await ctx.emitAudit("audit.process.exited", {
+          agentName: ctx.agent.name,
+          channelId: ctx.channelId,
+          processId,
           exitCode: code ?? null,
-          state: "EXITED",
-          endedAt: Date.now(),
-          source: `agent:${ctx.agent.name}`,
-        }),
-      });
-      await ctx.emitAudit("audit.process.exited", {
-        agentName: ctx.agent.name,
-        channelId: ctx.channelId,
-        processId,
-        exitCode: code ?? null,
-      });
-      processes.delete(processId);
+          signal: signal ?? null,
+          state: exitState,
+        });
+      } finally {
+        processes.delete(processId);
+        finalize();
+      }
     });
     return { processId };
   }

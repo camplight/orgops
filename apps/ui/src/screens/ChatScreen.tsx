@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { EventRow } from "../types";
@@ -43,6 +43,12 @@ function humanizeEventType(type: string) {
     .split(".")
     .map((part) => part.replace(/[_-]+/g, " "))
     .join(" ");
+}
+
+function getMessageRole(event: EventRow): "human" | "agent" | "system" {
+  if (event.source.startsWith("human:")) return "human";
+  if (event.source.startsWith("agent:")) return "agent";
+  return "system";
 }
 
 function isTerminalAgentEvent(event: EventRow) {
@@ -182,6 +188,12 @@ export function ChatScreen({
   }, [activityEvents, nowTick]);
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const lastMessageId = messageEvents[messageEvents.length - 1]?.id ?? null;
+  const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== "Enter") return;
+    if (!event.metaKey && !event.ctrlKey) return;
+    event.preventDefault();
+    void onSendMessage();
+  };
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -196,7 +208,7 @@ export function ChatScreen({
     }
 
     messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
-  }, [activeTargetId, lastMessageId, messageEvents.length]);
+  }, [activeTargetId, lastMessageId, messageEvents.length, typingIndicators.length]);
 
   return (
     <div className="space-y-6">
@@ -229,68 +241,100 @@ export function ChatScreen({
                 {activeChannelParticipants}
               </div>
             )}
-            <div ref={messagesContainerRef} className="space-y-2 text-sm max-h-96 overflow-auto">
+            <div
+              ref={messagesContainerRef}
+              className="max-h-[34rem] space-y-3 overflow-auto rounded-xl border border-slate-800 bg-slate-950/70 p-3 text-sm"
+            >
               {messageEvents.map((event) => (
-                <div key={event.id} className="border-b border-slate-800 pb-2">
-                  <div className="text-slate-300">
-                    <Markdown
-                      remarkPlugins={[remarkGfm]}
-                      components={{
-                        p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-                        a: ({ children, ...props }) => (
-                          <a
-                            {...props}
-                            className="text-sky-400 underline hover:text-sky-300"
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            {children}
-                          </a>
-                        ),
-                        pre: ({ children }) => (
-                          <pre className="mb-2 overflow-x-auto rounded bg-slate-900 p-2 text-slate-100 last:mb-0">
-                            {children}
-                          </pre>
-                        ),
-                        code: ({ children, ...props }) => (
-                          <code
-                            {...props}
-                            className="rounded bg-slate-800 px-1 py-0.5 text-slate-100"
-                          >
-                            {children}
-                          </code>
-                        ),
-                        ul: ({ children }) => (
-                          <ul className="mb-2 list-disc space-y-1 pl-5 last:mb-0">{children}</ul>
-                        ),
-                        ol: ({ children }) => (
-                          <ol className="mb-2 list-decimal space-y-1 pl-5 last:mb-0">{children}</ol>
-                        ),
-                        blockquote: ({ children }) => (
-                          <blockquote className="mb-2 border-l-2 border-slate-600 pl-3 text-slate-400 last:mb-0">
-                            {children}
-                          </blockquote>
-                        )
-                      }}
-                    >
-                      {(event.payload as { text?: string })?.text ?? ""}
-                    </Markdown>
+                <div
+                  key={event.id}
+                  className={`space-y-1 ${getMessageRole(event) === "human" ? "text-right" : "text-left"}`}
+                >
+                  <div
+                    className={`flex items-center gap-2 text-xs text-slate-400 ${
+                      getMessageRole(event) === "human" ? "justify-end" : "justify-start"
+                    }`}
+                  >
+                    <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[11px] text-slate-300">
+                      {event.source}
+                    </span>
+                    <span>{formatTimestamp(event.createdAt)}</span>
                   </div>
-                  <div className="text-slate-500 text-xs">
-                    {event.source} • {formatTimestamp(event.createdAt)}
+                  <div
+                    className={`flex ${getMessageRole(event) === "human" ? "justify-end" : "justify-start"}`}
+                  >
+                    <div
+                      className={`max-w-[85%] rounded-2xl border px-3 py-2 shadow-sm ${
+                        getMessageRole(event) === "human"
+                          ? "border-sky-700/70 bg-sky-900/30"
+                          : getMessageRole(event) === "agent"
+                            ? "border-slate-700 bg-slate-900"
+                            : "border-amber-700/50 bg-amber-950/30"
+                      }`}
+                    >
+                      <div className="text-slate-200">
+                        <Markdown
+                          remarkPlugins={[remarkGfm]}
+                          components={{
+                            p: ({ children }) => (
+                              <p className="mb-2 leading-relaxed last:mb-0">{children}</p>
+                            ),
+                            a: ({ children, ...props }) => (
+                              <a
+                                {...props}
+                                className="text-sky-400 underline hover:text-sky-300"
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                {children}
+                              </a>
+                            ),
+                            pre: ({ children }) => (
+                              <pre className="mb-2 overflow-x-auto rounded-lg border border-slate-700 bg-slate-950 p-2 text-slate-100 last:mb-0">
+                                {children}
+                              </pre>
+                            ),
+                            code: ({ children, ...props }) => (
+                              <code
+                                {...props}
+                                className="rounded bg-slate-800/90 px-1 py-0.5 text-slate-100"
+                              >
+                                {children}
+                              </code>
+                            ),
+                            ul: ({ children }) => (
+                              <ul className="mb-2 list-disc space-y-1 pl-5 last:mb-0">{children}</ul>
+                            ),
+                            ol: ({ children }) => (
+                              <ol className="mb-2 list-decimal space-y-1 pl-5 last:mb-0">{children}</ol>
+                            ),
+                            blockquote: ({ children }) => (
+                              <blockquote className="mb-2 border-l-2 border-slate-600 pl-3 text-slate-400 last:mb-0">
+                                {children}
+                              </blockquote>
+                            )
+                          }}
+                        >
+                          {(event.payload as { text?: string })?.text ?? ""}
+                        </Markdown>
+                      </div>
+                    </div>
                   </div>
                 </div>
               ))}
               {typingIndicators.map((indicator) => (
                 <div
                   key={`indicator-${indicator.agentName}`}
-                  className="rounded border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-400 italic"
+                  className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-300"
                 >
-                  {indicator.agentName} is {toSentenceCase(indicator.status)}...
+                  <span className="font-medium text-slate-100">{indicator.agentName}</span>{" "}
+                  is {toSentenceCase(indicator.status)}...
                 </div>
               ))}
               {messageEvents.length === 0 && (
-                <div className="text-slate-500">No messages yet.</div>
+                <div className="rounded-lg border border-dashed border-slate-700 bg-slate-900/40 px-4 py-8 text-center text-slate-500">
+                  No messages yet. Send the first message to start the conversation.
+                </div>
               )}
             </div>
 
@@ -300,6 +344,7 @@ export function ChatScreen({
                 placeholder="Send a message..."
                 value={messageText}
                 onChange={(e) => onMessageTextChange(e.target.value)}
+                onKeyDown={handleComposerKeyDown}
               />
               <div className="flex items-center gap-2">
                 <Button onClick={onSendMessage}>Send message</Button>

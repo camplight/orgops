@@ -3,6 +3,7 @@ import { drizzle } from "drizzle-orm/bun-sqlite";
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { schema } from "./schema";
+export { CHANNEL_KINDS, isChannelKind, type ChannelKind } from "./channel-kinds";
 
 export type OrgOpsDb = Database;
 export type OrgOpsDrizzleDb = ReturnType<typeof createDrizzleDb>;
