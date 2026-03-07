@@ -2,7 +2,8 @@ import { describe, expect, it } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createHmac } from "node:crypto";
+import { spawn } from "node:child_process";
+import { createHmac, randomUUID } from "node:crypto";
 import { openDb } from "@orgops/db";
 import { createApp } from "./app";
 
@@ -132,6 +133,68 @@ describe("api app", () => {
     const descList = (await descListRes.json()) as Array<{ id: string }>;
     expect(descList[0]?.id).toBe(secondEvent.id);
     expect(descList[1]?.id).toBe(firstEvent.id);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("invites humans with temporary passwords and enforces first-login reset", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token"
+    });
+
+    const adminLoginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" })
+    });
+    expect(adminLoginRes.status).toBe(200);
+    const adminCookie = adminLoginRes.headers.get("set-cookie") ?? "";
+
+    const inviteRes = await app.request("http://localhost/api/humans/invite", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ username: "alice" })
+    });
+    expect(inviteRes.status).toBe(201);
+    const inviteBody = (await inviteRes.json()) as { temporaryPassword: string };
+    expect(typeof inviteBody.temporaryPassword).toBe("string");
+    expect(inviteBody.temporaryPassword.length).toBeGreaterThanOrEqual(8);
+
+    const humanLoginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        username: "alice",
+        password: inviteBody.temporaryPassword
+      })
+    });
+    expect(humanLoginRes.status).toBe(200);
+    const humanLoginBody = (await humanLoginRes.json()) as { mustChangePassword?: boolean };
+    expect(humanLoginBody.mustChangePassword).toBe(true);
+    const humanCookie = humanLoginRes.headers.get("set-cookie") ?? "";
+
+    const blockedRes = await app.request("http://localhost/api/agents", {
+      headers: { cookie: humanCookie }
+    });
+    expect(blockedRes.status).toBe(403);
+
+    const profileRes = await app.request("http://localhost/api/auth/profile", {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie: humanCookie },
+      body: JSON.stringify({ username: "alice", newPassword: "alice-password-123" })
+    });
+    expect(profileRes.status).toBe(200);
+
+    const allowedRes = await app.request("http://localhost/api/agents", {
+      headers: { cookie: humanCookie }
+    });
+    expect(allowedRes.status).toBe(200);
 
     rmSync(dataDir, { recursive: true, force: true });
   });
@@ -1298,6 +1361,190 @@ describe("api app", () => {
 
     expect(existsSync(workspacePath)).toBe(true);
     expect(existsSync(testFilePath)).toBe(false);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("signals a single running process by id", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token"
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" })
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const child = spawn("/bin/bash", ["-lc", "sleep 30"]);
+    const processId = randomUUID();
+    try {
+      const createProcessRes = await app.request("http://localhost/api/processes", {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({
+          id: processId,
+          agentName: "test-agent",
+          cmd: "sleep 30",
+          cwd: dataDir,
+          pid: child.pid ?? null,
+          state: "RUNNING",
+          startedAt: Date.now()
+        })
+      });
+      expect(createProcessRes.status).toBe(201);
+
+      const exitRes = await app.request(`http://localhost/api/processes/${processId}`, {
+        method: "DELETE",
+        headers: { cookie }
+      });
+      expect(exitRes.status).toBe(200);
+      const body = (await exitRes.json()) as { ok: boolean; signaled: boolean };
+      expect(body.ok).toBe(true);
+      expect(body.signaled).toBe(true);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+      }
+    }
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("reconciles missing running processes as exited on refresh", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token"
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" })
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const child = spawn("/bin/bash", ["-lc", "sleep 30"]);
+    const processId = randomUUID();
+    try {
+      const createProcessRes = await app.request("http://localhost/api/processes", {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({
+          id: processId,
+          agentName: "test-agent",
+          cmd: "sleep 30",
+          cwd: dataDir,
+          pid: child.pid ?? null,
+          state: "RUNNING",
+          startedAt: Date.now()
+        })
+      });
+      expect(createProcessRes.status).toBe(201);
+
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+
+      const listRes = await app.request("http://localhost/api/processes?reconcile=1", {
+        headers: { cookie }
+      });
+      expect(listRes.status).toBe(200);
+      const list = (await listRes.json()) as Array<{
+        id: string;
+        state: string;
+        ended_at?: number;
+      }>;
+      const row = list.find((item) => item.id === processId);
+      expect(row).toBeDefined();
+      expect(row?.state).toBe("EXITED");
+      expect(typeof row?.ended_at).toBe("number");
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+      }
+    }
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("marks active process as exited when pid is missing on exit request", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token"
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" })
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const processId = randomUUID();
+    const createProcessRes = await app.request("http://localhost/api/processes", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        id: processId,
+        agentName: "test-agent",
+        cmd: "sleep 30",
+        cwd: dataDir,
+        pid: 999_999_999,
+        state: "RUNNING",
+        startedAt: Date.now()
+      })
+    });
+    expect(createProcessRes.status).toBe(201);
+
+    const exitRes = await app.request(`http://localhost/api/processes/${processId}`, {
+      method: "DELETE",
+      headers: { cookie }
+    });
+    expect(exitRes.status).toBe(200);
+    const body = (await exitRes.json()) as {
+      ok: boolean;
+      signaled: boolean;
+      markedExited: boolean;
+    };
+    expect(body.ok).toBe(true);
+    expect(body.signaled).toBe(false);
+    expect(body.markedExited).toBe(true);
+
+    const listRes = await app.request("http://localhost/api/processes", {
+      headers: { cookie }
+    });
+    expect(listRes.status).toBe(200);
+    const list = (await listRes.json()) as Array<{
+      id: string;
+      state: string;
+      ended_at?: number;
+    }>;
+    const row = list.find((item) => item.id === processId);
+    expect(row).toBeDefined();
+    expect(row?.state).toBe("EXITED");
+    expect(typeof row?.ended_at).toBe("number");
 
     rmSync(dataDir, { recursive: true, force: true });
   });

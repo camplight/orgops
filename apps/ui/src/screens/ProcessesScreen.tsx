@@ -10,6 +10,7 @@ type ProcessesScreenProps = {
   onSelectProcess: (id: string | null) => void;
   onRefresh: () => void;
   onClearAll: () => Promise<void>;
+  onExitProcess: (id: string) => Promise<void>;
 };
 
 function formatDurationMs(startedAt?: number, endedAt?: number) {
@@ -31,15 +32,28 @@ export function ProcessesScreen({
   activeProcessId,
   onSelectProcess,
   onRefresh,
-  onClearAll
+  onClearAll,
+  onExitProcess
 }: ProcessesScreenProps) {
   const [expandedCommands, setExpandedCommands] = useState<Record<string, boolean>>({});
-  const [outputPaneExpanded, setOutputPaneExpanded] = useState(false);
+  const [exitingProcessIds, setExitingProcessIds] = useState<Record<string, boolean>>({});
   const selectedProcess = useMemo(
     () => processes.find((process) => process.id === activeProcessId) ?? null,
     [activeProcessId, processes]
   );
   const output = activeProcessId ? (processOutput[activeProcessId] ?? []) : [];
+  const canExitProcess = (process: ProcessRow) =>
+    process.state === "RUNNING" || process.state === "STARTING";
+  const exitProcess = async (process: ProcessRow) => {
+    if (!canExitProcess(process)) return;
+    if (!confirm(`Exit process "${process.cmd}"?`)) return;
+    setExitingProcessIds((prev) => ({ ...prev, [process.id]: true }));
+    try {
+      await onExitProcess(process.id);
+    } finally {
+      setExitingProcessIds((prev) => ({ ...prev, [process.id]: false }));
+    }
+  };
 
   return (
     <div className="grid gap-4 lg:grid-cols-1">
@@ -149,54 +163,38 @@ export function ProcessesScreen({
         </div>
       </Card>
       {selectedProcess && (
-        <div className="pointer-events-none fixed bottom-0 left-0 right-0 z-40 flex items-end lg:left-56">
+        <div
+          className="fixed inset-0 z-40 bg-black/40 lg:left-56"
+          onClick={() => onSelectProcess(null)}
+        />
+      )}
+      <div
+        className={`pointer-events-none fixed inset-0 z-50 flex justify-end lg:left-56 ${
+          selectedProcess ? "" : "invisible"
+        }`}
+      >
+        <div
+          className={`pointer-events-auto flex h-full w-full max-w-4xl flex-col border-l border-slate-800 bg-slate-950/95 shadow-2xl transition-transform duration-300 ${
+            selectedProcess ? "translate-x-0" : "translate-x-full"
+          }`}
+        >
           <div
-            className={`pointer-events-auto flex w-full flex-col border-t border-slate-800 bg-slate-950/95 shadow-2xl transition-all ${
-              outputPaneExpanded ? "h-[85vh]" : "h-[42vh]"
-            }`}
+            className="flex shrink-0 items-center justify-between border-b border-slate-800 px-4 py-3"
           >
-            <div className="flex shrink-0 items-center justify-between border-b border-slate-800 px-4 py-3">
-              <div className="text-sm font-semibold text-slate-100">Process Output</div>
-              <div className="flex items-center gap-2">
+            <div className="text-sm font-semibold text-slate-100">Process Output</div>
+            <div className="flex items-center gap-2">
+              {selectedProcess && canExitProcess(selectedProcess) && (
                 <Button
                   variant="secondary"
-                  className="px-2 py-1 text-xs"
-                  onClick={() => setOutputPaneExpanded((prev) => !prev)}
+                  className="bg-rose-900 px-2 py-1 text-xs text-rose-100 hover:bg-rose-800"
+                  onClick={async () => {
+                    await exitProcess(selectedProcess);
+                  }}
+                  disabled={Boolean(exitingProcessIds[selectedProcess.id])}
                 >
-                  {outputPaneExpanded ? "Collapse down" : "Expand up"}
+                  {exitingProcessIds[selectedProcess.id] ? "Exiting..." : "Exit process"}
                 </Button>
-              </div>
-            </div>
-            <div className="shrink-0 border-b border-slate-800 px-4 py-3 text-xs text-slate-400">
-              <div className="text-slate-200">{selectedProcess.cmd}</div>
-              <div className="mt-1">
-                {selectedProcess.agent_name} | {selectedProcess.state} | started{" "}
-                {formatTimestamp(selectedProcess.started_at)}
-              </div>
-              <div className="mt-1">
-                Source:{" "}
-                {selectedProcess.state === "RUNNING"
-                  ? "Live stream + recorded history"
-                  : "Recorded history"}
-              </div>
-            </div>
-            <div className="min-h-0 flex-1 overflow-auto p-3 font-mono text-xs">
-              {output.map((entry, index) => (
-                <div key={`${entry.seq}-${index}`} className="whitespace-pre-wrap break-words">
-                  <span
-                    className={entry.stream === "STDERR" ? "text-rose-300" : "text-emerald-300"}
-                  >
-                    [{entry.stream}]
-                  </span>{" "}
-                  <span className="text-slate-500">{entry.seq}</span>{" "}
-                  <span className="text-slate-200">{entry.text}</span>
-                </div>
-              ))}
-              {output.length === 0 && (
-                <div className="py-8 text-center text-slate-500">No output yet.</div>
               )}
-            </div>
-            <div className="shrink-0 border-t border-slate-800 px-4 py-2 text-right">
               <Button
                 variant="secondary"
                 className="px-2 py-1 text-xs"
@@ -206,8 +204,45 @@ export function ProcessesScreen({
               </Button>
             </div>
           </div>
+          {selectedProcess ? (
+            <>
+              <div className="shrink-0 border-b border-slate-800 px-4 py-3 text-xs text-slate-400">
+                <div className="text-slate-200">{selectedProcess.cmd}</div>
+                <div className="mt-1">
+                  {selectedProcess.agent_name} | {selectedProcess.state} | started{" "}
+                  {formatTimestamp(selectedProcess.started_at)}
+                </div>
+                <div className="mt-1">
+                  Source:{" "}
+                  {selectedProcess.state === "RUNNING"
+                    ? "Live stream + recorded history"
+                    : "Recorded history"}
+                </div>
+              </div>
+              <div className="min-h-0 flex-1 overflow-auto p-3 font-mono text-xs">
+                {output.map((entry, index) => (
+                  <div key={`${entry.seq}-${index}`} className="whitespace-pre-wrap break-words">
+                    <span
+                      className={entry.stream === "STDERR" ? "text-rose-300" : "text-emerald-300"}
+                    >
+                      [{entry.stream}]
+                    </span>{" "}
+                    <span className="text-slate-500">{entry.seq}</span>{" "}
+                    <span className="text-slate-200">{entry.text}</span>
+                  </div>
+                ))}
+                {output.length === 0 && (
+                  <div className="py-8 text-center text-slate-500">No output yet.</div>
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="flex min-h-0 flex-1 items-center justify-center text-sm text-slate-500">
+              Select a process to view output.
+            </div>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }

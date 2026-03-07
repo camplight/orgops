@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { readFileSync, writeFileSync } from "node:fs";
 
 import { schema, type OrgOpsDrizzleDb } from "@orgops/db";
-import { and, asc, desc, eq, gt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, sql } from "drizzle-orm";
 
 type RuntimeDeps = {
   orm: OrgOpsDrizzleDb;
@@ -13,6 +13,20 @@ type RuntimeDeps = {
   publishProcessOutput: (processId: string, payload: any) => void;
   insertEvent: (input: any) => any;
 };
+
+function isPidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException)?.code;
+    // ESRCH means the PID does not exist. EPERM can still mean the process exists.
+    if (code === "ESRCH") return false;
+    if (code === "EPERM") return true;
+    return false;
+  }
+}
 
 export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
   const { orm, FILES_DIR, jsonResponse, publishProcessOutput, insertEvent } = deps;
@@ -62,16 +76,43 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
     const agentName = params.get("agentName");
     const channelId = params.get("channelId");
     const state = params.get("state");
+    const reconcile = params.get("reconcile") === "1";
     const clauses: any[] = [];
     if (agentName) clauses.push(eq(schema.processes.agent_name, agentName));
     if (channelId) clauses.push(eq(schema.processes.channel_id, channelId));
     if (state) clauses.push(eq(schema.processes.state, state));
-    const rows = orm
+    const queryWhere = clauses.length > 0 ? and(...clauses) : undefined;
+    let rows = orm
       .select()
       .from(schema.processes)
-      .where(clauses.length > 0 ? and(...clauses) : undefined)
+      .where(queryWhere)
       .orderBy(desc(schema.processes.started_at))
       .all();
+    if (reconcile) {
+      const staleActiveIds = rows
+        .filter(
+          (row) =>
+            (row.state === "RUNNING" || row.state === "STARTING") &&
+            (typeof row.pid !== "number" || !isPidAlive(row.pid)),
+        )
+        .map((row) => row.id);
+      if (staleActiveIds.length > 0) {
+        orm
+          .update(schema.processes)
+          .set({
+            state: "EXITED",
+            ended_at: Date.now(),
+          })
+          .where(inArray(schema.processes.id, staleActiveIds))
+          .run();
+        rows = orm
+          .select()
+          .from(schema.processes)
+          .where(queryWhere)
+          .orderBy(desc(schema.processes.started_at))
+          .all();
+      }
+    }
     const outputStats = orm
       .select({
         process_id: schema.processOutput.process_id,
@@ -116,6 +157,50 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
       })
       .run();
     return jsonResponse(c, { ok: true }, 201);
+  });
+
+  app.delete("/api/processes/:id", (c) => {
+    const processId = c.req.param("id");
+    const row = orm
+      .select({
+        id: schema.processes.id,
+        pid: schema.processes.pid,
+        state: schema.processes.state,
+      })
+      .from(schema.processes)
+      .where(eq(schema.processes.id, processId))
+      .get();
+    if (!row) return jsonResponse(c, { error: "Process not found" }, 404);
+
+    const isActiveState = row.state === "RUNNING" || row.state === "STARTING";
+    let signaled = false;
+    let pidMissing = false;
+    if (row.pid !== null && row.pid !== undefined && isActiveState) {
+      try {
+        process.kill(row.pid, "SIGTERM");
+        signaled = true;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException)?.code;
+        // If a PID no longer exists, mark this record as exited.
+        pidMissing = code === "ESRCH" || !isPidAlive(row.pid);
+      }
+    } else if (isActiveState) {
+      pidMissing = true;
+    }
+
+    const markedExited = Boolean(isActiveState && pidMissing);
+    if (markedExited) {
+      orm
+        .update(schema.processes)
+        .set({
+          state: "EXITED",
+          ended_at: Date.now(),
+        })
+        .where(eq(schema.processes.id, processId))
+        .run();
+    }
+
+    return jsonResponse(c, { ok: true, signaled, markedExited, processId });
   });
 
   app.delete("/api/processes", (c) => {

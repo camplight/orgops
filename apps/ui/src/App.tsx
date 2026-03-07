@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { Screen } from "./types";
 import { apiFetch, apiJson, getApiHeaders } from "./api";
 import { AppLayout } from "./components/layout";
@@ -13,10 +13,17 @@ import {
   ProcessesScreen,
   SkillsScreen,
   SecretsScreen,
+  HumansScreen,
   ProfileScreen
 } from "./screens";
 import { useAuth, useOrgOpsData, useWebSocket } from "./hooks";
-import type { EventRow, ProcessOutputRow, TeamMember } from "./types";
+import type {
+  AgentWorkspaceFileResponse,
+  AgentWorkspaceListResponse,
+  EventRow,
+  ProcessOutputRow,
+  TeamMember
+} from "./types";
 
 type ChatTarget = { kind: "channel"; id: string };
 
@@ -39,6 +46,10 @@ function isSlackBridgeChannel(channel: { kind?: string }) {
   return channel.kind === "INTEGRATION_BRIDGE";
 }
 
+function isAgentLifecycleChannel(channel: { name?: string }) {
+  return (channel.name ?? "").startsWith("agent.lifecycle.");
+}
+
 const DEFAULT_EVENT_FILTERS = {
   agentName: "",
   channelId: "",
@@ -50,7 +61,6 @@ const DEFAULT_EVENT_FILTERS = {
 };
 
 export default function App() {
-  const { authChecked, authenticated, username, refreshAuth, logout } = useAuth();
   const [activeScreen, setActiveScreen] = useState<Screen>("dashboard");
   const [activeProcessId, setActiveProcessId] = useState<string | null>(null);
   const [activeChannelId, setActiveChannelId] = useState<string | null>(null);
@@ -60,7 +70,14 @@ export default function App() {
   const [messageText, setMessageText] = useState("");
   const [eventFilters, setEventFilters] = useState(DEFAULT_EVENT_FILTERS);
 
-  const data = useOrgOpsData(authenticated);
+  const { authChecked, authenticated, username, mustChangePassword, refreshAuth, logout } = useAuth();
+  const data = useOrgOpsData(authenticated && !mustChangePassword);
+
+  useEffect(() => {
+    if (mustChangePassword) {
+      setActiveScreen("profile");
+    }
+  }, [mustChangePassword]);
 
   const appendUniqueEvent = useCallback((list: EventRow[], incoming: EventRow) => {
     if (list.some((event) => event.id === incoming.id)) return list;
@@ -192,9 +209,19 @@ export default function App() {
 
   const onScreenFocus = useCallback(
     (screen: Screen) => {
-      if (screen === "dashboard") data.refreshEvents();
+      if (screen === "dashboard") {
+        data.refreshDashboard();
+        data.refreshDashboardEvents();
+        data.refreshChannels();
+        data.refreshProcesses();
+        data.refreshSecrets();
+        data.refreshTeams();
+      }
       if (screen === "channels") data.refreshChannels();
-      if (screen === "teams") data.refreshTeams();
+      if (screen === "teams") {
+        data.refreshTeams();
+        data.refreshHumans();
+      }
       if (screen === "chat") {
         data.refreshChannels();
         if (activeChatTarget) {
@@ -203,6 +230,7 @@ export default function App() {
       }
       if (screen === "processes") data.refreshProcesses();
       if (screen === "secrets") data.refreshSecrets();
+      if (screen === "humans") data.refreshHumans();
       if (screen === "events") {
         fetchAllEvents(new URLSearchParams()).then(data.setEvents);
         data.refreshChannels();
@@ -319,7 +347,12 @@ export default function App() {
         <DashboardScreen
           agents={data.agents}
           events={data.events}
+          eventStats={data.dashboardEventStats}
           skills={data.skills}
+          channels={data.channels}
+          processes={data.processes}
+          secrets={data.secrets}
+          teams={data.teams}
         />
       )}
 
@@ -352,6 +385,44 @@ export default function App() {
           onCleanupAgentWorkspace={async (name) => {
             await data.apiFetch(`/api/agents/${name}/cleanup-workspace`, { method: "POST" });
           }}
+          loadAgentEvents={async (name) => {
+            const params = new URLSearchParams();
+            params.set("agentName", name);
+            params.set("limit", "200");
+            params.set("order", "desc");
+            return data.apiJson<EventRow[]>(`/api/events?${params.toString()}`);
+          }}
+          loadAgentWorkspace={(name, path) => {
+            const params = new URLSearchParams();
+            if (path && path !== ".") {
+              params.set("path", path);
+            }
+            const query = params.toString();
+            const suffix = query ? `?${query}` : "";
+            return data.apiJson<AgentWorkspaceListResponse>(
+              `/api/agents/${encodeURIComponent(name)}/workspace${suffix}`
+            );
+          }}
+          loadAgentWorkspaceFile={(name, path) => {
+            const params = new URLSearchParams();
+            params.set("path", path);
+            return data.apiJson<AgentWorkspaceFileResponse>(
+              `/api/agents/${encodeURIComponent(name)}/workspace/file?${params.toString()}`
+            );
+          }}
+          onDownloadAgentWorkspaceFile={(name, path) => {
+            const params = new URLSearchParams();
+            params.set("path", path);
+            const href = `/api/agents/${encodeURIComponent(
+              name
+            )}/workspace/download?${params.toString()}`;
+            const link = document.createElement("a");
+            link.href = href;
+            link.rel = "noopener";
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+          }}
         />
       )}
 
@@ -359,6 +430,7 @@ export default function App() {
         <TeamsScreen
           teams={data.teams}
           agents={data.agents}
+          humans={data.humans}
           onCreateTeam={async (team) => {
             const res = await data.apiFetch("/api/teams", {
               method: "POST",
@@ -392,6 +464,15 @@ export default function App() {
               headers: data.getApiHeaders(),
               body: JSON.stringify({ memberType, memberId })
             });
+          }}
+          onRemoveMember={async (teamId, memberType, memberId) => {
+            await data.apiFetch(
+              `/api/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(memberType)}/${encodeURIComponent(memberId)}`,
+              {
+                method: "DELETE",
+                headers: data.getApiHeaders()
+              }
+            );
           }}
         />
       )}
@@ -457,7 +538,10 @@ export default function App() {
               })),
             ...data.channels
               .filter(
-                (channel) => !isDirectMessageChannel(channel) && !isSlackBridgeChannel(channel)
+                (channel) =>
+                  !isDirectMessageChannel(channel) &&
+                  !isSlackBridgeChannel(channel) &&
+                  !isAgentLifecycleChannel(channel)
               )
               .map((channel) => ({
                 id: `channel:${channel.id}`,
@@ -515,6 +599,13 @@ export default function App() {
             data.setProcessOutput({});
             data.setProcesses([]);
           }}
+          onExitProcess={async (id) => {
+            await data.apiFetch(`/api/processes/${id}`, {
+              method: "DELETE",
+              headers: data.getApiHeaders()
+            });
+            await data.refreshProcesses();
+          }}
         />
       )}
 
@@ -542,7 +633,47 @@ export default function App() {
           }}
         />
       )}
-      {activeScreen === "profile" && <ProfileScreen username={username} />}
+      {activeScreen === "humans" && (
+        <HumansScreen
+          humans={data.humans}
+          onInviteHuman={async (input) => {
+            const res = await data.apiFetch("/api/humans/invite", {
+              method: "POST",
+              headers: data.getApiHeaders(),
+              body: JSON.stringify(input)
+            });
+            const body = (await res.json()) as {
+              id: string;
+              username: string;
+              temporaryPassword: string;
+            };
+            await data.refreshHumans();
+            return body;
+          }}
+          onRefresh={async () => {
+            await data.refreshHumans();
+          }}
+        />
+      )}
+      {activeScreen === "profile" && (
+        <ProfileScreen
+          username={username}
+          mustChangePassword={mustChangePassword}
+          onSaveProfile={async (input) => {
+            await data.apiFetch("/api/auth/profile", {
+              method: "PATCH",
+              headers: data.getApiHeaders(),
+              body: JSON.stringify(input)
+            });
+            await refreshAuth();
+            try {
+              await data.refreshHumans();
+            } catch {
+              // Human listing can stay stale if the request is still blocked.
+            }
+          }}
+        />
+      )}
     </AppLayout>
   );
 }

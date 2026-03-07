@@ -3,6 +3,7 @@ export { ChannelsScreen } from "./ChannelsScreen";
 export { ChatScreen } from "./ChatScreen";
 export { DashboardScreen } from "./DashboardScreen";
 export { EventsScreen } from "./EventsScreen";
+export { HumansScreen } from "./HumansScreen";
 export { ProcessesScreen } from "./ProcessesScreen";
 export { ProfileScreen } from "./ProfileScreen";
 export { SecretsScreen } from "./SecretsScreen";

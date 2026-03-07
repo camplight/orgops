@@ -1,16 +1,64 @@
-import type { Agent, EventRow, SkillMeta } from "../types";
+import type { Agent, Channel, EventRow, ProcessRow, SecretRow, SkillMeta, Team } from "../types";
 import { Card } from "../components/ui";
 import { formatTimestamp } from "../utils/formatTimestamp";
 
 type DashboardScreenProps = {
   agents: Agent[];
   events: EventRow[];
+  eventStats: {
+    total: number;
+    processed: number;
+    failed: number;
+    pending: number;
+    scheduled: number;
+  };
   skills: SkillMeta[];
+  channels: Channel[];
+  processes: ProcessRow[];
+  secrets: SecretRow[];
+  teams: Team[];
 };
 
-export function DashboardScreen({ agents, events, skills }: DashboardScreenProps) {
+const numberFormatter = new Intl.NumberFormat();
+
+export function DashboardScreen({
+  agents,
+  events,
+  eventStats,
+  skills,
+  channels,
+  processes,
+  secrets,
+  teams
+}: DashboardScreenProps) {
+  const metricCards = [
+    { label: "Agents", value: agents.length, tone: "text-cyan-300" },
+    { label: "Events (total)", value: eventStats.total, tone: "text-slate-100" },
+    { label: "Processed", value: eventStats.processed, tone: "text-emerald-300" },
+    { label: "Failed", value: eventStats.failed, tone: "text-rose-300" },
+    { label: "Pending", value: eventStats.pending, tone: "text-amber-300" },
+    { label: "Scheduled", value: eventStats.scheduled, tone: "text-violet-300" },
+    { label: "Skills", value: skills.length, tone: "text-indigo-300" },
+    { label: "Channels", value: channels.length, tone: "text-sky-300" },
+    { label: "Processes", value: processes.length, tone: "text-teal-300" },
+    { label: "Secrets", value: secrets.length, tone: "text-fuchsia-300" },
+    { label: "Teams", value: teams.length, tone: "text-orange-300" }
+  ];
+
   return (
-    <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+    <div className="space-y-6">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {metricCards.map((metric) => (
+          <Card key={metric.label} className="space-y-1">
+            <div className="text-xs uppercase tracking-wide text-slate-400">{metric.label}</div>
+            <div className={`text-2xl font-semibold ${metric.tone}`}>
+              {numberFormatter.format(metric.value)}
+            </div>
+          </Card>
+        ))}
+      </div>
+
+      <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
       <Card title="Agents">
         <div className="space-y-2">
           {agents.map((agent) => (
@@ -46,6 +94,7 @@ export function DashboardScreen({ agents, events, skills }: DashboardScreenProps
           ))}
         </div>
       </Card>
+      </div>
     </div>
   );
 }

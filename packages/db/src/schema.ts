@@ -42,6 +42,16 @@ export const teams = sqliteTable("teams", {
   created_at: integer("created_at").notNull()
 });
 
+export const humans = sqliteTable("humans", {
+  id: text("id").primaryKey(),
+  username: text("username").notNull().unique(),
+  password_hash: text("password_hash").notNull(),
+  must_change_password: integer("must_change_password").notNull().default(1),
+  created_at: integer("created_at").notNull(),
+  updated_at: integer("updated_at").notNull(),
+  invited_by_human_id: text("invited_by_human_id")
+});
+
 export const teamMemberships = sqliteTable(
   "team_memberships",
   {
@@ -228,6 +238,7 @@ export const schema = {
   migrations,
   agents,
   teams,
+  humans,
   teamMemberships,
   channels,
   channelSubscriptions,

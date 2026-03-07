@@ -21,6 +21,8 @@ const SKILL_ROOTS = resolveSkillRoots({
 });
 
 const heartbeats = new Map<string, number>();
+const bootstrappedAgents = new Set<string>();
+const lifecycleChannels = new Map<string, string>();
 const HEARTBEAT_INTERVAL_MS = 5000;
 
 async function apiFetch(path: string, init?: RequestInit) {
@@ -61,6 +63,104 @@ async function emitEvent(event: any) {
 
 async function emitAudit(type: string, payload: unknown, source = "system") {
   await emitEvent({ type, payload, source });
+}
+
+type ChannelParticipant = {
+  subscriberType?: string;
+  subscriberId?: string;
+};
+
+type ChannelRecord = {
+  id: string;
+  name?: string;
+  participants?: ChannelParticipant[];
+};
+
+function lifecycleChannelName(agentName: string) {
+  return `agent.lifecycle.${agentName}`;
+}
+
+async function listChannels(): Promise<ChannelRecord[]> {
+  const res = await apiFetch("/api/channels");
+  return res.json();
+}
+
+function isAgentSubscribed(
+  channel: ChannelRecord,
+  agentName: string,
+): boolean {
+  return (channel.participants ?? []).some(
+    (participant) =>
+      String(participant.subscriberType ?? "").toUpperCase() === "AGENT" &&
+      participant.subscriberId === agentName,
+  );
+}
+
+async function ensureLifecycleChannel(agentName: string): Promise<string> {
+  const cached = lifecycleChannels.get(agentName);
+  if (cached) return cached;
+
+  const expectedName = lifecycleChannelName(agentName);
+  const channels = await listChannels();
+  const existing = channels.find(
+    (channel) => channel.name === expectedName && isAgentSubscribed(channel, agentName),
+  );
+  if (existing?.id) {
+    lifecycleChannels.set(agentName, existing.id);
+    return existing.id;
+  }
+
+  let createdChannelId: string | null = null;
+  try {
+    const createResponse = await apiFetch("/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: expectedName,
+        description: `Lifecycle bootstrap channel for ${agentName}`,
+        kind: "GROUP",
+      }),
+    });
+    const created = (await createResponse.json()) as { id?: string };
+    createdChannelId = created.id ?? null;
+  } catch {
+    // Channel may already exist from another runner instance; re-read and continue.
+  }
+
+  const refreshedChannels = await listChannels();
+  const resolved =
+    refreshedChannels.find(
+      (channel) => channel.name === expectedName,
+    ) ?? (createdChannelId ? { id: createdChannelId } : null);
+  if (!resolved?.id) {
+    throw new Error(`Unable to resolve lifecycle channel for ${agentName}`);
+  }
+
+  await apiFetch(`/api/channels/${encodeURIComponent(resolved.id)}/subscribe`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      subscriberType: "AGENT",
+      subscriberId: agentName,
+    }),
+  });
+
+  lifecycleChannels.set(agentName, resolved.id);
+  return resolved.id;
+}
+
+async function emitStartupEvent(agent: Agent) {
+  const channelId = await ensureLifecycleChannel(agent.name);
+  await emitEvent({
+    type: "agent.lifecycle.started",
+    source: "system:runner",
+    channelId,
+    payload: {
+      targetAgentName: agent.name,
+      text: "You just started. Review your soul, memory, and current state, then decide your next action.",
+      startedAt: Date.now(),
+    },
+  });
 }
 
 async function listChannelEvents(channelId: string): Promise<Event[]> {
@@ -178,7 +278,6 @@ async function handleEvent(agent: Agent, event: Event) {
   const soul = typeof agent.soulContents === "string" ? agent.soulContents : "";
   const allSkills = listSkills(SKILL_ROOTS);
   const enabledSkillSet = new Set(agent.enabledSkills ?? []);
-  enabledSkillSet.add("local-memory");
   const selectedSkills = allSkills.filter((skill) =>
     enabledSkillSet.has(skill.name),
   );
@@ -286,6 +385,7 @@ async function ensureWorkspace(agent: Agent) {
 async function pollAgent(agent: Agent) {
   if (agent.desiredState !== "RUNNING") {
     heartbeats.delete(agent.name);
+    bootstrappedAgents.delete(agent.name);
     if (agent.runtimeState !== "STOPPED") {
       await patchAgentState(agent.name, { runtimeState: "STOPPED" });
     }
@@ -301,6 +401,14 @@ async function pollAgent(agent: Agent) {
       lastHeartbeatAt: now,
     });
     heartbeats.set(agent.name, now);
+  }
+  if (!bootstrappedAgents.has(agent.name)) {
+    try {
+      await emitStartupEvent(agent);
+      bootstrappedAgents.add(agent.name);
+    } catch (error) {
+      console.error(`failed to emit startup event for ${agent.name}`, error);
+    }
   }
   const query = `agentName=${encodeURIComponent(agent.name)}&status=PENDING&limit=50`;
   const res = await apiFetch(`/api/events?${query}`);

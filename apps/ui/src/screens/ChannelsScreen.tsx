@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Agent, Channel, ChannelParticipant, EventRow } from "../types";
 import { Button, Card, Input, Select } from "../components/ui";
 import { formatTimestamp } from "../utils/formatTimestamp";
@@ -38,8 +38,14 @@ export function ChannelsScreen({
   const [subscribing, setSubscribing] = useState(false);
   const [unsubscribingAgent, setUnsubscribingAgent] = useState<string | null>(null);
   const [createDrawerOpen, setCreateDrawerOpen] = useState(false);
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const selectedChannel = channels.find((channel) => channel.id === activeChannelId) ?? null;
+  const selectedEvent = channelEvents.find((event) => event.id === selectedEventId) ?? null;
+
+  useEffect(() => {
+    setSelectedEventId(null);
+  }, [activeChannelId]);
   const formatParticipantLabel = (participant: ChannelParticipant) => {
     if (participant.subscriberType === "HUMAN") {
       return `${participant.subscriberId} (human)`;
@@ -113,6 +119,23 @@ export function ChannelsScreen({
       setError(message);
     } finally {
       setDeletingChannelId(null);
+    }
+  };
+
+  const formatJson = (value: unknown) => {
+    if (value === undefined) {
+      return "undefined";
+    }
+    if (value === null) {
+      return "null";
+    }
+    if (typeof value === "string") {
+      return value;
+    }
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch {
+      return String(value);
     }
   };
 
@@ -214,13 +237,13 @@ export function ChannelsScreen({
       </aside>
 
       <div
-        className={`pointer-events-none fixed bottom-0 left-0 right-0 z-50 flex items-end lg:left-56 ${
+        className={`pointer-events-none fixed inset-0 z-50 flex justify-end lg:left-56 ${
           selectedChannel ? "" : "invisible"
         }`}
       >
         <div
-          className={`pointer-events-auto flex h-[70vh] w-full flex-col border-t border-slate-800 bg-slate-950/95 shadow-2xl transition-transform duration-300 ${
-            selectedChannel ? "translate-y-0" : "translate-y-full"
+          className={`pointer-events-auto relative flex h-full w-full max-w-4xl flex-col border-l border-slate-800 bg-slate-950/95 shadow-2xl transition-transform duration-300 ${
+            selectedChannel ? "translate-x-0" : "translate-x-full"
           }`}
         >
           <div className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-800 px-4 py-3">
@@ -251,7 +274,10 @@ export function ChannelsScreen({
                 type="button"
                 variant="secondary"
                 className="px-2 py-1 text-xs"
-                onClick={() => onSelectChannel(null)}
+                onClick={() => {
+                  setSelectedEventId(null);
+                  onSelectChannel(null);
+                }}
               >
                 Close
               </Button>
@@ -323,12 +349,17 @@ export function ChannelsScreen({
               <div className="max-h-full space-y-2 overflow-auto pr-1 text-sm">
                 {selectedChannel ? (
                   channelEvents.map((event) => (
-                    <div key={event.id} className="border-b border-slate-800 pb-2">
+                    <button
+                      key={event.id}
+                      type="button"
+                      className="w-full border-b border-slate-800 pb-2 text-left hover:bg-slate-900/40"
+                      onClick={() => setSelectedEventId(event.id)}
+                    >
                       <div className="text-slate-300">{event.type}</div>
                       <div className="text-xs text-slate-500">
                         {event.source} • {formatTimestamp(event.createdAt)}
                       </div>
-                    </div>
+                    </button>
                   ))
                 ) : (
                   <div className="text-sm text-slate-500">Select a channel to view events.</div>
@@ -345,6 +376,82 @@ export function ChannelsScreen({
               {error}
             </div>
           ) : null}
+
+          <div
+            className={`absolute inset-0 z-10 flex justify-end bg-black/30 transition-opacity ${
+              selectedEvent ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"
+            }`}
+            onClick={() => setSelectedEventId(null)}
+          >
+            <div
+              className={`pointer-events-auto flex h-full w-full max-w-2xl flex-col border-l border-slate-800 bg-slate-950 shadow-2xl transition-transform duration-300 ${
+                selectedEvent ? "translate-x-0" : "translate-x-full"
+              }`}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+                <div>
+                  <h4 className="text-sm font-semibold text-slate-100">Event Details</h4>
+                  <p className="text-xs text-slate-500">
+                    {selectedEvent ? selectedEvent.id : "No event selected"}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="px-2 py-1 text-xs"
+                  onClick={() => setSelectedEventId(null)}
+                >
+                  Back
+                </Button>
+              </div>
+
+              {selectedEvent ? (
+                <div className="min-h-0 flex-1 space-y-3 overflow-auto px-4 py-4 text-sm">
+                  <div className="rounded border border-slate-800 bg-slate-950 p-3">
+                    <div className="text-xs uppercase tracking-wide text-slate-500">Type</div>
+                    <div className="mt-1 text-slate-200">{selectedEvent.type}</div>
+                  </div>
+                  <div className="rounded border border-slate-800 bg-slate-950 p-3">
+                    <div className="text-xs uppercase tracking-wide text-slate-500">Source</div>
+                    <div className="mt-1 break-all text-slate-200">{selectedEvent.source}</div>
+                  </div>
+                  <div className="rounded border border-slate-800 bg-slate-950 p-3">
+                    <div className="text-xs uppercase tracking-wide text-slate-500">Created</div>
+                    <div className="mt-1 text-slate-200">
+                      {formatTimestamp(selectedEvent.createdAt)}
+                    </div>
+                  </div>
+                  <div className="rounded border border-slate-800 bg-slate-950 p-3">
+                    <div className="text-xs uppercase tracking-wide text-slate-500">Status</div>
+                    <div className="mt-1 text-slate-200">{selectedEvent.status ?? "N/A"}</div>
+                  </div>
+                  <div className="rounded border border-slate-800 bg-slate-950 p-3">
+                    <div className="text-xs uppercase tracking-wide text-slate-500">Channel ID</div>
+                    <div className="mt-1 break-all text-slate-200">
+                      {selectedEvent.channelId ?? "N/A"}
+                    </div>
+                  </div>
+                  <div className="rounded border border-slate-800 bg-slate-950 p-3">
+                    <div className="text-xs uppercase tracking-wide text-slate-500">Payload</div>
+                    <pre className="mt-2 overflow-auto whitespace-pre-wrap break-words rounded bg-slate-900 p-2 text-xs text-slate-300">
+                      {formatJson(selectedEvent.payload)}
+                    </pre>
+                  </div>
+                  {selectedEvent.lastError ? (
+                    <div className="rounded border border-rose-900/60 bg-rose-950/20 p-3">
+                      <div className="text-xs uppercase tracking-wide text-rose-400">
+                        Last Error
+                      </div>
+                      <pre className="mt-2 overflow-auto whitespace-pre-wrap break-words rounded bg-slate-900 p-2 text-xs text-rose-300">
+                        {selectedEvent.lastError}
+                      </pre>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          </div>
         </div>
       </div>
 

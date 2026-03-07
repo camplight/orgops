@@ -12,6 +12,30 @@ export type Agent = {
   allowOutsideWorkspace?: boolean;
 };
 
+export type AgentWorkspaceEntry = {
+  name: string;
+  path: string;
+  kind: "directory" | "file";
+  extension?: string;
+  size?: number | null;
+  modifiedAt?: number | null;
+  isTextFile?: boolean;
+};
+
+export type AgentWorkspaceListResponse = {
+  workspacePath: string;
+  path: string;
+  entries: AgentWorkspaceEntry[];
+};
+
+export type AgentWorkspaceFileResponse = {
+  path: string;
+  name: string;
+  size: number;
+  modifiedAt: number;
+  content: string;
+};
+
 export type EventRow = {
   id: string;
   type: string;
@@ -75,6 +99,20 @@ export type Team = {
   description?: string;
 };
 
+export type Human = {
+  id: string;
+  username: string;
+  mustChangePassword: boolean;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type AuthMe = {
+  id?: string | null;
+  username?: string | null;
+  mustChangePassword?: boolean;
+};
+
 export type TeamMember = {
   memberType: string;
   memberId: string;
@@ -122,4 +160,5 @@ export type Screen =
   | "processes"
   | "skills"
   | "secrets"
+  | "humans"
   | "profile";

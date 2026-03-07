@@ -55,16 +55,55 @@ export function EventsScreen({
   const [payloadFilter, setPayloadFilter] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const channelNameById = useMemo(
-    () => new Map(channels.map((channel) => [channel.id, channel.name])),
-    [channels],
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const channelById = useMemo(
+    () => new Map(channels.map((channel) => [channel.id, channel])),
+    [channels]
   );
+
+  const formatParticipantLabel = (subscriberType: string, subscriberId: string) => {
+    if (subscriberType === "HUMAN") return `${subscriberId} (human)`;
+    if (subscriberType === "AGENT") return `${subscriberId} (agent)`;
+    return `${subscriberId} (${subscriberType.toLowerCase()})`;
+  };
+
+  const parseSourceParticipant = (source?: string) => {
+    if (!source) return null;
+    const [rawType, ...rest] = source.split(":");
+    if (!rawType || rest.length === 0) return null;
+    const subscriberType = rawType.trim().toUpperCase();
+    const subscriberId = rest.join(":").trim();
+    if (!subscriberId) return null;
+    if (subscriberType !== "HUMAN" && subscriberType !== "AGENT") return null;
+    return { subscriberType, subscriberId };
+  };
 
   const getDestinationLabel = (event: EventRow) => {
     const targets: string[] = [];
     if (event.channelId) {
-      const channelName = channelNameById.get(event.channelId);
-      targets.push(channelName ? `channel:${channelName} (${event.channelId})` : `channel:${event.channelId}`);
+      const participants = channelById.get(event.channelId)?.participants ?? [];
+      const sourceParticipant = parseSourceParticipant(event.source);
+      const destinationParticipants =
+        sourceParticipant
+          ? participants.filter(
+              (participant) =>
+                !(
+                  participant.subscriberType.toUpperCase() === sourceParticipant.subscriberType &&
+                  participant.subscriberId === sourceParticipant.subscriberId
+                )
+            )
+          : participants;
+      if (destinationParticipants.length > 0) {
+        targets.push(
+          destinationParticipants
+            .map((participant) =>
+              formatParticipantLabel(participant.subscriberType, participant.subscriberId)
+            )
+            .join(" | ")
+        );
+      } else {
+        targets.push(event.channelId);
+      }
     }
     return targets.length > 0 ? targets.join(" | ") : "-";
   };
@@ -112,7 +151,7 @@ export function EventsScreen({
           : String(left).localeCompare(String(right));
       return sortDirection === "asc" ? cmp : -cmp;
     });
-  }, [events, payloadFilter, sortDirection, sortKey, channelNameById]);
+  }, [events, payloadFilter, sortDirection, sortKey, channelById]);
 
   const sortLabel = (key: SortKey, label: string) =>
     `${label}${sortKey === key ? (sortDirection === "asc" ? " ↑" : " ↓") : ""}`;
@@ -121,12 +160,24 @@ export function EventsScreen({
   const startIndex = (currentPage - 1) * pageSize;
   const endIndex = startIndex + pageSize;
   const pagedEvents = filteredAndSortedEvents.slice(startIndex, endIndex);
+  const selectedEvent = useMemo(
+    () => filteredAndSortedEvents.find((event) => event.id === selectedEventId) ?? null,
+    [filteredAndSortedEvents, selectedEventId]
+  );
 
   useEffect(() => {
     if (currentPage > totalPages) {
       setCurrentPage(totalPages);
     }
   }, [currentPage, totalPages]);
+
+  useEffect(() => {
+    if (!selectedEventId) return;
+    const exists = filteredAndSortedEvents.some((event) => event.id === selectedEventId);
+    if (!exists) {
+      setSelectedEventId(null);
+    }
+  }, [filteredAndSortedEvents, selectedEventId]);
 
   return (
     <div className="space-y-4">
@@ -234,6 +285,9 @@ export function EventsScreen({
             </select>
           </div>
         </div>
+        <div className="mb-3 text-xs text-slate-500">
+          Click an event row to open details.
+        </div>
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead>
@@ -264,13 +318,17 @@ export function EventsScreen({
                   </button>
                 </th>
                 <th className="px-2 py-2">Deliver At</th>
-                <th className="px-2 py-2">Payload</th>
-                <th className="px-2 py-2">Error</th>
               </tr>
             </thead>
             <tbody>
               {pagedEvents.map((event) => (
-                <tr key={event.id} className="border-b border-slate-900 align-top">
+                <tr
+                  key={event.id}
+                  className={`cursor-pointer border-b border-slate-900 align-top hover:bg-slate-900/40 ${
+                    selectedEventId === event.id ? "bg-slate-900/70" : ""
+                  }`}
+                  onClick={() => setSelectedEventId(event.id)}
+                >
                   <td className="px-2 py-2 whitespace-nowrap text-slate-400">
                     {formatTimestamp(event.createdAt)}
                   </td>
@@ -280,14 +338,6 @@ export function EventsScreen({
                   <td className="px-2 py-2 text-slate-300">{event.status ?? "-"}</td>
                   <td className="px-2 py-2 whitespace-nowrap text-slate-400">
                     {event.deliverAt ? formatTimestamp(event.deliverAt) : "-"}
-                  </td>
-                  <td className="px-2 py-2 max-w-[480px]">
-                    <pre className="text-xs text-slate-400 whitespace-pre-wrap break-words">
-                      {JSON.stringify(event.payload ?? {}, null, 2)}
-                    </pre>
-                  </td>
-                  <td className="px-2 py-2 text-xs text-rose-400 max-w-[320px] whitespace-pre-wrap break-words">
-                    {event.lastError ?? "-"}
                   </td>
                 </tr>
               ))}
@@ -317,6 +367,76 @@ export function EventsScreen({
           </Button>
         </div>
       </Card>
+
+      <div
+        className={`fixed inset-0 z-40 bg-black/40 transition-opacity lg:left-56 ${
+          selectedEvent ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"
+        }`}
+        onClick={() => setSelectedEventId(null)}
+      />
+      <aside
+        className={`fixed bottom-0 right-0 top-0 z-50 w-full max-w-3xl border-l border-slate-800 bg-slate-950 shadow-2xl transition-transform duration-300 ${
+          selectedEvent ? "translate-x-0" : "translate-x-full"
+        }`}
+        aria-hidden={!selectedEvent}
+      >
+        <div className="flex h-full flex-col">
+          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-800 px-4 py-3">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-100">
+                {selectedEvent?.type ?? "Event Details"}
+              </h3>
+              <p className="text-xs text-slate-500">{selectedEvent?.id}</p>
+            </div>
+            <Button
+              type="button"
+              variant="secondary"
+              className="px-2 py-1 text-xs"
+              onClick={() => setSelectedEventId(null)}
+            >
+              Close
+            </Button>
+          </div>
+          {selectedEvent ? (
+            <div className="min-h-0 flex-1 space-y-4 overflow-auto px-4 py-4">
+              <div className="rounded border border-slate-800 bg-slate-950 p-3 text-sm">
+                <div className="text-slate-300">
+                  <span className="text-slate-500">Source:</span> {selectedEvent.source}
+                </div>
+                <div className="mt-1 text-slate-300">
+                  <span className="text-slate-500">Destination:</span>{" "}
+                  {getDestinationLabel(selectedEvent)}
+                </div>
+                <div className="mt-1 text-slate-300">
+                  <span className="text-slate-500">Status:</span> {selectedEvent.status ?? "-"}
+                </div>
+                <div className="mt-1 text-slate-300">
+                  <span className="text-slate-500">Created:</span>{" "}
+                  {formatTimestamp(selectedEvent.createdAt)}
+                </div>
+                <div className="mt-1 text-slate-300">
+                  <span className="text-slate-500">Deliver At:</span>{" "}
+                  {selectedEvent.deliverAt ? formatTimestamp(selectedEvent.deliverAt) : "-"}
+                </div>
+              </div>
+
+              <div className="rounded border border-slate-800 bg-slate-950 p-3">
+                <h4 className="mb-2 text-sm text-slate-300">Payload</h4>
+                <pre className="max-h-[45vh] overflow-auto whitespace-pre-wrap break-words text-xs text-slate-300">
+                  {JSON.stringify(selectedEvent.payload ?? {}, null, 2)}
+                </pre>
+              </div>
+
+              <div className="rounded border border-slate-800 bg-slate-950 p-3">
+                <h4 className="mb-2 text-sm text-slate-300">Last Error</h4>
+                <pre className="max-h-[25vh] overflow-auto whitespace-pre-wrap break-words text-xs text-rose-300">
+                  {selectedEvent.lastError ?? "-"}
+                </pre>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </aside>
     </div>
   );
 }

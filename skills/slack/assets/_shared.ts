@@ -116,11 +116,14 @@ export async function ensureOrgOpsChannelSubscription(input: {
     throw new Error(`Failed to list orgops channels: ${listRes.status} ${text}`);
   }
   const existingChannels = (await listRes.json().catch(() => [])) as Array<{
+    id?: string;
     name?: string;
   }>;
-  const alreadyExists = existingChannels.some((channel) => channel.name === input.channelId);
+  let canonicalChannelId = existingChannels.find(
+    (channel) => channel.name === input.channelId
+  )?.id;
 
-  if (!alreadyExists) {
+  if (!canonicalChannelId) {
     const createRes = await fetch(`${apiUrl}/api/channels`, {
       method: "POST",
       headers: {
@@ -133,7 +136,10 @@ export async function ensureOrgOpsChannelSubscription(input: {
         kind: "INTEGRATION_BRIDGE"
       })
     });
-    if (!createRes.ok && createRes.status !== 409) {
+    if (createRes.ok) {
+      const created = (await createRes.json().catch(() => ({}))) as { id?: string };
+      canonicalChannelId = created.id;
+    } else if (createRes.status !== 409) {
       const text = await createRes.text().catch(() => "");
       const duplicateName =
         text.includes("UNIQUE constraint failed: channels.name") ||
@@ -144,8 +150,29 @@ export async function ensureOrgOpsChannelSubscription(input: {
     }
   }
 
+  if (!canonicalChannelId) {
+    const refreshRes = await fetch(`${apiUrl}/api/channels`, {
+      headers: {
+        "x-orgops-runner-token": token
+      }
+    });
+    if (!refreshRes.ok) {
+      const text = await refreshRes.text().catch(() => "");
+      throw new Error(`Failed to refresh orgops channels: ${refreshRes.status} ${text}`);
+    }
+    const refreshedChannels = (await refreshRes.json().catch(() => [])) as Array<{
+      id?: string;
+      name?: string;
+    }>;
+    canonicalChannelId = refreshedChannels.find((channel) => channel.name === input.channelId)?.id;
+  }
+
+  if (!canonicalChannelId) {
+    throw new Error(`Unable to resolve channel id for ${input.channelId}`);
+  }
+
   const subscribeRes = await fetch(
-    `${apiUrl}/api/channels/${encodeURIComponent(input.channelId)}/subscribe`,
+    `${apiUrl}/api/channels/${encodeURIComponent(canonicalChannelId)}/subscribe`,
     {
       method: "POST",
       headers: {
@@ -162,4 +189,6 @@ export async function ensureOrgOpsChannelSubscription(input: {
     const text = await subscribeRes.text().catch(() => "");
     throw new Error(`Failed to subscribe agent to orgops channel: ${subscribeRes.status} ${text}`);
   }
+
+  return canonicalChannelId;
 }

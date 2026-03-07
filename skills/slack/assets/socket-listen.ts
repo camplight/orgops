@@ -36,6 +36,11 @@ type OrgOpsEventRow = {
   createdAt?: number;
 };
 
+type OrgOpsChannelRow = {
+  id?: string;
+  name?: string;
+};
+
 async function slackOpenSocket(appToken: string): Promise<string> {
   const res = await fetch("https://slack.com/api/apps.connections.open", {
     method: "POST",
@@ -98,14 +103,14 @@ async function emitSlackEventToOrgOps(
   },
 ) {
   const orgopsChannelId = toOrgOpsChannelId(input.teamId, input.slackChannelId);
-  await ensureOrgOpsChannelSubscription({
+  const canonicalOrgOpsChannelId = await ensureOrgOpsChannelSubscription({
     channelId: orgopsChannelId,
     agentName: agent,
   });
   await emitOrgOpsEvent({
     type: input.type,
     source: `slack:${input.teamId}:${agent}`,
-    channelId: orgopsChannelId,
+    channelId: canonicalOrgOpsChannelId,
     payload: input.payload,
   });
 }
@@ -252,10 +257,43 @@ async function listRecentOrgOpsAgentMessages(
   return (await res.json()) as OrgOpsEventRow[];
 }
 
+async function resolveSlackChannelFromOrgOpsChannelId(
+  orgopsChannelId: string,
+  cache: Map<string, { teamId: string; channelId: string } | null>,
+) {
+  const direct = parseOrgOpsSlackChannelId(orgopsChannelId);
+  if (direct) {
+    cache.set(orgopsChannelId, direct);
+    return direct;
+  }
+
+  if (cache.has(orgopsChannelId)) {
+    return cache.get(orgopsChannelId) ?? null;
+  }
+
+  const apiUrl = process.env.ORGOPS_API_URL ?? "http://localhost:8787";
+  const token = process.env.ORGOPS_RUNNER_TOKEN;
+  if (!token) throw new Error("Missing ORGOPS_RUNNER_TOKEN");
+
+  const res = await fetch(`${apiUrl}/api/channels`, {
+    headers: { "x-orgops-runner-token": token },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Failed to list orgops channels: ${res.status} ${text}`);
+  }
+  const channels = (await res.json()) as OrgOpsChannelRow[];
+  const match = channels.find((channel) => channel.id === orgopsChannelId);
+  const parsed = match?.name ? parseOrgOpsSlackChannelId(String(match.name)) : null;
+  cache.set(orgopsChannelId, parsed);
+  return parsed;
+}
+
 async function bridgeOrgOpsMessagesToSlack(
   agent: string,
   botToken: string,
   cursor: { afterCreatedAt: number },
+  channelCache: Map<string, { teamId: string; channelId: string } | null>,
 ) {
   const events = await listRecentOrgOpsAgentMessages(agent, cursor.afterCreatedAt);
   if (!Array.isArray(events) || events.length === 0) return;
@@ -268,7 +306,8 @@ async function bridgeOrgOpsMessagesToSlack(
     }
 
     const channelId = String(event.channelId ?? "");
-    const parsed = parseOrgOpsSlackChannelId(channelId);
+    if (!channelId) continue;
+    const parsed = await resolveSlackChannelFromOrgOpsChannelId(channelId, channelCache);
     if (!parsed || !parsed.channelId) continue;
 
     const text = String(event.payload?.text ?? "").trim();
@@ -301,6 +340,10 @@ async function main() {
   const identity = await slackAuthTest(botToken);
   const url = await slackOpenSocket(appToken);
   const bridgeCursor = { afterCreatedAt: Date.now() };
+  const orgopsToSlackChannelCache = new Map<
+    string,
+    { teamId: string; channelId: string } | null
+  >();
 
   console.log(
     `Socket Mode connected for agent=${agent} as user=${identity.userId}`,
@@ -339,7 +382,12 @@ async function main() {
   });
 
   setInterval(() => {
-    bridgeOrgOpsMessagesToSlack(agent, botToken, bridgeCursor).catch((err) => {
+    bridgeOrgOpsMessagesToSlack(
+      agent,
+      botToken,
+      bridgeCursor,
+      orgopsToSlackChannelCache,
+    ).catch((err) => {
       console.error("orgops->slack bridge error", err);
     });
   }, 1500);

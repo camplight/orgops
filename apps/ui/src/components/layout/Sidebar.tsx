@@ -16,6 +16,7 @@ const NAV_ITEMS: { screen: Screen; label: string }[] = [
   { screen: "processes", label: "Processes" },
   { screen: "skills", label: "Skills" },
   { screen: "secrets", label: "Secrets" },
+  { screen: "humans", label: "Humans" },
   { screen: "profile", label: "Profile" }
 ];
 

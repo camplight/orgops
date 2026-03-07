@@ -6,7 +6,7 @@ import {
   readFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
 import { and, eq, inArray } from "drizzle-orm";
 
 import {
@@ -29,6 +29,7 @@ import { registerSkillsRoutes } from "./routes/skills";
 import { registerSecretsRoutes } from "./routes/secrets";
 import { registerWebhookRoutes } from "./routes/webhooks";
 import { registerWsRoutes, type WsServerMessage } from "./routes/ws";
+import { registerHumansRoutes } from "./routes/humans";
 
 export type AppConfig = {
   db?: OrgOpsDb;
@@ -41,7 +42,7 @@ export type AppConfig = {
 
 type AppEnv = {
   Variables: {
-    user: { username: string };
+    user: { id?: string; username: string; mustChangePassword: boolean };
   };
 };
 
@@ -71,7 +72,10 @@ export function createApp(config: AppConfig = {}) {
   const orm = createDrizzleDb(db);
 
   const bus = new EventBus<WsServerMessage>();
-  const sessions = new Map<string, { username: string }>();
+  const sessions = new Map<
+    string,
+    { id?: string; username: string; mustChangePassword: boolean }
+  >();
 
   const ADMIN_USER =
     config.adminUser ?? process.env.ORGOPS_ADMIN_USER ?? "admin";
@@ -91,6 +95,43 @@ export function createApp(config: AppConfig = {}) {
   mkdirSync(FILES_DIR, { recursive: true });
   mkdirSync(EVENT_TYPES_DIR, { recursive: true });
 
+  function hashPassword(password: string) {
+    const salt = randomBytes(16).toString("hex");
+    const derived = scryptSync(password, salt, 64).toString("hex");
+    return `scrypt$${salt}$${derived}`;
+  }
+
+  function verifyPassword(password: string, hashed: string) {
+    const [algo, salt, storedHash] = hashed.split("$");
+    if (algo !== "scrypt" || !salt || !storedHash) return false;
+    const computedHash = scryptSync(password, salt, 64).toString("hex");
+    const storedBytes = Buffer.from(storedHash, "hex");
+    const computedBytes = Buffer.from(computedHash, "hex");
+    if (storedBytes.length !== computedBytes.length) return false;
+    return timingSafeEqual(storedBytes, computedBytes);
+  }
+
+  const existingAdmin = orm
+    .select({ id: schema.humans.id })
+    .from(schema.humans)
+    .where(eq(schema.humans.username, ADMIN_USER))
+    .get();
+  if (!existingAdmin) {
+    const now = Date.now();
+    orm
+      .insert(schema.humans)
+      .values({
+        id: randomUUID(),
+        username: ADMIN_USER,
+        password_hash: hashPassword(ADMIN_PASS),
+        must_change_password: 0,
+        created_at: now,
+        updated_at: now,
+        invited_by_human_id: null,
+      })
+      .run();
+  }
+
   function jsonResponse(c: any, data: unknown, status = 200) {
     return c.json(data, status);
   }
@@ -98,7 +139,7 @@ export function createApp(config: AppConfig = {}) {
   function requireAuth(c: any, next: any) {
     const runnerHeader = c.req.header("x-orgops-runner-token");
     if (RUNNER_TOKEN && runnerHeader === RUNNER_TOKEN) {
-      c.set("user", { username: "runner" });
+      c.set("user", { username: "runner", mustChangePassword: false });
       return next();
     }
     const cookie = c.req.header("cookie") ?? "";
@@ -115,7 +156,7 @@ export function createApp(config: AppConfig = {}) {
     if (runnerHeader !== RUNNER_TOKEN) {
       return jsonResponse(c, { error: "Runner token required" }, 401);
     }
-    c.set("user", { username: "runner" });
+    c.set("user", { username: "runner", mustChangePassword: false });
     return next();
   }
 
@@ -287,13 +328,22 @@ export function createApp(config: AppConfig = {}) {
   }
 
   registerAuthRoutes(app as any, {
-    ADMIN_USER,
-    ADMIN_PASS,
+    orm,
+    humanSchema: schema.humans,
     RUNNER_TOKEN,
     sessions,
     AuthLoginSchema,
     jsonResponse,
     requireAuth,
+    hashPassword,
+    verifyPassword,
+  });
+
+  registerHumansRoutes(app as any, {
+    orm,
+    jsonResponse,
+    humanSchema: schema.humans,
+    hashPassword,
   });
 
   registerModelsRoutes(app as any, { orm, jsonResponse, parseJson });

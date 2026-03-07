@@ -6,6 +6,7 @@ import type {
   ChannelParticipant,
   EventRow,
   EventTypeInfo,
+  Human,
   ProcessRow,
   ProcessOutputRow,
   SecretRow,
@@ -15,12 +16,37 @@ import type {
   Conversation
 } from "../types";
 
+type DashboardEventStats = {
+  total: number;
+  processed: number;
+  failed: number;
+  pending: number;
+  scheduled: number;
+};
+
+function getDashboardEventStats(events: EventRow[]): DashboardEventStats {
+  const statusCounts = events.reduce<Record<string, number>>((acc, event) => {
+    const status = (event.status ?? "UNKNOWN").toUpperCase();
+    acc[status] = (acc[status] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  return {
+    total: events.length,
+    processed: (statusCounts.DELIVERED ?? 0) + (statusCounts.PROCESSED ?? 0),
+    failed: (statusCounts.FAILED ?? 0) + (statusCounts.DEAD ?? 0),
+    pending: statusCounts.PENDING ?? 0,
+    scheduled: statusCounts.SCHEDULED ?? 0
+  };
+}
+
 export function useOrgOpsData(authenticated: boolean) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [events, setEvents] = useState<EventRow[]>([]);
   const [eventTypes, setEventTypes] = useState<EventTypeInfo[]>([]);
   const [skills, setSkills] = useState<SkillMeta[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
+  const [humans, setHumans] = useState<Human[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [threads, setThreads] = useState<Thread[]>([]);
@@ -29,6 +55,13 @@ export function useOrgOpsData(authenticated: boolean) {
   const [secrets, setSecrets] = useState<SecretRow[]>([]);
   const [channelEvents, setChannelEvents] = useState<EventRow[]>([]);
   const [channelParticipants, setChannelParticipants] = useState<ChannelParticipant[]>([]);
+  const [dashboardEventStats, setDashboardEventStats] = useState<DashboardEventStats>({
+    total: 0,
+    processed: 0,
+    failed: 0,
+    pending: 0,
+    scheduled: 0
+  });
 
   const refreshDashboard = useCallback(() => {
     apiJson<Agent[]>("/api/agents").then(setAgents);
@@ -38,8 +71,17 @@ export function useOrgOpsData(authenticated: boolean) {
     (query = "/api/events?limit=50&order=desc") => apiJson<EventRow[]>(query).then(setEvents),
     []
   );
+  const refreshDashboardEvents = useCallback(async () => {
+    const [recentEvents, allEvents] = await Promise.all([
+      apiJson<EventRow[]>("/api/events?limit=50&order=desc"),
+      apiJson<EventRow[]>("/api/events?all=1&order=desc")
+    ]);
+    setEvents(recentEvents);
+    setDashboardEventStats(getDashboardEventStats(allEvents));
+  }, []);
 
   const refreshTeams = useCallback(() => apiJson<Team[]>("/api/teams").then(setTeams), []);
+  const refreshHumans = useCallback(() => apiJson<Human[]>("/api/humans").then(setHumans), []);
   const refreshEventTypes = useCallback(
     () => apiJson<EventTypeInfo[]>("/api/event-types").then(setEventTypes),
     []
@@ -53,7 +95,7 @@ export function useOrgOpsData(authenticated: boolean) {
     []
   );
   const refreshProcesses = useCallback(
-    () => apiJson<ProcessRow[]>("/api/processes").then(setProcesses),
+    () => apiJson<ProcessRow[]>("/api/processes?reconcile=1").then(setProcesses),
     []
   );
   const refreshSecrets = useCallback(
@@ -64,11 +106,26 @@ export function useOrgOpsData(authenticated: boolean) {
   useEffect(() => {
     if (!authenticated) return;
     refreshDashboard();
-    refreshEvents();
+    refreshDashboardEvents();
     refreshEventTypes();
+    refreshChannels();
+    refreshProcesses();
+    refreshSecrets();
+    refreshTeams();
+    refreshHumans();
     const id = setInterval(refreshDashboard, 5000);
     return () => clearInterval(id);
-  }, [authenticated, refreshDashboard, refreshEvents, refreshEventTypes]);
+  }, [
+    authenticated,
+    refreshDashboard,
+    refreshDashboardEvents,
+    refreshEventTypes,
+    refreshChannels,
+    refreshProcesses,
+    refreshSecrets,
+    refreshTeams,
+    refreshHumans
+  ]);
 
   const loadConversation = useCallback(async (id: string, channelId?: string | null) => {
     const threadsData = await apiJson<Thread[]>(`/api/conversations/${id}/threads`);
@@ -116,6 +173,8 @@ export function useOrgOpsData(authenticated: boolean) {
     skills,
     teams,
     setTeams,
+    humans,
+    setHumans,
     channels,
     setChannels,
     conversations,
@@ -130,7 +189,9 @@ export function useOrgOpsData(authenticated: boolean) {
     setSecrets,
     refreshDashboard,
     refreshEvents,
+    refreshDashboardEvents,
     refreshTeams,
+    refreshHumans,
     refreshEventTypes,
     refreshChannels,
     refreshConversations,
@@ -138,6 +199,7 @@ export function useOrgOpsData(authenticated: boolean) {
     refreshSecrets,
     channelEvents,
     channelParticipants,
+    dashboardEventStats,
     loadChannelEvents,
     loadChannelParticipants,
     loadConversation,

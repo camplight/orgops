@@ -1,6 +1,12 @@
 import type { Hono } from "hono";
-import { mkdirSync, rmSync } from "node:fs";
-import { resolve } from "node:path";
+import {
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync
+} from "node:fs";
+import { basename, extname, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 
 import { schema, type OrgOpsDrizzleDb } from "@orgops/db";
@@ -29,6 +35,111 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     resolveWorkspacePath,
     insertEvent
   } = deps;
+  const TEXT_EXTENSIONS = new Set([
+    ".txt",
+    ".md",
+    ".markdown",
+    ".json",
+    ".jsonl",
+    ".yaml",
+    ".yml",
+    ".xml",
+    ".csv",
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".mjs",
+    ".cjs",
+    ".py",
+    ".rb",
+    ".go",
+    ".rs",
+    ".java",
+    ".kt",
+    ".swift",
+    ".c",
+    ".h",
+    ".cpp",
+    ".hpp",
+    ".sh",
+    ".bash",
+    ".zsh",
+    ".env",
+    ".ini",
+    ".toml",
+    ".sql",
+    ".css",
+    ".scss",
+    ".html",
+    ".htm",
+    ".log"
+  ]);
+
+  function toPosixPath(pathValue: string) {
+    return pathValue.split(sep).join("/");
+  }
+
+  function isWithinDirectory(targetPath: string, basePath: string) {
+    if (targetPath === basePath) return true;
+    return targetPath.startsWith(`${basePath}${sep}`);
+  }
+
+  function resolveAgentWorkspacePath(agentName: string) {
+    const row = orm
+      .select({
+        workspacePath: schema.agents.workspace_path
+      })
+      .from(schema.agents)
+      .where(eq(schema.agents.name, agentName))
+      .get() as { workspacePath: string } | undefined;
+    if (!row) {
+      return { error: "Not found", status: 404 as const };
+    }
+    const workspacePath = resolveWorkspacePath(row.workspacePath ?? "");
+    if (!workspacePath.trim()) {
+      return { error: "Workspace path is not configured", status: 400 as const };
+    }
+    return { workspacePath };
+  }
+
+  function resolveSafeWorkspaceTarget(
+    workspacePath: string,
+    relativePathInput: string | null
+  ) {
+    const relativePathValue = (relativePathInput ?? "").trim();
+    const targetPath = resolve(
+      workspacePath,
+      relativePathValue ? relativePathValue : "."
+    );
+    if (!isWithinDirectory(targetPath, workspacePath)) {
+      return { error: "Invalid workspace path", status: 400 as const };
+    }
+    return {
+      targetPath,
+      relativePath: toPosixPath(relative(workspacePath, targetPath))
+    };
+  }
+
+  function canPreviewAsText(pathValue: string) {
+    const extension = extname(pathValue).toLowerCase();
+    if (TEXT_EXTENSIONS.has(extension)) {
+      return true;
+    }
+    const fileName = basename(pathValue).toLowerCase();
+    if (fileName === "dockerfile" || fileName === "makefile") {
+      return true;
+    }
+    return false;
+  }
+
+  function isTextBuffer(buffer: Buffer) {
+    const sample = buffer.subarray(0, 4096);
+    for (const byte of sample) {
+      if (byte === 0) return false;
+    }
+    return true;
+  }
 
   app.get("/api/agents", (c) => {
     const rows = orm.select().from(schema.agents).all() as any[];
@@ -229,5 +340,134 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       source: "system"
     });
     return jsonResponse(c, { ok: true });
+  });
+
+  app.get("/api/agents/:name/workspace", (c) => {
+    const name = c.req.param("name");
+    const workspaceResult = resolveAgentWorkspacePath(name);
+    if ("error" in workspaceResult) {
+      return jsonResponse(c, { error: workspaceResult.error }, workspaceResult.status);
+    }
+    const workspacePath = workspaceResult.workspacePath;
+    mkdirSync(workspacePath, { recursive: true });
+
+    const url = new URL(c.req.url);
+    const relativePathInput = url.searchParams.get("path");
+    const resolvedTarget = resolveSafeWorkspaceTarget(workspacePath, relativePathInput);
+    if ("error" in resolvedTarget) {
+      return jsonResponse(c, { error: resolvedTarget.error }, resolvedTarget.status);
+    }
+
+    const stat = statSync(resolvedTarget.targetPath, { throwIfNoEntry: false });
+    if (!stat) {
+      return jsonResponse(c, { error: "Path not found" }, 404);
+    }
+    if (!stat.isDirectory()) {
+      return jsonResponse(c, { error: "Path is not a directory" }, 400);
+    }
+
+    const entries = readdirSync(resolvedTarget.targetPath, { withFileTypes: true })
+      .map((entry) => {
+        const absolutePath = resolve(resolvedTarget.targetPath, entry.name);
+        const entryStat = statSync(absolutePath, { throwIfNoEntry: false });
+        const relativePath = toPosixPath(relative(workspacePath, absolutePath));
+        const extension = entry.isDirectory() ? "" : extname(entry.name).toLowerCase();
+        const isTextFile = !entry.isDirectory() && canPreviewAsText(entry.name);
+        return {
+          name: entry.name,
+          path: relativePath,
+          kind: entry.isDirectory() ? "directory" : "file",
+          extension,
+          size: entryStat?.size ?? null,
+          modifiedAt: entryStat?.mtimeMs ?? null,
+          isTextFile
+        };
+      })
+      .sort((left, right) => {
+        if (left.kind === right.kind) {
+          return left.name.localeCompare(right.name);
+        }
+        return left.kind === "directory" ? -1 : 1;
+      });
+
+    return jsonResponse(c, {
+      workspacePath,
+      path: resolvedTarget.relativePath === "" ? "." : resolvedTarget.relativePath,
+      entries
+    });
+  });
+
+  app.get("/api/agents/:name/workspace/file", (c) => {
+    const name = c.req.param("name");
+    const workspaceResult = resolveAgentWorkspacePath(name);
+    if ("error" in workspaceResult) {
+      return jsonResponse(c, { error: workspaceResult.error }, workspaceResult.status);
+    }
+    const workspacePath = workspaceResult.workspacePath;
+    const url = new URL(c.req.url);
+    const relativePathInput = url.searchParams.get("path");
+    if (!relativePathInput?.trim()) {
+      return jsonResponse(c, { error: "path query parameter is required" }, 400);
+    }
+
+    const resolvedTarget = resolveSafeWorkspaceTarget(workspacePath, relativePathInput);
+    if ("error" in resolvedTarget) {
+      return jsonResponse(c, { error: resolvedTarget.error }, resolvedTarget.status);
+    }
+    const stat = statSync(resolvedTarget.targetPath, { throwIfNoEntry: false });
+    if (!stat) {
+      return jsonResponse(c, { error: "Path not found" }, 404);
+    }
+    if (!stat.isFile()) {
+      return jsonResponse(c, { error: "Path is not a file" }, 400);
+    }
+
+    const bytes = readFileSync(resolvedTarget.targetPath);
+    if (!canPreviewAsText(resolvedTarget.targetPath) || !isTextBuffer(bytes)) {
+      return jsonResponse(c, { error: "File is binary and cannot be previewed" }, 415);
+    }
+
+    return jsonResponse(c, {
+      path: resolvedTarget.relativePath,
+      name: basename(resolvedTarget.targetPath),
+      size: stat.size,
+      modifiedAt: stat.mtimeMs,
+      content: bytes.toString("utf-8")
+    });
+  });
+
+  app.get("/api/agents/:name/workspace/download", (c) => {
+    const name = c.req.param("name");
+    const workspaceResult = resolveAgentWorkspacePath(name);
+    if ("error" in workspaceResult) {
+      return jsonResponse(c, { error: workspaceResult.error }, workspaceResult.status);
+    }
+    const workspacePath = workspaceResult.workspacePath;
+    const url = new URL(c.req.url);
+    const relativePathInput = url.searchParams.get("path");
+    if (!relativePathInput?.trim()) {
+      return jsonResponse(c, { error: "path query parameter is required" }, 400);
+    }
+
+    const resolvedTarget = resolveSafeWorkspaceTarget(workspacePath, relativePathInput);
+    if ("error" in resolvedTarget) {
+      return jsonResponse(c, { error: resolvedTarget.error }, resolvedTarget.status);
+    }
+    const stat = statSync(resolvedTarget.targetPath, { throwIfNoEntry: false });
+    if (!stat) {
+      return jsonResponse(c, { error: "Path not found" }, 404);
+    }
+    if (!stat.isFile()) {
+      return jsonResponse(c, { error: "Path is not a file" }, 400);
+    }
+
+    const bytes = readFileSync(resolvedTarget.targetPath);
+    return new Response(bytes, {
+      status: 200,
+      headers: {
+        "content-type": "application/octet-stream",
+        "content-disposition": `attachment; filename="${basename(resolvedTarget.targetPath)}"`
+      }
+    });
   });
 }
