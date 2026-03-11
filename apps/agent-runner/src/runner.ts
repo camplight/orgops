@@ -24,6 +24,30 @@ const heartbeats = new Map<string, number>();
 const bootstrappedAgents = new Set<string>();
 const lifecycleChannels = new Map<string, string>();
 const HEARTBEAT_INTERVAL_MS = 5000;
+const DEFAULT_MAX_HISTORY_EVENTS = 120;
+const DEFAULT_MAX_HISTORY_CHARS = 120_000;
+const DEFAULT_MAX_EVENT_CHARS = 12_000;
+
+function readPositiveIntEnv(
+  value: string | undefined,
+  fallback: number,
+): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+const HISTORY_MAX_EVENTS = readPositiveIntEnv(
+  process.env.ORGOPS_HISTORY_MAX_EVENTS,
+  DEFAULT_MAX_HISTORY_EVENTS,
+);
+const HISTORY_MAX_CHARS = readPositiveIntEnv(
+  process.env.ORGOPS_HISTORY_MAX_CHARS,
+  DEFAULT_MAX_HISTORY_CHARS,
+);
+const EVENT_MAX_CHARS = readPositiveIntEnv(
+  process.env.ORGOPS_EVENT_MAX_CHARS,
+  DEFAULT_MAX_EVENT_CHARS,
+);
 
 async function apiFetch(path: string, init?: RequestInit) {
   const runnerToken = process.env.ORGOPS_RUNNER_TOKEN ?? "dev-runner-token";
@@ -175,16 +199,56 @@ export function toHistoryMessage(agent: Agent, event: Event) {
     event.source === `agent:${agent.name}`
       ? ("assistant" as const)
       : ("user" as const);
+  const baseRecord = {
+    eventId: event.id,
+    channelId: event.channelId,
+    parentEventId: event.parentEventId,
+    type: event.type,
+    source: event.source,
+    payload: event.payload ?? {},
+  };
+  let content = JSON.stringify(baseRecord, null, 2);
+  if (content.length > EVENT_MAX_CHARS) {
+    const payloadJson = JSON.stringify(event.payload ?? {});
+    const preview = payloadJson.slice(0, 2000);
+    content = JSON.stringify(
+      {
+        ...baseRecord,
+        payload: {
+          truncated: true,
+          preview,
+          originalPayloadChars: payloadJson.length,
+        },
+      },
+      null,
+      2,
+    );
+  }
   return {
     role,
+    content,
+  };
+}
+
+function buildHistoryTruncationMessage(
+  omittedCount: number,
+  includedCount: number,
+  maxEvents: number,
+  maxChars: number,
+) {
+  return {
+    role: "user" as const,
     content: JSON.stringify(
       {
-        eventId: event.id,
-        channelId: event.channelId,
-        parentEventId: event.parentEventId,
-        type: event.type,
-        source: event.source,
-        payload: event.payload ?? {},
+        type: "system.history.truncated",
+        omittedCount,
+        includedCount,
+        reason: "history_budget_exceeded",
+        limits: {
+          maxEvents,
+          maxChars,
+          maxEventChars: EVENT_MAX_CHARS,
+        },
       },
       null,
       2,
@@ -197,11 +261,43 @@ export function buildModelMessages(
   system: string,
   channelEvents: Event[],
 ) {
+  const boundedByEventCount =
+    channelEvents.length > HISTORY_MAX_EVENTS
+      ? channelEvents.slice(-HISTORY_MAX_EVENTS)
+      : channelEvents;
+  const historyMessages = boundedByEventCount.map((channelEvent) =>
+    toHistoryMessage(agent, channelEvent),
+  );
+
+  const keptFromEnd: Array<{ role: "user" | "assistant"; content: string }> = [];
+  let totalHistoryChars = 0;
+  for (let index = historyMessages.length - 1; index >= 0; index -= 1) {
+    const message = historyMessages[index];
+    const messageChars = message.content.length;
+    if (
+      keptFromEnd.length > 0 &&
+      totalHistoryChars + messageChars > HISTORY_MAX_CHARS
+    ) {
+      break;
+    }
+    keptFromEnd.push(message);
+    totalHistoryChars += messageChars;
+  }
+  keptFromEnd.reverse();
+  const omittedCount = channelEvents.length - keptFromEnd.length;
   return [
     { role: "system" as const, content: system },
-    ...channelEvents.map((channelEvent) =>
-      toHistoryMessage(agent, channelEvent),
-    ),
+    ...(omittedCount > 0
+      ? [
+          buildHistoryTruncationMessage(
+            omittedCount,
+            keptFromEnd.length,
+            HISTORY_MAX_EVENTS,
+            HISTORY_MAX_CHARS,
+          ),
+        ]
+      : []),
+    ...keptFromEnd,
   ];
 }
 

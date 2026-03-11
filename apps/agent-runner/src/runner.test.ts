@@ -83,6 +83,38 @@ describe("agent runner", () => {
     expect(eventIds).toEqual(["evt-1", "evt-2", "evt-3"]);
   });
 
+  it("truncates oversized history to stay within model budget", () => {
+    const agent: Agent = {
+      name: "tester",
+      systemInstructions: "",
+      soulPath: "",
+      workspacePath: "/tmp",
+      modelId: "openai:gpt-4o-mini",
+      desiredState: "RUNNING",
+      runtimeState: "RUNNING",
+    };
+    const events: Event[] = Array.from({ length: 130 }, (_, index) => ({
+      id: `evt-${index + 1}`,
+      type: "message.created",
+      payload: { text: `msg-${index + 1}` },
+      source: "human:alice",
+      channelId: "chan-1",
+    }));
+
+    const messages = buildModelMessages(agent, "system prompt", events);
+    expect(messages[0]).toEqual({ role: "system", content: "system prompt" });
+    expect(messages[1]?.role).toBe("user");
+    const truncationMeta = JSON.parse(String(messages[1]?.content));
+    expect(truncationMeta.type).toBe("system.history.truncated");
+    expect(truncationMeta.omittedCount).toBeGreaterThan(0);
+    expect(truncationMeta.includedCount).toBeLessThan(events.length);
+    const eventIds = messages
+      .slice(2)
+      .map((message) => JSON.parse(message.content as string).eventId);
+    expect(eventIds[0]).toBe("evt-11");
+    expect(eventIds[eventIds.length - 1]).toBe("evt-130");
+  });
+
   it("filters control, self, and unaddressed agent channel events", async () => {
     const agent: Agent = {
       name: "tester",
