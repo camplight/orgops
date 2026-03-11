@@ -174,9 +174,6 @@ export function registerAuthRoutes(app: Hono<any>, deps: AuthDeps) {
   });
 
   app.use("/api/*", async (c, next) => {
-    if (c.req.path.startsWith("/api/webhooks/")) {
-      return next();
-    }
     if (RUNNER_TOKEN && c.req.header("x-orgops-runner-token") === RUNNER_TOKEN) {
       (c as any).set("user", { username: "runner", mustChangePassword: false });
       return next();

@@ -56,9 +56,6 @@ This builds the UI and runs the API, runner, and UI preview.
 - `ORGOPS_API_URL` (agent-runner API base URL)
 - `ORGOPS_EVENT_MAX_FAILURES` (default: 25)
 - `OPENAI_API_KEY` (for OpenAI models)
-- Webhooks:
-  - `ORGOPS_WEBHOOK_SECRET`
-  - `ORGOPS_GITHUB_WEBHOOK_SECRET`
 
 ## Tests
 

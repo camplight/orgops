@@ -101,6 +101,44 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
     return DIRECT_CHANNEL_KIND.group;
   }
 
+  function agentExists(agentName: string) {
+    const row = orm
+      .select({ id: schema.agents.id })
+      .from(schema.agents)
+      .where(eq(schema.agents.name, agentName))
+      .get();
+    return Boolean(row);
+  }
+
+  function humanExists(username: string) {
+    const row = orm
+      .select({ id: schema.humans.id })
+      .from(schema.humans)
+      .where(eq(schema.humans.username, username))
+      .get();
+    return Boolean(row);
+  }
+
+  function findMissingParticipant(
+    participants: Array<{ subscriberType: string; subscriberId: string }>,
+  ) {
+    for (const participant of participants) {
+      if (
+        participant.subscriberType === "AGENT" &&
+        !agentExists(participant.subscriberId)
+      ) {
+        return participant;
+      }
+      if (
+        participant.subscriberType === "HUMAN" &&
+        !humanExists(participant.subscriberId)
+      ) {
+        return participant;
+      }
+    }
+    return null;
+  }
+
   function ensureDirectChannel(
     participants: Array<{ subscriberType: string; subscriberId: string }>,
     description?: string | null,
@@ -343,6 +381,16 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
         400,
       );
     }
+    const missingParticipant = findMissingParticipant(participants);
+    if (missingParticipant) {
+      return jsonResponse(
+        c,
+        {
+          error: `${missingParticipant.subscriberType} participant not found: ${missingParticipant.subscriberId}`,
+        },
+        404,
+      );
+    }
     const user = c.get("user") as { username?: string } | undefined;
     if (user?.username && user.username !== "runner") {
       const mismatchedHuman = participants.find(
@@ -377,6 +425,9 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
     }
     if (!agentName)
       return jsonResponse(c, { error: "agentName is required" }, 400);
+    if (!agentExists(agentName)) {
+      return jsonResponse(c, { error: `AGENT not found: ${agentName}` }, 404);
+    }
     const direct = ensureDirectChannel(
       normalizeDirectParticipants([
         { subscriberType: "HUMAN", subscriberId: humanId },
@@ -406,6 +457,12 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
         { error: "leftAgentName and rightAgentName must differ" },
         400,
       );
+    }
+    if (!agentExists(leftAgentName)) {
+      return jsonResponse(c, { error: `AGENT not found: ${leftAgentName}` }, 404);
+    }
+    if (!agentExists(rightAgentName)) {
+      return jsonResponse(c, { error: `AGENT not found: ${rightAgentName}` }, 404);
     }
     const direct = ensureDirectChannel(
       normalizeDirectParticipants([
@@ -460,6 +517,9 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
         { error: "Only AGENT channel subscriptions are supported" },
         400,
       );
+    }
+    if (!agentExists(subscriberId)) {
+      return jsonResponse(c, { error: `AGENT not found: ${subscriberId}` }, 404);
     }
     orm
       .insert(schema.channelSubscriptions)

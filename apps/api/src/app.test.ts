@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
-import { createHmac, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { openDb } from "@orgops/db";
 import { createApp } from "./app";
 
@@ -195,91 +195,6 @@ describe("api app", () => {
       headers: { cookie: humanCookie }
     });
     expect(allowedRes.status).toBe(200);
-
-    rmSync(dataDir, { recursive: true, force: true });
-  });
-
-  it("verifies generic webhook signature", async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
-    const db = openDb(":memory:");
-    process.env.ORGOPS_WEBHOOK_SECRET = "test-secret";
-    const { app } = createApp({
-      db,
-      dataDir,
-      adminUser: "admin",
-      adminPass: "admin",
-      runnerToken: "test-token"
-    });
-
-    const payload = JSON.stringify({ id: "evt-1", message: "ok" });
-    const signature = createHmac("sha256", "test-secret").update(payload).digest("hex");
-
-    const res = await app.request("http://localhost/api/webhooks/generic/test", {
-      method: "POST",
-      headers: {
-        "x-orgops-signature": signature
-      },
-      body: payload
-    });
-    expect(res.status).toBe(200);
-
-    rmSync(dataDir, { recursive: true, force: true });
-  });
-
-  it("dynamic webhook: CRUD definitions and verify by name", async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
-    const db = openDb(":memory:");
-    const { app } = createApp({
-      db,
-      dataDir,
-      adminUser: "admin",
-      adminPass: "admin",
-      runnerToken: "test-token"
-    });
-
-    const loginRes = await app.request("http://localhost/api/auth/login", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
-    });
-    expect(loginRes.status).toBe(200);
-    const cookie = loginRes.headers.get("set-cookie") ?? "";
-
-    const createRes = await app.request("http://localhost/api/webhook-definitions", {
-      method: "POST",
-      headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({
-        name: "my-webhook",
-        verificationKind: "generic_hmac",
-        secret: "my-secret"
-      })
-    });
-    expect(createRes.status).toBe(201);
-    const createBody = await createRes.json();
-    expect(createBody.name).toBe("my-webhook");
-
-    const listRes = await app.request("http://localhost/api/webhook-definitions", { headers: { cookie } });
-    expect(listRes.status).toBe(200);
-    const list = await listRes.json();
-    expect(list.length).toBe(1);
-    expect(list[0].name).toBe("my-webhook");
-    expect(list[0].verificationKind).toBe("generic_hmac");
-    expect(list[0].secret).toBeUndefined();
-
-    const payload = JSON.stringify({ id: "evt-2", message: "hello" });
-    const signature = createHmac("sha256", "my-secret").update(payload).digest("hex");
-    const webhookRes = await app.request("http://localhost/api/webhooks/my-webhook", {
-      method: "POST",
-      headers: { "x-orgops-signature": signature },
-      body: payload
-    });
-    expect(webhookRes.status).toBe(200);
-
-    const notFoundRes = await app.request("http://localhost/api/webhooks/nonexistent", {
-      method: "POST",
-      body: payload
-    });
-    expect(notFoundRes.status).toBe(404);
 
     rmSync(dataDir, { recursive: true, force: true });
   });
@@ -725,6 +640,18 @@ describe("api app", () => {
     expect(createChannelRes.status).toBe(201);
     const createChannelBody = (await createChannelRes.json()) as { id: string };
 
+    const createAgentRes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "agent-one",
+        modelId: "test:model",
+        systemInstructions: "",
+        workspacePath: ".orgops-data/workspaces/agent-one"
+      })
+    });
+    expect(createAgentRes.status).toBe(201);
+
     const subscribeRes = await app.request(
       `http://localhost/api/channels/${createChannelBody.id}/subscribe`,
       {
@@ -858,6 +785,18 @@ describe("api app", () => {
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
 
+    const createAgentRes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "coordinator",
+        modelId: "test:model",
+        systemInstructions: "",
+        workspacePath: ".orgops-data/workspaces/coordinator"
+      })
+    });
+    expect(createAgentRes.status).toBe(201);
+
     const ensureRes = await app.request("http://localhost/api/channels/direct/human-agent", {
       method: "POST",
       headers: { "content-type": "application/json", cookie },
@@ -882,6 +821,59 @@ describe("api app", () => {
       { subscriberType: "AGENT", subscriberId: "coordinator" },
       { subscriberType: "HUMAN", subscriberId: "admin" }
     ]);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("rejects human-agent direct channel for unknown agent", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token"
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" })
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const ensureRes = await app.request("http://localhost/api/channels/direct/human-agent", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ agentName: "slack" })
+    });
+    expect(ensureRes.status).toBe(404);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("rejects agent-agent direct channel when participant agent is unknown", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token"
+    });
+
+    const ensureRes = await app.request("http://localhost/api/channels/direct/agent-agent", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orgops-runner-token": "test-token"
+      },
+      body: JSON.stringify({ leftAgentName: "coordinator", rightAgentName: "browser-use" })
+    });
+    expect(ensureRes.status).toBe(404);
 
     rmSync(dataDir, { recursive: true, force: true });
   });

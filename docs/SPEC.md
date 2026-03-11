@@ -29,7 +29,6 @@ orgops/
     api/                  # Hono HTTP + WS server, single-writer DB access
     ui/                   # React + Tailwind SPA
     agent-runner/         # One daemon supervises all agents, executes tools, LLM loop
-    webhook-ingest/       # Verified webhook endpoints (or merge into api for MVP)
   packages/
     db/                   # schema, migrations, query helpers
     schemas/              # Zod schemas for API payloads + events
@@ -43,8 +42,6 @@ orgops/
     orgops.sqlite
     workspaces/
 ```
-
-**MVP simplification:** you may merge `webhook-ingest` into `apps/api` as `/api/webhooks/*`.
 
 ## Core concepts
 
@@ -279,7 +276,7 @@ Indexes:
 
 - **At-least-once** delivery to agents/subscribers.
 - Idempotency:
-  - ingress/webhooks must use `idempotencyKey` derived from provider event id.
+  - events should use `idempotencyKey` when retries are possible.
 - Scheduling:
   - events with `deliverAt` remain `PENDING` until time <= now.
 - Dead-letter:
@@ -395,19 +392,6 @@ Config:
 - `GET /api/secrets` (names only + scope, no values)
 - `POST /api/secrets` (set value)
 - `DELETE /api/secrets/:id`
-
-#### Webhooks (verified)
-
-- `POST /api/webhooks/github`
-- `POST /api/webhooks/generic/:source`
-- `POST /api/webhooks/:name`
-
-Each verifies signature + replay protection, then emits events.
-
-Replay protection (MVP):
-
-- GitHub uses `X-GitHub-Delivery`
-- Generic accepts `x-orgops-idempotency` or `payload.id`
 
 ## Agent Runner (one daemon supervises all agents)
 
@@ -606,7 +590,6 @@ Ship these skill folders in `skills/`:
 - `audit.fs.read`
 - `audit.fs.write`
 - `audit.secret.accessed`
-- `audit.webhook.verified` / `audit.webhook.rejected`
 
 ## Implementation order (MVP plan)
 
@@ -616,15 +599,13 @@ Ship these skill folders in `skills/`:
 4. agent-runner: fetch events → LLM → emit message events (no tools yet)
 5. Add shell/fs tools + audit logging
 6. Add proc manager + live logs via WS
-7. Webhook verification endpoints
-8. Skills index in prompt + skills UI
+7. Skills index in prompt + skills UI
 
 ## Acceptance criteria
 
 - Human can chat with an agent in multiple conversations; messages are stored and streamed live.
 - Agents can run shell commands and start long processes; output streams to UI and is persisted.
 - All actions are auditable as events.
-- Verified webhooks ingest into events; unverified are rejected and audited.
 - System runs on one VPS under one domain with bun + sqlite.
 
 ## Development commands

@@ -11,6 +11,7 @@ export function buildRunnerGuidance(nowMs: number, nowIso: string) {
     "- The runner executes your tool calls and records audit events for observability.",
     "- The runner does not orchestrate your collaboration; you must decide delegation, waiting, and completion behavior.",
     "- Skills are available as files and should be read explicitly with fs_read before use when needed.",
+    "- Skill names are not agent names; do not use events_dm_send to message a skill unless a real agent with that exact name exists.",
     "",
     "Tools and channels:",
     "- Use tools directly: shell_run, fs_read/fs_write/fs_list/fs_stat/fs_mkdir/fs_rm/fs_move, proc_* and events_*.",

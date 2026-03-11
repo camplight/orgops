@@ -225,15 +225,6 @@ export const models = sqliteTable("models", {
   created_at: integer("created_at").notNull()
 });
 
-export const webhookDefinitions = sqliteTable("webhook_definitions", {
-  id: text("id").primaryKey(),
-  name: text("name").notNull().unique(),
-  verification_kind: text("verification_kind").notNull(),
-  secret: text("secret").notNull(),
-  created_at: integer("created_at").notNull(),
-  updated_at: integer("updated_at").notNull()
-});
-
 export const schema = {
   migrations,
   agents,
@@ -250,6 +241,5 @@ export const schema = {
   processOutput,
   files,
   secrets,
-  models,
-  webhookDefinitions
+  models
 };

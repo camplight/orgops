@@ -27,7 +27,6 @@ import { registerEventsRoutes } from "./routes/events";
 import { registerRuntimeRoutes } from "./routes/runtime";
 import { registerSkillsRoutes } from "./routes/skills";
 import { registerSecretsRoutes } from "./routes/secrets";
-import { registerWebhookRoutes } from "./routes/webhooks";
 import { registerWsRoutes, type WsServerMessage } from "./routes/ws";
 import { registerHumansRoutes } from "./routes/humans";
 
@@ -165,14 +164,6 @@ export function createApp(config: AppConfig = {}) {
       return JSON.parse(input) as T;
     } catch {
       return fallback;
-    }
-  }
-
-  function parseJsonSafe(input: string): Record<string, any> | null {
-    try {
-      return JSON.parse(input) as Record<string, any>;
-    } catch {
-      return null;
     }
   }
 
@@ -387,13 +378,6 @@ export function createApp(config: AppConfig = {}) {
     jsonResponse,
     requireAuth,
     requireRunnerAuth,
-    insertEvent,
-  });
-
-  registerWebhookRoutes(app as any, {
-    orm,
-    jsonResponse,
-    parseJsonSafe,
     insertEvent,
   });
 
