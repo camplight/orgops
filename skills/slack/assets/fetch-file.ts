@@ -57,6 +57,27 @@ async function downloadToFile(input: { url: string; botToken: string; outPath: s
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+
+  if (args["help"]) {
+    console.log(`Usage:
+  bun run skills/slack/assets/fetch-file.ts -- --agent <agent> --file <fileId> [--out-dir <dir>]
+    [--orgops-channel-id <channelId> | --team-id <teamId> --channel-id <channelId>]
+
+Options:
+  --agent             Agent name (used to select SLACK_BOT_TOKEN__<agent>)
+  --file              Slack file id (e.g. F0123...)
+  --out-dir           Output directory (default: /tmp/orgops-slack-files)
+  --orgops-channel-id OrgOps channel id to emit slack.file.fetched into
+  --team-id           Slack team id (used to resolve/create slack:<teamId>:<channelId> channel)
+  --channel-id        Slack channel id (used with --team-id)
+  --help              Show this help
+
+Emits (optional):
+  slack.file.fetched { fileId, path, mime, size, name, title, url_private_download }
+`);
+    return;
+  }
+
   const agent = getAgent(args);
 
   const fileId = requireString(args, "file");

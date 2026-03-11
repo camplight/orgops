@@ -1,6 +1,6 @@
 ---
 name: slack
-description: "Slack skill: per-agent Slack app participation (send/reply/DM/history/search) + Socket Mode listener that emits orgops events."
+description: "Slack skill: per-agent Slack app participation (send/reply/DM/history/search) + Socket Mode listener using normal OrgOps message events."
 metadata: {"openclaw":{"requires":{"env":["ORGOPS_RUNNER_TOKEN"]}}}
 ---
 # Slack skill
@@ -10,10 +10,9 @@ This skill lets OrgOps agents act as **Slack apps** using **per-agent tokens** s
 It provides:
 
 - Slack Web API helpers (post message, reply in thread, open DM, history, search, list channels, user info)
-- A **Socket Mode** listener (one process per agent) that converts Slack events into OrgOps events:
-  - `integration.event.inbound` (provider-agnostic envelope)
-  - and bridges outbound OrgOps events from `slack:*` channels back to Slack via `chat.postMessage`:
-    - `integration.command.requested` (provider-agnostic connector workflow)
+- Slack file helpers (files.info + download to local path)
+- A **Socket Mode** listener (one process per agent) that converts Slack events into OrgOps `message.created` events.
+- A reverse bridge that forwards OrgOps `message.created` events in Slack integration channels back to Slack with `chat.postMessage`.
 
 ## Secrets
 
@@ -43,6 +42,7 @@ bun run skills/secrets/assets/set.ts -- slack SLACK_APP_TOKEN__worker1 xapp-...
    - `im:write`
    - `users:read`
    - `search:read`
+   - `files:read` (required for file download helpers)
 5. Install the app to the workspace to obtain the `xoxb-...` bot token
 6. Subscribe to events (Event Subscriptions):
    - `message.channels`, `message.groups`, `message.im`, `message.mpim`
@@ -127,6 +127,55 @@ You can also search by display name:
 bun run skills/slack/assets/find-user.ts -- --agent worker1 --display-name "Outbounder"
 ```
 
+### File info
+
+Requires bot scope: `files:read`
+
+```bash
+bun run skills/slack/assets/file-info.ts -- --agent worker1 --file F0123456789
+```
+
+### Fetch file bytes to a local path (no base64)
+
+Requires bot scope: `files:read`
+
+Downloads the file using `files.info` + `url_private_download` and writes it to a local directory.
+
+```bash
+bun run skills/slack/assets/fetch-file.ts -- --agent worker1 --file F0123456789
+```
+
+By default files are written to:
+
+- `/tmp/orgops-slack-files`
+
+Override output directory:
+
+```bash
+bun run skills/slack/assets/fetch-file.ts -- --agent worker1 --file F0123456789 --out-dir ./tmp/slack-files
+```
+
+Optionally emit an OrgOps event so other agents can consume the stable path:
+
+```bash
+bun run skills/slack/assets/fetch-file.ts -- \
+  --agent worker1 \
+  --file F0123456789 \
+  --orgops-channel-id slack:T123:C456
+```
+
+Emitted event:
+
+- `type`: `slack.file.fetched`
+- `payload`:
+  - `fileId`: string
+  - `path`: string (local filesystem path)
+  - `mime`: string | null
+  - `size`: number
+  - `name`: string | null
+  - `title`: string | null
+  - `url_private_download`: string | null
+
 ## Socket Mode listener (event-driven)
 
 Run one listener process per agent:
@@ -135,24 +184,28 @@ Run one listener process per agent:
 bun run skills/slack/assets/socket-listen.ts -- --agent worker1
 ```
 
-This will emit OrgOps events via the Events API:
+Optional routing granularity:
 
-- `integration.event.inbound`
+- `--route-mode channel` (default): one OrgOps channel per Slack team+channel
+- `--route-mode thread`: one OrgOps channel per Slack thread
+- `--route-mode person`: one OrgOps channel per sender in a Slack channel
 
-When emitting, the listener now auto-ensures an OrgOps channel named
-`slack:<teamId>:<channelId>` exists and subscribes the target agent, so incoming
-Slack events are routable to the runner without manual channel setup.
+This emits OrgOps `message.created` events via the Events API.
+
+When emitting, the listener auto-ensures an OrgOps integration channel exists and subscribes
+the target agent, so incoming Slack events are routable to the runner without manual setup.
+Channel metadata includes Slack routing info (`provider/teamId/channelId`, and optional thread/person).
 
 Notes:
 
 - v1 keeps lifecycle management simple: you run this as an explicit sidecar process.
 - v2 can integrate with OrgOps process/websocket infra for supervision.
 - Listener now acts as a bidirectional bridge:
-  - Slack inbound -> OrgOps `integration.event.inbound`
-  - OrgOps outbound in `slack:<teamId>:<channelId>` -> Slack messages:
-    - `integration.command.requested` with payload:
-      - `provider: "slack"`
-      - `action: "post_message"` (or `chat.postMessage`)
-      - optional `connection` (agent name that owns the bot/app token)
-      - optional `target.spaceId`, `target.threadId`
-      - `payload.text`
+  - Slack inbound -> OrgOps `message.created` (`source: integration:slack:<agent>`, payload includes `integration.origin=slack`)
+  - OrgOps outbound in Slack integration channels -> Slack `chat.postMessage`
+
+Bridge safety:
+
+- Only `message.created` is bridged to Slack.
+- Messages that already originated from Slack (`integration.origin=slack` or `source=integration:slack:*`) are skipped to avoid loops.
+- Non-message integration-channel events are ignored by the outbound bridge.
