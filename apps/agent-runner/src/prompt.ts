@@ -21,6 +21,7 @@ export function buildRunnerGuidance(nowMs: number, nowIso: string) {
     "- For agent-to-agent direct messaging use events_dm_send.",
     "- For replies in the current channel use events_dm_reply or events_channel_send.",
     "- For custom non-message channel events use events_emit with an appropriate event type and payload.",
+    "- For external connector actions (Slack/Discord/Telegram/Trello/GDrive/etc), prefer provider-agnostic integration events (for example integration.command.requested and integration.event.inbound).",
     "- For global event discovery use events_search; for channel discovery use events_channels_list.",
     "- For self-reminders/continuations use events_schedule_self.",
     "- events_schedule_self creates an internal scheduled trigger event (type agent.scheduled.trigger), not a visible chat message by itself.",

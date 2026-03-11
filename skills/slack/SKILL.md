@@ -11,9 +11,9 @@ It provides:
 
 - Slack Web API helpers (post message, reply in thread, open DM, history, search, list channels, user info)
 - A **Socket Mode** listener (one process per agent) that converts Slack events into OrgOps events:
-  - `slack.message.created`
-  - `slack.app_mention`
-  - and bridges agent `message.created` replies from OrgOps `slack:*` channels back to Slack via `chat.postMessage`
+  - `integration.event.inbound` (provider-agnostic envelope)
+  - and bridges outbound OrgOps events from `slack:*` channels back to Slack via `chat.postMessage`:
+    - `integration.command.requested` (provider-agnostic connector workflow)
 
 ## Secrets
 
@@ -137,8 +137,7 @@ bun run skills/slack/assets/socket-listen.ts -- --agent worker1
 
 This will emit OrgOps events via the Events API:
 
-- `slack.message.created`
-- `slack.app_mention`
+- `integration.event.inbound`
 
 When emitting, the listener now auto-ensures an OrgOps channel named
 `slack:<teamId>:<channelId>` exists and subscribes the target agent, so incoming
@@ -149,5 +148,11 @@ Notes:
 - v1 keeps lifecycle management simple: you run this as an explicit sidecar process.
 - v2 can integrate with OrgOps process/websocket infra for supervision.
 - Listener now acts as a bidirectional bridge:
-  - Slack inbound -> OrgOps `slack.*` events
-  - OrgOps agent replies in `slack:<teamId>:<channelId>` -> Slack messages
+  - Slack inbound -> OrgOps `integration.event.inbound`
+  - OrgOps outbound in `slack:<teamId>:<channelId>` -> Slack messages:
+    - `integration.command.requested` with payload:
+      - `provider: "slack"`
+      - `action: "post_message"` (or `chat.postMessage`)
+      - optional `connection` (agent name that owns the bot/app token)
+      - optional `target.spaceId`, `target.threadId`
+      - `payload.text`

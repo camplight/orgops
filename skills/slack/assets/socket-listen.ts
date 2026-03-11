@@ -107,11 +107,33 @@ async function emitSlackEventToOrgOps(
     channelId: orgopsChannelId,
     agentName: agent,
   });
+  const slackTs = String(input.payload.ts ?? "").trim() || undefined;
+  const slackThreadTs = String(input.payload.threadTs ?? "").trim() || undefined;
+  const slackUserId = String(input.payload.userId ?? "").trim() || undefined;
+  const text = String(input.payload.text ?? "");
+  const inboundAction = input.type === "slack.app_mention" ? "app_mention" : "message_created";
+
+  // Provider-agnostic integration envelope for future connectors (Slack/Discord/Telegram/etc).
   await emitOrgOpsEvent({
-    type: input.type,
-    source: `slack:${input.teamId}:${agent}`,
+    type: "integration.event.inbound",
+    source: `integration:slack:${agent}`,
     channelId: canonicalOrgOpsChannelId,
-    payload: input.payload,
+    payload: {
+      provider: "slack",
+      connection: agent,
+      action: inboundAction,
+      target: {
+        workspaceId: input.teamId,
+        spaceId: input.slackChannelId,
+        ...(slackThreadTs ? { threadId: slackThreadTs } : {}),
+        ...(slackTs ? { messageId: slackTs } : {}),
+      },
+      actor: {
+        ...(slackUserId ? { externalUserId: slackUserId } : {}),
+      },
+      text,
+      data: input.payload,
+    },
   });
 }
 
@@ -232,8 +254,7 @@ async function handleSlackEventWithIdentity(
   return handleSlackEvent(agent, event);
 }
 
-async function listRecentOrgOpsAgentMessages(
-  agent: string,
+async function listRecentIntegrationCommands(
   after: number,
 ): Promise<OrgOpsEventRow[]> {
   const apiUrl = process.env.ORGOPS_API_URL ?? "http://localhost:8787";
@@ -241,8 +262,7 @@ async function listRecentOrgOpsAgentMessages(
   if (!token) throw new Error("Missing ORGOPS_RUNNER_TOKEN");
 
   const query = new URLSearchParams();
-  query.set("source", `agent:${agent}`);
-  query.set("type", "message.created");
+  query.set("type", "integration.command.requested");
   query.set("order", "asc");
   query.set("after", String(after));
   query.set("limit", "200");
@@ -252,7 +272,9 @@ async function listRecentOrgOpsAgentMessages(
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`Failed to list orgops events: ${res.status} ${text}`);
+    throw new Error(
+      `Failed to list integration command events: ${res.status} ${text}`,
+    );
   }
   return (await res.json()) as OrgOpsEventRow[];
 }
@@ -295,8 +317,10 @@ async function bridgeOrgOpsMessagesToSlack(
   cursor: { afterCreatedAt: number },
   channelCache: Map<string, { teamId: string; channelId: string } | null>,
 ) {
-  const events = await listRecentOrgOpsAgentMessages(agent, cursor.afterCreatedAt);
-  if (!Array.isArray(events) || events.length === 0) return;
+  const events = (await listRecentIntegrationCommands(cursor.afterCreatedAt)).sort(
+    (left, right) => Number(left.createdAt ?? 0) - Number(right.createdAt ?? 0),
+  );
+  if (events.length === 0) return;
 
   let maxCreatedAt = cursor.afterCreatedAt;
   for (const event of events) {
@@ -305,27 +329,124 @@ async function bridgeOrgOpsMessagesToSlack(
       maxCreatedAt = createdAt;
     }
 
-    const channelId = String(event.channelId ?? "");
-    if (!channelId) continue;
-    const parsed = await resolveSlackChannelFromOrgOpsChannelId(channelId, channelCache);
-    if (!parsed || !parsed.channelId) continue;
+    if (event.type === "integration.command.requested") {
+      const provider = String(event.payload?.provider ?? "").trim().toLowerCase();
+      if (provider !== "slack") continue;
+      const connection = String(event.payload?.connection ?? "").trim();
+      if (connection && connection !== agent) continue;
+      if (!connection && event.source !== `agent:${agent}`) continue;
+      const requestChannelId = String(event.channelId ?? "").trim();
+      if (!requestChannelId) continue;
 
-    const text = String(event.payload?.text ?? "").trim();
-    if (!text) continue;
+      const action = String(event.payload?.action ?? "").trim();
+      const target = event.payload?.target as Record<string, unknown> | undefined;
+      const targetSpaceId = String(target?.spaceId ?? "").trim();
+      const targetThreadId = String(target?.threadId ?? "").trim();
+      const payloadData = event.payload?.payload as Record<string, unknown> | undefined;
+      const text = String(payloadData?.text ?? event.payload?.text ?? "").trim();
+      if (!text) {
+        await emitOrgOpsEvent({
+          type: "integration.command.failed",
+          source: `integration:slack:${agent}`,
+          channelId: requestChannelId,
+          payload: {
+            provider: "slack",
+            connection: agent,
+            requestEventId: event.id,
+            action,
+            error: "Missing text payload",
+          },
+        });
+        continue;
+      }
 
-    const threadTsRaw = event.payload?.threadTs;
-    const threadTs =
-      typeof threadTsRaw === "string" && threadTsRaw.trim()
-        ? threadTsRaw.trim()
-        : undefined;
+      const channelId = String(event.channelId ?? "");
+      const mappedTarget = channelId
+        ? await resolveSlackChannelFromOrgOpsChannelId(channelId, channelCache)
+        : null;
+      const resolvedSpaceId = targetSpaceId || mappedTarget?.channelId || "";
+      if (!resolvedSpaceId) {
+        await emitOrgOpsEvent({
+          type: "integration.command.failed",
+          source: `integration:slack:${agent}`,
+          channelId: requestChannelId,
+          payload: {
+            provider: "slack",
+            connection: agent,
+            requestEventId: event.id,
+            action,
+            error: "Unable to resolve Slack channel target",
+          },
+        });
+        continue;
+      }
 
-    const body: Record<string, unknown> = {
-      channel: parsed.channelId,
-      text,
-    };
-    if (threadTs) body.thread_ts = threadTs;
+      const postBody: Record<string, unknown> = {
+        channel: resolvedSpaceId,
+        text,
+      };
+      if (targetThreadId) {
+        postBody.thread_ts = targetThreadId;
+      } else {
+        const payloadThreadTs = String(payloadData?.threadTs ?? "").trim();
+        if (payloadThreadTs) postBody.thread_ts = payloadThreadTs;
+      }
 
-    await slackApi(botToken, "chat.postMessage", body);
+      if (action !== "post_message" && action !== "chat.postMessage") {
+        await emitOrgOpsEvent({
+          type: "integration.command.failed",
+          source: `integration:slack:${agent}`,
+          channelId: requestChannelId,
+          payload: {
+            provider: "slack",
+            connection: agent,
+            requestEventId: event.id,
+            action,
+            error: `Unsupported action: ${action}`,
+          },
+        });
+        continue;
+      }
+
+      try {
+        const response = await slackApi<{ ts?: string; channel?: string }>(
+          botToken,
+          "chat.postMessage",
+          postBody,
+        );
+        await emitOrgOpsEvent({
+          type: "integration.command.succeeded",
+          source: `integration:slack:${agent}`,
+          channelId: requestChannelId,
+          payload: {
+            provider: "slack",
+            connection: agent,
+            requestEventId: event.id,
+            action,
+            target: {
+              ...(response.channel ? { spaceId: response.channel } : { spaceId: resolvedSpaceId }),
+              ...(response.ts ? { messageId: response.ts } : {}),
+              ...(typeof postBody.thread_ts === "string"
+                ? { threadId: String(postBody.thread_ts) }
+                : {}),
+            },
+          },
+        });
+      } catch (error) {
+        await emitOrgOpsEvent({
+          type: "integration.command.failed",
+          source: `integration:slack:${agent}`,
+          channelId: requestChannelId,
+          payload: {
+            provider: "slack",
+            connection: agent,
+            requestEventId: event.id,
+            action,
+            error: String(error),
+          },
+        });
+      }
+    }
   }
 
   cursor.afterCreatedAt = maxCreatedAt;
