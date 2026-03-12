@@ -1,5 +1,7 @@
 import type { Hono } from "hono";
 import { schema, type OrgOpsDrizzleDb } from "@orgops/db";
+import type { SkillMeta, SkillRoot } from "@orgops/skills";
+import type { EventShapeDefinition } from "@orgops/schemas";
 import {
   and,
   asc,
@@ -22,12 +24,29 @@ type EventsDeps = {
   EventSchema: {
     safeParse: (data: unknown) => { success: boolean; data?: any };
   };
-  readdirSync: (
-    path: string,
-    options: { withFileTypes: true },
-  ) => { name: string; isFile: () => boolean }[];
-  readFileSync: (path: string, options?: any) => string | Buffer;
-  EVENT_TYPES_DIR: string;
+  SKILL_ROOTS: SkillRoot[];
+  listSkills: (roots: SkillRoot[]) => SkillMeta[];
+  loadSkillEventShapes: (
+    skills: SkillMeta[],
+  ) => Promise<{ shapes: EventShapeDefinition[]; errors: Array<{ skill: string; error: string }> }>;
+  getCoreEventShapes: () => EventShapeDefinition[];
+  validateEventAgainstShapes: (
+    event: {
+      type: string;
+      payload: unknown;
+      source: string;
+      channelId?: string;
+      parentEventId?: string;
+      deliverAt?: number;
+      idempotencyKey?: string;
+    },
+    shapes: EventShapeDefinition[],
+  ) =>
+    | { ok: true; matchedDefinitions: number }
+    | { ok: false; type: string; matchedDefinitions: number; issues: Array<{ source: string; message: string }> };
+  serializeEventShapes: (
+    shapes: EventShapeDefinition[],
+  ) => Array<{ type: string; description: string; source: string; payloadExample?: unknown }>;
 };
 
 export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
@@ -36,11 +55,37 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     jsonResponse,
     eventRowToApi,
     insertEvent,
-    readdirSync,
-    readFileSync,
-    EVENT_TYPES_DIR,
+    SKILL_ROOTS,
+    listSkills,
+    loadSkillEventShapes,
+    getCoreEventShapes,
+    validateEventAgainstShapes,
+    serializeEventShapes,
   } = deps;
   const EventSchema = deps.EventSchema;
+  const EVENT_SHAPES_CACHE_TTL_MS = Number(process.env.ORGOPS_EVENT_SHAPES_CACHE_TTL_MS ?? 3000);
+  let eventShapesCache:
+    | {
+        expiresAt: number;
+        shapes: EventShapeDefinition[];
+        loadErrors: Array<{ skill: string; error: string }>;
+      }
+    | undefined;
+
+  async function getEventShapes() {
+    const now = Date.now();
+    if (eventShapesCache && eventShapesCache.expiresAt > now) {
+      return eventShapesCache;
+    }
+    const availableSkills = listSkills(SKILL_ROOTS);
+    const loaded = await loadSkillEventShapes(availableSkills);
+    eventShapesCache = {
+      expiresAt: now + EVENT_SHAPES_CACHE_TTL_MS,
+      shapes: [...getCoreEventShapes(), ...loaded.shapes],
+      loadErrors: loaded.errors,
+    };
+    return eventShapesCache;
+  }
 
   app.post("/api/events", async (c) => {
     const raw = await c.req.text();
@@ -79,6 +124,30 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       );
     }
 
+    const eventShapes = await getEventShapes();
+    const validationResult = validateEventAgainstShapes(
+      {
+        type,
+        source,
+        payload: parsed.data.payload ?? {},
+        channelId: parsed.data.channelId,
+        parentEventId: parsed.data.parentEventId,
+        deliverAt: parsed.data.deliverAt,
+        idempotencyKey: parsed.data.idempotencyKey,
+      },
+      eventShapes.shapes,
+    );
+    if (!validationResult.ok) {
+      return jsonResponse(
+        c,
+        {
+          error: "Event payload validation failed",
+          validation: validationResult,
+        },
+        400,
+      );
+    }
+
     if (parsed.data.idempotencyKey) {
       const existing = orm
         .select()
@@ -90,6 +159,19 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
 
     const row = insertEvent({ ...parsed.data, type, source });
     return jsonResponse(c, eventRowToApi(row), 201);
+  });
+
+  app.get("/api/events/:id", (c) => {
+    const id = c.req.param("id");
+    const row = orm
+      .select()
+      .from(schema.events)
+      .where(eq(schema.events.id, id))
+      .get() as any | undefined;
+    if (!row) {
+      return jsonResponse(c, { error: "Not found" }, 404);
+    }
+    return jsonResponse(c, eventRowToApi(row));
   });
 
   app.get("/api/events", (c) => {
@@ -457,21 +539,11 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     });
   });
 
-  app.get("/api/event-types", (c) => {
-    const entries = readdirSync(EVENT_TYPES_DIR, { withFileTypes: true })
-      .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
-      .map((entry) => {
-        const filename = entry.name;
-        const fullPath = `${EVENT_TYPES_DIR}/${filename}`;
-        const content = String(readFileSync(fullPath, "utf-8"));
-        const titleMatch = content.match(/^#\s+(.+)$/m);
-        return {
-          filename,
-          eventType: filename.replace(/\.md$/i, ""),
-          title: titleMatch?.[1] ?? filename.replace(/\.md$/i, ""),
-          content,
-        };
-      });
-    return jsonResponse(c, entries);
+  app.get("/api/event-types", async (c) => {
+    const eventShapes = await getEventShapes();
+    return jsonResponse(c, {
+      eventTypes: serializeEventShapes(eventShapes.shapes),
+      loadErrors: eventShapes.loadErrors,
+    });
   });
 }

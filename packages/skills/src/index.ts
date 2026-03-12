@@ -1,6 +1,8 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import type { EventShapeDefinition } from "@orgops/schemas";
 import YAML from "yaml";
 
 export type SkillMeta = {
@@ -19,6 +21,14 @@ export type SkillRoot = {
 
 const FRONTMATTER_RE = /^---\s*[\r\n]+([\s\S]*?)[\r\n]+---/;
 const SKILL_FILENAME = "SKILL.md";
+const EVENT_SHAPES_FILENAMES = ["event-shapes.ts", "event-shapes.js"] as const;
+
+export type SkillEventShape = EventShapeDefinition;
+
+type SkillEventShapesModule = {
+  eventShapes?: unknown;
+  default?: unknown;
+};
 
 function parseMetadata(value: unknown): Record<string, unknown> | undefined {
   if (!value) return undefined;
@@ -107,4 +117,68 @@ export function listSkills(roots: SkillRoot[]): SkillMeta[] {
     }
   }
   return skills;
+}
+
+function parseEventShapesCandidate(
+  skillName: string,
+  candidate: unknown,
+): SkillEventShape[] {
+  if (!Array.isArray(candidate)) return [];
+  const out: SkillEventShape[] = [];
+  for (const entry of candidate) {
+    if (!entry || typeof entry !== "object") continue;
+    const record = entry as Record<string, unknown>;
+    const type = typeof record.type === "string" ? record.type.trim() : "";
+    const description =
+      typeof record.description === "string" ? record.description.trim() : "";
+    if (!type || !description) continue;
+    out.push({
+      ...record,
+      type,
+      description,
+      source:
+        typeof record.source === "string" && record.source.startsWith("skill:")
+          ? (record.source as `skill:${string}`)
+          : (`skill:${skillName}` as const),
+    });
+  }
+  return out;
+}
+
+export async function loadSkillEventShapes(skills: SkillMeta[]): Promise<{
+  shapes: SkillEventShape[];
+  errors: Array<{ skill: string; error: string }>;
+}> {
+  const shapes: SkillEventShape[] = [];
+  const errors: Array<{ skill: string; error: string }> = [];
+  for (const skill of skills) {
+    const filePath = EVENT_SHAPES_FILENAMES.map((filename) =>
+      join(skill.path, filename),
+    ).find((candidate) => existsSync(candidate));
+    if (!filePath) continue;
+    try {
+      const module = (await import(pathToFileURL(filePath).href)) as SkillEventShapesModule;
+      const byNamedExport = parseEventShapesCandidate(
+        skill.name,
+        module.eventShapes,
+      );
+      if (byNamedExport.length > 0) {
+        shapes.push(...byNamedExport);
+        continue;
+      }
+      const byDefaultExport = parseEventShapesCandidate(skill.name, module.default);
+      if (byDefaultExport.length > 0) {
+        shapes.push(...byDefaultExport);
+        continue;
+      }
+      errors.push({
+        skill: skill.name,
+        error:
+          "event-shapes module found but no valid shape exports (expected eventShapes/default array).",
+      });
+    } catch (error) {
+      errors.push({ skill: skill.name, error: String(error) });
+    }
+  }
+  return { shapes, errors };
 }

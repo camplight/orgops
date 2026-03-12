@@ -31,12 +31,12 @@ orgops/
     agent-runner/         # One daemon supervises all agents, executes tools, LLM loop
   packages/
     db/                   # schema, migrations, query helpers
-    schemas/              # Zod schemas for API payloads + events
+    schemas/              # Zod schemas for API payloads + typed event shapes
     event-bus/            # topic routing helpers, pub/sub interface
     llm/                  # AI SDK provider wrapper + model registry resolver
     crypto/               # secrets encryption helpers
     skills/               # skill indexing + metadata parsing
-  event-types/            # event type docs
+  skills/                 # built-in skills (+ optional event-shapes.ts per skill)
   files/                  # runtime files (gitignored)
   .orgops-data/           # runtime data (gitignored)
     orgops.sqlite
@@ -379,7 +379,7 @@ Config:
 - `GET /api/events` (filters: channelId, agentName, after, limit)
 - `POST /api/events/:id/ack` (optional)
 - `POST /api/events/:id/fail` (increment failure count)
-- `GET /api/event-types` (list schema directory summary, MVP can be static)
+- `GET /api/event-types` (list composed typed event definitions from core + enabled skills)
 
 #### Files
 
@@ -472,29 +472,14 @@ Each agent has a heartbeat loop (in runner, not separate processes unless you wa
 - `audit.tool.executed`
 - `audit.tool.failed`
 
-## Event type directory (schemas + docs)
+## Event shape registry (typed + dynamic)
 
-On disk:
+Event validation is defined in TypeScript:
 
-```
-event-types/
-  message.created.md
-  task.created.md
-  process.started.md
-  process.output.md
-  process.exited.md
-  agent.control.start.md
-  ...
-```
+- Core event shapes in `packages/schemas/src/event-shapes.ts`
+- Optional skill-owned shapes in `skills/<name>/event-shapes.ts`
 
-Each file describes:
-
-- purpose
-- routing expectations
-- payload shape (human-readable)
-- examples
-
-Agents can read these via fs tools.
+API and runner compose these validators dynamically for fast schema feedback on emit.
 
 ## UI (React + Tailwind)
 

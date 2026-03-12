@@ -21,6 +21,17 @@ export type ExecuteContext = {
   apiFetch: (path: string, init?: RequestInit) => Promise<Response>;
   emitEvent: (event: unknown) => Promise<void>;
   emitAudit: (type: string, payload: unknown, source?: string) => Promise<void>;
+  validateEvent?: (event: {
+    type: string;
+    payload: unknown;
+    source: string;
+    channelId?: string;
+    parentEventId?: string;
+    deliverAt?: number;
+    idempotencyKey?: string;
+  }) =>
+    | { ok: true; matchedDefinitions: number }
+    | { ok: false; type: string; matchedDefinitions: number; issues: Array<{ source: string; message: string }> };
 };
 
 export type ToolDef = [string, string, z.ZodTypeAny];

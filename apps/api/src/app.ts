@@ -2,8 +2,6 @@ import { Hono } from "hono";
 import {
   existsSync,
   mkdirSync,
-  readdirSync,
-  readFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
@@ -17,8 +15,19 @@ import {
   type OrgOpsDb,
 } from "@orgops/db";
 import { EventBus } from "@orgops/event-bus";
-import { AuthLoginSchema, EventSchema } from "@orgops/schemas";
-import { listSkills, resolveSkillRoots } from "@orgops/skills";
+import {
+  AuthLoginSchema,
+  EventSchema,
+  type EventShapeDefinition,
+  getCoreEventShapes,
+  serializeEventShapes,
+  validateEventAgainstShapes,
+} from "@orgops/schemas";
+import {
+  listSkills,
+  loadSkillEventShapes,
+  resolveSkillRoots,
+} from "@orgops/skills";
 import { registerAuthRoutes } from "./routes/auth";
 import { registerModelsRoutes } from "./routes/models";
 import { registerAgentsRoutes } from "./routes/agents";
@@ -84,7 +93,6 @@ export function createApp(config: AppConfig = {}) {
     config.runnerToken ?? process.env.ORGOPS_RUNNER_TOKEN ?? "dev-runner-token";
 
   const FILES_DIR = join(PROJECT_ROOT, "files");
-  const EVENT_TYPES_DIR = join(PROJECT_ROOT, "event-types");
   const SKILL_ROOTS = resolveSkillRoots({
     projectRoot: PROJECT_ROOT,
     env: process.env,
@@ -92,7 +100,6 @@ export function createApp(config: AppConfig = {}) {
   let lastEventCreatedAt = 0;
 
   mkdirSync(FILES_DIR, { recursive: true });
-  mkdirSync(EVENT_TYPES_DIR, { recursive: true });
 
   function hashPassword(password: string) {
     const salt = randomBytes(16).toString("hex");
@@ -358,9 +365,18 @@ export function createApp(config: AppConfig = {}) {
     eventRowToApi,
     insertEvent,
     EventSchema,
-    readdirSync,
-    readFileSync,
-    EVENT_TYPES_DIR,
+    SKILL_ROOTS,
+    listSkills,
+    loadSkillEventShapes: async (skills) => {
+      const loaded = await loadSkillEventShapes(skills);
+      return {
+        ...loaded,
+        shapes: loaded.shapes as EventShapeDefinition[],
+      };
+    },
+    getCoreEventShapes,
+    validateEventAgainstShapes,
+    serializeEventShapes,
   });
 
   registerRuntimeRoutes(app as any, {

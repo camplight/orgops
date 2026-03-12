@@ -146,6 +146,13 @@ describe("agent runner", () => {
       source: "channel:slack:coordinator",
       channelId: "chan-1",
     };
+    const channelCommandRequestedEvent: Event = {
+      id: "evt-command-requested",
+      type: "channel.command.requested",
+      payload: { command: { action: "chat.postMessage" } },
+      source: "agent:tester",
+      channelId: "chan-1",
+    };
     const taskCreatedEvent: Event = {
       id: "evt-task",
       type: "task.created",
@@ -212,7 +219,8 @@ describe("agent runner", () => {
 
     expect(await shouldHandleEvent(agent, controlEvent)).toBe(false);
     expect(await shouldHandleEvent(agent, auditEvent)).toBe(false);
-    expect(await shouldHandleEvent(agent, channelCommandEvent)).toBe(false);
+    expect(await shouldHandleEvent(agent, channelCommandEvent)).toBe(true);
+    expect(await shouldHandleEvent(agent, channelCommandRequestedEvent)).toBe(false);
     expect(await shouldHandleEvent(agent, taskCreatedEvent)).toBe(false);
     expect(await shouldHandleEvent(agent, ownEvent)).toBe(false);
     expect(await shouldHandleEvent(agent, otherAgentChannelEvent)).toBe(false);
@@ -373,6 +381,112 @@ describe("agent runner", () => {
     expect(requests[0]?.body.channelId).toBe("chan-1");
     expect(requests[0]?.body.source).toBe("agent:tester");
     expect(requests[0]?.body.payload).toEqual({ step: "diff-ready" });
+  });
+
+  it("returns pending-timeout delivery hint when emitted event stays pending", async () => {
+    const requests: Array<{ path: string; body: any }> = [];
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        soulContents: "role prompt",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async (path: string, init?: RequestInit) => {
+        requests.push({
+          path,
+          body: init?.body ? JSON.parse(String(init.body)) : {},
+        });
+        if (path === "/api/events") {
+          return new Response(JSON.stringify({ id: "evt-custom", status: "PENDING" }), {
+            status: 201,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (path === "/api/events/evt-custom") {
+          return new Response(JSON.stringify({ id: "evt-custom", status: "PENDING" }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+      validateEvent: () => ({ ok: true as const, matchedDefinitions: 1 }),
+    };
+
+    const result = (await executeTool(ctx, "events_emit", {
+      type: "custom.workflow.progressed",
+      payload: { step: "dispatch" },
+      awaitDeliveryMs: 1,
+    })) as { delivery?: { status?: string } };
+
+    expect(requests.some((request) => request.path === "/api/events/evt-custom")).toBe(true);
+    expect(result.delivery?.status).toBe("pending_timeout");
+  });
+
+  it("fails events_emit fast when composed validator rejects payload", async () => {
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        soulContents: "role prompt",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async () =>
+        new Response(JSON.stringify({ id: "evt-custom" }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        }),
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+      validateEvent: () => ({
+        ok: false as const,
+        type: "channel.command.requested",
+        matchedDefinitions: 1,
+        issues: [{ source: "skill:slack", message: "payload.command.payload.text: Required" }],
+      }),
+    };
+
+    await expect(
+      executeTool(ctx, "events_emit", {
+        type: "channel.command.requested",
+        payload: {
+          channel: { provider: "slack" },
+          command: { action: "chat.postMessage", payload: {} },
+        },
+      }),
+    ).rejects.toThrow("Event validation failed");
   });
 
   it("searches events globally via events_search", async () => {

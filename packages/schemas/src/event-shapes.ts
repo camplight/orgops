@@ -1,0 +1,424 @@
+import { z } from "zod";
+
+export type EventDraft = {
+  type: string;
+  payload: unknown;
+  source: string;
+  channelId?: string;
+  parentEventId?: string;
+  deliverAt?: number;
+  idempotencyKey?: string;
+};
+
+export type EventShapeDefinition = {
+  type: string;
+  description: string;
+  source?: "core" | `skill:${string}`;
+  payloadSchema?: z.ZodTypeAny;
+  eventSchema?: z.ZodTypeAny;
+  payloadExample?: unknown;
+};
+
+export type EventValidationIssue = {
+  source: string;
+  message: string;
+};
+
+export type EventValidationResult =
+  | { ok: true; matchedDefinitions: number }
+  | {
+      ok: false;
+      type: string;
+      matchedDefinitions: number;
+      issues: EventValidationIssue[];
+    };
+
+const sourceSchema = z.string().min(1);
+const channelSchema = z
+  .object({
+    provider: z.string().min(1),
+    connection: z.string().min(1).optional(),
+    workspaceId: z.string().min(1).optional(),
+    spaceId: z.string().min(1),
+    threadId: z.string().min(1).optional(),
+    messageId: z.string().min(1).optional(),
+  })
+  .passthrough();
+
+const commandSchema = z
+  .object({
+    action: z.string().min(1),
+    payload: z.record(z.string(), z.unknown()).optional(),
+  })
+  .passthrough();
+
+const eventEnvelopeSchema = z
+  .object({
+    channel: channelSchema,
+    event: z
+      .object({
+        action: z.string().min(1),
+      })
+      .passthrough(),
+    actor: z.record(z.string(), z.unknown()).optional(),
+    text: z.string().optional(),
+    data: z.unknown().optional(),
+    raw: z.unknown().optional(),
+  })
+  .passthrough();
+
+const auditToolPayloadSchema = z
+  .object({
+    tool: z.string().min(1),
+    args: z.record(z.string(), z.unknown()).optional(),
+    output: z.unknown().optional(),
+    error: z.string().optional(),
+  })
+  .passthrough();
+
+const coreEventShapes: EventShapeDefinition[] = [
+  {
+    type: "message.created",
+    description: "Human/agent message event in a channel.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1),
+      source: sourceSchema,
+      payload: z
+        .object({
+          text: z.string().min(1),
+          eventType: z.string().min(1).optional(),
+          hopCount: z.number().int().nonnegative().optional(),
+          inReplyTo: z.string().min(1).optional(),
+        })
+        .passthrough(),
+    }),
+  },
+  {
+    type: "agent.scheduled.trigger",
+    description: "Internal scheduled trigger for an agent.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1),
+      payload: z
+        .object({
+          text: z.string().min(1),
+          targetAgentName: z.string().min(1),
+        })
+        .passthrough(),
+    }),
+  },
+  {
+    type: "agent.lifecycle.started",
+    description: "Bootstrap event sent when agent runner starts an agent.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1),
+      payload: z
+        .object({
+          targetAgentName: z.string().min(1),
+          text: z.string().min(1),
+          startedAt: z.number().int(),
+        })
+        .passthrough(),
+    }),
+  },
+  {
+    type: "channel.event.created",
+    description: "Inbound external channel event envelope.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1),
+      payload: eventEnvelopeSchema,
+    }),
+  },
+  {
+    type: "channel.command.requested",
+    description: "Outbound external channel command request.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1),
+      payload: z
+        .object({
+          channel: channelSchema,
+          command: commandSchema,
+          idempotencyKey: z.string().min(1).optional(),
+        })
+        .passthrough(),
+    }),
+  },
+  {
+    type: "channel.command.succeeded",
+    description: "Outbound external channel command success.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1),
+      payload: z
+        .object({
+          channel: z.record(z.string(), z.unknown()),
+          requestEventId: z.string().min(1),
+          command: z.object({ action: z.string().min(1) }).passthrough(),
+          target: z.record(z.string(), z.unknown()).optional(),
+          result: z.unknown().optional(),
+        })
+        .passthrough(),
+    }),
+  },
+  {
+    type: "channel.command.failed",
+    description: "Outbound external channel command failure.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1),
+      payload: z
+        .object({
+          channel: z.record(z.string(), z.unknown()),
+          requestEventId: z.string().min(1),
+          command: z.object({ action: z.string().min(1) }).passthrough(),
+          error: z.string().min(1),
+          retryable: z.boolean().optional(),
+          details: z.unknown().optional(),
+        })
+        .passthrough(),
+    }),
+  },
+  {
+    type: "task.created",
+    description: "Task/audit event emitted when tools were used in a step.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1),
+      payload: z
+        .object({
+          eventType: z.string().min(1),
+          toolResultCount: z.number().int().nonnegative(),
+        })
+        .passthrough(),
+    }),
+  },
+  {
+    type: "event.deadlettered",
+    description: "Event moved to dead-letter after repeated failures.",
+    source: "core",
+    eventSchema: z.object({
+      payload: z
+        .object({
+          eventId: z.string().min(1),
+          failCount: z.number().int().nonnegative(),
+        })
+        .passthrough(),
+    }),
+  },
+  {
+    type: "audit.response.skipped",
+    description: "Runner skipped final text response by agent directive.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1),
+      payload: z
+        .object({
+          eventType: z.string().min(1),
+          reason: z.string().min(1),
+          note: z.string().optional(),
+        })
+        .passthrough(),
+    }),
+  },
+  {
+    type: "audit.events.cleared",
+    description: "Audit record for event clear operation.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "audit.secret.set",
+    description: "Audit record for secret updates.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "audit.secret.accessed",
+    description: "Audit record for secret access.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "audit.workspace.cleaned",
+    description: "Audit record for workspace cleanup.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "audit.process.started",
+    description: "Audit record for process start.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "audit.process.output",
+    description: "Audit record for process output chunk.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "audit.process.exited",
+    description: "Audit record for process exit.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "audit.tool.started",
+    description: "Audit record for tool invocation start.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1).optional(),
+      payload: auditToolPayloadSchema,
+    }),
+  },
+  {
+    type: "audit.tool.executed",
+    description: "Audit record for successful tool invocation.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1).optional(),
+      payload: auditToolPayloadSchema,
+    }),
+  },
+  {
+    type: "audit.tool.failed",
+    description: "Audit record for failed tool invocation.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1).optional(),
+      payload: auditToolPayloadSchema,
+    }),
+  },
+  {
+    type: "process.started",
+    description: "Process lifecycle event emitted by runner.",
+    source: "core",
+    payloadSchema: z
+      .object({
+        processId: z.string().min(1),
+        cmd: z.string().min(1),
+      })
+      .passthrough(),
+  },
+  {
+    type: "process.output",
+    description: "Process output event.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "process.exited",
+    description: "Process exited event.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "processes.cleared",
+    description: "Process clear operation event.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "agent.control.start",
+    description: "Agent lifecycle control command.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "agent.control.stop",
+    description: "Agent lifecycle control command.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "agent.control.restart",
+    description: "Agent lifecycle control command.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "agent.control.reload-skills",
+    description: "Agent lifecycle control command.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "agent.control.cleanup-workspace",
+    description: "Agent lifecycle control command.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+];
+
+export function getCoreEventShapes(): EventShapeDefinition[] {
+  return coreEventShapes;
+}
+
+function formatIssues(prefix: string, result: z.SafeParseError<unknown>): string[] {
+  return result.error.issues.map((issue) => {
+    const path = issue.path.length > 0 ? issue.path.join(".") : "<root>";
+    return `${prefix}${path}: ${issue.message}`;
+  });
+}
+
+export function validateEventAgainstShapes(
+  event: EventDraft,
+  definitions: EventShapeDefinition[],
+): EventValidationResult {
+  const matching = definitions.filter((definition) => definition.type === event.type);
+  if (matching.length === 0) {
+    return {
+      ok: false,
+      type: event.type,
+      matchedDefinitions: 0,
+      issues: [
+        {
+          source: "core",
+          message: `Unsupported event type: ${event.type}`,
+        },
+      ],
+    };
+  }
+
+  const collected: EventValidationIssue[] = [];
+  for (const definition of matching) {
+    const definitionSource = definition.source ?? "core";
+    if (definition.eventSchema) {
+      const parsed = definition.eventSchema.safeParse(event);
+      if (parsed.success) return { ok: true, matchedDefinitions: matching.length };
+      for (const message of formatIssues("", parsed)) {
+        collected.push({ source: definitionSource, message });
+      }
+      continue;
+    }
+    if (definition.payloadSchema) {
+      const parsed = definition.payloadSchema.safeParse(event.payload);
+      if (parsed.success) return { ok: true, matchedDefinitions: matching.length };
+      for (const message of formatIssues("payload.", parsed)) {
+        collected.push({ source: definitionSource, message });
+      }
+      continue;
+    }
+    return { ok: true, matchedDefinitions: matching.length };
+  }
+
+  return {
+    ok: false,
+    type: event.type,
+    matchedDefinitions: matching.length,
+    issues: collected,
+  };
+}
+
+export function serializeEventShapes(definitions: EventShapeDefinition[]) {
+  return definitions.map((definition) => ({
+    type: definition.type,
+    description: definition.description,
+    source: definition.source ?? "core",
+    payloadExample: definition.payloadExample,
+  }));
+}

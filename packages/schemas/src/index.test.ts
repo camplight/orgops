@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { EventSchema } from "./index";
+import {
+  EventSchema,
+  getCoreEventShapes,
+  validateEventAgainstShapes,
+} from "./index";
 
 describe("schemas", () => {
   it("validates event payload", () => {
@@ -9,5 +13,31 @@ describe("schemas", () => {
       source: "human:admin",
     });
     expect(parsed.success).toBe(true);
+  });
+
+  it("validates typed core event shapes", () => {
+    const result = validateEventAgainstShapes(
+      {
+        type: "message.created",
+        source: "human:admin",
+        channelId: "chan-1",
+        payload: { text: "hello" },
+      },
+      getCoreEventShapes(),
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it("returns shape issues for invalid event payload", () => {
+    const result = validateEventAgainstShapes(
+      {
+        type: "message.created",
+        source: "human:admin",
+        channelId: "chan-1",
+        payload: { text: "" },
+      },
+      getCoreEventShapes(),
+    );
+    expect(result.ok).toBe(false);
   });
 });

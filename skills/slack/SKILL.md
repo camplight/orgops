@@ -1,7 +1,6 @@
 ---
 name: slack
-description: "Slack skill: per-agent Slack app participation (send/reply/DM/history/search) + Socket Mode listener for inbound Slack events."
-metadata: {"openclaw":{"requires":{"env":["ORGOPS_RUNNER_TOKEN"]}}}
+description: "Slack skill: per-agent Slack skill + Socket Mode listener server. If you start the Socket Mode listener server, make sure to read the whole skill first. Use for yourself."
 ---
 # Slack skill
 
@@ -9,9 +8,10 @@ This skill lets OrgOps agents act as **Slack apps** using **per-agent tokens** s
 
 It provides:
 
-- Slack Web API helpers (post message, reply in thread, open DM, history, search, list channels, user info)
+- Slack Web API helpers (open DM, history, search, list channels, user info)
 - Slack file helpers (files.info + download to local path)
 - A **Socket Mode** listener (one process per agent) that converts Slack events into OrgOps `channel.event.created` events.
+- Typed event-shape validators (`event-shapes.ts`) consumed by runner/API validation.
 
 ## Secrets
 
@@ -56,38 +56,50 @@ All scripts accept `--agent <agentName>` and use:
 
 Agent operating rule:
 
-- Prefer these CLI scripts for Slack actions instead of manually emitting generic connector events like `channel.command.requested`.
-- Use direct event emission only when there is no script that fits the task.
-- If arguments are unclear, run the target script with `--help` first and follow the printed usage exactly.
-- For Slack-triggered work, after posting back to Slack via script, return `[NO_REPLY]` to avoid duplicate replies in OrgOps chat.
+- Prefer `events_*` tools for outbound Slack messaging through bridge channels.
+- Use CLI scripts only for capabilities not covered by events (history/search/channels/users/files/DM open).
+- For Slack-triggered work, after posting back via events tools, return `[NO_REPLY]` to avoid duplicate OrgOps chat replies.
 
-### Post a message
+## Outbound via Events API (bridged channel)
 
-```bash
-bun run skills/slack/assets/post-message.ts -- --agent worker1 --channel C123 --text "hello"
+For agent-to-Slack delivery through a bridged OrgOps channel, emit standard `message.created`.
+
+Preferred tool call from agents:
+
+```json
+{
+  "tool": "events_channel_send",
+  "args": {
+    "channelId": "<orgops-bridge-channel-id>",
+    "text": "hello from OrgOps"
+  }
+}
 ```
 
-### Reply in a thread
+Reply in a Slack thread (tool call example):
 
-```bash
-bun run skills/slack/assets/reply.ts -- --agent worker1 --channel C123 --thread-ts 1710000000.000100 --text "reply"
+```json
+{
+  "tool": "events_emit",
+  "args": {
+    "type": "message.created",
+    "channelId": "<orgops-bridge-channel-id>",
+    "payload": {
+      "text": "Thanks — here are examples.",
+      "threadTs": "1710000000.000100"
+    }
+  }
+}
 ```
 
-### Reply from OrgOps Slack events (recommended)
+Validation notes:
 
-For inbound `slack.message.created` / `slack.app_mention` events, use this helper so
-you can reply directly back to Slack from event fields:
+- `type` is `message.created`
+- `payload.text` is required and must be non-empty
+- optional `payload.threadTs` can be used to target a Slack thread (use `events_emit` for this)
+- listener forwards only agent-authored outbound messages (`source` like `agent:<name>`)
 
-```bash
-bun run skills/slack/assets/respond-to-event.ts -- --agent worker1 --orgops-channel-id slack:T123:C456 --event-ts 1710000000.000100 --text "Working on it"
-```
-
-Notes:
-
-- `--orgops-channel-id` format is `slack:<teamId>:<channelId>`.
-- Use `--thread-ts` when present (or `--event-ts` to reply in thread anchored to the incoming event timestamp).
-- If neither `--thread-ts` nor `--event-ts` is provided, this posts a normal channel/DM message.
-- When responding to Slack-triggered events, prefer Slack post/reply via this script and return `[NO_REPLY]` so you do not also emit a duplicate OrgOps chat reply.
+The exact typed validators live in `skills/slack/event-shapes.ts` and are dynamically loaded by enabled skills.
 
 ### Open a DM
 
@@ -206,6 +218,6 @@ Notes:
 
 - v1 keeps lifecycle management simple: you run this as an explicit sidecar process.
 - v2 can integrate with OrgOps process/websocket infra for supervision.
-- Listener is inbound-only:
+- Listener behavior:
   - Slack inbound -> OrgOps `channel.event.created` (`source: channel:slack:<agent>`)
-  - It does not process OrgOps events for outbound Slack posting.
+  - OrgOps outbound `message.created` (agent source in slack bridge channels) -> Slack API `chat.postMessage`

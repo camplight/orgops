@@ -58,10 +58,10 @@ export type SkillMeta = {
 };
 
 export type EventTypeInfo = {
-  filename: string;
-  eventType: string;
-  title: string;
-  content: string;
+  type: string;
+  description: string;
+  source: string;
+  payloadExample?: unknown;
 };
 
 export type Conversation = {

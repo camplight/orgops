@@ -28,6 +28,7 @@ const emitSchema = z.object({
   channelId: z.string().min(1).optional(),
   parentEventId: z.string().min(1).optional(),
   idempotencyKey: z.string().min(1).optional(),
+  awaitDeliveryMs: z.number().int().min(1).max(120_000).optional(),
 }).merge(scheduleOptionsSchema);
 
 const channelMessagesSchema = z.object({
@@ -106,7 +107,7 @@ export const eventsToolDefs: ToolDef[] = [
   ],
   [
     "events_emit",
-    "Emit a custom event by type to a channel (or current channel). Optional scheduling via deliverAt, deliverAtIso, delayMs, or delaySeconds.",
+    "Emit a custom event by type to a channel (or current channel). Optional scheduling via deliverAt, deliverAtIso, delayMs, or delaySeconds. Optional awaitDeliveryMs to wait until status leaves PENDING.",
     emitSchema,
   ],
   [
@@ -153,18 +154,20 @@ async function sendMessage(
   text: string,
   deliverAt?: number,
 ) {
+  const eventDraft = {
+    type: "message.created",
+    source: `agent:${ctx.agent.name}`,
+    channelId,
+    payload: {
+      text,
+    },
+    ...(deliverAt !== undefined ? { deliverAt } : {}),
+  };
+  validateEventOrThrow(ctx, eventDraft);
   const response = await ctx.apiFetch("/api/events", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      type: "message.created",
-      source: `agent:${ctx.agent.name}`,
-      channelId,
-      payload: {
-        text,
-      },
-      ...(deliverAt !== undefined ? { deliverAt } : {}),
-    }),
+    body: JSON.stringify(eventDraft),
   });
   return response.json();
 }
@@ -213,6 +216,54 @@ function agentNameFromSource(source: string | undefined): string | null {
   if (!source?.startsWith("agent:")) return null;
   const name = source.slice("agent:".length).trim();
   return name || null;
+}
+
+function validateEventOrThrow(
+  ctx: ExecuteContext,
+  eventDraft: {
+    type: string;
+    payload: unknown;
+    source: string;
+    channelId?: string;
+    parentEventId?: string;
+    deliverAt?: number;
+    idempotencyKey?: string;
+  },
+) {
+  const validation = ctx.validateEvent?.(eventDraft);
+  if (!validation || validation.ok) return;
+  const details = validation.issues
+    .slice(0, 8)
+    .map((issue) => `- [${issue.source}] ${issue.message}`)
+    .join("\n");
+  throw new Error(
+    [
+      `Event validation failed for type "${eventDraft.type}".`,
+      "Adjust the payload/schema and retry.",
+      details,
+    ].join("\n"),
+  );
+}
+
+async function waitForEventDeliveryState(
+  ctx: ExecuteContext,
+  eventId: string,
+  timeoutMs: number,
+): Promise<{ status: "delivered" | "pending_timeout"; event: Record<string, unknown> }> {
+  const startedAt = Date.now();
+  const deadline = startedAt + timeoutMs;
+  while (true) {
+    const response = await ctx.apiFetch(`/api/events/${encodeURIComponent(eventId)}`);
+    const event = (await response.json()) as Record<string, unknown>;
+    const currentStatus = String(event.status ?? "PENDING");
+    if (currentStatus !== "PENDING") {
+      return { status: "delivered", event };
+    }
+    if (Date.now() >= deadline) {
+      return { status: "pending_timeout", event };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
 }
 
 export async function execute(
@@ -346,23 +397,48 @@ export async function execute(
           "No target destination. Provide channelId or call from an event with channel context.",
       };
     }
+    const eventDraft = {
+      type: parsed.type.trim(),
+      payload: parsed.payload ?? {},
+      source: `agent:${ctx.agent.name}`,
+      ...(targetChannelId ? { channelId: targetChannelId } : {}),
+      ...(parsed.parentEventId ? { parentEventId: parsed.parentEventId } : {}),
+      ...(parsed.idempotencyKey ? { idempotencyKey: parsed.idempotencyKey } : {}),
+      ...(deliverAt !== undefined ? { deliverAt } : {}),
+    };
+    validateEventOrThrow(ctx, eventDraft);
     const response = await ctx.apiFetch("/api/events", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        type: parsed.type.trim(),
-        payload: parsed.payload ?? {},
-        source: `agent:${ctx.agent.name}`,
-        ...(targetChannelId ? { channelId: targetChannelId } : {}),
-        ...(parsed.parentEventId ? { parentEventId: parsed.parentEventId } : {}),
-        ...(parsed.idempotencyKey ? { idempotencyKey: parsed.idempotencyKey } : {}),
-        ...(deliverAt !== undefined ? { deliverAt } : {}),
-      }),
+      body: JSON.stringify(eventDraft),
     });
-    const event = await response.json();
+    const event = (await response.json()) as Record<string, unknown>;
+    let delivery:
+      | { status: "not_waited" }
+      | { status: "delivered"; eventStatus: string }
+      | { status: "pending_timeout"; eventStatus: string; timeoutMs: number } = {
+      status: "not_waited",
+    };
+    if (parsed.awaitDeliveryMs) {
+      const eventId = String(event.id ?? "");
+      if (eventId) {
+        const waited = await waitForEventDeliveryState(ctx, eventId, parsed.awaitDeliveryMs);
+        const waitedStatus = String(waited.event.status ?? "PENDING");
+        if (waited.status === "delivered") {
+          delivery = { status: "delivered", eventStatus: waitedStatus };
+        } else {
+          delivery = {
+            status: "pending_timeout",
+            eventStatus: waitedStatus,
+            timeoutMs: parsed.awaitDeliveryMs,
+          };
+        }
+      }
+    }
     return {
       event,
       channelId: targetChannelId,
+      delivery,
     };
   }
 
@@ -373,19 +449,21 @@ export async function execute(
     if (!channelId) {
       return { error: "No current channelId. Provide channelId explicitly." };
     }
+    const eventDraft = {
+      type: "agent.scheduled.trigger",
+      source: "system:scheduler",
+      channelId,
+      payload: {
+        text: parsed.text,
+        targetAgentName: ctx.agent.name,
+      },
+      ...(deliverAt !== undefined ? { deliverAt } : {}),
+    };
+    validateEventOrThrow(ctx, eventDraft);
     const response = await ctx.apiFetch("/api/events", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        type: "agent.scheduled.trigger",
-        source: "system:scheduler",
-        channelId,
-        payload: {
-          text: parsed.text,
-          targetAgentName: ctx.agent.name,
-        },
-        ...(deliverAt !== undefined ? { deliverAt } : {}),
-      }),
+      body: JSON.stringify(eventDraft),
     });
     const event = await response.json();
     return { channelId, event };

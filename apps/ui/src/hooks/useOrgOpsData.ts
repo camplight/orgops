@@ -83,7 +83,10 @@ export function useOrgOpsData(authenticated: boolean) {
   const refreshTeams = useCallback(() => apiJson<Team[]>("/api/teams").then(setTeams), []);
   const refreshHumans = useCallback(() => apiJson<Human[]>("/api/humans").then(setHumans), []);
   const refreshEventTypes = useCallback(
-    () => apiJson<EventTypeInfo[]>("/api/event-types").then(setEventTypes),
+    () =>
+      apiJson<{ eventTypes: EventTypeInfo[] }>("/api/event-types").then((response) =>
+        setEventTypes(response.eventTypes ?? [])
+      ),
     []
   );
   const refreshChannels = useCallback(

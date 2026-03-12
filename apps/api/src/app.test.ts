@@ -137,6 +137,72 @@ describe("api app", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("returns schema validation errors for invalid event emit", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token"
+    });
+
+    const invalidEventRes = await app.request("http://localhost/api/events", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orgops-runner-token": "test-token"
+      },
+      body: JSON.stringify({
+        type: "message.created",
+        payload: { text: "" },
+        source: "agent:tester",
+        channelId: "chan-1"
+      })
+    });
+    expect(invalidEventRes.status).toBe(400);
+    const invalidBody = (await invalidEventRes.json()) as {
+      error?: string;
+      validation?: { ok: boolean; issues?: Array<{ message?: string }> };
+    };
+    expect(invalidBody.error).toBe("Event payload validation failed");
+    expect(invalidBody.validation?.ok).toBe(false);
+    expect((invalidBody.validation?.issues ?? []).length).toBeGreaterThan(0);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("lists TypeScript event shape definitions from core and skills", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token"
+    });
+
+    const eventTypesRes = await app.request("http://localhost/api/event-types", {
+      headers: { "x-orgops-runner-token": "test-token" }
+    });
+    expect(eventTypesRes.status).toBe(200);
+    const body = (await eventTypesRes.json()) as {
+      eventTypes: Array<{ type: string; source: string }>;
+    };
+    expect(body.eventTypes.some((entry) => entry.type === "message.created")).toBe(true);
+    expect(
+      body.eventTypes.some(
+        (entry) =>
+          entry.type === "message.created" &&
+          entry.source === "skill:slack"
+      )
+    ).toBe(true);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("invites humans with temporary passwords and enforces first-login reset", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");
@@ -1177,7 +1243,10 @@ describe("api app", () => {
       },
       {
         type: "agent.scheduled.trigger",
-        payload: { reason: "keep different type" },
+        payload: {
+          text: "keep different type",
+          targetAgentName: "agent-scheduled",
+        },
         source: "system",
         channelId: "channel-a"
       },
@@ -1272,7 +1341,10 @@ describe("api app", () => {
       },
       {
         type: "agent.scheduled.trigger",
-        payload: { reason: "keep non-message event" },
+        payload: {
+          text: "keep non-message event",
+          targetAgentName: "agent-scheduled",
+        },
         source: "system",
         channelId: "chat-a"
       },

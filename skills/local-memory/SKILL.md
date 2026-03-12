@@ -1,10 +1,10 @@
 ---
 name: local-memory
-description: Keep lightweight, durable notes in workspace memory files for context, decisions, and active tasks.
+description: Keep lightweight, durable notes in workspace memory files for context, decisions, and active tasks. Always read your memory.
 ---
 # Local Memory
 
-Use this skill as instructions only. Keep lightweight, durable notes in the `workspace/memory` folder.
+Use this skill as instructions only. Keep lightweight, durable notes in the `workspace/memory` folder. Always read your memory for context. Search within the memory too and auto-load memory.md.
 
 ## Suggested files
 

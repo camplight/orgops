@@ -1,4 +1,5 @@
 import { z } from "zod";
+export * from "./event-shapes";
 
 export const EventStatusSchema = z.enum([
   "PENDING",

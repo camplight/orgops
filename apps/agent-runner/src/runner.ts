@@ -1,7 +1,12 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { generate } from "@orgops/llm";
-import { listSkills, resolveSkillRoots } from "@orgops/skills";
+import {
+  listSkills,
+  loadSkillEventShapes,
+  resolveSkillRoots,
+} from "@orgops/skills";
+import { getCoreEventShapes, validateEventAgainstShapes } from "@orgops/schemas";
 import { createRunnerTools, executeTool } from "./tools";
 import { stopAllRunningProcesses } from "./tools/proc";
 import type { Agent, Event } from "./types";
@@ -328,7 +333,7 @@ export async function shouldHandleEvent(agent: Agent, event: Event) {
   if (event.type?.startsWith("agent.control.")) return false;
   // Skip bookkeeping events that should never trigger model replies.
   if (event.type?.startsWith("audit.")) return false;
-  if (event.type?.startsWith("channel.command.")) return false;
+  if (event.type === "channel.command.requested") return false;
   if (event.type === "task.created") return false;
   if (event.source === `agent:${agent.name}`) return false;
   const targetAgentName =
@@ -376,6 +381,8 @@ async function handleEvent(agent: Agent, event: Event) {
   const selectedSkills = allSkills.filter((skill) =>
     enabledSkillSet.has(skill.name),
   );
+  const loadedSkillEventShapes = await loadSkillEventShapes(selectedSkills);
+  const eventShapes = [...getCoreEventShapes(), ...loadedSkillEventShapes.shapes];
   const skillIndex = selectedSkills
     .map(
       (skill) =>
@@ -411,7 +418,19 @@ async function handleEvent(agent: Agent, event: Event) {
       payload: unknown,
       source = `agent:${agent.name}`,
     ) => emitAudit(type, payload, source),
+    validateEvent: (eventDraft: {
+      type: string;
+      payload: unknown;
+      source: string;
+      channelId?: string;
+      parentEventId?: string;
+      deliverAt?: number;
+      idempotencyKey?: string;
+    }) => validateEventAgainstShapes(eventDraft, eventShapes),
   };
+  if (loadedSkillEventShapes.errors.length > 0) {
+    console.warn("skill event shape load errors", loadedSkillEventShapes.errors);
+  }
   const tools = createRunnerTools({
     agent,
     event,

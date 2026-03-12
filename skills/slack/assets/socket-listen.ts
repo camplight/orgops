@@ -5,6 +5,7 @@ import {
   getEnvForAgent,
   parseArgs,
   printUsage,
+  slackApi,
   wantsHelp,
 } from "./_shared";
 
@@ -26,6 +27,15 @@ type SocketEnvelope = {
 type SlackIdentity = {
   userId: string;
   botId?: string;
+};
+
+type OrgOpsEvent = {
+  id: string;
+  type: string;
+  source?: string;
+  channelId?: string;
+  payload?: Record<string, unknown>;
+  status?: string;
 };
 
 async function slackOpenSocket(appToken: string): Promise<string> {
@@ -69,6 +79,125 @@ async function ackEnvelope(ws: WebSocket, envelopeId: string) {
 
 function toOrgOpsChannelId(teamId: string, channelId: string) {
   return `slack:${teamId}:${channelId}`;
+}
+
+async function orgopsApiFetch(path: string, init?: RequestInit) {
+  const apiUrl = process.env.ORGOPS_API_URL ?? "http://localhost:8787";
+  const token = process.env.ORGOPS_RUNNER_TOKEN;
+  if (!token) throw new Error("Missing ORGOPS_RUNNER_TOKEN");
+  const headers = new Headers(init?.headers);
+  headers.set("x-orgops-runner-token", token);
+  const response = await fetch(`${apiUrl}${path}`, { ...init, headers });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`OrgOps API ${path} failed: ${response.status} ${text}`);
+  }
+  return response;
+}
+
+type BridgeChannelInfo = {
+  id?: string;
+  name?: string;
+  metadata?: {
+    integrationBridge?: {
+      provider?: string;
+      connection?: string;
+      teamId?: string;
+      channelId?: string;
+      threadTs?: string;
+    };
+  };
+};
+
+async function resolveBridgeTarget(input: {
+  channelId: string;
+}): Promise<{
+  channelId: string;
+  threadTs?: string;
+  connection?: string;
+} | null> {
+  const channelsResponse = await orgopsApiFetch("/api/channels");
+  const channels = (await channelsResponse.json()) as BridgeChannelInfo[];
+  const bridge = channels.find((channel) => channel.id === input.channelId);
+  if (!bridge) {
+    return null;
+  }
+  const integrationBridge = bridge.metadata?.integrationBridge;
+  if (integrationBridge?.provider === "slack" && integrationBridge.channelId) {
+    return {
+      channelId: integrationBridge.channelId,
+      ...(integrationBridge.threadTs ? { threadTs: integrationBridge.threadTs } : {}),
+      ...(integrationBridge.connection
+        ? { connection: integrationBridge.connection }
+        : {}),
+    };
+  }
+  const fromName = String(bridge.name ?? "");
+  const parts = fromName.split(":");
+  if (parts.length === 3 && parts[0] === "slack" && parts[2]) {
+    return { channelId: parts[2] };
+  }
+  return null;
+}
+
+async function failOrgOpsEvent(eventId: string, error: unknown) {
+  await orgopsApiFetch(`/api/events/${encodeURIComponent(eventId)}/fail`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ error: String(error) }),
+  });
+}
+
+async function handleOutboundMessageEvent(agent: string, botToken: string, event: OrgOpsEvent) {
+  if (event.type !== "message.created") return;
+  if (!event.source?.startsWith("agent:")) return;
+  if (event.source === `channel:slack:${agent}`) return;
+  const eventChannelId = String(event.channelId ?? "").trim();
+  if (!eventChannelId) {
+    await failOrgOpsEvent(event.id, "message.created missing channelId");
+    return;
+  }
+  const payload = (event.payload ?? {}) as Record<string, unknown>;
+  const text = String(payload.text ?? "").trim();
+  if (!text) return;
+
+  try {
+    const target = await resolveBridgeTarget({ channelId: eventChannelId });
+    if (!target) return;
+    if (target.connection && target.connection !== agent) return;
+    const explicitThreadTs =
+      typeof payload.threadTs === "string" && payload.threadTs.trim()
+        ? payload.threadTs.trim()
+        : typeof payload.thread_ts === "string" && payload.thread_ts.trim()
+          ? payload.thread_ts.trim()
+          : undefined;
+    const threadTs = explicitThreadTs ?? target.threadTs;
+    const requestBody: Record<string, unknown> = {
+      channel: target.channelId,
+      text,
+    };
+    if (threadTs) {
+      requestBody.thread_ts = threadTs;
+    }
+    await slackApi<Record<string, unknown>>(botToken, "chat.postMessage", requestBody);
+  } catch (error) {
+    await failOrgOpsEvent(event.id, error);
+  }
+}
+
+async function pollOutboundMessages(agent: string, botToken: string) {
+  const query = new URLSearchParams({
+    agentName: agent,
+    status: "PENDING",
+    type: "message.created",
+    sourcePrefix: "agent:",
+    limit: "20",
+  });
+  const response = await orgopsApiFetch(`/api/events?${query.toString()}`);
+  const events = (await response.json()) as OrgOpsEvent[];
+  for (const event of events) {
+    await handleOutboundMessageEvent(agent, botToken, event);
+  }
 }
 
 async function emitSlackEventToOrgOps(
@@ -253,8 +382,9 @@ Options:
   --help   Show this help
 
 Behavior:
-  Starts Slack Socket Mode listener for inbound routing only:
+  Starts Slack Socket Mode listener:
   - Slack inbound messages/app_mentions -> OrgOps channel.event.created
+  - OrgOps outbound message.created (agent source) in slack bridge channels -> Slack chat.postMessage
 `);
     return;
   }
@@ -270,6 +400,7 @@ Behavior:
   );
 
   const ws = new WebSocket(url);
+  let outboundPollInFlight = false;
 
   ws.addEventListener("open", () => {
     console.log("ws open");
@@ -300,6 +431,18 @@ Behavior:
   ws.addEventListener("error", (e) => {
     console.error("ws error", e);
   });
+
+  setInterval(async () => {
+    if (outboundPollInFlight) return;
+    outboundPollInFlight = true;
+    try {
+      await pollOutboundMessages(agent, botToken);
+    } catch (error) {
+      console.error("outbound message poll failed", error);
+    } finally {
+      outboundPollInFlight = false;
+    }
+  }, 1000);
 
 }
 

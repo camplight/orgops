@@ -14,10 +14,9 @@ packages/
   db/             SQLite schema + migrations
   event-bus/      Pub/sub helpers
   llm/            Vercel AI SDK wrapper
-  schemas/        Zod schemas
+  schemas/        Zod schemas + typed event shapes
   skills/         Skill catalog parser
-skills/           Built-in skills
-event-types/      Event type docs
+skills/           Built-in skills (+ optional event-shapes.ts per skill)
 files/            Runtime file storage (gitignored)
 .orgops-data/      Runtime DB + workspaces (gitignored)
 ```

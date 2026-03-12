@@ -71,7 +71,7 @@ export function EventsScreen({
     () =>
       [
         ...new Set([
-          ...eventTypes.map((eventType) => eventType.eventType),
+          ...eventTypes.map((eventType) => eventType.type),
           ...events.map((event) => event.type)
         ])
       ]
