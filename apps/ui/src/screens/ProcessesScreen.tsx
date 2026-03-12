@@ -10,6 +10,7 @@ type ProcessesScreenProps = {
   onSelectProcess: (id: string | null) => void;
   onRefresh: () => void;
   onClearAll: () => Promise<void>;
+  onClearExited: () => Promise<void>;
   onExitProcess: (id: string) => Promise<void>;
 };
 
@@ -33,6 +34,7 @@ export function ProcessesScreen({
   onSelectProcess,
   onRefresh,
   onClearAll,
+  onClearExited,
   onExitProcess
 }: ProcessesScreenProps) {
   const [expandedCommands, setExpandedCommands] = useState<Record<string, boolean>>({});
@@ -44,6 +46,9 @@ export function ProcessesScreen({
   const output = activeProcessId ? (processOutput[activeProcessId] ?? []) : [];
   const canExitProcess = (process: ProcessRow) =>
     process.state === "RUNNING" || process.state === "STARTING";
+  const hasExitedProcesses = processes.some(
+    (process) => process.state !== "RUNNING" && process.state !== "STARTING"
+  );
   const exitProcess = async (process: ProcessRow) => {
     if (!canExitProcess(process)) return;
     if (!confirm(`Exit process "${process.cmd}"?`)) return;
@@ -66,6 +71,19 @@ export function ProcessesScreen({
               onClick={onRefresh}
             >
               Refresh
+            </Button>
+            <Button
+              variant="secondary"
+              className="px-3 py-1 text-sm"
+              onClick={async () => {
+                if (!confirm("Clear exited processes only? This cannot be undone.")) {
+                  return;
+                }
+                await onClearExited();
+              }}
+              disabled={!hasExitedProcesses}
+            >
+              Clear exited
             </Button>
             <Button
               variant="secondary"

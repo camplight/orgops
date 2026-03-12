@@ -101,6 +101,33 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
     return DIRECT_CHANNEL_KIND.group;
   }
 
+  function parseMetadataJson(input: unknown) {
+    if (input === undefined) return { ok: true as const, value: undefined };
+    if (input === null) return { ok: true as const, value: null };
+    if (typeof input !== "object" || Array.isArray(input)) {
+      return {
+        ok: false as const,
+        error: "metadata must be an object or null",
+      };
+    }
+    return {
+      ok: true as const,
+      value: input as Record<string, unknown>,
+    };
+  }
+
+  function parseStoredMetadata(input: unknown) {
+    if (typeof input !== "string" || !input.trim()) return null;
+    try {
+      const parsed = JSON.parse(input) as unknown;
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
   function agentExists(agentName: string) {
     const row = orm
       .select({ id: schema.agents.id })
@@ -180,6 +207,7 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
         id,
         name,
         description: description ?? "Direct channel",
+        metadata_json: null,
         kind,
         direct_participant_key: directParticipantKey,
         created_at: Date.now(),
@@ -330,6 +358,7 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
         }));
       return {
         ...channel,
+        metadata: parseStoredMetadata(channel.metadata_json),
         kind: channel.kind ?? CHANNEL_KINDS.GROUP,
         directParticipantKey: channel.direct_participant_key ?? undefined,
         participants,
@@ -356,6 +385,10 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
         400
       );
     }
+    const parsedMetadata = parseMetadataJson(body.metadata);
+    if (!parsedMetadata.ok) {
+      return jsonResponse(c, { error: parsedMetadata.error }, 400);
+    }
     const id = randomUUID();
     orm
       .insert(schema.channels)
@@ -363,6 +396,12 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
         id,
         name,
         description: body.description ?? null,
+        metadata_json:
+          parsedMetadata.value === undefined
+            ? null
+            : parsedMetadata.value === null
+              ? null
+              : JSON.stringify(parsedMetadata.value),
         kind: requestedKind,
         direct_participant_key: null,
         created_at: Date.now(),
@@ -476,13 +515,30 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
 
   app.patch("/api/channels/:id", async (c) => {
     const id = c.req.param("id");
-    const body = await c.req.json();
+    const rawBody = await c.req.json();
+    const body =
+      rawBody && typeof rawBody === "object" && !Array.isArray(rawBody)
+        ? (rawBody as Record<string, unknown>)
+        : {};
+    const parsedMetadata = parseMetadataJson(body.metadata);
+    if (!parsedMetadata.ok) {
+      return jsonResponse(c, { error: parsedMetadata.error }, 400);
+    }
+    const nextValues: Record<string, unknown> = {};
+    if (typeof body.name === "string") nextValues.name = body.name;
+    if ("description" in body) nextValues.description = body.description ?? null;
+    if (parsedMetadata.value !== undefined) {
+      nextValues.metadata_json =
+        parsedMetadata.value === null
+          ? null
+          : JSON.stringify(parsedMetadata.value);
+    }
+    if (Object.keys(nextValues).length === 0) {
+      return jsonResponse(c, { error: "No channel fields to update" }, 400);
+    }
     orm
       .update(schema.channels)
-      .set({
-        name: body.name,
-        description: body.description ?? null,
-      })
+      .set(nextValues)
       .where(eq(schema.channels.id, id))
       .run();
     return jsonResponse(c, { ok: true });
@@ -505,6 +561,20 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
 
   app.delete("/api/channels/:id", deleteChannelHandler);
   app.post("/api/channels/:id/delete", deleteChannelHandler);
+
+  app.delete("/api/channels", (c) => {
+    const channelIds = orm
+      .select({ id: schema.channels.id })
+      .from(schema.channels)
+      .all()
+      .map((row) => row.id);
+    if (channelIds.length === 0) {
+      return jsonResponse(c, { ok: true, deletedCount: 0 });
+    }
+    orm.delete(schema.channelSubscriptions).run();
+    orm.delete(schema.channels).run();
+    return jsonResponse(c, { ok: true, deletedCount: channelIds.length });
+  });
 
   app.post("/api/channels/:id/subscribe", async (c) => {
     const id = c.req.param("id");

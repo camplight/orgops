@@ -34,6 +34,14 @@ export function getAgent(args: Args): string {
   return requireString(args, "agent");
 }
 
+export function wantsHelp(args: Args): boolean {
+  return args.help === true || args.h === true;
+}
+
+export function printUsage(text: string) {
+  console.log(text.trim());
+}
+
 export function getEnvForAgent(agent: string, base: string): string {
   const key = `${base}__${agent}`;
   const v = process.env[key];
@@ -101,6 +109,7 @@ export async function emitOrgOpsEvent(input: {
 export async function ensureOrgOpsChannelSubscription(input: {
   channelId: string;
   agentName: string;
+  metadata?: Record<string, unknown> | null;
 }) {
   const apiUrl = process.env.ORGOPS_API_URL ?? "http://localhost:8787";
   const token = process.env.ORGOPS_RUNNER_TOKEN;
@@ -133,7 +142,8 @@ export async function ensureOrgOpsChannelSubscription(input: {
       body: JSON.stringify({
         name: input.channelId,
         description: "Auto-created integration bridge channel",
-        kind: "INTEGRATION_BRIDGE"
+        kind: "INTEGRATION_BRIDGE",
+        ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
       })
     });
     if (createRes.ok) {

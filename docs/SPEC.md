@@ -439,7 +439,7 @@ Each agent has a heartbeat loop (in runner, not separate processes unless you wa
    - `message.created` (agent response)
    - `task.created`
    - `process.started/output/exited`
-   - `audit.shell.command`, `audit.fs.write`, etc.
+   - `audit.tool.started/executed/failed`
 
 ### LLM call wrapper (AI SDK)
 
@@ -468,9 +468,9 @@ Each agent has a heartbeat loop (in runner, not separate processes unless you wa
 
 **Audit is mandatory**: every command emits:
 
-- `audit.shell.command` with:
-  - agentName, channelId, cmd, cwd, envKeys, startTs, exitCode
-- `audit.process.started/exited`
+- `audit.tool.started`
+- `audit.tool.executed`
+- `audit.tool.failed`
 
 ## Event type directory (schemas + docs)
 
@@ -583,12 +583,12 @@ Ship these skill folders in `skills/`:
 
 ## Mandatory audit events (minimum list)
 
-- `audit.shell.command`
+- `audit.tool.started`
+- `audit.tool.executed`
+- `audit.tool.failed`
 - `audit.process.started`
-- `audit.process.output` (or store in process_output + emit summary)
+- `audit.process.output` (for long-running stream visibility)
 - `audit.process.exited`
-- `audit.fs.read`
-- `audit.fs.write`
 - `audit.secret.accessed`
 
 ## Implementation order (MVP plan)

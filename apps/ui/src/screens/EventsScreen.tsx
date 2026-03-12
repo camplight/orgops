@@ -19,7 +19,7 @@ type EventsScreenProps = {
   eventTypes: EventTypeInfo[];
   filters: EventFilters;
   onFiltersChange: (filters: EventFilters) => void;
-  onApplyFilters: () => void;
+  onApplyFilters: (filters?: EventFilters) => void;
   onClearEvents: () => Promise<void>;
   onEmitEvent: (rawJson: string) => Promise<void>;
   onRefreshEventTypes: () => Promise<void> | void;
@@ -45,6 +45,7 @@ const DEFAULT_FILTERS: EventFilters = {
 export function EventsScreen({
   events,
   channels,
+  eventTypes,
   filters,
   onFiltersChange,
   onApplyFilters,
@@ -60,12 +61,24 @@ export function EventsScreen({
     () => new Map(channels.map((channel) => [channel.id, channel])),
     [channels]
   );
-
-  const formatParticipantLabel = (subscriberType: string, subscriberId: string) => {
-    if (subscriberType === "HUMAN") return `${subscriberId} (human)`;
-    if (subscriberType === "AGENT") return `${subscriberId} (agent)`;
-    return `${subscriberId} (${subscriberType.toLowerCase()})`;
-  };
+  const sourceOptions = useMemo(
+    () =>
+      [...new Set(events.map((event) => event.source).filter((source) => Boolean(source?.trim())))]
+        .sort((a, b) => a.localeCompare(b)),
+    [events]
+  );
+  const typeOptions = useMemo(
+    () =>
+      [
+        ...new Set([
+          ...eventTypes.map((eventType) => eventType.eventType),
+          ...events.map((event) => event.type)
+        ])
+      ]
+        .filter((type) => Boolean(type?.trim()))
+        .sort((a, b) => a.localeCompare(b)),
+    [eventTypes, events]
+  );
 
   const parseSourceParticipant = (source?: string) => {
     if (!source) return null;
@@ -77,35 +90,63 @@ export function EventsScreen({
     if (subscriberType !== "HUMAN" && subscriberType !== "AGENT") return null;
     return { subscriberType, subscriberId };
   };
+  const getProcessKindFromCommand = (command: string) => {
+    const trimmed = command.trim();
+    if (!trimmed) return null;
+    const executable = trimmed
+      .replace(/^["']/, "")
+      .split(/\s+|\||&&|;/, 1)[0]
+      ?.replace(/["']$/, "");
+    if (!executable) return null;
+    const base = executable.split("/").pop() ?? executable;
+    return base || null;
+  };
+  const getStartedSummary = (event: EventRow) => {
+    const payload = (event.payload ?? {}) as Record<string, unknown>;
+    const toolRaw = payload.tool;
+    const cmdRaw = payload.cmd;
+    const processIdRaw = payload.processId;
+    const tool = typeof toolRaw === "string" && toolRaw.trim() ? toolRaw : null;
+    const cmd = typeof cmdRaw === "string" && cmdRaw.trim() ? cmdRaw : null;
+    const processId =
+      typeof processIdRaw === "string" && processIdRaw.trim() ? processIdRaw : null;
+    const processKind = cmd ? getProcessKindFromCommand(cmd) : null;
+    if (!tool && !processKind && !processId) return null;
+    return {
+      tool,
+      processKind,
+      processId
+    };
+  };
+  const formatStartedLabel = (event: EventRow) => {
+    const summary = getStartedSummary(event);
+    if (!summary) return "-";
+    const parts: string[] = [];
+    if (summary.tool) parts.push(`tool:${summary.tool}`);
+    if (summary.processKind) parts.push(`proc:${summary.processKind}`);
+    if (parts.length === 0 && summary.processId) {
+      return `proc:${summary.processId}`;
+    }
+    return parts.join(" | ");
+  };
+  const agentNameOptions = useMemo(
+    () =>
+      [...new Set(
+        events
+          .map((event) => parseSourceParticipant(event.source))
+          .filter((participant) => participant?.subscriberType === "AGENT")
+          .map((participant) => participant?.subscriberId ?? "")
+      )]
+        .filter((name) => Boolean(name.trim()))
+        .sort((a, b) => a.localeCompare(b)),
+    [events]
+  );
 
   const getDestinationLabel = (event: EventRow) => {
-    const targets: string[] = [];
-    if (event.channelId) {
-      const participants = channelById.get(event.channelId)?.participants ?? [];
-      const sourceParticipant = parseSourceParticipant(event.source);
-      const destinationParticipants =
-        sourceParticipant
-          ? participants.filter(
-              (participant) =>
-                !(
-                  participant.subscriberType.toUpperCase() === sourceParticipant.subscriberType &&
-                  participant.subscriberId === sourceParticipant.subscriberId
-                )
-            )
-          : participants;
-      if (destinationParticipants.length > 0) {
-        targets.push(
-          destinationParticipants
-            .map((participant) =>
-              formatParticipantLabel(participant.subscriberType, participant.subscriberId)
-            )
-            .join(" | ")
-        );
-      } else {
-        targets.push(event.channelId);
-      }
-    }
-    return targets.length > 0 ? targets.join(" | ") : "-";
+    if (!event.channelId) return "-";
+    const channel = channelById.get(event.channelId);
+    if (channel?.name?.trim()) return channel.name;
+    return event.channelId;
   };
 
   const handleSort = (nextKey: SortKey) => {
@@ -179,84 +220,116 @@ export function EventsScreen({
     }
   }, [filteredAndSortedEvents, selectedEventId]);
 
+  const handleResetFilters = () => {
+    const resetFilters = { ...DEFAULT_FILTERS };
+    onFiltersChange(resetFilters);
+    onApplyFilters(resetFilters);
+  };
+
   return (
     <div className="space-y-4">
       <Card title="Event Filters">
-        <div className="grid gap-3 md:grid-cols-4">
-          <Input
-            placeholder="Agent name"
-            value={filters.agentName}
-            onChange={(e) => onFiltersChange({ ...filters, agentName: e.target.value })}
-          />
-          <Input
-            list="channel-filter-options"
-            placeholder="Channel ID"
-            value={filters.channelId}
-            onChange={(e) => onFiltersChange({ ...filters, channelId: e.target.value })}
-          />
-          <datalist id="channel-filter-options">
-            {channels.map((channel) => (
-              <option key={channel.id} value={channel.id}>
-                {channel.name}
-              </option>
-            ))}
-          </datalist>
-          <Input
-            placeholder="Type"
-            value={filters.type}
-            onChange={(e) => onFiltersChange({ ...filters, type: e.target.value })}
-          />
-          <Input
-            placeholder="Source"
-            value={filters.source}
-            onChange={(e) => onFiltersChange({ ...filters, source: e.target.value })}
-          />
-          <Input
-            placeholder="Status"
-            value={filters.status}
-            onChange={(e) => onFiltersChange({ ...filters, status: e.target.value })}
-          />
-          <Input
-            placeholder="Payload contains (client-side)"
-            value={payloadFilter}
-            onChange={(e) => {
-              setPayloadFilter(e.target.value);
-              setCurrentPage(1);
-            }}
-          />
-          <label className="flex items-center gap-2 text-sm text-slate-300">
-            <input
-              type="checkbox"
-              checked={filters.auditOnly}
-              onChange={(e) => onFiltersChange({ ...filters, auditOnly: e.target.checked })}
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            onApplyFilters();
+          }}
+        >
+          <div className="grid gap-3 md:grid-cols-4">
+            <Input
+              list="agent-name-filter-options"
+              placeholder="Agent name"
+              value={filters.agentName}
+              onChange={(e) => onFiltersChange({ ...filters, agentName: e.target.value })}
             />
-            Audit only
-          </label>
-          <label className="flex items-center gap-2 text-sm text-slate-300">
-            <input
-              type="checkbox"
-              checked={filters.scheduledOnly}
-              onChange={(e) => onFiltersChange({ ...filters, scheduledOnly: e.target.checked })}
+            <datalist id="agent-name-filter-options">
+              {agentNameOptions.map((agentName) => (
+                <option key={agentName} value={agentName} />
+              ))}
+            </datalist>
+            <Input
+              list="channel-filter-options"
+              placeholder="Channel ID"
+              value={filters.channelId}
+              onChange={(e) => onFiltersChange({ ...filters, channelId: e.target.value })}
             />
-            Scheduled only
-          </label>
-        </div>
-        <div className="mt-3 flex gap-2">
-          <Button onClick={onApplyFilters}>Apply</Button>
-          <Button variant="secondary" onClick={() => onFiltersChange(DEFAULT_FILTERS)}>
-            Reset
-          </Button>
-          <Button
-            variant="secondary"
-            className="bg-rose-900 hover:bg-rose-800 text-rose-100"
-            onClick={async () => {
-              if (!confirm("Delete all events? This cannot be undone.")) return;
-              await onClearEvents();
-            }}
-          >
-            Clear all events
-          </Button>
-        </div>
+            <datalist id="channel-filter-options">
+              {channels.map((channel) => (
+                <option key={channel.id} value={channel.id}>
+                  {channel.name}
+                </option>
+              ))}
+            </datalist>
+            <Input
+              list="type-filter-options"
+              placeholder="Type"
+              value={filters.type}
+              onChange={(e) => onFiltersChange({ ...filters, type: e.target.value })}
+            />
+            <datalist id="type-filter-options">
+              {typeOptions.map((type) => (
+                <option key={type} value={type} />
+              ))}
+            </datalist>
+            <Input
+              list="source-filter-options"
+              placeholder="Source"
+              value={filters.source}
+              onChange={(e) => onFiltersChange({ ...filters, source: e.target.value })}
+            />
+            <datalist id="source-filter-options">
+              {sourceOptions.map((source) => (
+                <option key={source} value={source} />
+              ))}
+            </datalist>
+            <Input
+              placeholder="Status"
+              value={filters.status}
+              onChange={(e) => onFiltersChange({ ...filters, status: e.target.value })}
+            />
+            <Input
+              placeholder="Payload contains (client-side)"
+              value={payloadFilter}
+              onChange={(e) => {
+                setPayloadFilter(e.target.value);
+                setCurrentPage(1);
+              }}
+            />
+            <label className="flex items-center gap-2 text-sm text-slate-300">
+              <input
+                type="checkbox"
+                checked={filters.auditOnly}
+                onChange={(e) => onFiltersChange({ ...filters, auditOnly: e.target.checked })}
+              />
+              Audit only
+            </label>
+            <label className="flex items-center gap-2 text-sm text-slate-300">
+              <input
+                type="checkbox"
+                checked={filters.scheduledOnly}
+                onChange={(e) => onFiltersChange({ ...filters, scheduledOnly: e.target.checked })}
+              />
+              Scheduled only
+            </label>
+          </div>
+          <div className="mt-3 flex gap-2">
+            <Button type="submit">Apply</Button>
+            <Button type="button" variant="secondary" onClick={handleResetFilters}>
+              Reset
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              className="bg-rose-900 hover:bg-rose-800 text-rose-100"
+              onClick={async () => {
+                if (!confirm("Delete all events? This cannot be undone.")) return;
+                await onClearEvents();
+              }}
+            >
+              Clear all events
+            </Button>
+          </div>
+        </form>
       </Card>
 
       <Card title={`Events (${filteredAndSortedEvents.length})`}>
@@ -332,7 +405,12 @@ export function EventsScreen({
                   <td className="px-2 py-2 whitespace-nowrap text-slate-400">
                     {formatTimestamp(event.createdAt)}
                   </td>
-                  <td className="px-2 py-2 text-slate-200">{event.type}</td>
+                  <td className="px-2 py-2 text-slate-200">
+                    <div>{event.type}</div>
+                    {formatStartedLabel(event) !== "-" ? (
+                      <div className="mt-0.5 text-xs text-slate-400">{formatStartedLabel(event)}</div>
+                    ) : null}
+                  </td>
                   <td className="px-2 py-2 text-slate-300">{event.source}</td>
                   <td className="px-2 py-2 text-slate-400">{getDestinationLabel(event)}</td>
                   <td className="px-2 py-2 text-slate-300">{event.status ?? "-"}</td>
@@ -400,6 +478,21 @@ export function EventsScreen({
           {selectedEvent ? (
             <div className="min-h-0 flex-1 space-y-4 overflow-auto px-4 py-4">
               <div className="rounded border border-slate-800 bg-slate-950 p-3 text-sm">
+                {(() => {
+                  const startedSummary = getStartedSummary(selectedEvent);
+                  if (!startedSummary) return null;
+                  return (
+                    <div className="mb-1 text-slate-300">
+                      <span className="text-slate-500">Started:</span>{" "}
+                      {startedSummary.tool ? `tool ${startedSummary.tool}` : null}
+                      {startedSummary.tool && startedSummary.processKind ? " | " : null}
+                      {startedSummary.processKind ? `process ${startedSummary.processKind}` : null}
+                      {!startedSummary.tool && !startedSummary.processKind && startedSummary.processId
+                        ? `process ${startedSummary.processId}`
+                        : null}
+                    </div>
+                  );
+                })()}
                 <div className="text-slate-300">
                   <span className="text-slate-500">Source:</span> {selectedEvent.source}
                 </div>

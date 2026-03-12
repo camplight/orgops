@@ -1,9 +1,29 @@
-import { getAgent, getEnvForAgent, parseArgs, requireString, slackApi } from "./_shared";
+import {
+  getAgent,
+  getEnvForAgent,
+  parseArgs,
+  printUsage,
+  requireString,
+  slackApi,
+  wantsHelp,
+} from "./_shared";
 
 type Resp = { channel: string; ts: string; message: unknown };
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (wantsHelp(args)) {
+    printUsage(`Usage:
+  bun run skills/slack/assets/post-message.ts -- --agent <agent> --channel <channelId> --text "<message>"
+
+Options:
+  --agent     Agent name (uses SLACK_BOT_TOKEN__<agent>)
+  --channel   Slack channel id (e.g. C123..., D123...)
+  --text      Message body
+  --help      Show this help
+`);
+    return;
+  }
   const agent = getAgent(args);
   const channel = requireString(args, "channel");
   const text = requireString(args, "text");

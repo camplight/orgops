@@ -29,20 +29,10 @@ export async function execute(
     ctx.extraAllowedRoots ?? [],
   );
   const env = (args.env ?? {}) as Record<string, string>;
-  const startTs = Date.now();
   const result = spawnSync("/bin/bash", ["-lc", cmd], {
     cwd,
     env: { ...process.env, ...ctx.injectionEnv, ...env },
     encoding: "utf-8",
-  });
-  await ctx.emitAudit("audit.shell.command", {
-    agentName: ctx.agent.name,
-    channelId: ctx.channelId,
-    cmd,
-    cwd,
-    envKeys: Object.keys(env),
-    startTs,
-    exitCode: result.status ?? 0,
   });
   return {
     stdout: result.stdout ?? "",

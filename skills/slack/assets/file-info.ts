@@ -1,4 +1,12 @@
-import { getAgent, getEnvForAgent, parseArgs, requireString, slackApiGet } from "./_shared";
+import {
+  getAgent,
+  getEnvForAgent,
+  parseArgs,
+  printUsage,
+  requireString,
+  slackApiGet,
+  wantsHelp,
+} from "./_shared";
 
 type SlackFileInfoResponse = {
   ok: true;
@@ -18,6 +26,17 @@ type SlackFileInfoResponse = {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (wantsHelp(args)) {
+    printUsage(`Usage:
+  bun run skills/slack/assets/file-info.ts -- --agent <agent> --file <fileId>
+
+Options:
+  --agent  Agent name (uses SLACK_BOT_TOKEN__<agent>)
+  --file   Slack file id (e.g. F0123...)
+  --help   Show this help
+`);
+    return;
+  }
   const agent = getAgent(args);
   const file = requireString(args, "file");
 

@@ -29,7 +29,6 @@ const processes = new Map<
     agentName: string;
     channelId?: string;
     apiFetch: ExecuteContext["apiFetch"];
-    emitAudit: ExecuteContext["emitAudit"];
     finalized: Promise<void>;
   }
 >();
@@ -124,7 +123,6 @@ export async function execute(
       agentName: ctx.agent.name,
       channelId: ctx.channelId,
       apiFetch: ctx.apiFetch,
-      emitAudit: ctx.emitAudit,
       finalized,
     });
     await ctx.apiFetch("/api/processes", {

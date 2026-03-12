@@ -1,9 +1,30 @@
-import { getAgent, getEnvForAgent, optionalString, parseArgs, requireString, slackApiGet } from "./_shared";
+import {
+  getAgent,
+  getEnvForAgent,
+  optionalString,
+  parseArgs,
+  printUsage,
+  requireString,
+  slackApiGet,
+  wantsHelp,
+} from "./_shared";
 
 type Resp = { messages: unknown };
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (wantsHelp(args)) {
+    printUsage(`Usage:
+  bun run skills/slack/assets/search.ts -- --agent <agent> --query "<search query>" [--count 20]
+
+Options:
+  --agent  Agent name (uses SLACK_BOT_TOKEN__<agent>)
+  --query  Slack search query
+  --count  Maximum results (default: 20)
+  --help   Show this help
+`);
+    return;
+  }
   const agent = getAgent(args);
   const query = requireString(args, "query");
   const count = optionalString(args, "count") ?? "20";

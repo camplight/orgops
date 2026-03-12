@@ -2,7 +2,7 @@
 type: audit.process.started
 ---
 
-Agent started a managed process.
+Agent started a long-running process.
 
 Payload:
 

@@ -2,7 +2,7 @@
 type: audit.process.output
 ---
 
-Agent process produced an output chunk.
+Agent produced process output for a running process.
 
 Payload:
 

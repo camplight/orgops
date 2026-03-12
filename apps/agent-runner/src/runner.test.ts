@@ -132,6 +132,27 @@ describe("agent runner", () => {
       payload: {},
       source: "system",
     };
+    const auditEvent: Event = {
+      id: "evt-audit",
+      type: "audit.response.skipped",
+      payload: { reason: "agent_requested_no_reply" },
+      source: "agent:coordinator",
+      channelId: "chan-1",
+    };
+    const channelCommandEvent: Event = {
+      id: "evt-command",
+      type: "channel.command.succeeded",
+      payload: { command: { action: "chat.postMessage" } },
+      source: "channel:slack:coordinator",
+      channelId: "chan-1",
+    };
+    const taskCreatedEvent: Event = {
+      id: "evt-task",
+      type: "task.created",
+      payload: { eventType: "message.created" },
+      source: "agent:coordinator",
+      channelId: "chan-1",
+    };
     const ownEvent: Event = {
       id: "evt-own",
       type: "message.created",
@@ -190,6 +211,9 @@ describe("agent runner", () => {
     };
 
     expect(await shouldHandleEvent(agent, controlEvent)).toBe(false);
+    expect(await shouldHandleEvent(agent, auditEvent)).toBe(false);
+    expect(await shouldHandleEvent(agent, channelCommandEvent)).toBe(false);
+    expect(await shouldHandleEvent(agent, taskCreatedEvent)).toBe(false);
     expect(await shouldHandleEvent(agent, ownEvent)).toBe(false);
     expect(await shouldHandleEvent(agent, otherAgentChannelEvent)).toBe(false);
     expect(await shouldHandleEvent(agent, addressedByMention)).toBe(true);

@@ -14,6 +14,7 @@ type ChannelsScreenProps = {
   loadChannelParticipants: (id: string) => Promise<unknown>;
   onCreateChannel: (channel: { name: string; description: string }) => Promise<void>;
   onDeleteChannel: (id: string) => Promise<void>;
+  onDeleteAllChannels: () => Promise<void>;
   onSubscribe: (channelId: string, agentName: string) => Promise<void>;
   onUnsubscribe: (channelId: string, agentName: string) => Promise<void>;
 };
@@ -29,12 +30,14 @@ export function ChannelsScreen({
   loadChannelParticipants,
   onCreateChannel,
   onDeleteChannel,
+  onDeleteAllChannels,
   onSubscribe,
   onUnsubscribe
 }: ChannelsScreenProps) {
   const [newChannel, setNewChannel] = useState({ name: "", description: "" });
   const [newSubscription, setNewSubscription] = useState({ agentName: "" });
   const [deletingChannelId, setDeletingChannelId] = useState<string | null>(null);
+  const [deletingAllChannels, setDeletingAllChannels] = useState(false);
   const [subscribing, setSubscribing] = useState(false);
   const [unsubscribingAgent, setUnsubscribingAgent] = useState<string | null>(null);
   const [createDrawerOpen, setCreateDrawerOpen] = useState(false);
@@ -122,6 +125,30 @@ export function ChannelsScreen({
     }
   };
 
+  const handleDeleteAllChannels = async () => {
+    setError(null);
+    if (channels.length === 0) {
+      setError("No channels to delete.");
+      return;
+    }
+    const confirmed = window.confirm(
+      `Delete all ${channels.length} channel${channels.length === 1 ? "" : "s"}? This cannot be undone.`
+    );
+    if (!confirmed) return;
+    setDeletingAllChannels(true);
+    try {
+      await onDeleteAllChannels();
+      onSelectChannel(null);
+      setSelectedEventId(null);
+    } catch (deleteError) {
+      const message =
+        deleteError instanceof Error ? deleteError.message : "Failed to delete all channels.";
+      setError(message);
+    } finally {
+      setDeletingAllChannels(false);
+    }
+  };
+
   const formatJson = (value: unknown) => {
     if (value === undefined) {
       return "undefined";
@@ -156,7 +183,19 @@ export function ChannelsScreen({
           <div className="text-xs text-slate-500">
             Click a channel row to open details.
           </div>
-          <Button onClick={() => setCreateDrawerOpen(true)}>New channel</Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="secondary"
+              className="text-rose-300 hover:text-rose-200"
+              onClick={handleDeleteAllChannels}
+              disabled={deletingAllChannels || channels.length === 0}
+            >
+              Delete all
+            </Button>
+            <Button onClick={() => setCreateDrawerOpen(true)} disabled={deletingAllChannels}>
+              New channel
+            </Button>
+          </div>
         </div>
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
@@ -266,7 +305,11 @@ export function ChannelsScreen({
                   selectedChannel &&
                   handleDeleteChannel(selectedChannel.id, selectedChannel.name)
                 }
-                disabled={!selectedChannel || deletingChannelId === selectedChannel?.id}
+                disabled={
+                  !selectedChannel ||
+                  deletingAllChannels ||
+                  deletingChannelId === selectedChannel?.id
+                }
               >
                 Delete Channel
               </Button>

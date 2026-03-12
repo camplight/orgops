@@ -9,8 +9,10 @@ import {
   getEnvForAgent,
   optionalString,
   parseArgs,
+  printUsage,
   requireString,
   slackApiGet,
+  wantsHelp,
 } from "./_shared";
 
 type SlackFileInfoResponse = {
@@ -58,8 +60,8 @@ async function downloadToFile(input: { url: string; botToken: string; outPath: s
 async function main() {
   const args = parseArgs(process.argv.slice(2));
 
-  if (args["help"]) {
-    console.log(`Usage:
+  if (wantsHelp(args)) {
+    printUsage(`Usage:
   bun run skills/slack/assets/fetch-file.ts -- --agent <agent> --file <fileId> [--out-dir <dir>]
     [--orgops-channel-id <channelId> | --team-id <teamId> --channel-id <channelId>]
 

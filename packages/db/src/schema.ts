@@ -70,6 +70,7 @@ export const channels = sqliteTable("channels", {
   id: text("id").primaryKey(),
   name: text("name").notNull().unique(),
   description: text("description"),
+  metadata_json: text("metadata_json"),
   kind: text("kind").notNull().default(CHANNEL_KINDS.GROUP),
   direct_participant_key: text("direct_participant_key"),
   created_at: integer("created_at").notNull()

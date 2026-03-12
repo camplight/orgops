@@ -1,6 +1,6 @@
 ---
 name: slack
-description: "Slack skill: per-agent Slack app participation (send/reply/DM/history/search) + Socket Mode listener using normal OrgOps message events."
+description: "Slack skill: per-agent Slack app participation (send/reply/DM/history/search) + Socket Mode listener for inbound Slack events."
 metadata: {"openclaw":{"requires":{"env":["ORGOPS_RUNNER_TOKEN"]}}}
 ---
 # Slack skill
@@ -11,8 +11,7 @@ It provides:
 
 - Slack Web API helpers (post message, reply in thread, open DM, history, search, list channels, user info)
 - Slack file helpers (files.info + download to local path)
-- A **Socket Mode** listener (one process per agent) that converts Slack events into OrgOps `message.created` events.
-- A reverse bridge that forwards OrgOps `message.created` events in Slack integration channels back to Slack with `chat.postMessage`.
+- A **Socket Mode** listener (one process per agent) that converts Slack events into OrgOps `channel.event.created` events.
 
 ## Secrets
 
@@ -54,6 +53,13 @@ All scripts accept `--agent <agentName>` and use:
 
 - `SLACK_BOT_TOKEN__<agentName>`
 - (listener only) `SLACK_APP_TOKEN__<agentName>`
+
+Agent operating rule:
+
+- Prefer these CLI scripts for Slack actions instead of manually emitting generic connector events like `channel.command.requested`.
+- Use direct event emission only when there is no script that fits the task.
+- If arguments are unclear, run the target script with `--help` first and follow the printed usage exactly.
+- For Slack-triggered work, after posting back to Slack via script, return `[NO_REPLY]` to avoid duplicate replies in OrgOps chat.
 
 ### Post a message
 
@@ -190,9 +196,9 @@ Optional routing granularity:
 - `--route-mode thread`: one OrgOps channel per Slack thread
 - `--route-mode person`: one OrgOps channel per sender in a Slack channel
 
-This emits OrgOps `message.created` events via the Events API.
+This emits OrgOps `channel.event.created` events via the Events API.
 
-When emitting, the listener auto-ensures an OrgOps integration channel exists and subscribes
+When emitting, the listener auto-ensures an OrgOps channel exists and subscribes
 the target agent, so incoming Slack events are routable to the runner without manual setup.
 Channel metadata includes Slack routing info (`provider/teamId/channelId`, and optional thread/person).
 
@@ -200,12 +206,6 @@ Notes:
 
 - v1 keeps lifecycle management simple: you run this as an explicit sidecar process.
 - v2 can integrate with OrgOps process/websocket infra for supervision.
-- Listener now acts as a bidirectional bridge:
-  - Slack inbound -> OrgOps `message.created` (`source: integration:slack:<agent>`, payload includes `integration.origin=slack`)
-  - OrgOps outbound in Slack integration channels -> Slack `chat.postMessage`
-
-Bridge safety:
-
-- Only `message.created` is bridged to Slack.
-- Messages that already originated from Slack (`integration.origin=slack` or `source=integration:slack:*`) are skipped to avoid loops.
-- Non-message integration-channel events are ignored by the outbound bridge.
+- Listener is inbound-only:
+  - Slack inbound -> OrgOps `channel.event.created` (`source: channel:slack:<agent>`)
+  - It does not process OrgOps events for outbound Slack posting.

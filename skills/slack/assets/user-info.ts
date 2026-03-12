@@ -1,9 +1,28 @@
-import { getAgent, getEnvForAgent, parseArgs, requireString, slackApiGet } from "./_shared";
+import {
+  getAgent,
+  getEnvForAgent,
+  parseArgs,
+  printUsage,
+  requireString,
+  slackApiGet,
+  wantsHelp,
+} from "./_shared";
 
 type Resp = { user: unknown };
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (wantsHelp(args)) {
+    printUsage(`Usage:
+  bun run skills/slack/assets/user-info.ts -- --agent <agent> --user <userId>
+
+Options:
+  --agent  Agent name (uses SLACK_BOT_TOKEN__<agent>)
+  --user   Slack user id (e.g. U123...)
+  --help   Show this help
+`);
+    return;
+  }
   const agent = getAgent(args);
   const user = requireString(args, "user");
 

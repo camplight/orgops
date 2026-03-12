@@ -148,6 +148,11 @@ export function registerSecretsRoutes(app: Hono<any>, deps: SecretsDeps) {
   app.get("/api/secrets/env", requireRunnerAuth, async (c) => {
     const masterKey = parseMasterKey(process.env.ORGOPS_MASTER_KEY ?? "");
     const requestedByAgent = (c.req.header("x-orgops-agent-name") ?? "").trim();
+    const requestedChannelId = (c.req.header("x-orgops-channel-id") ?? "").trim();
+    const channelId =
+      requestedChannelId && /^[a-zA-Z0-9._-]+$/.test(requestedChannelId)
+        ? requestedChannelId
+        : undefined;
     const source = requestedByAgent && /^[a-zA-Z0-9._-]+$/.test(requestedByAgent) ? `agent:${requestedByAgent}` : "system";
     const rows = orm
       .select({ name: schema.secrets.name, ciphertext_b64: schema.secrets.ciphertext_b64 })
@@ -164,6 +169,7 @@ export function registerSecretsRoutes(app: Hono<any>, deps: SecretsDeps) {
     }
     insertEvent({
       type: "audit.secret.accessed",
+      channelId,
       payload: {
         scopeType: PACKAGE_SCOPE,
         count: Object.keys(env).length,

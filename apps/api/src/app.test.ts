@@ -689,6 +689,81 @@ describe("api app", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("deletes all channels and clears channel subscriptions", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token"
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" })
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const createAgentRes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "agent-bulk-delete",
+        modelId: "test:model",
+        systemInstructions: "",
+        workspacePath: ".orgops-data/workspaces/agent-bulk-delete"
+      })
+    });
+    expect(createAgentRes.status).toBe(201);
+
+    for (const channelName of ["bulk-delete-a", "bulk-delete-b"]) {
+      const createChannelRes = await app.request("http://localhost/api/channels", {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ name: channelName })
+      });
+      expect(createChannelRes.status).toBe(201);
+      const channel = (await createChannelRes.json()) as { id: string };
+      const subscribeRes = await app.request(`http://localhost/api/channels/${channel.id}/subscribe`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ subscriberType: "AGENT", subscriberId: "agent-bulk-delete" })
+      });
+      expect(subscribeRes.status).toBe(200);
+    }
+
+    const deleteRes = await app.request("http://localhost/api/channels", {
+      method: "DELETE",
+      headers: { cookie }
+    });
+    expect(deleteRes.status).toBe(200);
+    const deleteBody = (await deleteRes.json()) as { ok: boolean; deletedCount: number };
+    expect(deleteBody.ok).toBe(true);
+    expect(deleteBody.deletedCount).toBe(2);
+
+    const channelsRes = await app.request("http://localhost/api/channels", {
+      headers: { cookie }
+    });
+    const channels = (await channelsRes.json()) as Array<{ id: string }>;
+    expect(channels).toEqual([]);
+
+    const participantsRes = await app.request(
+      "http://localhost/api/channels/nonexistent/participants",
+      {
+        headers: { cookie }
+      }
+    );
+    expect(participantsRes.status).toBe(200);
+    const participants = await participantsRes.json();
+    expect(participants).toEqual([]);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("deletes missing channels idempotently", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");
@@ -762,6 +837,98 @@ describe("api app", () => {
       body: JSON.stringify({ name: "bad-direct", kind: "HUMAN_AGENT_DM" })
     });
     expect(invalidCreateRes.status).toBe(400);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("stores and returns channel metadata for integration bridge channels", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token"
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" })
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const createRes = await app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "slack-bridge-metadata",
+        kind: "INTEGRATION_BRIDGE",
+        metadata: {
+          integrationBridge: {
+            provider: "slack",
+            connection: "worker1",
+            teamId: "T123",
+            channelId: "C456",
+            threadTs: "1710000000.000100"
+          }
+        }
+      })
+    });
+    expect(createRes.status).toBe(201);
+    const created = (await createRes.json()) as { id: string };
+
+    const listRes = await app.request("http://localhost/api/channels", {
+      headers: { cookie }
+    });
+    expect(listRes.status).toBe(200);
+    const list = (await listRes.json()) as Array<{
+      id: string;
+      metadata?: {
+        integrationBridge?: {
+          provider?: string;
+          channelId?: string;
+          threadTs?: string;
+        };
+      } | null;
+    }>;
+    const row = list.find((channel) => channel.id === created.id);
+    expect(row?.metadata?.integrationBridge?.provider).toBe("slack");
+    expect(row?.metadata?.integrationBridge?.channelId).toBe("C456");
+    expect(row?.metadata?.integrationBridge?.threadTs).toBe("1710000000.000100");
+
+    const patchRes = await app.request(`http://localhost/api/channels/${created.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        metadata: {
+          integrationBridge: {
+            provider: "slack",
+            connection: "worker1",
+            teamId: "T123",
+            dmUserId: "U999"
+          }
+        }
+      })
+    });
+    expect(patchRes.status).toBe(200);
+
+    const listAfterPatchRes = await app.request("http://localhost/api/channels", {
+      headers: { cookie }
+    });
+    expect(listAfterPatchRes.status).toBe(200);
+    const listAfterPatch = (await listAfterPatchRes.json()) as Array<{
+      id: string;
+      metadata?: {
+        integrationBridge?: {
+          dmUserId?: string;
+        };
+      } | null;
+    }>;
+    const patched = listAfterPatch.find((channel) => channel.id === created.id);
+    expect(patched?.metadata?.integrationBridge?.dmUserId).toBe("U999");
 
     rmSync(dataDir, { recursive: true, force: true });
   });
@@ -1537,6 +1704,105 @@ describe("api app", () => {
     expect(row).toBeDefined();
     expect(row?.state).toBe("EXITED");
     expect(typeof row?.ended_at).toBe("number");
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("clears only exited processes when scope=exited", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token"
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" })
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const runningId = randomUUID();
+    const exitedId = randomUUID();
+    const completedId = randomUUID();
+    const now = Date.now();
+
+    const createRunningRes = await app.request("http://localhost/api/processes", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        id: runningId,
+        agentName: "test-agent",
+        cmd: "sleep 30",
+        cwd: dataDir,
+        pid: null,
+        state: "RUNNING",
+        startedAt: now
+      })
+    });
+    expect(createRunningRes.status).toBe(201);
+
+    const createExitedRes = await app.request("http://localhost/api/processes", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        id: exitedId,
+        agentName: "test-agent",
+        cmd: "echo done",
+        cwd: dataDir,
+        pid: null,
+        state: "EXITED",
+        startedAt: now - 2000,
+        endedAt: now - 1000
+      })
+    });
+    expect(createExitedRes.status).toBe(201);
+
+    const createCompletedRes = await app.request("http://localhost/api/processes", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        id: completedId,
+        agentName: "test-agent",
+        cmd: "echo complete",
+        cwd: dataDir,
+        pid: null,
+        state: "COMPLETED",
+        startedAt: now - 2000,
+        endedAt: now - 1000
+      })
+    });
+    expect(createCompletedRes.status).toBe(201);
+
+    const clearRes = await app.request("http://localhost/api/processes?scope=exited", {
+      method: "DELETE",
+      headers: { cookie }
+    });
+    expect(clearRes.status).toBe(200);
+    const clearBody = (await clearRes.json()) as {
+      ok: boolean;
+      scope: string;
+      clearedCount: number;
+      terminatedCount: number;
+    };
+    expect(clearBody.ok).toBe(true);
+    expect(clearBody.scope).toBe("exited");
+    expect(clearBody.clearedCount).toBe(2);
+    expect(clearBody.terminatedCount).toBe(0);
+
+    const listRes = await app.request("http://localhost/api/processes", {
+      headers: { cookie }
+    });
+    expect(listRes.status).toBe(200);
+    const list = (await listRes.json()) as Array<{ id: string; state: string }>;
+    expect(list.map((row) => row.id)).toContain(runningId);
+    expect(list.map((row) => row.id)).not.toContain(exitedId);
+    expect(list.map((row) => row.id)).not.toContain(completedId);
 
     rmSync(dataDir, { recursive: true, force: true });
   });

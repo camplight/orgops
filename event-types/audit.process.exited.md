@@ -2,7 +2,7 @@
 type: audit.process.exited
 ---
 
-Agent process exited.
+Agent process ended.
 
 Payload:
 
@@ -10,3 +10,5 @@ Payload:
 - `channelId`
 - `processId`
 - `exitCode`
+- `signal`
+- `state`

@@ -204,6 +204,9 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
   });
 
   app.delete("/api/processes", (c) => {
+    const url = new URL(c.req.url);
+    const scope = url.searchParams.get("scope");
+    const clearExitedOnly = scope === "exited";
     const rows = orm
       .select({
         id: schema.processes.id,
@@ -212,8 +215,11 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
       })
       .from(schema.processes)
       .all();
+    const rowsToClear = clearExitedOnly
+      ? rows.filter((row) => row.state !== "RUNNING" && row.state !== "STARTING")
+      : rows;
     let terminatedCount = 0;
-    for (const row of rows) {
+    for (const row of rowsToClear) {
       if (
         row.pid !== null &&
         row.pid !== undefined &&
@@ -227,16 +233,29 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
         }
       }
     }
-    orm.delete(schema.processOutput).run();
-    orm.delete(schema.processes).run();
+    if (rowsToClear.length > 0) {
+      orm
+        .delete(schema.processOutput)
+        .where(inArray(schema.processOutput.process_id, rowsToClear.map((row) => row.id)))
+        .run();
+      orm
+        .delete(schema.processes)
+        .where(inArray(schema.processes.id, rowsToClear.map((row) => row.id)))
+        .run();
+    }
     insertEvent({
       type: "processes.cleared",
-      payload: { terminatedCount, clearedCount: rows.length },
+      payload: {
+        scope: clearExitedOnly ? "exited" : "all",
+        terminatedCount,
+        clearedCount: rowsToClear.length,
+      },
       source: "system",
     });
     return jsonResponse(c, {
       ok: true,
-      clearedCount: rows.length,
+      scope: clearExitedOnly ? "exited" : "all",
+      clearedCount: rowsToClear.length,
       terminatedCount,
     });
   });

@@ -26,7 +26,6 @@ const lifecycleChannels = new Map<string, string>();
 const HEARTBEAT_INTERVAL_MS = 5000;
 const DEFAULT_MAX_HISTORY_EVENTS = 120;
 const DEFAULT_MAX_HISTORY_CHARS = 120_000;
-const DEFAULT_MAX_EVENT_CHARS = 12_000;
 
 function readPositiveIntEnv(
   value: string | undefined,
@@ -43,10 +42,6 @@ const HISTORY_MAX_EVENTS = readPositiveIntEnv(
 const HISTORY_MAX_CHARS = readPositiveIntEnv(
   process.env.ORGOPS_HISTORY_MAX_CHARS,
   DEFAULT_MAX_HISTORY_CHARS,
-);
-const EVENT_MAX_CHARS = readPositiveIntEnv(
-  process.env.ORGOPS_EVENT_MAX_CHARS,
-  DEFAULT_MAX_EVENT_CHARS,
 );
 
 async function apiFetch(path: string, init?: RequestInit) {
@@ -86,7 +81,20 @@ async function emitEvent(event: any) {
 }
 
 async function emitAudit(type: string, payload: unknown, source = "system") {
-  await emitEvent({ type, payload, source });
+  const payloadRecord =
+    payload && typeof payload === "object"
+      ? (payload as { channelId?: unknown })
+      : undefined;
+  const payloadChannelId =
+    typeof payloadRecord?.channelId === "string" && payloadRecord.channelId
+      ? payloadRecord.channelId
+      : undefined;
+  await emitEvent({
+    type,
+    payload,
+    source,
+    ...(payloadChannelId ? { channelId: payloadChannelId } : {}),
+  });
 }
 
 type ChannelParticipant = {
@@ -207,23 +215,7 @@ export function toHistoryMessage(agent: Agent, event: Event) {
     source: event.source,
     payload: event.payload ?? {},
   };
-  let content = JSON.stringify(baseRecord, null, 2);
-  if (content.length > EVENT_MAX_CHARS) {
-    const payloadJson = JSON.stringify(event.payload ?? {});
-    const preview = payloadJson.slice(0, 2000);
-    content = JSON.stringify(
-      {
-        ...baseRecord,
-        payload: {
-          truncated: true,
-          preview,
-          originalPayloadChars: payloadJson.length,
-        },
-      },
-      null,
-      2,
-    );
-  }
+  const content = JSON.stringify(baseRecord, null, 2);
   return {
     role,
     content,
@@ -247,7 +239,6 @@ function buildHistoryTruncationMessage(
         limits: {
           maxEvents,
           maxChars,
-          maxEventChars: EVENT_MAX_CHARS,
         },
       },
       null,
@@ -335,6 +326,10 @@ export function parseResponseDirective(rawText: string): ResponseDirective {
 
 export async function shouldHandleEvent(agent: Agent, event: Event) {
   if (event.type?.startsWith("agent.control.")) return false;
+  // Skip bookkeeping events that should never trigger model replies.
+  if (event.type?.startsWith("audit.")) return false;
+  if (event.type?.startsWith("channel.command.")) return false;
+  if (event.type === "task.created") return false;
   if (event.source === `agent:${agent.name}`) return false;
   const targetAgentName =
     typeof event.payload?.targetAgentName === "string"
@@ -356,10 +351,14 @@ export async function shouldHandleEvent(agent: Agent, event: Event) {
 
 async function getPackageSecretsEnv(
   agentName: string,
+  channelId?: string,
 ): Promise<Record<string, string>> {
   try {
     const res = await apiFetch("/api/secrets/env", {
-      headers: { "x-orgops-agent-name": agentName },
+      headers: {
+        "x-orgops-agent-name": agentName,
+        ...(channelId ? { "x-orgops-channel-id": channelId } : {}),
+      },
     });
     return (await res.json()) as Record<string, string>;
   } catch {
@@ -370,7 +369,7 @@ async function getPackageSecretsEnv(
 async function handleEvent(agent: Agent, event: Event) {
   const channelId = event.channelId;
   if (!channelId) return;
-  const injectionEnv = await getPackageSecretsEnv(agent.name);
+  const injectionEnv = await getPackageSecretsEnv(agent.name, channelId);
   const soul = typeof agent.soulContents === "string" ? agent.soulContents : "";
   const allSkills = listSkills(SKILL_ROOTS);
   const enabledSkillSet = new Set(agent.enabledSkills ?? []);
@@ -411,7 +410,7 @@ async function handleEvent(agent: Agent, event: Event) {
       type: string,
       payload: unknown,
       source = `agent:${agent.name}`,
-    ) => emitEvent({ type, payload, source }),
+    ) => emitAudit(type, payload, source),
   };
   const tools = createRunnerTools({
     agent,

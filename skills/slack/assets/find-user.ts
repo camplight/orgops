@@ -1,4 +1,12 @@
-import { getAgent, getEnvForAgent, optionalString, parseArgs, requireString, slackApiGet } from "./_shared";
+import {
+  getAgent,
+  getEnvForAgent,
+  optionalString,
+  parseArgs,
+  printUsage,
+  slackApiGet,
+  wantsHelp,
+} from "./_shared";
 
 type SlackUser = {
   id: string;
@@ -25,6 +33,20 @@ function norm(s: string) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (wantsHelp(args)) {
+    printUsage(`Usage:
+  bun run skills/slack/assets/find-user.ts -- --agent <agent> (--username <handle> | --display-name "<name>" | --query "<text>") [--limit 200]
+
+Options:
+  --agent         Agent name (uses SLACK_BOT_TOKEN__<agent>)
+  --username      Exact Slack handle match
+  --display-name  Exact display name match
+  --query         Fuzzy search across common name/display fields
+  --limit         users.list page size (default: 200, max: 200)
+  --help          Show this help
+`);
+    return;
+  }
   const agent = getAgent(args);
   const username = optionalString(args, "username");
   const displayName = optionalString(args, "display-name");

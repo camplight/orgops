@@ -59,6 +59,7 @@ const DEFAULT_EVENT_FILTERS = {
   auditOnly: false,
   scheduledOnly: false,
 };
+type EventFilters = typeof DEFAULT_EVENT_FILTERS;
 
 export default function App() {
   const [activeScreen, setActiveScreen] = useState<Screen>("dashboard");
@@ -288,15 +289,16 @@ export default function App() {
     setChatEvents(list);
   }, [activeChatTarget, loadChatEventsForTarget]);
 
-  const handleApplyEventFilters = useCallback(async () => {
+  const handleApplyEventFilters = useCallback(async (nextFilters?: EventFilters) => {
+    const filtersToApply = nextFilters ?? eventFilters;
     const params = new URLSearchParams();
-    if (eventFilters.agentName) params.set("agentName", eventFilters.agentName);
-    if (eventFilters.channelId) params.set("channelId", eventFilters.channelId);
-    if (eventFilters.type) params.set("type", eventFilters.type);
-    if (eventFilters.source) params.set("source", eventFilters.source);
-    if (eventFilters.status) params.set("status", eventFilters.status);
-    if (eventFilters.auditOnly) params.set("typePrefix", "audit.");
-    if (eventFilters.scheduledOnly) params.set("scheduled", "1");
+    if (filtersToApply.agentName) params.set("agentName", filtersToApply.agentName);
+    if (filtersToApply.channelId) params.set("channelId", filtersToApply.channelId);
+    if (filtersToApply.type) params.set("type", filtersToApply.type);
+    if (filtersToApply.source) params.set("source", filtersToApply.source);
+    if (filtersToApply.status) params.set("status", filtersToApply.status);
+    if (filtersToApply.auditOnly) params.set("typePrefix", "audit.");
+    if (filtersToApply.scheduledOnly) params.set("scheduled", "1");
     const list = await fetchAllEvents(params);
     data.setEvents(list);
   }, [eventFilters, data.setEvents, fetchAllEvents]);
@@ -505,6 +507,14 @@ export default function App() {
             data.setChannels((prev) => prev.filter((channel) => channel.id !== channelId));
             await data.refreshChannels();
           }}
+          onDeleteAllChannels={async () => {
+            await data.apiFetch("/api/channels", {
+              method: "DELETE"
+            });
+            setActiveChannelId(null);
+            data.setChannels([]);
+            await data.refreshChannels();
+          }}
           onSubscribe={async (channelId, agentName) => {
             await data.apiFetch(`/api/channels/${channelId}/subscribe`, {
               method: "POST",
@@ -590,6 +600,15 @@ export default function App() {
             }
           }}
           onRefresh={data.refreshProcesses}
+          onClearExited={async () => {
+            await data.apiFetch("/api/processes?scope=exited", {
+              method: "DELETE",
+              headers: data.getApiHeaders()
+            });
+            setActiveProcessId(null);
+            data.setProcessOutput({});
+            await data.refreshProcesses();
+          }}
           onClearAll={async () => {
             await data.apiFetch("/api/processes", {
               method: "DELETE",
