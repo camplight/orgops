@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { zodToJsonSchema } from "zod-to-json-schema";
 
 export type EventDraft = {
   type: string;
@@ -32,6 +33,15 @@ export type EventValidationResult =
       matchedDefinitions: number;
       issues: EventValidationIssue[];
     };
+
+export type EventTypeSummary = {
+  type: string;
+  description: string;
+  source: string;
+  payloadExample?: unknown;
+  schemaKind?: "event" | "payload";
+  schema?: unknown;
+};
 
 const sourceSchema = z.string().min(1);
 const channelSchema = z
@@ -178,20 +188,6 @@ const coreEventShapes: EventShapeDefinition[] = [
           error: z.string().min(1),
           retryable: z.boolean().optional(),
           details: z.unknown().optional(),
-        })
-        .passthrough(),
-    }),
-  },
-  {
-    type: "task.created",
-    description: "Task/audit event emitted when tools were used in a step.",
-    source: "core",
-    eventSchema: z.object({
-      channelId: z.string().min(1),
-      payload: z
-        .object({
-          eventType: z.string().min(1),
-          toolResultCount: z.number().int().nonnegative(),
         })
         .passthrough(),
     }),
@@ -414,11 +410,38 @@ export function validateEventAgainstShapes(
   };
 }
 
-export function serializeEventShapes(definitions: EventShapeDefinition[]) {
+export function serializeEventShapes(
+  definitions: EventShapeDefinition[],
+): EventTypeSummary[] {
+  const schemaName = (type: string, kind: "event" | "payload") =>
+    `${type.replace(/[^a-zA-Z0-9_]/g, "_")}_${kind}`;
+  const schemaToJson = (
+    schema: z.ZodTypeAny,
+    type: string,
+    kind: "event" | "payload",
+  ): unknown => {
+    try {
+      return zodToJsonSchema(schema, schemaName(type, kind));
+    } catch {
+      return { error: "schema_serialization_failed" };
+    }
+  };
   return definitions.map((definition) => ({
     type: definition.type,
     description: definition.description,
     source: definition.source ?? "core",
     payloadExample: definition.payloadExample,
+    ...(definition.eventSchema
+      ? {
+          schemaKind: "event" as const,
+          schema: schemaToJson(definition.eventSchema, definition.type, "event"),
+        }
+      : {}),
+    ...(definition.payloadSchema
+      ? {
+          schemaKind: "payload" as const,
+          schema: schemaToJson(definition.payloadSchema, definition.type, "payload"),
+        }
+      : {}),
   }));
 }

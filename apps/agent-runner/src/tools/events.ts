@@ -59,6 +59,12 @@ const channelsListSchema = z.object({
   limit: z.number().int().min(1).max(500).optional(),
 });
 
+const eventTypesSchema = z.object({
+  source: z.string().min(1).optional(),
+  typePrefix: z.string().min(1).optional(),
+  includeExamples: z.boolean().optional(),
+});
+
 const scheduleSelfSchema = z
   .object({
     text: z.string().min(1),
@@ -124,6 +130,11 @@ export const eventsToolDefs: ToolDef[] = [
     "events_channels_list",
     "List channels and participants, with optional filters by kind/name/participant.",
     channelsListSchema,
+  ],
+  [
+    "events_event_types",
+    "List known event types from core and loaded skills. Use source/typePrefix filters to discover additional non-core types.",
+    eventTypesSchema,
   ],
   [
     "events_schedule_self",
@@ -384,6 +395,31 @@ export async function execute(
     });
     const limited = parsed.limit ? filtered.slice(0, parsed.limit) : filtered;
     return { channels: limited, totalMatched: filtered.length };
+  }
+
+  if (tool === "events_event_types") {
+    const parsed = eventTypesSchema.parse(args);
+    const source = parsed.source?.trim();
+    const typePrefix = parsed.typePrefix?.trim();
+    const knownEventTypes = ctx.listEventTypes?.({
+      ...(source ? { source } : {}),
+      ...(typePrefix ? { typePrefix } : {}),
+    });
+    if (!knownEventTypes) {
+      return {
+        eventTypes: [],
+        totalMatched: 0,
+        note: "Event type registry unavailable in this runtime context.",
+      };
+    }
+    const eventTypes = parsed.includeExamples
+      ? knownEventTypes
+      : knownEventTypes.map(({ payloadExample: _payloadExample, ...rest }) => rest);
+    return {
+      eventTypes,
+      totalMatched: eventTypes.length,
+      filters: parsed,
+    };
   }
 
   if (tool === "events_emit") {

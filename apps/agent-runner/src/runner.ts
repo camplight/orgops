@@ -6,7 +6,12 @@ import {
   loadSkillEventShapes,
   resolveSkillRoots,
 } from "@orgops/skills";
-import { getCoreEventShapes, validateEventAgainstShapes } from "@orgops/schemas";
+import {
+  type EventTypeSummary,
+  getCoreEventShapes,
+  serializeEventShapes,
+  validateEventAgainstShapes,
+} from "@orgops/schemas";
 import { createRunnerTools, executeTool } from "./tools";
 import { stopAllRunningProcesses } from "./tools/proc";
 import type { Agent, Event } from "./types";
@@ -48,6 +53,19 @@ const HISTORY_MAX_CHARS = readPositiveIntEnv(
   process.env.ORGOPS_HISTORY_MAX_CHARS,
   DEFAULT_MAX_HISTORY_CHARS,
 );
+
+function queryEventTypes(
+  eventTypes: EventTypeSummary[],
+  input?: { source?: string; typePrefix?: string },
+): EventTypeSummary[] {
+  const source = input?.source?.trim();
+  const typePrefix = input?.typePrefix?.trim();
+  return eventTypes.filter((eventType) => {
+    if (source && eventType.source !== source) return false;
+    if (typePrefix && !eventType.type.startsWith(typePrefix)) return false;
+    return true;
+  });
+}
 
 async function apiFetch(path: string, init?: RequestInit) {
   const runnerToken = process.env.ORGOPS_RUNNER_TOKEN ?? "dev-runner-token";
@@ -122,10 +140,7 @@ async function listChannels(): Promise<ChannelRecord[]> {
   return res.json();
 }
 
-function isAgentSubscribed(
-  channel: ChannelRecord,
-  agentName: string,
-): boolean {
+function isAgentSubscribed(channel: ChannelRecord, agentName: string): boolean {
   return (channel.participants ?? []).some(
     (participant) =>
       String(participant.subscriberType ?? "").toUpperCase() === "AGENT" &&
@@ -140,7 +155,8 @@ async function ensureLifecycleChannel(agentName: string): Promise<string> {
   const expectedName = lifecycleChannelName(agentName);
   const channels = await listChannels();
   const existing = channels.find(
-    (channel) => channel.name === expectedName && isAgentSubscribed(channel, agentName),
+    (channel) =>
+      channel.name === expectedName && isAgentSubscribed(channel, agentName),
   );
   if (existing?.id) {
     lifecycleChannels.set(agentName, existing.id);
@@ -166,9 +182,8 @@ async function ensureLifecycleChannel(agentName: string): Promise<string> {
 
   const refreshedChannels = await listChannels();
   const resolved =
-    refreshedChannels.find(
-      (channel) => channel.name === expectedName,
-    ) ?? (createdChannelId ? { id: createdChannelId } : null);
+    refreshedChannels.find((channel) => channel.name === expectedName) ??
+    (createdChannelId ? { id: createdChannelId } : null);
   if (!resolved?.id) {
     throw new Error(`Unable to resolve lifecycle channel for ${agentName}`);
   }
@@ -265,7 +280,8 @@ export function buildModelMessages(
     toHistoryMessage(agent, channelEvent),
   );
 
-  const keptFromEnd: Array<{ role: "user" | "assistant"; content: string }> = [];
+  const keptFromEnd: Array<{ role: "user" | "assistant"; content: string }> =
+    [];
   let totalHistoryChars = 0;
   for (let index = historyMessages.length - 1; index >= 0; index -= 1) {
     const message = historyMessages[index];
@@ -334,7 +350,6 @@ export async function shouldHandleEvent(agent: Agent, event: Event) {
   // Skip bookkeeping events that should never trigger model replies.
   if (event.type?.startsWith("audit.")) return false;
   if (event.type === "channel.command.requested") return false;
-  if (event.type === "task.created") return false;
   if (event.source === `agent:${agent.name}`) return false;
   const targetAgentName =
     typeof event.payload?.targetAgentName === "string"
@@ -382,7 +397,15 @@ async function handleEvent(agent: Agent, event: Event) {
     enabledSkillSet.has(skill.name),
   );
   const loadedSkillEventShapes = await loadSkillEventShapes(selectedSkills);
-  const eventShapes = [...getCoreEventShapes(), ...loadedSkillEventShapes.shapes];
+  const coreEventShapes = getCoreEventShapes();
+  const eventShapes = [
+    ...coreEventShapes,
+    ...loadedSkillEventShapes.shapes,
+  ];
+  const serializedEventTypes = serializeEventShapes(eventShapes);
+  const coreEventTypes = queryEventTypes(serializedEventTypes, {
+    source: "core",
+  });
   const skillIndex = selectedSkills
     .map(
       (skill) =>
@@ -391,14 +414,14 @@ async function handleEvent(agent: Agent, event: Event) {
     .join("\n");
   const nowMs = Date.now();
   const nowIso = new Date(nowMs).toISOString();
-  const runnerGuidance = buildRunnerGuidance(nowMs, nowIso);
+  const runnerGuidance = buildRunnerGuidance(nowMs, nowIso, coreEventTypes);
   const system = [
     agent.systemInstructions,
+    runnerGuidance,
     `Workspace:\n${agent.workspacePath}\n\n`,
     `Allow outside workspace:\n${agent.allowOutsideWorkspace ? "enabled" : "disabled"}\n\n`,
-    soul ? `Soul:\n${soul}` : "",
-    runnerGuidance,
-    "Use skills:\n" + skillIndex,
+    soul ? `Your soul:\n${soul}` : "",
+    "Your skills, load them accordingly to the context:\n" + skillIndex,
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -418,6 +441,8 @@ async function handleEvent(agent: Agent, event: Event) {
       payload: unknown,
       source = `agent:${agent.name}`,
     ) => emitAudit(type, payload, source),
+    listEventTypes: (input?: { source?: string; typePrefix?: string }) =>
+      queryEventTypes(serializedEventTypes, input),
     validateEvent: (eventDraft: {
       type: string;
       payload: unknown;
@@ -429,7 +454,10 @@ async function handleEvent(agent: Agent, event: Event) {
     }) => validateEventAgainstShapes(eventDraft, eventShapes),
   };
   if (loadedSkillEventShapes.errors.length > 0) {
-    console.warn("skill event shape load errors", loadedSkillEventShapes.errors);
+    console.warn(
+      "skill event shape load errors",
+      loadedSkillEventShapes.errors,
+    );
   }
   const tools = createRunnerTools({
     agent,
@@ -445,19 +473,6 @@ async function handleEvent(agent: Agent, event: Event) {
     env: injectionEnv,
   });
 
-  const toolResultCount = result.toolResults?.length ?? 0;
-  if (toolResultCount > 0) {
-    await emitEvent({
-      type: "task.created",
-      payload: {
-        eventType: event.type,
-        toolResultCount,
-      },
-      source: `agent:${agent.name}`,
-      channelId,
-    });
-  }
-
   const directive = parseResponseDirective(result.text ?? "");
   if (!directive.text && directive.mode === "reply") {
     return;
@@ -468,10 +483,10 @@ async function handleEvent(agent: Agent, event: Event) {
       payload: {
         eventType: event.type,
         reason: "agent_requested_no_reply",
-        note: directive.text || undefined
+        note: directive.text || undefined,
       },
       source: `agent:${agent.name}`,
-      channelId
+      channelId,
     });
     return;
   }

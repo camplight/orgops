@@ -153,13 +153,6 @@ describe("agent runner", () => {
       source: "agent:tester",
       channelId: "chan-1",
     };
-    const taskCreatedEvent: Event = {
-      id: "evt-task",
-      type: "task.created",
-      payload: { eventType: "message.created" },
-      source: "agent:coordinator",
-      channelId: "chan-1",
-    };
     const ownEvent: Event = {
       id: "evt-own",
       type: "message.created",
@@ -221,7 +214,6 @@ describe("agent runner", () => {
     expect(await shouldHandleEvent(agent, auditEvent)).toBe(false);
     expect(await shouldHandleEvent(agent, channelCommandEvent)).toBe(true);
     expect(await shouldHandleEvent(agent, channelCommandRequestedEvent)).toBe(false);
-    expect(await shouldHandleEvent(agent, taskCreatedEvent)).toBe(false);
     expect(await shouldHandleEvent(agent, ownEvent)).toBe(false);
     expect(await shouldHandleEvent(agent, otherAgentChannelEvent)).toBe(false);
     expect(await shouldHandleEvent(agent, addressedByMention)).toBe(true);

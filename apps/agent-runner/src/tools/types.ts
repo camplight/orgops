@@ -1,5 +1,6 @@
 import type { LlmTool } from "@orgops/llm";
 import type { Agent, Event } from "../types";
+import type { EventTypeSummary } from "@orgops/schemas";
 import type { z } from "zod";
 
 export type RunnerToolDeps = {
@@ -18,6 +19,10 @@ export type ExecuteContext = {
   channelId?: string;
   extraAllowedRoots?: string[];
   injectionEnv: Record<string, string>;
+  listEventTypes?: (input?: {
+    source?: string;
+    typePrefix?: string;
+  }) => EventTypeSummary[];
   apiFetch: (path: string, init?: RequestInit) => Promise<Response>;
   emitEvent: (event: unknown) => Promise<void>;
   emitAudit: (type: string, payload: unknown, source?: string) => Promise<void>;

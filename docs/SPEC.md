@@ -437,7 +437,6 @@ Each agent has a heartbeat loop (in runner, not separate processes unless you wa
 4. Execute tool calls (shell/fs/proc) and capture outputs.
 5. Emit resulting events back via `POST /api/events`:
    - `message.created` (agent response)
-   - `task.created`
    - `process.started/output/exited`
    - `audit.tool.started/executed/failed`
 

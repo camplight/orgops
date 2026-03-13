@@ -1,40 +1,49 @@
-export function buildRunnerGuidance(nowMs: number, nowIso: string) {
+import type { EventTypeSummary } from "@orgops/schemas";
+
+function stringifySchema(schema: unknown) {
+  try {
+    return JSON.stringify(schema);
+  } catch {
+    return "\"<unserializable-schema>\"";
+  }
+}
+
+function formatCoreEventTypesSection(coreEventTypes: EventTypeSummary[]) {
+  if (coreEventTypes.length === 0) {
+    return "- Core event types: none registered.";
+  }
+  const lines = coreEventTypes.map(
+    (eventType) =>
+      [
+        `  - ${eventType.type}${eventType.description ? `: ${eventType.description}` : ""}`,
+        `    schemaKind: ${eventType.schemaKind ?? "none"}`,
+        `    schema: ${stringifySchema(eventType.schema)}`,
+      ].join("\n"),
+  );
   return [
-    "OrgOps system context:",
-    "- OrgOps is an event-driven runtime system usually running in a host OS within a repo root.",
-    "- Every runtime event carries a type, source, and payload and target a channel.",
-    "- Event types can include many built-ins plus custom types used by agents and integrations.",
-    "- Event emit requests are schema-validated (core + enabled skill validators).",
-    "",
+    "- Core event types available by default (not exhaustive):",
+    ...lines,
+    "- You are not limited to core types; use `events_event_types` to discover additional skill or runtime-specific types.",
+  ].join("\n");
+}
+
+export function buildRunnerGuidance(
+  nowMs: number,
+  nowIso: string,
+  coreEventTypes: EventTypeSummary[] = [],
+) {
+  return [
     "Runner environment contract:",
     "- You are running inside OrgOps agent-runner and receive one triggering event at a time from a channel.",
+    "- OrgOps is an event-driven runtime system running in a host OS directly from source located at the repo root",
     "- The runner executes your tool calls and records audit events for observability.",
     "- The runner does not orchestrate your collaboration; you must decide delegation, waiting, and completion behavior.",
-    "- Skills are available as files and should be read explicitly with fs_read before use when needed. Skills can be outside of your workspace.",
-    "- Skill names are not agent names; do not use events_dm_send to message a skill unless a real agent with that exact name exists.",
-    "",
-    "Tools and channels:",
-    "- Use tools directly: shell_run, fs_read/fs_write/fs_list/fs_stat/fs_mkdir/fs_rm/fs_move, proc_* and events_*.",
-    "- Your default filesystem root is your own workspace; treat relative paths as workspace-relative.",
-    "- Do not prefix paths with .orgops-data/workspaces/<agent>; inside your workspace use local paths like countdown.txt.",
-    "- For global event discovery use events_search; for channel discovery use events_channels_list.",
-    "- For self-reminders/continuations use events_schedule_self.",
-    "- events_schedule_self creates an internal scheduled trigger event (type agent.scheduled.trigger), not a visible chat message by itself.",
-    "- When handling agent.scheduled.trigger, execute the instruction in payload.text, then send any needed user-facing messages/tools yourself.",
-    "- For delayed follow-ups prefer relative delaySeconds/delayMs.",
-    "- Absolute scheduling also supports deliverAtIso (ISO-8601) or deliverAt (unix ms).",
-    "- Use exactly one scheduling field per events tool call.",
-    "- When using events_emit, set awaitDeliveryMs to detect events that remain PENDING too long.",
+    "- The runner maps relative paths as your own workspace-relative.",
     `- Current UTC time is ${nowIso} (${nowMs} unix ms).`,
-    "",
-    "Response ownership:",
     "- Decide whether the runner should emit a final message reply for this step.",
     "- Return `[REPLY] <text>` to instruct the runner to emit a message.created reply.",
     "- Return `[NO_REPLY]` when you already sent the needed message via events tools or intentionally want silence.",
     "- If no directive is provided, runner defaults to reply behavior.",
-    "- Avoid duplicate final responses: do not both send via tool and also return `[REPLY]` with the same content.",
-    "",
-    "Output quality:",
-    "- Final user-facing text must be concise and human-readable.",
+    formatCoreEventTypesSection(coreEventTypes),
   ].join("\n");
 }

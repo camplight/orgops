@@ -67,6 +67,10 @@
       "name": "@orgops/event-bus",
       "version": "0.0.1",
     },
+    "packages/events-scenario-tests": {
+      "name": "@orgops/events-scenario-tests",
+      "version": "0.0.1",
+    },
     "packages/llm": {
       "name": "@orgops/llm",
       "version": "0.0.1",
@@ -80,12 +84,14 @@
       "version": "0.0.1",
       "dependencies": {
         "zod": "^3.23.8",
+        "zod-to-json-schema": "^3.25.1",
       },
     },
     "packages/skills": {
       "name": "@orgops/skills",
       "version": "0.0.1",
       "dependencies": {
+        "@orgops/schemas": "workspace:*",
         "yaml": "^2.5.1",
       },
     },
@@ -220,6 +226,8 @@
     "@orgops/db": ["@orgops/db@workspace:packages/db"],
 
     "@orgops/event-bus": ["@orgops/event-bus@workspace:packages/event-bus"],
+
+    "@orgops/events-scenario-tests": ["@orgops/events-scenario-tests@workspace:packages/events-scenario-tests"],
 
     "@orgops/llm": ["@orgops/llm@workspace:packages/llm"],
 
