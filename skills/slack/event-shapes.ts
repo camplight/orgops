@@ -23,6 +23,48 @@ export const eventShapes: EventShapeDefinition[] = [
     },
   },
   {
+    type: "channel.command.requested",
+    description:
+      "Outbound Slack command request envelope. Listener executes payload.command.action via Slack Web API for bridged channels.",
+    source: "skill:slack",
+    eventSchema: z.object({
+      source: z.string().regex(/^agent:/),
+      channelId: z.string().min(1),
+      payload: z
+        .object({
+          channel: z
+            .object({
+              provider: z.literal("slack"),
+              connection: z.string().min(1).optional(),
+              workspaceId: z.string().min(1).optional(),
+              spaceId: z.string().min(1).optional(),
+            })
+            .passthrough(),
+          command: z
+            .object({
+              action: z.string().min(1),
+              payload: z.record(z.string(), z.unknown()).optional(),
+            })
+            .passthrough(),
+        })
+        .passthrough(),
+    }),
+    payloadExample: {
+      channel: {
+        provider: "slack",
+        connection: "worker1",
+        workspaceId: "T123",
+        spaceId: "C456",
+      },
+      command: {
+        action: "chat.postMessage",
+        payload: {
+          text: "hello from command envelope",
+        },
+      },
+    },
+  },
+  {
     type: "channel.event.created",
     description: "Slack inbound event envelope routed through integration bridge.",
     source: "skill:slack",

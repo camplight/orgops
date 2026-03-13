@@ -28,6 +28,15 @@ function isPidAlive(pid: number): boolean {
   }
 }
 
+async function waitForPidExit(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isPidAlive(pid)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return !isPidAlive(pid);
+}
+
 export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
   const { orm, FILES_DIR, jsonResponse, publishProcessOutput, insertEvent } = deps;
 
@@ -159,7 +168,7 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
     return jsonResponse(c, { ok: true }, 201);
   });
 
-  app.delete("/api/processes/:id", (c) => {
+  app.delete("/api/processes/:id", async (c) => {
     const processId = c.req.param("id");
     const row = orm
       .select({
@@ -174,11 +183,24 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
 
     const isActiveState = row.state === "RUNNING" || row.state === "STARTING";
     let signaled = false;
+    let forceKilled = false;
     let pidMissing = false;
     if (row.pid !== null && row.pid !== undefined && isActiveState) {
       try {
         process.kill(row.pid, "SIGTERM");
         signaled = true;
+        pidMissing = await waitForPidExit(row.pid, 1200);
+        if (!pidMissing && isPidAlive(row.pid)) {
+          try {
+            process.kill(row.pid, "SIGKILL");
+            signaled = true;
+            forceKilled = true;
+            pidMissing = await waitForPidExit(row.pid, 500);
+          } catch (error) {
+            const code = (error as NodeJS.ErrnoException)?.code;
+            pidMissing = code === "ESRCH" || !isPidAlive(row.pid);
+          }
+        }
       } catch (error) {
         const code = (error as NodeJS.ErrnoException)?.code;
         // If a PID no longer exists, mark this record as exited.
@@ -193,14 +215,14 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
       orm
         .update(schema.processes)
         .set({
-          state: "EXITED",
+          state: forceKilled ? "TERMINATED" : "EXITED",
           ended_at: Date.now(),
         })
         .where(eq(schema.processes.id, processId))
         .run();
     }
 
-    return jsonResponse(c, { ok: true, signaled, markedExited, processId });
+    return jsonResponse(c, { ok: true, signaled, forceKilled, markedExited, processId });
   });
 
   app.delete("/api/processes", (c) => {

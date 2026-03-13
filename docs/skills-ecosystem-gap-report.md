@@ -70,7 +70,7 @@ Relevant files:
 **Match**
 
 - Both use `SKILL.md` as skill entrypoint with YAML frontmatter.
-- Both support project-level `.claude/skills` style roots (OrgOps includes `.claude/skills` in `resolveSkillRoots`).
+- OrgOps uses a single canonical project root (`skills/`) resolved by `resolveSkillRoot`.
 - Both treat skill content as instruction playbooks plus optional supporting files.
 
 **Gap**

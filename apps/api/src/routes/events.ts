@@ -24,8 +24,8 @@ type EventsDeps = {
   EventSchema: {
     safeParse: (data: unknown) => { success: boolean; data?: any };
   };
-  SKILL_ROOTS: SkillRoot[];
-  listSkills: (roots: SkillRoot[]) => SkillMeta[];
+  SKILL_ROOT: SkillRoot;
+  listSkills: (root: SkillRoot) => SkillMeta[];
   loadSkillEventShapes: (
     skills: SkillMeta[],
   ) => Promise<{ shapes: EventShapeDefinition[]; errors: Array<{ skill: string; error: string }> }>;
@@ -55,7 +55,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     jsonResponse,
     eventRowToApi,
     insertEvent,
-    SKILL_ROOTS,
+    SKILL_ROOT,
     listSkills,
     loadSkillEventShapes,
     getCoreEventShapes,
@@ -77,7 +77,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     if (eventShapesCache && eventShapesCache.expiresAt > now) {
       return eventShapesCache;
     }
-    const availableSkills = listSkills(SKILL_ROOTS);
+    const availableSkills = listSkills(SKILL_ROOT);
     const loaded = await loadSkillEventShapes(availableSkills);
     eventShapesCache = {
       expiresAt: now + EVENT_SHAPES_CACHE_TTL_MS,

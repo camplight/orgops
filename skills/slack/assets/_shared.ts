@@ -25,11 +25,6 @@ export function requireString(args: Args, key: string): string {
   return v;
 }
 
-export function optionalString(args: Args, key: string): string | undefined {
-  const v = args[key];
-  return typeof v === "string" ? v : undefined;
-}
-
 export function getAgent(args: Args): string {
   return requireString(args, "agent");
 }
@@ -57,22 +52,6 @@ export async function slackApi<T>(botToken: string, method: string, body: Record
       authorization: `Bearer ${botToken}`
     },
     body: JSON.stringify(body)
-  });
-  const json = (await res.json()) as any;
-  if (!json?.ok) {
-    throw new Error(`Slack API error calling ${method}: ${json?.error ?? "unknown"}`);
-  }
-  return json as T;
-}
-
-export async function slackApiGet<T>(botToken: string, method: string, params: Record<string, string | undefined>) {
-  const url = new URL(`https://slack.com/api/${method}`);
-  for (const [k, v] of Object.entries(params)) {
-    if (v !== undefined) url.searchParams.set(k, v);
-  }
-  const res = await fetch(url, {
-    method: "GET",
-    headers: { authorization: `Bearer ${botToken}` }
   });
   const json = (await res.json()) as any;
   if (!json?.ok) {

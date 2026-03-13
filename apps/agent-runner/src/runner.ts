@@ -4,7 +4,7 @@ import { generate } from "@orgops/llm";
 import {
   listSkills,
   loadSkillEventShapes,
-  resolveSkillRoots,
+  resolveSkillRoot,
 } from "@orgops/skills";
 import {
   type EventTypeSummary,
@@ -25,10 +25,7 @@ const PROJECT_ROOT = (() => {
   const candidate = resolve(cwd, "../..");
   return existsSync(join(candidate, "package.json")) ? candidate : cwd;
 })();
-const SKILL_ROOTS = resolveSkillRoots({
-  projectRoot: PROJECT_ROOT,
-  env: process.env,
-});
+const SKILL_ROOT = resolveSkillRoot(PROJECT_ROOT);
 
 const heartbeats = new Map<string, number>();
 const bootstrappedAgents = new Set<string>();
@@ -128,6 +125,9 @@ type ChannelParticipant = {
 type ChannelRecord = {
   id: string;
   name?: string;
+  kind?: string;
+  description?: string;
+  metadata?: Record<string, unknown> | null;
   participants?: ChannelParticipant[];
 };
 
@@ -138,6 +138,14 @@ function lifecycleChannelName(agentName: string) {
 async function listChannels(): Promise<ChannelRecord[]> {
   const res = await apiFetch("/api/channels");
   return res.json();
+}
+
+async function getChannelRecord(
+  channelId: string,
+): Promise<ChannelRecord | null> {
+  if (!channelId) return null;
+  const channels = await listChannels();
+  return channels.find((channel) => channel.id === channelId) ?? null;
 }
 
 function isAgentSubscribed(channel: ChannelRecord, agentName: string): boolean {
@@ -389,19 +397,17 @@ async function getPackageSecretsEnv(
 async function handleEvent(agent: Agent, event: Event) {
   const channelId = event.channelId;
   if (!channelId) return;
+  const channelRecord = await getChannelRecord(channelId);
   const injectionEnv = await getPackageSecretsEnv(agent.name, channelId);
   const soul = typeof agent.soulContents === "string" ? agent.soulContents : "";
-  const allSkills = listSkills(SKILL_ROOTS);
+  const allSkills = listSkills(SKILL_ROOT);
   const enabledSkillSet = new Set(agent.enabledSkills ?? []);
   const selectedSkills = allSkills.filter((skill) =>
     enabledSkillSet.has(skill.name),
   );
   const loadedSkillEventShapes = await loadSkillEventShapes(selectedSkills);
   const coreEventShapes = getCoreEventShapes();
-  const eventShapes = [
-    ...coreEventShapes,
-    ...loadedSkillEventShapes.shapes,
-  ];
+  const eventShapes = [...coreEventShapes, ...loadedSkillEventShapes.shapes];
   const serializedEventTypes = serializeEventShapes(eventShapes);
   const coreEventTypes = queryEventTypes(serializedEventTypes, {
     source: "core",
@@ -409,19 +415,28 @@ async function handleEvent(agent: Agent, event: Event) {
   const skillIndex = selectedSkills
     .map(
       (skill) =>
-        `${skill.name} | ${skill.description} | ${skill.location} | ${join(skill.path, "SKILL.md")}`,
+        `${skill.name} | ${skill.description} | ${join(skill.path, "SKILL.md")}`,
     )
     .join("\n");
   const nowMs = Date.now();
   const nowIso = new Date(nowMs).toISOString();
-  const runnerGuidance = buildRunnerGuidance(nowMs, nowIso, coreEventTypes);
+  const runnerGuidance = buildRunnerGuidance(
+    nowMs,
+    nowIso,
+    SKILL_ROOT.path,
+    coreEventTypes,
+  );
   const system = [
     agent.systemInstructions,
     runnerGuidance,
     `Workspace:\n${agent.workspacePath}\n\n`,
-    `Allow outside workspace:\n${agent.allowOutsideWorkspace ? "enabled" : "disabled"}\n\n`,
+    `Current channel context:\n${JSON.stringify(
+      channelRecord ?? { id: channelId, unresolved: true },
+      null,
+      2,
+    )}`,
     soul ? `Your soul:\n${soul}` : "",
-    "Your skills, load them accordingly to the context:\n" + skillIndex,
+    "Your skills:\n" + skillIndex,
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -473,30 +488,12 @@ async function handleEvent(agent: Agent, event: Event) {
     env: injectionEnv,
   });
 
-  const directive = parseResponseDirective(result.text ?? "");
-  if (!directive.text && directive.mode === "reply") {
-    return;
-  }
-  if (directive.mode === "no_reply") {
-    await emitEvent({
-      type: "audit.response.skipped",
-      payload: {
-        eventType: event.type,
-        reason: "agent_requested_no_reply",
-        note: directive.text || undefined,
-      },
-      source: `agent:${agent.name}`,
-      channelId,
-    });
-    return;
-  }
-
   await emitEvent({
-    type: "message.created",
+    type: "audit.response.skipped",
     payload: {
-      text: directive.text,
       eventType: event.type,
-      hopCount: Number(event.payload?.hopCount ?? 0) + 1,
+      reason: "agent_result",
+      text: result.text,
     },
     source: `agent:${agent.name}`,
     channelId,

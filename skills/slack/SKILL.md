@@ -8,9 +8,8 @@ This skill lets OrgOps agents act as **Slack apps** using **per-agent tokens** s
 
 It provides:
 
-- Slack Web API helpers (open DM, history, search, list channels, user info)
-- Slack file helpers (files.info + download to local path)
 - A **Socket Mode** listener (one process per agent) that converts Slack events into OrgOps `channel.event.created` events.
+- Outbound Slack delivery by consuming OrgOps events in bridged channels.
 - Typed event-shape validators (`event-shapes.ts`) consumed by runner/API validation.
 
 ## Secrets
@@ -56,13 +55,15 @@ All scripts accept `--agent <agentName>` and use:
 
 Agent operating rule:
 
-- Prefer `events_*` tools for outbound Slack messaging through bridge channels.
-- Use CLI scripts only for capabilities not covered by events (history/search/channels/users/files/DM open).
+- Use `events_*` tools only. Do not use Slack CLI helpers for runtime interaction.
 - For Slack-triggered work, after posting back via events tools, return `[NO_REPLY]` to avoid duplicate OrgOps chat replies.
 
-## Outbound via Events API (bridged channel)
+## Outbound via Events API (bridged channel only)
 
-For agent-to-Slack delivery through a bridged OrgOps channel, emit standard `message.created`.
+For agent-to-Slack delivery through a bridged OrgOps channel, emit:
+
+- `message.created` for common text replies
+- `channel.command.requested` for explicit Slack Web API commands
 
 Preferred tool call from agents:
 
@@ -92,107 +93,39 @@ Reply in a Slack thread (tool call example):
 }
 ```
 
+Explicit command example (`channel.command.requested`):
+
+```json
+{
+  "tool": "events_emit",
+  "args": {
+    "type": "channel.command.requested",
+    "channelId": "<orgops-bridge-channel-id>",
+    "payload": {
+      "channel": {
+        "provider": "slack",
+        "connection": "worker1",
+        "workspaceId": "T123",
+        "spaceId": "C456"
+      },
+      "command": {
+        "action": "chat.postMessage",
+        "payload": {
+          "text": "hello via command envelope"
+        }
+      }
+    }
+  }
+}
+```
+
 Validation notes:
 
-- `type` is `message.created`
-- `payload.text` is required and must be non-empty
-- optional `payload.threadTs` can be used to target a Slack thread (use `events_emit` for this)
-- listener forwards only agent-authored outbound messages (`source` like `agent:<name>`)
+- `message.created`: requires non-empty `payload.text`; optional `payload.threadTs`
+- `channel.command.requested`: requires `payload.channel` + `payload.command.action` and optional `payload.command.payload`
+- listener processes agent-authored outbound events only (`source` like `agent:<name>`)
 
 The exact typed validators live in `skills/slack/event-shapes.ts` and are dynamically loaded by enabled skills.
-
-### Open a DM
-
-```bash
-bun run skills/slack/assets/open-dm.ts -- --agent worker1 --user U123
-```
-
-### Fetch history
-
-```bash
-bun run skills/slack/assets/history.ts -- --agent worker1 --channel C123 --limit 20
-```
-
-### Search messages
-
-```bash
-bun run skills/slack/assets/search.ts -- --agent worker1 --query "from:@alice error" --count 20
-```
-
-### List channels
-
-```bash
-bun run skills/slack/assets/list-channels.ts -- --agent worker1 --types public_channel,private_channel
-```
-
-### User info
-
-```bash
-bun run skills/slack/assets/user-info.ts -- --agent worker1 --user U123
-```
-
-### Find user (username/display name -> user id)
-
-Requires bot scope: `users:read`
-
-```bash
-bun run skills/slack/assets/find-user.ts -- --agent worker1 --username outbounder
-```
-
-You can also search by display name:
-
-```bash
-bun run skills/slack/assets/find-user.ts -- --agent worker1 --display-name "Outbounder"
-```
-
-### File info
-
-Requires bot scope: `files:read`
-
-```bash
-bun run skills/slack/assets/file-info.ts -- --agent worker1 --file F0123456789
-```
-
-### Fetch file bytes to a local path (no base64)
-
-Requires bot scope: `files:read`
-
-Downloads the file using `files.info` + `url_private_download` and writes it to a local directory.
-
-```bash
-bun run skills/slack/assets/fetch-file.ts -- --agent worker1 --file F0123456789
-```
-
-By default files are written to:
-
-- `/tmp/orgops-slack-files`
-
-Override output directory:
-
-```bash
-bun run skills/slack/assets/fetch-file.ts -- --agent worker1 --file F0123456789 --out-dir ./tmp/slack-files
-```
-
-Optionally emit an OrgOps event so other agents can consume the stable path:
-
-```bash
-bun run skills/slack/assets/fetch-file.ts -- \
-  --agent worker1 \
-  --file F0123456789 \
-  --orgops-channel-id slack:T123:C456
-```
-
-Emitted event:
-
-- `type`: `slack.file.fetched`
-- `payload`:
-  - `fileId`: string
-  - `path`: string (local filesystem path)
-  - `mime`: string | null
-  - `size`: number
-  - `name`: string | null
-  - `title`: string | null
-  - `url_private_download`: string | null
 
 ## Socket Mode listener (event-driven)
 
@@ -220,4 +153,4 @@ Notes:
 - v2 can integrate with OrgOps process/websocket infra for supervision.
 - Listener behavior:
   - Slack inbound -> OrgOps `channel.event.created` (`source: channel:slack:<agent>`)
-  - OrgOps outbound `message.created` (agent source in slack bridge channels) -> Slack API `chat.postMessage`
+  - OrgOps outbound `message.created` and `channel.command.requested` (agent source in slack bridge channels) -> Slack Web API

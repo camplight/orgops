@@ -38,6 +38,11 @@ type OrgOpsEvent = {
   status?: string;
 };
 
+type OutboundChannelCommand = {
+  action: string;
+  payload?: Record<string, unknown>;
+};
+
 async function slackOpenSocket(appToken: string): Promise<string> {
   const res = await fetch("https://slack.com/api/apps.connections.open", {
     method: "POST",
@@ -148,7 +153,77 @@ async function failOrgOpsEvent(eventId: string, error: unknown) {
   });
 }
 
-async function handleOutboundMessageEvent(agent: string, botToken: string, event: OrgOpsEvent) {
+function toRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return value as Record<string, unknown>;
+}
+
+function parseRequestedCommand(payload: Record<string, unknown>): OutboundChannelCommand | null {
+  const command = toRecord(payload.command);
+  const action = String(command.action ?? "").trim();
+  if (!action) return null;
+  const commandPayload = toRecord(command.payload);
+  return {
+    action,
+    ...(Object.keys(commandPayload).length > 0 ? { payload: commandPayload } : {}),
+  };
+}
+
+function parseRequestedChannel(payload: Record<string, unknown>): Record<string, unknown> {
+  return toRecord(payload.channel);
+}
+
+async function emitChannelCommandSucceeded(input: {
+  agent: string;
+  sourceChannelId: string;
+  requestEventId: string;
+  channel: Record<string, unknown>;
+  command: OutboundChannelCommand;
+  target?: Record<string, unknown>;
+  result?: unknown;
+}) {
+  await emitOrgOpsEvent({
+    type: "channel.command.succeeded",
+    source: `channel:slack:${input.agent}`,
+    channelId: input.sourceChannelId,
+    payload: {
+      channel: input.channel,
+      requestEventId: input.requestEventId,
+      command: input.command,
+      ...(input.target ? { target: input.target } : {}),
+      ...(input.result !== undefined ? { result: input.result } : {}),
+    },
+  });
+}
+
+async function emitChannelCommandFailed(input: {
+  agent: string;
+  sourceChannelId: string;
+  requestEventId: string;
+  channel: Record<string, unknown>;
+  command: OutboundChannelCommand;
+  error: unknown;
+  details?: unknown;
+}) {
+  await emitOrgOpsEvent({
+    type: "channel.command.failed",
+    source: `channel:slack:${input.agent}`,
+    channelId: input.sourceChannelId,
+    payload: {
+      channel: input.channel,
+      requestEventId: input.requestEventId,
+      command: input.command,
+      error: String(input.error),
+      ...(input.details !== undefined ? { details: input.details } : {}),
+    },
+  });
+}
+
+async function handleOutboundMessageEvent(
+  agent: string,
+  botToken: string,
+  event: OrgOpsEvent,
+) {
   if (event.type !== "message.created") return;
   if (!event.source?.startsWith("agent:")) return;
   if (event.source === `channel:slack:${agent}`) return;
@@ -185,18 +260,135 @@ async function handleOutboundMessageEvent(agent: string, botToken: string, event
   }
 }
 
-async function pollOutboundMessages(agent: string, botToken: string) {
+async function handleOutboundCommandRequestedEvent(
+  agent: string,
+  botToken: string,
+  event: OrgOpsEvent,
+) {
+  if (event.type !== "channel.command.requested") return;
+  if (!event.source?.startsWith("agent:")) return;
+  const eventChannelId = String(event.channelId ?? "").trim();
+  if (!eventChannelId) {
+    await failOrgOpsEvent(event.id, "channel.command.requested missing channelId");
+    return;
+  }
+
+  const payload = toRecord(event.payload);
+  const channel = parseRequestedChannel(payload);
+  const command = parseRequestedCommand(payload);
+  if (!command) {
+    await emitChannelCommandFailed({
+      agent,
+      sourceChannelId: eventChannelId,
+      requestEventId: event.id,
+      channel,
+      command: { action: "unknown" },
+      error: "Invalid channel.command.requested payload.command",
+      details: payload,
+    });
+    await failOrgOpsEvent(event.id, "invalid channel.command.requested payload.command");
+    return;
+  }
+
+  const provider = String(channel.provider ?? "").trim();
+  if (provider && provider !== "slack") {
+    await emitChannelCommandFailed({
+      agent,
+      sourceChannelId: eventChannelId,
+      requestEventId: event.id,
+      channel,
+      command,
+      error: `Unsupported provider: ${provider}`,
+    });
+    return;
+  }
+  const channelConnection = String(channel.connection ?? "").trim();
+  if (channelConnection && channelConnection !== agent) {
+    return;
+  }
+
+  try {
+    const target = await resolveBridgeTarget({ channelId: eventChannelId });
+    if (!target) {
+      await emitChannelCommandFailed({
+        agent,
+        sourceChannelId: eventChannelId,
+        requestEventId: event.id,
+        channel,
+        command,
+        error: "Unable to resolve Slack bridge target for channel",
+      });
+      return;
+    }
+    if (target.connection && target.connection !== agent) return;
+
+    const commandPayload: Record<string, unknown> = { ...(command.payload ?? {}) };
+    if (!commandPayload.channel) {
+      commandPayload.channel = target.channelId;
+    }
+    if (target.threadTs && !commandPayload.thread_ts) {
+      commandPayload.thread_ts = target.threadTs;
+    }
+
+    const result = await slackApi<Record<string, unknown>>(
+      botToken,
+      command.action,
+      commandPayload,
+    );
+
+    await emitChannelCommandSucceeded({
+      agent,
+      sourceChannelId: eventChannelId,
+      requestEventId: event.id,
+      channel: channel.provider ? channel : { provider: "slack", connection: agent },
+      command: {
+        action: command.action,
+        payload: commandPayload,
+      },
+      target: {
+        channelId: target.channelId,
+        ...(target.threadTs ? { threadTs: target.threadTs } : {}),
+      },
+      result,
+    });
+  } catch (error) {
+    await emitChannelCommandFailed({
+      agent,
+      sourceChannelId: eventChannelId,
+      requestEventId: event.id,
+      channel: channel.provider ? channel : { provider: "slack", connection: agent },
+      command,
+      error,
+    });
+    await failOrgOpsEvent(event.id, error);
+  }
+}
+
+async function listPendingOutboundEvents(
+  agent: string,
+  type: "message.created" | "channel.command.requested",
+): Promise<OrgOpsEvent[]> {
   const query = new URLSearchParams({
     agentName: agent,
     status: "PENDING",
-    type: "message.created",
+    type,
     sourcePrefix: "agent:",
     limit: "20",
   });
   const response = await orgopsApiFetch(`/api/events?${query.toString()}`);
-  const events = (await response.json()) as OrgOpsEvent[];
-  for (const event of events) {
+  return (await response.json()) as OrgOpsEvent[];
+}
+
+async function pollOutboundMessages(agent: string, botToken: string) {
+  const [messageEvents, channelCommandEvents] = await Promise.all([
+    listPendingOutboundEvents(agent, "message.created"),
+    listPendingOutboundEvents(agent, "channel.command.requested"),
+  ]);
+  for (const event of messageEvents) {
     await handleOutboundMessageEvent(agent, botToken, event);
+  }
+  for (const event of channelCommandEvents) {
+    await handleOutboundCommandRequestedEvent(agent, botToken, event);
   }
 }
 
@@ -254,68 +446,6 @@ async function emitSlackEventToOrgOps(
   });
 }
 
-async function handleSlackEvent(agent: string, event: any) {
-  const teamId = String(event?.team_id ?? event?.team ?? "");
-  const inner = event?.event;
-  if (!teamId || !inner) return;
-
-  if (inner.type === "message") {
-    // Ignore bot messages to avoid loops
-    if (inner.subtype === "bot_message" || inner.bot_id) return;
-
-    const channelId = String(inner.channel ?? "");
-    const userId = String(inner.user ?? "");
-    const text = String(inner.text ?? "");
-    const ts = String(inner.ts ?? "");
-    const threadTs = inner.thread_ts ? String(inner.thread_ts) : undefined;
-
-    if (!channelId || !userId || !ts) return;
-
-    await emitSlackEventToOrgOps(agent, {
-      type: "slack.message.created",
-      teamId,
-      slackChannelId: channelId,
-      payload: {
-        teamId,
-        channelId,
-        channelType: inner.channel_type ?? undefined,
-        userId,
-        text,
-        ts,
-        threadTs,
-        raw: inner,
-      },
-    });
-    return;
-  }
-
-  if (inner.type === "app_mention") {
-    const channelId = String(inner.channel ?? "");
-    const userId = String(inner.user ?? "");
-    const text = String(inner.text ?? "");
-    const ts = String(inner.ts ?? "");
-    const threadTs = inner.thread_ts ? String(inner.thread_ts) : undefined;
-
-    if (!channelId || !userId || !ts) return;
-
-    await emitSlackEventToOrgOps(agent, {
-      type: "slack.app_mention",
-      teamId,
-      slackChannelId: channelId,
-      payload: {
-        teamId,
-        channelId,
-        userId,
-        text,
-        ts,
-        threadTs,
-        raw: inner,
-      },
-    });
-    return;
-  }
-}
-
 function messageMentionsSelf(inner: any, selfUserId: string) {
   const text = String(inner?.text ?? "");
   if (!text) return false;
@@ -367,8 +497,28 @@ async function handleSlackEventWithIdentity(
     });
     return;
   }
-
-  return handleSlackEvent(agent, event);
+  if (inner.type === "app_mention") {
+    const channelId = String(inner.channel ?? "");
+    const userId = String(inner.user ?? "");
+    const text = String(inner.text ?? "");
+    const ts = String(inner.ts ?? "");
+    const threadTs = inner.thread_ts ? String(inner.thread_ts) : undefined;
+    if (!channelId || !userId || !ts) return;
+    await emitSlackEventToOrgOps(agent, {
+      type: "slack.app_mention",
+      teamId,
+      slackChannelId: channelId,
+      payload: {
+        teamId,
+        channelId,
+        userId,
+        text,
+        ts,
+        threadTs,
+        raw: inner,
+      },
+    });
+  }
 }
 
 async function main() {
@@ -384,7 +534,7 @@ Options:
 Behavior:
   Starts Slack Socket Mode listener:
   - Slack inbound messages/app_mentions -> OrgOps channel.event.created
-  - OrgOps outbound message.created (agent source) in slack bridge channels -> Slack chat.postMessage
+  - OrgOps outbound message.created + channel.command.requested (agent source) in slack bridge channels -> Slack Web API
 `);
     return;
   }

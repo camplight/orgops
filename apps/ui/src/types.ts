@@ -53,7 +53,6 @@ export type SkillMeta = {
   name: string;
   description: string;
   license?: string;
-  location: string;
   path: string;
 };
 

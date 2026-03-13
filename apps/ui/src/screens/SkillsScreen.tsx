@@ -18,9 +18,6 @@ export function SkillsScreen({ skills }: SkillsScreenProps) {
           <div key={skill.name} className="border-b border-slate-800 pb-2">
             <div className="text-slate-200">{skill.name}</div>
             <div className="text-slate-500">{skill.description}</div>
-            <div className="text-slate-600 text-xs">
-              Location: {skill.location}
-            </div>
             <div className="text-slate-600 text-xs">{skill.path}</div>
           </div>
         ))}

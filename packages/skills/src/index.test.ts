@@ -7,7 +7,7 @@ import { listSkills, loadSkillEventShapes } from "./index";
 describe("skills", () => {
   it("reads built-in skills", () => {
     const skillsDir = join(import.meta.dir, "..", "..", "..", "skills");
-    const skills = listSkills([{ path: skillsDir, location: "workspace" }]);
+    const skills = listSkills({ path: skillsDir });
     expect(skills.length).toBeGreaterThan(0);
     expect(skills.find((skill) => skill.name === "secrets")).toBeTruthy();
   });
@@ -43,7 +43,7 @@ describe("skills", () => {
     );
 
     try {
-      const skills = listSkills([{ path: root, location: "workspace" }]);
+      const skills = listSkills({ path: root });
       expect(skills.map((skill) => skill.name)).toEqual(["valid"]);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -80,7 +80,7 @@ describe("skills", () => {
     );
 
     try {
-      const skills = listSkills([{ path: root, location: "workspace" }]);
+      const skills = listSkills({ path: root });
       const loaded = await loadSkillEventShapes(skills);
       expect(loaded.errors).toEqual([]);
       expect(loaded.shapes.some((shape) => shape.type === "bridge.event")).toBe(
