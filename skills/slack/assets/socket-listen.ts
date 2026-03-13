@@ -173,6 +173,12 @@ function parseRequestedChannel(payload: Record<string, unknown>): Record<string,
   return toRecord(payload.channel);
 }
 
+function agentNameFromSource(source: string | undefined): string | null {
+  if (!source?.startsWith("agent:")) return null;
+  const name = source.slice("agent:".length).trim();
+  return name || null;
+}
+
 async function emitChannelCommandSucceeded(input: {
   agent: string;
   sourceChannelId: string;
@@ -267,6 +273,8 @@ async function handleOutboundCommandRequestedEvent(
 ) {
   if (event.type !== "channel.command.requested") return;
   if (!event.source?.startsWith("agent:")) return;
+  const sourceAgent = agentNameFromSource(event.source);
+  if (!sourceAgent || sourceAgent !== agent) return;
   const eventChannelId = String(event.channelId ?? "").trim();
   if (!eventChannelId) {
     await failOrgOpsEvent(event.id, "channel.command.requested missing channelId");

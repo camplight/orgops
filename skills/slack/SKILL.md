@@ -1,6 +1,6 @@
 ---
 name: slack
-description: "Slack skill: per-agent Slack skill + Socket Mode listener server. If you start the Socket Mode listener server, make sure to read the whole skill first. Use for yourself."
+description: "Slack skill: per-agent Slack skill + Socket Mode listener server. Run the server on lifecycle start."
 ---
 # Slack skill
 

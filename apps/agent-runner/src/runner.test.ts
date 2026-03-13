@@ -3,7 +3,6 @@ import { createRunnerTools } from "./tools";
 import { executeTool } from "./tools";
 import {
   buildModelMessages,
-  parseResponseDirective,
   shouldHandleEvent,
 } from "./runner";
 import { stopAllRunningProcesses } from "./tools/proc";
@@ -115,7 +114,7 @@ describe("agent runner", () => {
     expect(eventIds[eventIds.length - 1]).toBe("evt-130");
   });
 
-  it("filters control, self, and unaddressed agent channel events", async () => {
+  it("filters control, self, and agent-sourced channel events", async () => {
     const agent: Agent = {
       name: "tester",
       systemInstructions: "",
@@ -158,6 +157,27 @@ describe("agent runner", () => {
       type: "message.created",
       payload: { text: "self" },
       source: "agent:tester",
+    };
+    const processOutputEvent: Event = {
+      id: "evt-process-output",
+      type: "process.output",
+      payload: { processId: "proc-1", stream: "STDOUT", text: "build..." },
+      source: "system:process-runner",
+      channelId: "chan-1",
+    };
+    const processStartedEvent: Event = {
+      id: "evt-process-started",
+      type: "process.started",
+      payload: { processId: "proc-1", cmd: "sleep 1" },
+      source: "system:process-runner",
+      channelId: "chan-1",
+    };
+    const processExitedEvent: Event = {
+      id: "evt-process-exited",
+      type: "process.exited",
+      payload: { processId: "proc-1", exitCode: 0 },
+      source: "system:process-runner",
+      channelId: "chan-1",
     };
     const userEvent: Event = {
       id: "evt-user",
@@ -215,11 +235,14 @@ describe("agent runner", () => {
     expect(await shouldHandleEvent(agent, channelCommandEvent)).toBe(true);
     expect(await shouldHandleEvent(agent, channelCommandRequestedEvent)).toBe(false);
     expect(await shouldHandleEvent(agent, ownEvent)).toBe(false);
+    expect(await shouldHandleEvent(agent, processStartedEvent)).toBe(true);
+    expect(await shouldHandleEvent(agent, processOutputEvent)).toBe(true);
+    expect(await shouldHandleEvent(agent, processExitedEvent)).toBe(true);
     expect(await shouldHandleEvent(agent, otherAgentChannelEvent)).toBe(false);
-    expect(await shouldHandleEvent(agent, addressedByMention)).toBe(true);
+    expect(await shouldHandleEvent(agent, addressedByMention)).toBe(false);
     expect(await shouldHandleEvent(agent, agentThreadReply)).toBe(false);
     expect(await shouldHandleEvent(agent, highHopCount)).toBe(false);
-    expect(await shouldHandleEvent(agent, targetedToOtherAgent)).toBe(false);
+    expect(await shouldHandleEvent(agent, targetedToOtherAgent)).toBe(true);
     expect(await shouldHandleEvent(agent, targetedToThisAgent)).toBe(true);
     expect(await shouldHandleEvent(agent, userEvent)).toBe(true);
   });
@@ -596,21 +619,6 @@ describe("agent runner", () => {
     expect(result.channels[0]?.id).toBe("chan-a");
   });
 
-  it("parses explicit response directives", () => {
-    expect(parseResponseDirective("[REPLY] hello")).toEqual({
-      mode: "reply",
-      text: "hello",
-    });
-    expect(parseResponseDirective("[NO_REPLY] already sent")).toEqual({
-      mode: "no_reply",
-      text: "already sent",
-    });
-    expect(parseResponseDirective("plain text")).toEqual({
-      mode: "reply",
-      text: "plain text",
-    });
-  });
-
   it("gracefully terminates spawned processes during shutdown", async () => {
     const requests: Array<{ path: string; body: any }> = [];
     const ctx = {
@@ -661,5 +669,45 @@ describe("agent runner", () => {
     );
     expect(exitRequest).toBeDefined();
     expect(exitRequest?.body.state).toBe("TERMINATED");
+  });
+
+  it("reports proc_status as not running after process exits", async () => {
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      extraAllowedRoots: [],
+      apiFetch: async () =>
+        new Response(JSON.stringify({ ok: true }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        }),
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+    };
+
+    const started = (await executeTool(ctx, "proc_start", {
+      cmd: "sleep 0.1",
+    })) as { processId: string };
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const status = (await executeTool(ctx, "proc_status", {
+      processId: started.processId,
+    })) as { running: boolean };
+    expect(status.running).toBe(false);
   });
 });

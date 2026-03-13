@@ -40,7 +40,10 @@ export function buildRunnerGuidance(
     "- The runner does not orchestrate your collaboration; you must decide delegation, waiting, and completion behavior.",
     "- The runner maps relative paths as your own workspace-relative.",
     `- Skills root folder path for resolving skill-relative references: ${skillRootPath}`,
-    "- The runner will do nothing with your response, use your tools wisely.",
+    "- Your final response MUST be JSON for one event object the runner can dispatch.",
+    "- Expected shape: { type, payload, source?, channelId?, parentEventId?, deliverAt?, idempotencyKey? }.",
+    "- Use event types that validate against available schemas (core + enabled skills).",
+    "- Do not include markdown or prose outside of JSON.",
     `- Current UTC time is ${nowIso} (${nowMs} unix ms).`,
     formatCoreEventTypesSection(coreEventTypes),
   ].join("\n");

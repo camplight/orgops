@@ -34,6 +34,7 @@ const processes = new Map<
 >();
 
 const PROCESS_SHUTDOWN_TIMEOUT_MS = 5000;
+const PROCESS_EVENT_SOURCE = "system:process-runner";
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -148,7 +149,7 @@ export async function execute(
     await ctx.emitEvent({
       type: "process.started",
       payload: { processId, cmd },
-      source: `agent:${ctx.agent.name}`,
+      source: PROCESS_EVENT_SOURCE,
       channelId: ctx.channelId,
     });
 
@@ -165,7 +166,7 @@ export async function execute(
           stream,
           text: chunk.toString("utf-8"),
           ts: Date.now(),
-          source: `agent:${ctx.agent.name}`,
+          source: PROCESS_EVENT_SOURCE,
         }),
       });
       await ctx.emitAudit("audit.process.output", {
@@ -189,7 +190,7 @@ export async function execute(
             exitCode: code ?? null,
             state: exitState,
             endedAt: Date.now(),
-            source: `agent:${ctx.agent.name}`,
+            source: PROCESS_EVENT_SOURCE,
           }),
         });
         await ctx.emitAudit("audit.process.exited", {
@@ -217,7 +218,15 @@ export async function execute(
   if (tool === "proc_status") {
     const processId = String(args.processId ?? "");
     const entry = processes.get(processId);
-    return { running: Boolean(entry), pid: entry?.proc.pid };
+    const running = Boolean(
+      entry &&
+        entry.proc.exitCode === null &&
+        entry.proc.signalCode === null,
+    );
+    if (entry && !running) {
+      processes.delete(processId);
+    }
+    return { running, pid: entry?.proc.pid };
   }
   if (tool === "proc_tail") {
     const processId = String(args.processId ?? "");

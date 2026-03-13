@@ -7,6 +7,7 @@ import {
   resolveSkillRoot,
 } from "@orgops/skills";
 import {
+  type EventValidationResult,
   type EventTypeSummary,
   getCoreEventShapes,
   serializeEventShapes,
@@ -321,56 +322,107 @@ export function buildModelMessages(
   ];
 }
 
-function escapeRegex(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function hasAgentMention(text: string, agentName: string) {
-  if (!text) return false;
-  const pattern = new RegExp(
-    `(^|\\s)@${escapeRegex(agentName)}(?=\\b|\\s|$)`,
-    "i",
-  );
-  return pattern.test(text);
-}
-
-type ResponseDirective = {
-  mode: "reply" | "no_reply";
-  text: string;
+type ModelEventDraft = {
+  type: string;
+  payload: unknown;
+  source: string;
+  channelId?: string;
+  parentEventId?: string;
+  deliverAt?: number;
+  idempotencyKey?: string;
 };
 
-export function parseResponseDirective(rawText: string): ResponseDirective {
+const MAX_EVENT_DISPATCH_ATTEMPTS = 3;
+
+function extractJsonObject(rawText: string): unknown {
   const text = rawText.trim();
-  if (!text) return { mode: "reply", text: "" };
-  const noReplyMatch = text.match(/^\[NO_REPLY\]\s*([\s\S]*)$/i);
-  if (noReplyMatch) {
-    return { mode: "no_reply", text: (noReplyMatch[1] ?? "").trim() };
+  if (!text) throw new Error("Empty response.");
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Support fenced code blocks with JSON content.
+    const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+    if (!fenced?.[1]) {
+      throw new Error("Response was not valid JSON.");
+    }
+    return JSON.parse(fenced[1]);
   }
-  const replyMatch = text.match(/^\[REPLY\]\s*([\s\S]*)$/i);
-  if (replyMatch) {
-    return { mode: "reply", text: (replyMatch[1] ?? "").trim() };
+}
+
+function normalizeEventDraft(
+  parsed: unknown,
+  agentName: string,
+  channelId?: string,
+): ModelEventDraft {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("JSON response must be an object.");
   }
-  return { mode: "reply", text };
+  const event = parsed as Record<string, unknown>;
+  const type = typeof event.type === "string" ? event.type.trim() : "";
+  if (!type) {
+    throw new Error("JSON event is missing a non-empty `type`.");
+  }
+  const source =
+    typeof event.source === "string" && event.source.trim()
+      ? event.source.trim()
+      : `agent:${agentName}`;
+  const resolvedChannelId =
+    typeof event.channelId === "string" && event.channelId.trim()
+      ? event.channelId.trim()
+      : channelId;
+  const payload = event.payload ?? {};
+  const parentEventId =
+    typeof event.parentEventId === "string" && event.parentEventId.trim()
+      ? event.parentEventId.trim()
+      : undefined;
+  const idempotencyKey =
+    typeof event.idempotencyKey === "string" && event.idempotencyKey.trim()
+      ? event.idempotencyKey.trim()
+      : undefined;
+  const deliverAt =
+    typeof event.deliverAt === "number" && Number.isFinite(event.deliverAt)
+      ? Math.floor(event.deliverAt)
+      : undefined;
+  return {
+    type,
+    payload,
+    source,
+    ...(resolvedChannelId ? { channelId: resolvedChannelId } : {}),
+    ...(parentEventId ? { parentEventId } : {}),
+    ...(idempotencyKey ? { idempotencyKey } : {}),
+    ...(deliverAt !== undefined ? { deliverAt } : {}),
+  };
+}
+
+function formatValidationErrors(validation: EventValidationResult): string {
+  if (validation.ok) return "";
+  return validation.issues
+    .slice(0, 8)
+    .map((issue) => `- [${issue.source}] ${issue.message}`)
+    .join("\n");
+}
+
+function buildFallbackMessageEvent(
+  agentName: string,
+  channelId: string,
+  text: string,
+  parentEventId?: string,
+) {
+  return {
+    type: "message.created",
+    source: `agent:${agentName}`,
+    channelId,
+    payload: { text: text.trim() || "Unable to produce structured event output." },
+    ...(parentEventId ? { parentEventId } : {}),
+  };
 }
 
 export async function shouldHandleEvent(agent: Agent, event: Event) {
   if (event.type?.startsWith("agent.control.")) return false;
   // Skip bookkeeping events that should never trigger model replies.
   if (event.type?.startsWith("audit.")) return false;
-  if (event.type === "channel.command.requested") return false;
   if (event.source === `agent:${agent.name}`) return false;
-  const targetAgentName =
-    typeof event.payload?.targetAgentName === "string"
-      ? event.payload.targetAgentName.trim()
-      : "";
-  if (targetAgentName && targetAgentName !== agent.name) return false;
-  const hopCount = Number(event.payload?.hopCount ?? 0);
-  if (Number.isFinite(hopCount) && hopCount >= 3) return false;
   if (!event.channelId) return false;
-
-  const text = String(event.payload?.text ?? "");
-  if (hasAgentMention(text, agent.name)) return true;
-
   if (typeof event.source === "string" && event.source.startsWith("agent:")) {
     return false;
   }
@@ -441,7 +493,7 @@ async function handleEvent(agent: Agent, event: Event) {
     .filter(Boolean)
     .join("\n\n");
   const eventHistory = await listChannelEvents(channelId);
-  const messages = buildModelMessages(agent, system, eventHistory);
+  const baseMessages = buildModelMessages(agent, system, eventHistory);
 
   const executeCtx = {
     agent,
@@ -482,22 +534,72 @@ async function handleEvent(agent: Agent, event: Event) {
     apiFetch,
     emitEvent,
   });
-  const result = await generate(agent.modelId, messages, {
-    tools,
-    maxSteps: 8,
-    env: injectionEnv,
-  });
+  const retryMessages: Array<{ role: "user"; content: string }> = [];
+  let lastResponseText = "";
 
-  await emitEvent({
-    type: "audit.response.skipped",
-    payload: {
-      eventType: event.type,
-      reason: "agent_result",
-      text: result.text,
-    },
-    source: `agent:${agent.name}`,
-    channelId,
-  });
+  for (let attempt = 1; attempt <= MAX_EVENT_DISPATCH_ATTEMPTS; attempt += 1) {
+    const result = await generate(
+      agent.modelId,
+      [...baseMessages, ...retryMessages],
+      {
+        tools,
+        maxSteps: 8,
+        env: injectionEnv,
+      },
+    );
+    lastResponseText = result.text ?? "";
+
+    let parsed: unknown;
+    try {
+      parsed = extractJsonObject(lastResponseText);
+    } catch (error) {
+      retryMessages.push({
+        role: "user",
+        content: [
+          `Your previous response was not valid JSON on attempt ${attempt}/${MAX_EVENT_DISPATCH_ATTEMPTS}.`,
+          `Error: ${String(error)}`,
+          "Return only a corrected JSON event object.",
+        ].join("\n"),
+      });
+      continue;
+    }
+
+    let eventDraft: ModelEventDraft;
+    try {
+      eventDraft = normalizeEventDraft(parsed, agent.name, channelId);
+    } catch (error) {
+      retryMessages.push({
+        role: "user",
+        content: [
+          `Your previous JSON output was invalid on attempt ${attempt}/${MAX_EVENT_DISPATCH_ATTEMPTS}.`,
+          `Error: ${String(error)}`,
+          "Return only a corrected JSON event object.",
+        ].join("\n"),
+      });
+      continue;
+    }
+
+    const validation = validateEventAgainstShapes(eventDraft, eventShapes);
+    if (validation.ok) {
+      await emitEvent(eventDraft);
+      return;
+    }
+
+    const details = formatValidationErrors(validation);
+    retryMessages.push({
+      role: "user",
+      content: [
+        `Event validation failed on attempt ${attempt}/${MAX_EVENT_DISPATCH_ATTEMPTS}.`,
+        `Type: ${eventDraft.type}`,
+        details || "- Unknown validation error.",
+        "Return only a corrected JSON event object that validates.",
+      ].join("\n"),
+    });
+  }
+
+  await emitEvent(
+    buildFallbackMessageEvent(agent.name, channelId, lastResponseText, event.id),
+  );
 }
 
 async function ensureWorkspace(agent: Agent) {

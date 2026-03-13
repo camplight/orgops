@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "bun run --env-file ../../.env --cwd apps/api dev",
     "dev:all": "concurrently -k \"bun run --env-file ../../.env --cwd apps/api dev\" \"bun run --env-file ../../.env --cwd apps/agent-runner dev\" \"bun run --env-file ../../.env --cwd apps/ui dev\"",
+    "dev:all:clean": "bun run scripts/dev-all-clean.ts",
     "build": "bun run --cwd apps/ui build",
     "prod:all": "bun run build && concurrently -k \"bun run --env-file ../../.env --cwd apps/api start\" \"bun run --env-file ../../.env --cwd apps/agent-runner start\" \"bun run --env-file ../../.env --cwd apps/ui preview\"",
     "test": "bun test",

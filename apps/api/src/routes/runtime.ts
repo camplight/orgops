@@ -39,6 +39,15 @@ async function waitForPidExit(pid: number, timeoutMs: number): Promise<boolean> 
 
 export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
   const { orm, FILES_DIR, jsonResponse, publishProcessOutput, insertEvent } = deps;
+  const PROCESS_EVENT_SOURCE = "system:process-runner";
+  const processContextById = (processId: string) =>
+    orm
+      .select({
+        channelId: schema.processes.channel_id,
+      })
+      .from(schema.processes)
+      .where(eq(schema.processes.id, processId))
+      .get() as { channelId: string | null } | undefined;
 
   app.post("/api/files", async (c) => {
     const body = await c.req.parseBody();
@@ -285,6 +294,7 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
   app.post("/api/processes/:id/output", async (c) => {
     const processId = c.req.param("id");
     const body = await c.req.json();
+    const processContext = processContextById(processId);
     orm
       .insert(schema.processOutput)
       .values({
@@ -300,7 +310,8 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
     insertEvent({
       type: "process.output",
       payload: { processId, seq: body.seq, stream: body.stream, text: body.text },
-      source: body.source ?? "system"
+      source: body.source ?? PROCESS_EVENT_SOURCE,
+      channelId: processContext?.channelId ?? undefined,
     });
     return jsonResponse(c, { ok: true }, 201);
   });
@@ -308,6 +319,7 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
   app.post("/api/processes/:id/exit", async (c) => {
     const processId = c.req.param("id");
     const body = await c.req.json();
+    const processContext = processContextById(processId);
     orm
       .update(schema.processes)
       .set({
@@ -320,7 +332,8 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
     insertEvent({
       type: "process.exited",
       payload: { processId, exitCode: body.exitCode ?? null },
-      source: body.source ?? "system"
+      source: body.source ?? PROCESS_EVENT_SOURCE,
+      channelId: processContext?.channelId ?? undefined,
     });
     return jsonResponse(c, { ok: true });
   });
