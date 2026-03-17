@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { generate } from "@orgops/llm";
 import {
@@ -51,6 +51,14 @@ const HISTORY_MAX_CHARS = readPositiveIntEnv(
   process.env.ORGOPS_HISTORY_MAX_CHARS,
   DEFAULT_MAX_HISTORY_CHARS,
 );
+
+function getSkillMarkdownContents(skillPath: string): string | null {
+  try {
+    return readFileSync(join(skillPath, "SKILL.md"), "utf-8");
+  } catch {
+    return null;
+  }
+}
 
 function queryEventTypes(
   eventTypes: EventTypeSummary[],
@@ -454,8 +462,12 @@ async function handleEvent(agent: Agent, event: Event) {
   const soul = typeof agent.soulContents === "string" ? agent.soulContents : "";
   const allSkills = listSkills(SKILL_ROOT);
   const enabledSkillSet = new Set(agent.enabledSkills ?? []);
+  const alwaysPreloadedSkillSet = new Set(agent.alwaysPreloadedSkills ?? []);
   const selectedSkills = allSkills.filter((skill) =>
     enabledSkillSet.has(skill.name),
+  );
+  const alwaysPreloadedSkills = selectedSkills.filter((skill) =>
+    alwaysPreloadedSkillSet.has(skill.name),
   );
   const loadedSkillEventShapes = await loadSkillEventShapes(selectedSkills);
   const coreEventShapes = getCoreEventShapes();
@@ -470,6 +482,14 @@ async function handleEvent(agent: Agent, event: Event) {
         `${skill.name} | ${skill.description} | ${join(skill.path, "SKILL.md")}`,
     )
     .join("\n");
+  const preloadedSkillsContext = alwaysPreloadedSkills
+    .map((skill) => {
+      const contents = getSkillMarkdownContents(skill.path);
+      if (!contents) return null;
+      return `# ${skill.name}\n${contents}`;
+    })
+    .filter((entry): entry is string => Boolean(entry))
+    .join("\n\n");
   const nowMs = Date.now();
   const nowIso = new Date(nowMs).toISOString();
   const runnerGuidance = buildRunnerGuidance(
@@ -489,6 +509,9 @@ async function handleEvent(agent: Agent, event: Event) {
     )}`,
     soul ? `Your soul:\n${soul}` : "",
     "Your skills:\n" + skillIndex,
+    preloadedSkillsContext
+      ? `Always pre-loaded skills (full SKILL.md contents):\n${preloadedSkillsContext}`
+      : "",
   ]
     .filter(Boolean)
     .join("\n\n");

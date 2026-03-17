@@ -155,6 +155,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         soulPath: row.soul_path,
         soulContents: row.soul_contents ?? "",
         enabledSkills: parseStringArraySafe(row.enabled_skills_json),
+        alwaysPreloadedSkills: parseStringArraySafe(row.always_preloaded_skills_json),
         workspacePath: row.workspace_path,
         allowOutsideWorkspace: Boolean(row.allow_outside_workspace),
         desiredState: row.desired_state,
@@ -179,9 +180,18 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       return jsonResponse(c, { error: "workspacePath is required" }, 400);
     }
     const soulContents = typeof body.soulContents === "string" ? body.soulContents : "";
-    const enabledSkills = Array.isArray(body.enabledSkills)
+    const enabledSkills: string[] = Array.isArray(body.enabledSkills)
       ? body.enabledSkills.filter((item: unknown): item is string => typeof item === "string")
       : [];
+    const alwaysPreloadedSkills: string[] = Array.isArray(body.alwaysPreloadedSkills)
+      ? body.alwaysPreloadedSkills.filter(
+          (item: unknown): item is string => typeof item === "string"
+        )
+      : [];
+    const alwaysPreloadedSkillsSet = new Set(alwaysPreloadedSkills);
+    const sanitizedAlwaysPreloadedSkills = enabledSkills.filter((name: string) =>
+      alwaysPreloadedSkillsSet.has(name)
+    );
     const allowOutsideWorkspace = Boolean(body.allowOutsideWorkspace);
     orm
       .insert(schema.agents)
@@ -197,6 +207,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         workspace_path: workspacePath,
         allow_outside_workspace: allowOutsideWorkspace ? 1 : 0,
         enabled_skills_json: JSON.stringify(enabledSkills),
+        always_preloaded_skills_json: JSON.stringify(sanitizedAlwaysPreloadedSkills),
         desired_state: body.desiredState ?? "RUNNING",
         runtime_state: body.runtimeState ?? "STOPPED",
         created_at: now,
@@ -220,6 +231,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       soulPath: row.soul_path,
       soulContents: row.soul_contents ?? "",
       enabledSkills: parseStringArraySafe(row.enabled_skills_json),
+      alwaysPreloadedSkills: parseStringArraySafe(row.always_preloaded_skills_json),
       workspacePath: row.workspace_path,
       allowOutsideWorkspace: Boolean(row.allow_outside_workspace),
       desiredState: row.desired_state,
@@ -246,6 +258,21 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     const enabledSkillsJson = Array.isArray(body.enabledSkills)
       ? JSON.stringify(body.enabledSkills.filter((item: unknown): item is string => typeof item === "string"))
       : null;
+    const resolvedEnabledSkills = enabledSkillsJson
+      ? parseStringArraySafe(enabledSkillsJson)
+      : parseStringArraySafe(existing.enabled_skills_json);
+    const alwaysPreloadedSkillsJson = Array.isArray(body.alwaysPreloadedSkills)
+      ? JSON.stringify(
+          body.alwaysPreloadedSkills.filter((item: unknown): item is string => typeof item === "string")
+        )
+      : null;
+    const alwaysPreloadedSkills = alwaysPreloadedSkillsJson
+      ? parseStringArraySafe(alwaysPreloadedSkillsJson)
+      : parseStringArraySafe(existing.always_preloaded_skills_json);
+    const alwaysPreloadedSkillSet = new Set(alwaysPreloadedSkills);
+    const sanitizedAlwaysPreloadedSkillsJson = JSON.stringify(
+      resolvedEnabledSkills.filter((name) => alwaysPreloadedSkillSet.has(name))
+    );
     const allowOutsideWorkspace =
       body.allowOutsideWorkspace !== undefined
         ? (body.allowOutsideWorkspace ? 1 : 0)
@@ -266,6 +293,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         allow_outside_workspace:
           allowOutsideWorkspace ?? existing.allow_outside_workspace,
         enabled_skills_json: enabledSkillsJson ?? existing.enabled_skills_json,
+        always_preloaded_skills_json: sanitizedAlwaysPreloadedSkillsJson,
         desired_state: body.desiredState ?? existing.desired_state,
         runtime_state: body.runtimeState ?? existing.runtime_state,
         last_heartbeat_at: body.lastHeartbeatAt ?? existing.last_heartbeat_at,

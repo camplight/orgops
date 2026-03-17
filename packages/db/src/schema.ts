@@ -32,7 +32,10 @@ export const agents = sqliteTable("agents", {
   last_heartbeat_at: integer("last_heartbeat_at"),
   created_at: integer("created_at").notNull(),
   updated_at: integer("updated_at").notNull(),
-  enabled_skills_json: text("enabled_skills_json").notNull().default("[]")
+  enabled_skills_json: text("enabled_skills_json").notNull().default("[]"),
+  always_preloaded_skills_json: text("always_preloaded_skills_json")
+    .notNull()
+    .default("[]")
 });
 
 export const teams = sqliteTable("teams", {

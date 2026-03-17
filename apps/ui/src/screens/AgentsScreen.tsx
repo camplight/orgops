@@ -16,6 +16,7 @@ type AgentForm = {
   allowOutsideWorkspace: boolean;
   soulContents: string;
   enabledSkills: string[];
+  alwaysPreloadedSkills: string[];
 };
 
 const DEFAULT_AGENT_FORM: AgentForm = {
@@ -24,7 +25,8 @@ const DEFAULT_AGENT_FORM: AgentForm = {
   workspacePath: ".orgops-data/workspaces/default",
   allowOutsideWorkspace: false,
   soulContents: "",
-  enabledSkills: []
+  enabledSkills: [],
+  alwaysPreloadedSkills: []
 };
 
 type AgentsScreenProps = {
@@ -111,7 +113,8 @@ export function AgentsScreen({
         `.orgops-data/workspaces/${selectedAgent.name}`,
       allowOutsideWorkspace: Boolean(selectedAgent.allowOutsideWorkspace),
       soulContents: selectedAgent.soulContents ?? "",
-      enabledSkills: selectedAgent.enabledSkills ?? []
+      enabledSkills: selectedAgent.enabledSkills ?? [],
+      alwaysPreloadedSkills: selectedAgent.alwaysPreloadedSkills ?? []
     });
   }, [isCreating, selectedAgent, isFormDirty]);
 
@@ -235,7 +238,9 @@ export function AgentsScreen({
           modelId: form.modelId.trim(),
           workspacePath: form.workspacePath.trim(),
           allowOutsideWorkspace: form.allowOutsideWorkspace,
-          soulContents: form.soulContents
+          soulContents: form.soulContents,
+          enabledSkills: form.enabledSkills,
+          alwaysPreloadedSkills: form.alwaysPreloadedSkills
         });
         setIsCreating(false);
         setSelectedAgentName(normalizedName);
@@ -253,7 +258,8 @@ export function AgentsScreen({
         workspacePath: form.workspacePath.trim(),
         allowOutsideWorkspace: form.allowOutsideWorkspace,
         soulContents: form.soulContents,
-        enabledSkills: form.enabledSkills
+        enabledSkills: form.enabledSkills,
+        alwaysPreloadedSkills: form.alwaysPreloadedSkills
       });
       setIsFormDirty(false);
       setSaveStatus({
@@ -295,10 +301,41 @@ export function AgentsScreen({
       if (exists) {
         return {
           ...prev,
-          enabledSkills: prev.enabledSkills.filter((name) => name !== skillName)
+          enabledSkills: prev.enabledSkills.filter((name) => name !== skillName),
+          alwaysPreloadedSkills: prev.alwaysPreloadedSkills.filter(
+            (name) => name !== skillName
+          )
         };
       }
       return { ...prev, enabledSkills: [...prev.enabledSkills, skillName] };
+    });
+  };
+
+  const toggleAlwaysPreloadedSkill = (skillName: string) => {
+    setIsFormDirty(true);
+    setSaveStatus(null);
+    setForm((prev) => {
+      const isEnabled = prev.enabledSkills.includes(skillName);
+      if (!isEnabled) {
+        return {
+          ...prev,
+          enabledSkills: [...prev.enabledSkills, skillName],
+          alwaysPreloadedSkills: [...prev.alwaysPreloadedSkills, skillName]
+        };
+      }
+      const exists = prev.alwaysPreloadedSkills.includes(skillName);
+      if (exists) {
+        return {
+          ...prev,
+          alwaysPreloadedSkills: prev.alwaysPreloadedSkills.filter(
+            (name) => name !== skillName
+          )
+        };
+      }
+      return {
+        ...prev,
+        alwaysPreloadedSkills: [...prev.alwaysPreloadedSkills, skillName]
+      };
     });
   };
 
@@ -488,21 +525,35 @@ export function AgentsScreen({
                       <div className="text-sm text-slate-400">Enabled skills</div>
                       <div className="grid gap-2 sm:grid-cols-2">
                         {skills.map((skill) => (
-                          <label
+                          <div
                             key={skill.path}
                             className="flex items-start gap-2 rounded border border-slate-800 bg-slate-950 px-2 py-2 text-sm text-slate-300"
                           >
-                            <input
-                              type="checkbox"
-                              checked={form.enabledSkills.includes(skill.name)}
-                              onChange={() => toggleSkill(skill.name)}
-                              className="mt-0.5"
-                            />
-                            <span className="leading-tight">
-                              <span className="block text-slate-200">{skill.name}</span>
-                              <span className="text-xs text-slate-500">{skill.description}</span>
-                            </span>
-                          </label>
+                            <div className="space-y-2">
+                              <div className="leading-tight">
+                                <span className="block text-slate-200">{skill.name}</span>
+                                <span className="text-xs text-slate-500">{skill.description}</span>
+                              </div>
+                              <label className="flex items-center gap-2 text-xs text-slate-300">
+                                <input
+                                  type="checkbox"
+                                  checked={form.enabledSkills.includes(skill.name)}
+                                  onChange={() => toggleSkill(skill.name)}
+                                  className="mt-0.5"
+                                />
+                                <span>Enabled</span>
+                              </label>
+                              <label className="flex items-center gap-2 text-xs text-slate-300">
+                                <input
+                                  type="checkbox"
+                                  checked={form.alwaysPreloadedSkills.includes(skill.name)}
+                                  onChange={() => toggleAlwaysPreloadedSkill(skill.name)}
+                                  className="mt-0.5"
+                                />
+                                <span>Always pre-load into context</span>
+                              </label>
+                            </div>
+                          </div>
                         ))}
                       </div>
                     </div>

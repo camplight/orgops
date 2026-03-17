@@ -535,12 +535,13 @@ export async function execute(
         error: `Unknown event type: ${parsed.type}. Use events_event_types to inspect available types.`,
       };
     }
+    const typePrefix = parsed.typePrefix;
     if (
-      parsed.typePrefix &&
-      !knownEventTypes.some((eventType) => eventType.type.startsWith(parsed.typePrefix))
+      typePrefix &&
+      !knownEventTypes.some((eventType) => eventType.type.startsWith(typePrefix))
     ) {
       return {
-        error: `Unknown event typePrefix: ${parsed.typePrefix}. Use events_event_types to inspect valid prefixes.`,
+        error: `Unknown event typePrefix: ${typePrefix}. Use events_event_types to inspect valid prefixes.`,
       };
     }
     const query = new URLSearchParams();

@@ -64,6 +64,73 @@ describe("api app", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("persists always-preloaded skills as a subset of enabled skills", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token"
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" })
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const createAgentRes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "skills-agent",
+        modelId: "openai:gpt-4o-mini",
+        workspacePath: ".orgops-data/workspaces/skills-agent",
+        enabledSkills: ["slack"],
+        alwaysPreloadedSkills: ["slack", "secrets"]
+      })
+    });
+    expect(createAgentRes.status).toBe(201);
+
+    const getAgentRes = await app.request("http://localhost/api/agents/skills-agent", {
+      headers: { cookie }
+    });
+    expect(getAgentRes.status).toBe(200);
+    const createdAgent = (await getAgentRes.json()) as {
+      enabledSkills?: string[];
+      alwaysPreloadedSkills?: string[];
+    };
+    expect(createdAgent.enabledSkills).toEqual(["slack"]);
+    expect(createdAgent.alwaysPreloadedSkills).toEqual(["slack"]);
+
+    const patchRes = await app.request("http://localhost/api/agents/skills-agent", {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        enabledSkills: ["secrets"],
+        alwaysPreloadedSkills: ["slack", "secrets"]
+      })
+    });
+    expect(patchRes.status).toBe(200);
+
+    const patchedRes = await app.request("http://localhost/api/agents/skills-agent", {
+      headers: { cookie }
+    });
+    expect(patchedRes.status).toBe(200);
+    const patchedAgent = (await patchedRes.json()) as {
+      enabledSkills?: string[];
+      alwaysPreloadedSkills?: string[];
+    };
+    expect(patchedAgent.enabledSkills).toEqual(["secrets"]);
+    expect(patchedAgent.alwaysPreloadedSkills).toEqual(["secrets"]);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("authenticates and creates events", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");

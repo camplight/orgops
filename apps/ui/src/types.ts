@@ -8,6 +8,7 @@ export type Agent = {
   soulPath?: string;
   soulContents?: string;
   enabledSkills?: string[];
+  alwaysPreloadedSkills?: string[];
   workspacePath?: string;
   allowOutsideWorkspace?: boolean;
 };
