@@ -493,15 +493,14 @@ describe("agent runner", () => {
       }),
     };
 
-    await expect(
-      executeTool(ctx, "events_emit", {
-        type: "channel.command.requested",
-        payload: {
-          channel: { provider: "slack" },
-          command: { action: "chat.postMessage", payload: {} },
-        },
-      }),
-    ).rejects.toThrow("Event validation failed");
+    const result = (await executeTool(ctx, "events_emit", {
+      type: "channel.command.requested",
+      payload: {
+        channel: { provider: "slack" },
+        command: { action: "chat.postMessage", payload: {} },
+      },
+    })) as { error?: string };
+    expect(result.error).toContain("Event validation failed");
   });
 
   it("searches events globally via events_search", async () => {
@@ -538,6 +537,9 @@ describe("agent runner", () => {
       },
       emitEvent: async () => {},
       emitAudit: async () => {},
+      listEventTypes: () => [
+        { type: "slack.message.created", description: "slack msg", source: "skill:slack" },
+      ],
     };
 
     const result = (await executeTool(ctx, "events_search", {
@@ -552,6 +554,95 @@ describe("agent runner", () => {
     expect(requests[0]?.path).toContain("order=desc");
     expect(requests[0]?.path).toContain("limit=20");
     expect(result.events).toHaveLength(2);
+  });
+
+  it("returns a validation error for unknown events_search typePrefix", async () => {
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        soulContents: "role prompt",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async () =>
+        new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+      listEventTypes: () => [
+        { type: "message.created", description: "msg", source: "core" },
+      ],
+    };
+
+    const result = (await executeTool(ctx, "events_search", {
+      typePrefix: "not-real.",
+    })) as { error?: string };
+
+    expect(typeof result.error).toBe("string");
+    expect(result.error).toContain("Unknown event typePrefix");
+  });
+
+  it("lists/filter agents via events_agents_search", async () => {
+    const requests: Array<string> = [];
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        soulContents: "role prompt",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async (path: string) => {
+        requests.push(path);
+        return new Response(
+          JSON.stringify([
+            { name: "worker-a", runtimeState: "RUNNING", desiredState: "RUNNING" },
+            { name: "worker-b", runtimeState: "STOPPED", desiredState: "STOPPED" },
+          ]),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      },
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+    };
+
+    const result = (await executeTool(ctx, "events_agents_search", {
+      runtimeState: "RUNNING",
+    })) as { agents: Array<{ name: string }>; totalMatched: number };
+
+    expect(requests).toEqual(["/api/agents"]);
+    expect(result.totalMatched).toBe(1);
+    expect(result.agents[0]?.name).toBe("worker-a");
   });
 
   it("lists channels via events_channels_list", async () => {
@@ -617,6 +708,64 @@ describe("agent runner", () => {
     expect(requests[0]?.path).toBe("/api/channels");
     expect(result.totalMatched).toBe(1);
     expect(result.channels[0]?.id).toBe("chan-a");
+  });
+
+  it("blocks participant management on integration bridge channels", async () => {
+    const requests: string[] = [];
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        soulContents: "role prompt",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async (path: string) => {
+        requests.push(path);
+        if (path === "/api/channels") {
+          return new Response(
+            JSON.stringify([
+              {
+                id: "chan-integration",
+                name: "slack:T1:C1",
+                kind: "INTEGRATION_BRIDGE",
+                participants: [],
+              },
+            ]),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+    };
+
+    const result = (await executeTool(ctx, "events_channel_participant_add", {
+      channelId: "chan-integration",
+      agentName: "worker-a",
+    })) as { error?: string };
+
+    expect(requests).toEqual(["/api/channels"]);
+    expect(result.error).toContain("Integration bridge channels");
   });
 
   it("gracefully terminates spawned processes during shutdown", async () => {

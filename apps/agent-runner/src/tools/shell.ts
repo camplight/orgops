@@ -4,31 +4,50 @@ import type { ExecuteContext, ToolDef } from "./types";
 import { resolveAgentPath } from "./path-access";
 
 const envSchema = z.record(z.string(), z.string()).optional();
+const shellRunSchema = z.object({
+  cmd: z.string().min(1),
+  cwd: z.string().optional(),
+  env: envSchema,
+});
 
 export const shellToolDefs: ToolDef[] = [
   [
     "shell_run",
     "Run a shell command.",
-    z.object({
-      cmd: z.string(),
-      cwd: z.string().optional(),
-      env: envSchema,
-    }),
+    shellRunSchema,
   ],
 ];
+
+function formatZodIssues(error: z.ZodError) {
+  return error.issues
+    .slice(0, 6)
+    .map((issue) => {
+      const path = issue.path.length > 0 ? issue.path.join(".") : "<root>";
+      return `${path}: ${issue.message}`;
+    })
+    .join("; ");
+}
 
 export async function execute(
   ctx: ExecuteContext,
   args: Record<string, unknown>,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  const cmd = String(args.cmd ?? "");
-  const requestedCwd = String(args.cwd ?? ctx.agent.workspacePath);
+  const parsed = shellRunSchema.safeParse(args);
+  if (!parsed.success) {
+    return {
+      stdout: "",
+      stderr: `Invalid arguments for shell_run: ${formatZodIssues(parsed.error)}`,
+      exitCode: 2,
+    };
+  }
+  const cmd = parsed.data.cmd;
+  const requestedCwd = parsed.data.cwd ?? ctx.agent.workspacePath;
   const cwd = resolveAgentPath(
     ctx.agent,
     requestedCwd,
     ctx.extraAllowedRoots ?? [],
   );
-  const env = (args.env ?? {}) as Record<string, string>;
+  const env = parsed.data.env ?? {};
   const result = spawnSync("/bin/bash", ["-lc", cmd], {
     cwd,
     env: { ...process.env, ...ctx.injectionEnv, ...env },

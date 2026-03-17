@@ -5,20 +5,22 @@ import type { ExecuteContext, ToolDef } from "./types";
 import { resolveAgentPath } from "./path-access";
 
 const envSchema = z.record(z.string(), z.string()).optional();
+const procStartSchema = z.object({
+  cmd: z.string().min(1),
+  cwd: z.string().optional(),
+  env: envSchema,
+});
+const processRefSchema = z.object({ processId: z.string().min(1) });
 
 export const procToolDefs: ToolDef[] = [
   [
     "proc_start",
     "Start a long-running process.",
-    z.object({
-      cmd: z.string(),
-      cwd: z.string().optional(),
-      env: envSchema,
-    }),
+    procStartSchema,
   ],
-  ["proc_stop", "Stop a process.", z.object({ processId: z.string() })],
-  ["proc_status", "Check a process.", z.object({ processId: z.string() })],
-  ["proc_tail", "Tail process output.", z.object({ processId: z.string() })],
+  ["proc_stop", "Stop a process.", processRefSchema],
+  ["proc_status", "Check a process.", processRefSchema],
+  ["proc_tail", "Tail process output.", processRefSchema],
 ];
 
 const processes = new Map<
@@ -35,6 +37,31 @@ const processes = new Map<
 
 const PROCESS_SHUTDOWN_TIMEOUT_MS = 5000;
 const PROCESS_EVENT_SOURCE = "system:process-runner";
+
+function formatZodIssues(error: z.ZodError) {
+  return error.issues
+    .slice(0, 6)
+    .map((issue) => {
+      const path = issue.path.length > 0 ? issue.path.join(".") : "<root>";
+      return `${path}: ${issue.message}`;
+    })
+    .join("; ");
+}
+
+function parseToolArgs<T>(
+  tool: string,
+  schema: z.ZodType<T>,
+  args: Record<string, unknown>,
+): { ok: true; data: T } | { ok: false; error: string } {
+  const parsed = schema.safeParse(args);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: `Invalid arguments for ${tool}: ${formatZodIssues(parsed.error)}`,
+    };
+  }
+  return { ok: true, data: parsed.data };
+}
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -101,14 +128,17 @@ export async function execute(
   args: Record<string, unknown>,
 ): Promise<unknown> {
   if (tool === "proc_start") {
-    const cmd = String(args.cmd ?? "");
-    const requestedCwd = String(args.cwd ?? ctx.agent.workspacePath);
+    const parsedResult = parseToolArgs(tool, procStartSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const parsed = parsedResult.data;
+    const cmd = parsed.cmd;
+    const requestedCwd = parsed.cwd ?? ctx.agent.workspacePath;
     const cwd = resolveAgentPath(
       ctx.agent,
       requestedCwd,
       ctx.extraAllowedRoots ?? [],
     );
-    const env = (args.env ?? {}) as Record<string, string>;
+    const env = parsed.env ?? {};
     const processId = randomUUID();
     const child = spawn("/bin/bash", ["-lc", cmd], {
       cwd,
@@ -209,14 +239,18 @@ export async function execute(
     return { processId };
   }
   if (tool === "proc_stop") {
-    const processId = String(args.processId ?? "");
+    const parsedResult = parseToolArgs(tool, processRefSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const processId = parsedResult.data.processId;
     const entry = processes.get(processId);
     if (!entry) return { error: "Process not found" };
     entry.proc.kill("SIGTERM");
     return { ok: true };
   }
   if (tool === "proc_status") {
-    const processId = String(args.processId ?? "");
+    const parsedResult = parseToolArgs(tool, processRefSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const processId = parsedResult.data.processId;
     const entry = processes.get(processId);
     const running = Boolean(
       entry &&
@@ -229,9 +263,11 @@ export async function execute(
     return { running, pid: entry?.proc.pid };
   }
   if (tool === "proc_tail") {
-    const processId = String(args.processId ?? "");
+    const parsedResult = parseToolArgs(tool, processRefSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const processId = parsedResult.data.processId;
     const res = await ctx.apiFetch(`/api/processes/${processId}/output`);
     return res.json();
   }
-  throw new Error(`Unknown proc tool: ${tool}`);
+  return { error: `Unknown proc tool: ${tool}` };
 }

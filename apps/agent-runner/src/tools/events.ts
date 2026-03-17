@@ -51,6 +51,44 @@ const searchSchema = z.object({
   all: z.boolean().optional(),
 });
 
+const agentsSearchSchema = z.object({
+  nameContains: z.string().min(1).optional(),
+  runtimeState: z
+    .enum(["STARTING", "RUNNING", "STOPPED", "CRASHED"])
+    .optional(),
+  desiredState: z.enum(["RUNNING", "STOPPED"]).optional(),
+  limit: z.number().int().min(1).max(500).optional(),
+});
+
+const channelCreateSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().optional(),
+});
+
+const channelUpdateSchema = z.object({
+  channelId: z.string().min(1),
+  name: z.string().min(1).optional(),
+  description: z.string().nullable().optional(),
+});
+
+const channelDeleteSchema = z.object({
+  channelId: z.string().min(1),
+});
+
+const channelParticipantsSchema = z.object({
+  channelId: z.string().min(1),
+});
+
+const channelParticipantAddSchema = z.object({
+  channelId: z.string().min(1),
+  agentName: z.string().min(1),
+});
+
+const channelParticipantRemoveSchema = z.object({
+  channelId: z.string().min(1),
+  agentName: z.string().min(1),
+});
+
 const channelsListSchema = z.object({
   kind: z.string().min(1).optional(),
   nameContains: z.string().min(1).optional(),
@@ -127,6 +165,41 @@ export const eventsToolDefs: ToolDef[] = [
     searchSchema,
   ],
   [
+    "events_agents_search",
+    "List/search agents with optional filters by name/runtime/desired state.",
+    agentsSearchSchema,
+  ],
+  [
+    "events_channel_create",
+    "Create a non-integration channel (GROUP kind only).",
+    channelCreateSchema,
+  ],
+  [
+    "events_channel_update",
+    "Update channel name/description. Integration channels are not manageable by agents.",
+    channelUpdateSchema,
+  ],
+  [
+    "events_channel_delete",
+    "Delete a non-integration channel.",
+    channelDeleteSchema,
+  ],
+  [
+    "events_channel_participants",
+    "List participants in a non-integration channel.",
+    channelParticipantsSchema,
+  ],
+  [
+    "events_channel_participant_add",
+    "Add an agent participant to a non-integration channel.",
+    channelParticipantAddSchema,
+  ],
+  [
+    "events_channel_participant_remove",
+    "Remove an agent participant from a non-integration channel.",
+    channelParticipantRemoveSchema,
+  ],
+  [
     "events_channels_list",
     "List channels and participants, with optional filters by kind/name/participant.",
     channelsListSchema,
@@ -142,6 +215,31 @@ export const eventsToolDefs: ToolDef[] = [
     scheduleSelfSchema,
   ],
 ];
+
+function formatZodIssues(error: z.ZodError) {
+  return error.issues
+    .slice(0, 6)
+    .map((issue) => {
+      const path = issue.path.length > 0 ? issue.path.join(".") : "<root>";
+      return `${path}: ${issue.message}`;
+    })
+    .join("; ");
+}
+
+function parseToolArgs<T>(
+  tool: string,
+  schema: z.ZodType<T>,
+  args: Record<string, unknown>,
+): { ok: true; data: T } | { ok: false; error: string } {
+  const parsed = schema.safeParse(args);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: `Invalid arguments for ${tool}: ${formatZodIssues(parsed.error)}`,
+    };
+  }
+  return { ok: true, data: parsed.data };
+}
 
 async function ensureDirectChannel(
   ctx: ExecuteContext,
@@ -256,6 +354,62 @@ function validateEventOrThrow(
   );
 }
 
+async function listChannels(
+  ctx: ExecuteContext,
+): Promise<
+  Array<{
+    id: string;
+    name?: string;
+    kind?: string;
+    description?: string | null;
+    participants?: Array<{ subscriberType?: string; subscriberId?: string }>;
+  }>
+> {
+  const response = await ctx.apiFetch("/api/channels");
+  return (await response.json()) as Array<{
+    id: string;
+    name?: string;
+    kind?: string;
+    description?: string | null;
+    participants?: Array<{ subscriberType?: string; subscriberId?: string }>;
+  }>;
+}
+
+async function getChannelById(
+  ctx: ExecuteContext,
+  channelId: string,
+): Promise<
+  | {
+      id: string;
+      name?: string;
+      kind?: string;
+      description?: string | null;
+      participants?: Array<{ subscriberType?: string; subscriberId?: string }>;
+    }
+  | null
+> {
+  const channels = await listChannels(ctx);
+  return channels.find((channel) => channel.id === channelId) ?? null;
+}
+
+async function ensureManageableChannel(
+  ctx: ExecuteContext,
+  channelId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const channel = await getChannelById(ctx, channelId);
+  if (!channel) {
+    return { ok: false, error: `Unknown channelId: ${channelId}` };
+  }
+  if (channel.kind === "INTEGRATION_BRIDGE") {
+    return {
+      ok: false,
+      error:
+        "Integration bridge channels are managed by integrations and cannot be modified by agent tools.",
+    };
+  }
+  return { ok: true };
+}
+
 async function waitForEventDeliveryState(
   ctx: ExecuteContext,
   eventId: string,
@@ -283,8 +437,15 @@ export async function execute(
   args: Record<string, unknown>,
 ): Promise<unknown> {
   if (tool === "events_dm_send") {
-    const parsed = dmSendSchema.parse(args);
-    const deliverAt = resolveDeliverAt(parsed);
+    const parsedResult = parseToolArgs(tool, dmSendSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const parsed = parsedResult.data;
+    let deliverAt: number | undefined;
+    try {
+      deliverAt = resolveDeliverAt(parsed);
+    } catch (error) {
+      return { error: String(error) };
+    }
     const channelId = await ensureDirectChannel(ctx, parsed.agentName);
     const text = ensureAgentMention(parsed.text, parsed.agentName);
     const event = await sendMessage(
@@ -297,8 +458,15 @@ export async function execute(
   }
 
   if (tool === "events_dm_reply") {
-    const parsed = dmReplySchema.parse(args);
-    const deliverAt = resolveDeliverAt(parsed);
+    const parsedResult = parseToolArgs(tool, dmReplySchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const parsed = parsedResult.data;
+    let deliverAt: number | undefined;
+    try {
+      deliverAt = resolveDeliverAt(parsed);
+    } catch (error) {
+      return { error: String(error) };
+    }
     if (!ctx.channelId) {
       return { error: "No current channelId. Use events_dm_send instead." };
     }
@@ -317,8 +485,15 @@ export async function execute(
   }
 
   if (tool === "events_channel_send") {
-    const parsed = channelSendSchema.parse(args);
-    const deliverAt = resolveDeliverAt(parsed);
+    const parsedResult = parseToolArgs(tool, channelSendSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const parsed = parsedResult.data;
+    let deliverAt: number | undefined;
+    try {
+      deliverAt = resolveDeliverAt(parsed);
+    } catch (error) {
+      return { error: String(error) };
+    }
     const triggerAgent = agentNameFromSource(ctx.triggerEvent.source);
     const channelId = parsed.channelId;
     const text =
@@ -337,7 +512,9 @@ export async function execute(
   }
 
   if (tool === "events_channel_messages") {
-    const parsed = channelMessagesSchema.parse(args);
+    const parsedResult = parseToolArgs(tool, channelMessagesSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const parsed = parsedResult.data;
     const query = new URLSearchParams();
     query.set("channelId", parsed.channelId);
     query.set("type", "message.created");
@@ -349,7 +526,23 @@ export async function execute(
   }
 
   if (tool === "events_search") {
-    const parsed = searchSchema.parse(args);
+    const parsedResult = parseToolArgs(tool, searchSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const parsed = parsedResult.data;
+    const knownEventTypes = ctx.listEventTypes?.() ?? [];
+    if (parsed.type && !knownEventTypes.some((eventType) => eventType.type === parsed.type)) {
+      return {
+        error: `Unknown event type: ${parsed.type}. Use events_event_types to inspect available types.`,
+      };
+    }
+    if (
+      parsed.typePrefix &&
+      !knownEventTypes.some((eventType) => eventType.type.startsWith(parsed.typePrefix))
+    ) {
+      return {
+        error: `Unknown event typePrefix: ${parsed.typePrefix}. Use events_event_types to inspect valid prefixes.`,
+      };
+    }
     const query = new URLSearchParams();
     if (parsed.channelId) query.set("channelId", parsed.channelId);
     if (parsed.type) query.set("type", parsed.type);
@@ -367,15 +560,142 @@ export async function execute(
     return { filters: parsed, events };
   }
 
-  if (tool === "events_channels_list") {
-    const parsed = channelsListSchema.parse(args);
-    const response = await ctx.apiFetch("/api/channels");
-    const channels = (await response.json()) as Array<{
-      id: string;
-      name?: string;
-      kind?: string;
-      participants?: Array<{ subscriberType?: string; subscriberId?: string }>;
+  if (tool === "events_agents_search") {
+    const parsedResult = parseToolArgs(tool, agentsSearchSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const parsed = parsedResult.data;
+    const response = await ctx.apiFetch("/api/agents");
+    const agents = (await response.json()) as Array<{
+      name: string;
+      runtimeState?: string;
+      desiredState?: string;
+      modelId?: string;
+      description?: string | null;
+      enabledSkills?: string[];
+      workspacePath?: string;
+      lastHeartbeatAt?: number | null;
     }>;
+    const nameContains = parsed.nameContains?.toLowerCase();
+    const filtered = agents.filter((agent) => {
+      if (nameContains && !agent.name.toLowerCase().includes(nameContains)) return false;
+      if (parsed.runtimeState && agent.runtimeState !== parsed.runtimeState) return false;
+      if (parsed.desiredState && agent.desiredState !== parsed.desiredState) return false;
+      return true;
+    });
+    const limited = parsed.limit ? filtered.slice(0, parsed.limit) : filtered;
+    return { agents: limited, totalMatched: filtered.length, filters: parsed };
+  }
+
+  if (tool === "events_channel_create") {
+    const parsedResult = parseToolArgs(tool, channelCreateSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const parsed = parsedResult.data;
+    const response = await ctx.apiFetch("/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: parsed.name.trim(),
+        description: parsed.description ?? "",
+        kind: "GROUP",
+      }),
+    });
+    const created = (await response.json()) as { id?: string };
+    return { channelId: created.id, created };
+  }
+
+  if (tool === "events_channel_update") {
+    const parsedResult = parseToolArgs(tool, channelUpdateSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const parsed = parsedResult.data;
+    if (parsed.name === undefined && parsed.description === undefined) {
+      return {
+        error:
+          "No update fields provided. Include at least one of: name, description.",
+      };
+    }
+    const manageable = await ensureManageableChannel(ctx, parsed.channelId);
+    if (!manageable.ok) return { error: manageable.error };
+    await ctx.apiFetch(`/api/channels/${encodeURIComponent(parsed.channelId)}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ...(parsed.name !== undefined ? { name: parsed.name.trim() } : {}),
+        ...(parsed.description !== undefined
+          ? { description: parsed.description }
+          : {}),
+      }),
+    });
+    return { ok: true, channelId: parsed.channelId };
+  }
+
+  if (tool === "events_channel_delete") {
+    const parsedResult = parseToolArgs(tool, channelDeleteSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const parsed = parsedResult.data;
+    const manageable = await ensureManageableChannel(ctx, parsed.channelId);
+    if (!manageable.ok) return { error: manageable.error };
+    const response = await ctx.apiFetch(
+      `/api/channels/${encodeURIComponent(parsed.channelId)}/delete`,
+      {
+        method: "POST",
+      },
+    );
+    const result = (await response.json()) as { ok?: boolean; deleted?: boolean };
+    return { channelId: parsed.channelId, ...result };
+  }
+
+  if (tool === "events_channel_participants") {
+    const parsedResult = parseToolArgs(tool, channelParticipantsSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const parsed = parsedResult.data;
+    const manageable = await ensureManageableChannel(ctx, parsed.channelId);
+    if (!manageable.ok) return { error: manageable.error };
+    const response = await ctx.apiFetch(
+      `/api/channels/${encodeURIComponent(parsed.channelId)}/participants`,
+    );
+    const participants = (await response.json()) as unknown[];
+    return { channelId: parsed.channelId, participants };
+  }
+
+  if (tool === "events_channel_participant_add") {
+    const parsedResult = parseToolArgs(tool, channelParticipantAddSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const parsed = parsedResult.data;
+    const manageable = await ensureManageableChannel(ctx, parsed.channelId);
+    if (!manageable.ok) return { error: manageable.error };
+    await ctx.apiFetch(`/api/channels/${encodeURIComponent(parsed.channelId)}/subscribe`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        subscriberType: "AGENT",
+        subscriberId: parsed.agentName,
+      }),
+    });
+    return { ok: true, channelId: parsed.channelId, agentName: parsed.agentName };
+  }
+
+  if (tool === "events_channel_participant_remove") {
+    const parsedResult = parseToolArgs(tool, channelParticipantRemoveSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const parsed = parsedResult.data;
+    const manageable = await ensureManageableChannel(ctx, parsed.channelId);
+    if (!manageable.ok) return { error: manageable.error };
+    await ctx.apiFetch(`/api/channels/${encodeURIComponent(parsed.channelId)}/unsubscribe`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        subscriberType: "AGENT",
+        subscriberId: parsed.agentName,
+      }),
+    });
+    return { ok: true, channelId: parsed.channelId, agentName: parsed.agentName };
+  }
+
+  if (tool === "events_channels_list") {
+    const parsedResult = parseToolArgs(tool, channelsListSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const parsed = parsedResult.data;
+    const channels = await listChannels(ctx);
     const participantType = parsed.participantType?.toUpperCase();
     const filtered = channels.filter((channel) => {
       if (parsed.kind && channel.kind !== parsed.kind) return false;
@@ -398,7 +718,9 @@ export async function execute(
   }
 
   if (tool === "events_event_types") {
-    const parsed = eventTypesSchema.parse(args);
+    const parsedResult = parseToolArgs(tool, eventTypesSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const parsed = parsedResult.data;
     const source = parsed.source?.trim();
     const typePrefix = parsed.typePrefix?.trim();
     const knownEventTypes = ctx.listEventTypes?.({
@@ -423,8 +745,15 @@ export async function execute(
   }
 
   if (tool === "events_emit") {
-    const parsed = emitSchema.parse(args);
-    const deliverAt = resolveDeliverAt(parsed);
+    const parsedResult = parseToolArgs(tool, emitSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const parsed = parsedResult.data;
+    let deliverAt: number | undefined;
+    try {
+      deliverAt = resolveDeliverAt(parsed);
+    } catch (error) {
+      return { error: String(error) };
+    }
     const defaultChannelId = ctx.channelId;
     const targetChannelId = parsed.channelId?.trim() || defaultChannelId;
     if (!targetChannelId) {
@@ -442,7 +771,11 @@ export async function execute(
       ...(parsed.idempotencyKey ? { idempotencyKey: parsed.idempotencyKey } : {}),
       ...(deliverAt !== undefined ? { deliverAt } : {}),
     };
-    validateEventOrThrow(ctx, eventDraft);
+    try {
+      validateEventOrThrow(ctx, eventDraft);
+    } catch (error) {
+      return { error: String(error) };
+    }
     const response = await ctx.apiFetch("/api/events", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -479,8 +812,15 @@ export async function execute(
   }
 
   if (tool === "events_schedule_self") {
-    const parsed = scheduleSelfSchema.parse(args);
-    const deliverAt = resolveDeliverAt(parsed);
+    const parsedResult = parseToolArgs(tool, scheduleSelfSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const parsed = parsedResult.data;
+    let deliverAt: number | undefined;
+    try {
+      deliverAt = resolveDeliverAt(parsed);
+    } catch (error) {
+      return { error: String(error) };
+    }
     const channelId = parsed.channelId ?? ctx.channelId;
     if (!channelId) {
       return { error: "No current channelId. Provide channelId explicitly." };
@@ -495,7 +835,11 @@ export async function execute(
       },
       ...(deliverAt !== undefined ? { deliverAt } : {}),
     };
-    validateEventOrThrow(ctx, eventDraft);
+    try {
+      validateEventOrThrow(ctx, eventDraft);
+    } catch (error) {
+      return { error: String(error) };
+    }
     const response = await ctx.apiFetch("/api/events", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -505,5 +849,5 @@ export async function execute(
     return { channelId, event };
   }
 
-  throw new Error(`Unknown events tool: ${tool}`);
+  return { error: `Unknown events tool: ${tool}` };
 }
