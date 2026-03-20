@@ -1,7 +1,6 @@
 ---
 name: secrets
 description: Manage package secrets (write, list keys, delete). Secrets are stored encrypted; agents can set values and list or delete keys but cannot read secret values. Use for API keys and tokens (e.g. OPENAI_API_KEY). Values are injected as env when running skills and LLM.
-metadata: {"openclaw":{"requires":{"env":["ORGOPS_RUNNER_TOKEN"]}}}
 ---
 # Package secrets
 
