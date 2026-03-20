@@ -194,6 +194,9 @@ export function ChatScreen({
     event.preventDefault();
     void onSendMessage();
   };
+  const handleExportPdf = () => {
+    window.print();
+  };
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -211,8 +214,9 @@ export function ChatScreen({
   }, [activeTargetId, lastMessageId, messageEvents.length, typingIndicators.length]);
 
   return (
-    <div className="space-y-6">
-      <Card title="Destination">
+    <div className="space-y-6 chat-print-root">
+      <div className="chat-print-hide">
+        <Card title="Destination">
         <div className="space-y-2">
           <div className="text-slate-400 text-sm">
             Select a channel or pick an agent to open a direct channel.
@@ -225,6 +229,7 @@ export function ChatScreen({
           />
         </div>
       </Card>
+      </div>
 
       <Card title="Messages">
         {!activeTarget && (
@@ -243,7 +248,7 @@ export function ChatScreen({
             )}
             <div
               ref={messagesContainerRef}
-              className="max-h-[34rem] space-y-3 overflow-auto rounded-xl border border-slate-800 bg-slate-950/70 p-3 text-sm"
+              className="max-h-[34rem] space-y-3 overflow-auto rounded-xl border border-slate-800 bg-slate-950/70 p-3 text-sm chat-print-messages"
             >
               {messageEvents.map((event) => (
                 <div
@@ -325,7 +330,7 @@ export function ChatScreen({
               {typingIndicators.map((indicator) => (
                 <div
                   key={`indicator-${indicator.agentName}`}
-                  className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-300"
+                  className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-300 chat-print-hide"
                 >
                   <span className="font-medium text-slate-100">{indicator.agentName}</span>{" "}
                   is {toSentenceCase(indicator.status)}...
@@ -338,7 +343,7 @@ export function ChatScreen({
               )}
             </div>
 
-            <div className="space-y-2">
+            <div className="space-y-2 chat-print-hide">
               <Textarea
                 rows={3}
                 placeholder="Send a message..."
@@ -348,6 +353,9 @@ export function ChatScreen({
               />
               <div className="flex items-center gap-2">
                 <Button onClick={onSendMessage}>Send message</Button>
+                <Button variant="secondary" onClick={handleExportPdf}>
+                  Export PDF
+                </Button>
                 <Button
                   variant="secondary"
                   className="bg-rose-900 text-rose-100 hover:bg-rose-800"

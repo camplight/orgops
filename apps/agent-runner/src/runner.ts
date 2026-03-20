@@ -13,7 +13,10 @@ import {
   serializeEventShapes,
   validateEventAgainstShapes,
 } from "@orgops/schemas";
-import { createRunnerTools, executeTool } from "./tools";
+import {
+  createRunnerTools,
+  executeTool,
+} from "./tools";
 import { stopAllRunningProcesses } from "./tools/proc";
 import type { Agent, Event } from "./types";
 import { buildRunnerGuidance } from "./prompt";

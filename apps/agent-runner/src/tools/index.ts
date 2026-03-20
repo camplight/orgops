@@ -8,7 +8,9 @@ import type { ExecuteContext, RunnerToolDeps } from "./types";
 
 const allToolDefs = [...shellToolDefs, ...fsToolDefs, ...procToolDefs, ...eventsToolDefs];
 
-export function createRunnerTools(deps: RunnerToolDeps): Record<string, LlmTool> {
+export function createRunnerTools(
+  deps: RunnerToolDeps,
+): Record<string, LlmTool> {
   const wrapExecute = createWrapExecute(deps);
   const duplicate = allToolDefs.find(
     (def, idx) => allToolDefs.findIndex((candidate) => candidate[0] === def[0]) !== idx,
