@@ -20,6 +20,7 @@ import {
 import { stopAllRunningProcesses } from "./tools/proc";
 import type { Agent, Event } from "./types";
 import { buildRunnerGuidance } from "./prompt";
+import { runRlmEventInChild, stopAllRlmChildren } from "./rlm-process";
 
 const API_URL = process.env.ORGOPS_API_URL ?? "http://localhost:8787";
 const PROJECT_ROOT = (() => {
@@ -560,6 +561,19 @@ async function handleEvent(agent: Agent, event: Event) {
     apiFetch,
     emitEvent,
   });
+  if ((agent.mode ?? "CLASSIC") === "RLM_REPL") {
+    await runRlmEventInChild({
+      agent,
+      event,
+      channelId,
+      systemPrompt: system,
+      baseMessages,
+      executeCtx,
+      apiFetch,
+      emitEvent,
+    });
+    return;
+  }
   const retryMessages: Array<{ role: "user"; content: string }> = [];
   let lastResponseText = "";
 
@@ -715,6 +729,7 @@ export async function loop() {
   }
   process.off("SIGINT", onSigint);
   process.off("SIGTERM", onSigterm);
+  stopAllRlmChildren();
   const processShutdownSummary = await stopAllRunningProcesses();
   if (processShutdownSummary.processCount > 0) {
     console.log(

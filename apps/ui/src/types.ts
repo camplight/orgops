@@ -11,6 +11,7 @@ export type Agent = {
   alwaysPreloadedSkills?: string[];
   workspacePath?: string;
   allowOutsideWorkspace?: boolean;
+  mode?: "CLASSIC" | "RLM_REPL";
 };
 
 export type AgentWorkspaceEntry = {

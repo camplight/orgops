@@ -12,6 +12,7 @@ import { formatTimestamp } from "../utils/formatTimestamp";
 type AgentForm = {
   name: string;
   modelId: string;
+  mode: "CLASSIC" | "RLM_REPL";
   workspacePath: string;
   allowOutsideWorkspace: boolean;
   soulContents: string;
@@ -22,6 +23,7 @@ type AgentForm = {
 const DEFAULT_AGENT_FORM: AgentForm = {
   name: "",
   modelId: "openai:gpt-4o-mini",
+  mode: "CLASSIC",
   workspacePath: ".orgops-data/workspaces/default",
   allowOutsideWorkspace: false,
   soulContents: "",
@@ -108,6 +110,7 @@ export function AgentsScreen({
     setForm({
       name: selectedAgent.name,
       modelId: selectedAgent.modelId ?? "openai:gpt-4o-mini",
+      mode: selectedAgent.mode ?? "CLASSIC",
       workspacePath:
         selectedAgent.workspacePath ??
         `.orgops-data/workspaces/${selectedAgent.name}`,
@@ -236,6 +239,7 @@ export function AgentsScreen({
           ...form,
           name: normalizedName,
           modelId: form.modelId.trim(),
+          mode: form.mode,
           workspacePath: form.workspacePath.trim(),
           allowOutsideWorkspace: form.allowOutsideWorkspace,
           soulContents: form.soulContents,
@@ -255,6 +259,7 @@ export function AgentsScreen({
       if (!selectedAgent) return;
       await onUpdateAgent(selectedAgent.name, {
         modelId: form.modelId.trim(),
+        mode: form.mode,
         workspacePath: form.workspacePath.trim(),
         allowOutsideWorkspace: form.allowOutsideWorkspace,
         soulContents: form.soulContents,
@@ -356,6 +361,7 @@ export function AgentsScreen({
                 <th className="px-2 py-2">Runtime</th>
                 <th className="px-2 py-2">Desired</th>
                 <th className="px-2 py-2">Model</th>
+                <th className="px-2 py-2">Mode</th>
                 <th className="px-2 py-2">Workspace</th>
               </tr>
             </thead>
@@ -377,6 +383,9 @@ export function AgentsScreen({
                   </td>
                   <td className="max-w-[220px] truncate px-2 py-2 text-slate-400">
                     {agent.modelId ?? "-"}
+                  </td>
+                  <td className="whitespace-nowrap px-2 py-2 text-slate-400">
+                    {agent.mode ?? "CLASSIC"}
                   </td>
                   <td className="max-w-[420px] truncate px-2 py-2 text-slate-500">
                     {agent.workspacePath ?? "-"}
@@ -493,6 +502,24 @@ export function AgentsScreen({
                         }}
                         placeholder="openai:gpt-4o-mini"
                       />
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-sm text-slate-400">Mode</div>
+                      <select
+                        value={form.mode}
+                        onChange={(e) => {
+                          setIsFormDirty(true);
+                          setSaveStatus(null);
+                          setForm((prev) => ({
+                            ...prev,
+                            mode: e.target.value === "RLM_REPL" ? "RLM_REPL" : "CLASSIC"
+                          }));
+                        }}
+                        className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+                      >
+                        <option value="CLASSIC">CLASSIC</option>
+                        <option value="RLM_REPL">RLM_REPL</option>
+                      </select>
                     </div>
                     <div className="space-y-1">
                       <div className="text-sm text-slate-400">Workspace directory</div>

@@ -158,6 +158,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         alwaysPreloadedSkills: parseStringArraySafe(row.always_preloaded_skills_json),
         workspacePath: row.workspace_path,
         allowOutsideWorkspace: Boolean(row.allow_outside_workspace),
+        mode: row.mode ?? "CLASSIC",
         desiredState: row.desired_state,
         runtimeState: row.runtime_state,
         lastHeartbeatAt: row.last_heartbeat_at,
@@ -206,6 +207,10 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         soul_contents: soulContents,
         workspace_path: workspacePath,
         allow_outside_workspace: allowOutsideWorkspace ? 1 : 0,
+        mode:
+          typeof body.mode === "string" && body.mode.trim()
+            ? body.mode.trim()
+            : "CLASSIC",
         enabled_skills_json: JSON.stringify(enabledSkills),
         always_preloaded_skills_json: JSON.stringify(sanitizedAlwaysPreloadedSkills),
         desired_state: body.desiredState ?? "RUNNING",
@@ -234,6 +239,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       alwaysPreloadedSkills: parseStringArraySafe(row.always_preloaded_skills_json),
       workspacePath: row.workspace_path,
       allowOutsideWorkspace: Boolean(row.allow_outside_workspace),
+      mode: row.mode ?? "CLASSIC",
       desiredState: row.desired_state,
       runtimeState: row.runtime_state,
       lastHeartbeatAt: row.last_heartbeat_at,
@@ -292,6 +298,10 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         workspace_path: workspacePath,
         allow_outside_workspace:
           allowOutsideWorkspace ?? existing.allow_outside_workspace,
+        mode:
+          typeof body.mode === "string" && body.mode.trim()
+            ? body.mode.trim()
+            : existing.mode,
         enabled_skills_json: enabledSkillsJson ?? existing.enabled_skills_json,
         always_preloaded_skills_json: sanitizedAlwaysPreloadedSkillsJson,
         desired_state: body.desiredState ?? existing.desired_state,

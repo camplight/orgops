@@ -290,6 +290,48 @@ const coreEventShapes: EventShapeDefinition[] = [
     }),
   },
   {
+    type: "audit.rlm.repl_input",
+    description: "Audit record for RLM REPL input.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "audit.rlm.repl_output",
+    description: "Audit record for RLM REPL output.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "audit.rlm.repl_output.error",
+    description: "Audit record for RLM REPL execution errors.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "audit.rlm.subagent.started",
+    description: "Audit record for RLM subagent start.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "audit.rlm.subagent.finished",
+    description: "Audit record for RLM subagent completion.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "audit.rlm.done",
+    description: "Audit record for RLM done() completion.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "audit.rlm.max_steps_reached",
+    description: "Audit record for RLM reaching step budget.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
     type: "process.started",
     description: "Process lifecycle event emitted by runner.",
     source: "core",

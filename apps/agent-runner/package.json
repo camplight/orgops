@@ -4,14 +4,20 @@
   "type": "module",
   "main": "src/index.ts",
   "scripts": {
-    "dev": "bun --watch run src/index.ts",
-    "start": "bun run src/index.ts",
-    "lint": "bun run --silent tsc -p tsconfig.json --noEmit"
+    "dev": "node --watch --import tsx src/index.ts",
+    "start": "node --import tsx src/index.ts",
+    "test": "vitest run",
+    "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@orgops/llm": "workspace:*",
     "@orgops/schemas": "workspace:*",
     "@orgops/skills": "workspace:*",
     "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^24.5.2",
+    "tsx": "^4.20.5",
+    "vitest": "^3.2.4"
   }
 }

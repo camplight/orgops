@@ -27,6 +27,7 @@ export const agents = sqliteTable("agents", {
   allow_outside_workspace: integer("allow_outside_workspace")
     .notNull()
     .default(0),
+  mode: text("mode").notNull().default("CLASSIC"),
   desired_state: text("desired_state").notNull().default("RUNNING"),
   runtime_state: text("runtime_state").notNull().default("STOPPED"),
   last_heartbeat_at: integer("last_heartbeat_at"),
