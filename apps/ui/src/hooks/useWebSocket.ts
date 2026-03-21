@@ -27,6 +27,24 @@ export function useWebSocket({
   const subscribedTopics = useRef<Set<string>>(new Set());
   const activeChannelTopicRef = useRef<string | null>(null);
   const activeProcessTopicRef = useRef<string | null>(null);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const reconnectAttemptRef = useRef(0);
+  const shouldReconnectRef = useRef(true);
+  const onAgentStatusRef = useRef(onAgentStatus);
+  const onEventRef = useRef(onEvent);
+  const onProcessOutputRef = useRef(onProcessOutput);
+
+  useEffect(() => {
+    onAgentStatusRef.current = onAgentStatus;
+  }, [onAgentStatus]);
+
+  useEffect(() => {
+    onEventRef.current = onEvent;
+  }, [onEvent]);
+
+  useEffect(() => {
+    onProcessOutputRef.current = onProcessOutput;
+  }, [onProcessOutput]);
 
   const subscribeTopic = (topic: string) => {
     const ws = wsRef.current;
@@ -53,41 +71,75 @@ export function useWebSocket({
 
   useEffect(() => {
     if (!authenticated) return;
-    const ws = new WebSocket(
-      `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`
-    );
-    ws.onopen = () => {
-      subscribedTopics.current.add("org:agentStatus");
-      subscribedTopics.current.add("org:events");
-      for (const topic of subscribedTopics.current) {
-        ws.send(JSON.stringify({ type: "subscribe", topic }));
+
+    shouldReconnectRef.current = true;
+    const wsUrl = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`;
+
+    const clearReconnectTimer = () => {
+      if (reconnectTimerRef.current !== null) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
       }
     };
-    ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        if (msg.type === "agent_status") {
-          onAgentStatus(msg.data.agentName, msg.data.runtimeState);
+
+    const connect = () => {
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        reconnectAttemptRef.current = 0;
+        subscribedTopics.current.add("org:agentStatus");
+        subscribedTopics.current.add("org:events");
+        for (const topic of subscribedTopics.current) {
+          ws.send(JSON.stringify({ type: "subscribe", topic }));
         }
-        if (msg.type === "event") {
-          onEvent(msg.data);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === "agent_status") {
+            onAgentStatusRef.current(msg.data.agentName, msg.data.runtimeState);
+          }
+          if (msg.type === "event") {
+            onEventRef.current(msg.data);
+          }
+          if (msg.type === "process_output") {
+            const processId = msg.topic.split(":")[1];
+            if (processId) onProcessOutputRef.current(processId, msg.data);
+          }
+        } catch {
+          // ignore parse errors
         }
-        if (msg.type === "process_output") {
-          const processId = msg.topic.split(":")[1];
-          if (processId) onProcessOutput(processId, msg.data);
-        }
-      } catch {
-        // ignore parse errors
-      }
+      };
+
+      ws.onerror = () => {
+        // Trigger onclose, where reconnect scheduling is centralized.
+        ws.close();
+      };
+
+      ws.onclose = () => {
+        if (!shouldReconnectRef.current) return;
+        const delay = Math.min(5000, 400 * 2 ** reconnectAttemptRef.current);
+        reconnectAttemptRef.current += 1;
+        clearReconnectTimer();
+        reconnectTimerRef.current = window.setTimeout(connect, delay);
+      };
     };
-    wsRef.current = ws;
+
+    connect();
+
     return () => {
-      ws.close();
+      shouldReconnectRef.current = false;
+      clearReconnectTimer();
+      wsRef.current?.close();
+      wsRef.current = null;
+      reconnectAttemptRef.current = 0;
       subscribedTopics.current.clear();
       activeChannelTopicRef.current = null;
       activeProcessTopicRef.current = null;
     };
-  }, [authenticated, onAgentStatus, onEvent, onProcessOutput]);
+  }, [authenticated]);
 
   useEffect(() => {
     const nextTopic = activeChannelId ? `channel:${activeChannelId}` : null;

@@ -10,9 +10,9 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@orgops/llm": "workspace:*",
-    "@orgops/schemas": "workspace:*",
-    "@orgops/skills": "workspace:*",
+    "@orgops/llm": "file:../../packages/llm",
+    "@orgops/schemas": "file:../../packages/schemas",
+    "@orgops/skills": "file:../../packages/skills",
     "zod": "^3.23.8"
   },
   "devDependencies": {

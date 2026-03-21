@@ -7,18 +7,18 @@ JSON-driven end-to-end scenario checks for OrgOps collaboration flows against a 
 From repo root:
 
 ```bash
-bun run scenario:test:countdown
+npm run scenario:test:countdown
 ```
 
 Or directly:
 
 ```bash
-bun run --cwd packages/events-scenario-tests run --scenario coordinator-worker-countdown
+npm run --workspace @orgops/events-scenario-tests run -- --scenario coordinator-worker-countdown
 ```
 
 ## Notes
 
-- Requires API and runner running (for example via `bun run dev:all`).
+- Requires API and runner running (for example via `npm run dev:all`).
 - Uses `ORGOPS_API_URL` and `ORGOPS_RUNNER_TOKEN` (defaults match dev defaults).
 - Scenario setup can clear events and trigger workspace cleanup per agent.
 - Assertions are tolerant to variation:

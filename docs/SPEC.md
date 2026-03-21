@@ -13,7 +13,7 @@ Build **OrgOps**: a single-company, single-VPS system where **humans and autonom
 
 ## Tech stack
 
-- Runtime: **Bun**
+- Runtime: **Node.js**
 - API framework: **Hono** (HTTP JSON)
 - Realtime: **WebSocket** (single `/ws` endpoint + topic pub/sub)
 - DB: **SQLite** (WAL enabled)
@@ -538,9 +538,9 @@ API and runner compose these validators dynamically for fast schema feedback on 
 
 ### Services
 
-- `bun run apps/api`
-- `bun run apps/agent-runner`
-- `bun run apps/ui` (or build static and serve via API/nginx)
+- `npm run --workspace @orgops/api start`
+- `npm run --workspace @orgops/agent-runner start`
+- `npm run --workspace @orgops/ui preview` (or build static and serve via API/nginx)
 
 ### Nginx (single domain)
 
@@ -590,9 +590,9 @@ Ship these skill folders in `skills/`:
 - Human can chat with an agent in multiple conversations; messages are stored and streamed live.
 - Agents can run shell commands and start long processes; output streams to UI and is persisted.
 - All actions are auditable as events.
-- System runs on one VPS under one domain with bun + sqlite.
+- System runs on one VPS under one domain with Node.js + SQLite.
 
 ## Development commands
 
-- `bun run dev:all` starts API, agent-runner, and UI in dev mode
-- `bun run prod:all` builds UI and starts API, agent-runner, and UI preview
+- `npm run dev:all` starts API, agent-runner, and UI in dev mode
+- `npm run prod:all` builds UI and starts API, agent-runner, and UI preview

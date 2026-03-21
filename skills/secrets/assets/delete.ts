@@ -1,9 +1,9 @@
 const apiUrl = process.env.ORGOPS_API_URL ?? "http://localhost:8787";
 const token = process.env.ORGOPS_RUNNER_TOKEN;
 
-const [, , pkg, key] = Bun.argv;
+const [, , pkg, key] = process.argv;
 if (!pkg || !key) {
-  console.error("Usage: bun run delete.ts -- <package> <key>");
+  console.error("Usage: node --import tsx delete.ts -- <package> <key>");
   process.exit(1);
 }
 

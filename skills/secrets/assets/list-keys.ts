@@ -1,7 +1,7 @@
 const apiUrl = process.env.ORGOPS_API_URL ?? "http://localhost:8787";
 const token = process.env.ORGOPS_RUNNER_TOKEN;
 
-const [, , pkg] = Bun.argv;
+const [, , pkg] = process.argv;
 
 if (!token) {
   console.error("ORGOPS_RUNNER_TOKEN is required");

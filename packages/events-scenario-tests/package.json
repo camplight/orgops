@@ -4,8 +4,8 @@
   "type": "module",
   "main": "src/index.ts",
   "scripts": {
-    "run": "bun run src/index.ts",
-    "run:countdown": "bun run src/index.ts --scenario coordinator-worker-countdown",
-    "lint": "bun run --silent tsc -p tsconfig.json --noEmit"
+    "run": "node --import tsx src/index.ts",
+    "run:countdown": "node --import tsx src/index.ts --scenario coordinator-worker-countdown",
+    "lint": "tsc -p tsconfig.json --noEmit"
   }
 }

@@ -6,7 +6,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "lint": "bun run --silent tsc -p tsconfig.json --noEmit"
+    "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "react": "^18.3.1",

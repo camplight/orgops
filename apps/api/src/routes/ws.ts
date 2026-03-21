@@ -1,5 +1,4 @@
 import type { Hono } from "hono";
-import { upgradeWebSocket } from "hono/bun";
 
 import type { EventBus } from "@orgops/event-bus";
 
@@ -17,10 +16,11 @@ export type WsServerMessage =
 
 type WsDeps = {
   bus: EventBus<WsServerMessage>;
+  upgradeWebSocket: (createEvents: any) => any;
 };
 
 export function registerWsRoutes(app: Hono<any>, deps: WsDeps) {
-  const { bus } = deps;
+  const { bus, upgradeWebSocket } = deps;
 
   app.get(
     "/ws",
@@ -30,7 +30,7 @@ export function registerWsRoutes(app: Hono<any>, deps: WsDeps) {
       const send = (ws: { send: (data: string) => void }, data: WsServerMessage) =>
         ws.send(JSON.stringify(data));
       return {
-        onMessage: (event, ws) => {
+        onMessage: (event: { data: string | Uint8Array }, ws: { send: (data: string) => void }) => {
           const message = JSON.parse(event.data.toString()) as WsMessage;
           if (message.type === "ping") {
             return send(ws, { type: "subscribed", topic: "pong" });

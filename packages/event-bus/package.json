@@ -4,6 +4,6 @@
   "type": "module",
   "main": "src/index.ts",
   "scripts": {
-    "lint": "bun run --silent tsc -p tsconfig.json --noEmit"
+    "lint": "tsc -p tsconfig.json --noEmit"
   }
 }

@@ -1,12 +1,13 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { listSkills, loadSkillEventShapes } from "./index";
 
 describe("skills", () => {
   it("reads built-in skills", () => {
-    const skillsDir = join(import.meta.dir, "..", "..", "..", "skills");
+    const skillsDir = join(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "..", "skills");
     const skills = listSkills({ path: skillsDir });
     expect(skills.length).toBeGreaterThan(0);
     expect(skills.find((skill) => skill.name === "secrets")).toBeTruthy();

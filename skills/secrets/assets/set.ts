@@ -1,9 +1,9 @@
 const apiUrl = process.env.ORGOPS_API_URL ?? "http://localhost:8787";
 const token = process.env.ORGOPS_RUNNER_TOKEN;
 
-const [, , pkg, key, value] = Bun.argv;
+const [, , pkg, key, value] = process.argv;
 if (!pkg || !key || value === undefined) {
-  console.error("Usage: bun run set.ts -- <package> <key> <value>");
+  console.error("Usage: node --import tsx set.ts -- <package> <key> <value>");
   process.exit(1);
 }
 

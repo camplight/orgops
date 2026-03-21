@@ -4,9 +4,13 @@
   "type": "module",
   "main": "src/index.ts",
   "scripts": {
-    "lint": "bun run --silent tsc -p tsconfig.json --noEmit"
+    "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "better-sqlite3": "^12.4.1",
     "drizzle-orm": "^0.44.6"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12"
   }
 }

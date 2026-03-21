@@ -4,16 +4,18 @@
   "type": "module",
   "main": "src/server.ts",
   "scripts": {
-    "dev": "bun --watch run src/server.ts",
-    "start": "bun run src/server.ts",
-    "lint": "bun run --silent tsc -p tsconfig.json --noEmit"
+    "dev": "node --watch --import tsx src/server.ts",
+    "start": "node --import tsx src/server.ts",
+    "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@orgops/db": "workspace:*",
-    "@orgops/event-bus": "workspace:*",
-    "@orgops/crypto": "workspace:*",
-    "@orgops/schemas": "workspace:*",
-    "@orgops/skills": "workspace:*",
+    "@hono/node-server": "^1.13.7",
+    "@hono/node-ws": "^1.2.0",
+    "@orgops/db": "file:../../packages/db",
+    "@orgops/event-bus": "file:../../packages/event-bus",
+    "@orgops/crypto": "file:../../packages/crypto",
+    "@orgops/schemas": "file:../../packages/schemas",
+    "@orgops/skills": "file:../../packages/skills",
     "drizzle-orm": "^0.44.6",
     "hono": "^4.5.0"
   }

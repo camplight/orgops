@@ -1,11 +1,10 @@
-import { serve } from "bun";
-import { websocket } from "hono/bun";
+import { serve } from "@hono/node-server";
 import { createApp } from "./app";
 
-const { app } = createApp();
+const { app, injectWebSocket } = createApp();
 
-serve({
+const server = serve({
   fetch: app.fetch,
-  websocket,
   port: Number(process.env.PORT ?? 8787)
 });
+injectWebSocket(server);

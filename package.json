@@ -6,20 +6,25 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "bun run --env-file ../../.env --cwd apps/api dev",
-    "dev:all": "concurrently -k \"bun run --env-file ../../.env --cwd apps/api dev\" \"bun run --env-file ../../.env --cwd apps/agent-runner dev\" \"bun run --env-file ../../.env --cwd apps/ui dev\"",
-    "dev:all:clean": "bun run scripts/dev-all-clean.ts",
-    "build": "bun run --cwd apps/ui build",
-    "prod:all": "bun run build && concurrently -k \"bun run --env-file ../../.env --cwd apps/api start\" \"bun run --env-file ../../.env --cwd apps/agent-runner start\" \"bun run --env-file ../../.env --cwd apps/ui preview\"",
-    "test": "bun test",
-    "lint": "bun run lint:all",
-    "lint:all": "bun run --cwd apps/api lint && bun run --cwd apps/agent-runner lint && bun run --cwd apps/ui lint && bun run --cwd packages/db lint && bun run --cwd packages/schemas lint && bun run --cwd packages/event-bus lint && bun run --cwd packages/llm lint && bun run --cwd packages/crypto lint && bun run --cwd packages/skills lint && bun run --cwd packages/events-scenario-tests lint",
-    "scenario:test": "bun run --cwd packages/events-scenario-tests run",
-    "scenario:test:countdown": "bun run --cwd packages/events-scenario-tests run:countdown"
+    "dev": "dotenv -e .env -- npm run --workspace @orgops/api dev",
+    "dev:all": "dotenv -e .env -- concurrently -k \"npm run --workspace @orgops/api dev\" \"npm run --workspace @orgops/ui dev\" \"wait-on tcp:8787 && npm run --workspace @orgops/agent-runner dev\"",
+    "dev:all:no-api": "dotenv -e .env -- concurrently -k \"npm run --workspace @orgops/ui dev\" \"wait-on tcp:8787 && npm run --workspace @orgops/agent-runner dev\"",
+    "dev:all:clean": "node --env-file=.env --import tsx scripts/dev-all-clean.ts",
+    "build": "npm run --workspace @orgops/ui build",
+    "prod:all": "npm run build && dotenv -e .env -- concurrently -k \"npm run --workspace @orgops/api start\" \"npm run --workspace @orgops/ui preview\" \"wait-on tcp:8787 && npm run --workspace @orgops/agent-runner start\"",
+    "test": "vitest run",
+    "lint": "npm run lint:all",
+    "lint:all": "npm run --workspace @orgops/api lint && npm run --workspace @orgops/agent-runner lint && npm run --workspace @orgops/ui lint && npm run --workspace @orgops/db lint && npm run --workspace @orgops/schemas lint && npm run --workspace @orgops/event-bus lint && npm run --workspace @orgops/llm lint && npm run --workspace @orgops/crypto lint && npm run --workspace @orgops/skills lint && npm run --workspace @orgops/events-scenario-tests lint",
+    "scenario:test": "npm run --workspace @orgops/events-scenario-tests run",
+    "scenario:test:countdown": "npm run --workspace @orgops/events-scenario-tests run:countdown"
   },
   "devDependencies": {
-    "bun-types": "^1.3.9",
+    "@types/node": "^24.5.2",
     "concurrently": "^9.0.1",
-    "typescript": "^5.5.4"
+    "dotenv-cli": "^8.0.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.5.4",
+    "vitest": "^3.2.4",
+    "wait-on": "^8.0.5"
   }
 }

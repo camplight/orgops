@@ -5,7 +5,7 @@ Hono-based HTTP + WebSocket server with SQLite single-writer access.
 ## Run
 
 ```bash
-bun run dev
+npm run dev --workspace @orgops/api
 ```
 
 ## Key endpoints

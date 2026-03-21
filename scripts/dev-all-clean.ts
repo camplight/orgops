@@ -4,13 +4,11 @@ const API_URL = process.env.ORGOPS_API_URL ?? "http://localhost:8787";
 const RUNNER_TOKEN = process.env.ORGOPS_RUNNER_TOKEN ?? "dev-runner-token";
 
 const API_START_CMD = [
-  "bun",
-  "run",
-  "--env-file",
-  "../../.env",
-  "--cwd",
-  "apps/api",
-  "start",
+  "node",
+  "--env-file=.env",
+  "--import",
+  "tsx",
+  "apps/api/src/server.ts",
 ];
 
 type Agent = { name: string };
@@ -115,7 +113,13 @@ function waitForExit(child: ChildProcess): Promise<number> {
 }
 
 async function startDevAll() {
-  const child = spawnCommand("bun", ["run", "dev:all"], { withStdin: true });
+  const child = spawnCommand("npm", ["run", "dev:all"], { withStdin: true });
+  const code = await waitForExit(child);
+  process.exit(code);
+}
+
+async function startDevAllWithoutApi() {
+  const child = spawnCommand("npm", ["run", "dev:all:no-api"], { withStdin: true });
   const code = await waitForExit(child);
   process.exit(code);
 }
@@ -144,6 +148,12 @@ async function main() {
       tempApiProcess.kill("SIGTERM");
       await waitForExit(tempApiProcess);
     }
+  }
+
+  if (apiWasAlreadyRunning) {
+    console.log("[dev:all:clean] API already running; starting runner+ui only.");
+    await startDevAllWithoutApi();
+    return;
   }
 
   await startDevAll();

@@ -1,11 +1,14 @@
-import { Database } from "bun:sqlite";
-import { drizzle } from "drizzle-orm/bun-sqlite";
+import Database from "better-sqlite3";
+import { drizzle } from "drizzle-orm/better-sqlite3";
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { schema } from "./schema";
 export { CHANNEL_KINDS, isChannelKind, type ChannelKind } from "./channel-kinds";
 
-export type OrgOpsDb = Database;
+const THIS_DIR = dirname(fileURLToPath(import.meta.url));
+
+export type OrgOpsDb = InstanceType<typeof Database>;
 export type OrgOpsDrizzleDb = ReturnType<typeof createDrizzleDb>;
 
 export const DEFAULT_DB_PATH = ".orgops-data/orgops.sqlite";
@@ -31,7 +34,7 @@ export function createDrizzleDb(db: OrgOpsDb) {
   return drizzle(db, { schema });
 }
 
-export function migrate(db: OrgOpsDb, migrationsDir = join(import.meta.dir, "..", "migrations")) {
+export function migrate(db: OrgOpsDb, migrationsDir = join(THIS_DIR, "..", "migrations")) {
   if (!existsSync(migrationsDir)) {
     return;
   }
@@ -39,12 +42,8 @@ export function migrate(db: OrgOpsDb, migrationsDir = join(import.meta.dir, ".."
     "CREATE TABLE IF NOT EXISTS migrations (id TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)"
   );
 
-  const applied = new Set(
-    db
-      .query("SELECT id FROM migrations")
-      .all()
-      .map((row) => (row as { id: string }).id)
-  );
+  const applied = db.prepare("SELECT id FROM migrations").all() as Array<{ id: string }>;
+  const appliedIds = new Set(applied.map((row) => row.id));
 
   const files = readdirSync(migrationsDir)
     .filter((file) => file.endsWith(".sql"))
@@ -54,7 +53,7 @@ export function migrate(db: OrgOpsDb, migrationsDir = join(import.meta.dir, ".."
   const insert = db.prepare("INSERT INTO migrations (id, applied_at) VALUES (?, ?)");
 
   for (const file of files) {
-    if (applied.has(file)) continue;
+    if (appliedIds.has(file)) continue;
     const sql = readFileSync(join(migrationsDir, file), "utf-8");
     db.exec(sql);
     insert.run(file, now);

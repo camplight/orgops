@@ -533,7 +533,7 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (wantsHelp(args)) {
     printUsage(`Usage:
-  bun run skills/slack/assets/socket-listen.ts -- --agent <agent>
+  node --import tsx skills/slack/assets/socket-listen.ts -- --agent <agent>
 
 Options:
   --agent  Agent name (uses SLACK_BOT_TOKEN__<agent> and SLACK_APP_TOKEN__<agent>)

@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import * as vm from "node:vm";
 import { inspect } from "node:util";
-import { generate, type LlmMessage } from "@orgops/llm";
+import { generate, type LlmMessage, type LlmTool } from "@orgops/llm";
 import { createRunnerTools, executeTool, type ExecuteContext } from "./tools";
 import type { Agent, Event } from "./types";
 
@@ -57,6 +57,21 @@ type RlmSession = {
 
 type RunState = {
   spawnedSubagents: number;
+  toolCallsThisStep: ToolCallRecord[];
+};
+
+type ToolDoc = {
+  name: string;
+  description?: string;
+  parameters?: unknown;
+};
+
+type ToolCallRecord = {
+  tool: string;
+  args: Record<string, unknown>;
+  ok: boolean;
+  output?: unknown;
+  error?: string;
 };
 
 type RunReplLoopInput = {
@@ -71,6 +86,7 @@ type RunReplLoopInput = {
   promptText: string;
   depth: number;
   maxSteps: number;
+  toolDocs?: ToolDoc[];
   includeChannelMessages: boolean;
   baseMessages?: LlmMessage[];
   generateFn?: RlmGenerateFn;
@@ -166,6 +182,7 @@ function createToolFunctions(
   executeCtx: ExecuteContext,
   apiFetch: (path: string, init?: RequestInit) => Promise<Response>,
   emitEvent: (event: unknown) => Promise<void>,
+  onToolCall: (record: ToolCallRecord) => void,
 ) {
   const llmTools = createRunnerTools({
     agent,
@@ -175,17 +192,50 @@ function createToolFunctions(
     apiFetch,
     emitEvent,
   });
+  const docs: ToolDoc[] = Object.entries(llmTools).map(([name, tool]) => ({
+    name,
+    description: tool.description,
+    parameters: tool.parameters,
+  }));
   const entries = Object.entries(llmTools).map(([toolName, tool]) => {
     const executeFn = tool.execute;
     const wrapper = async (args: Record<string, unknown> = {}) => {
       if (!executeFn) {
-        throw new Error(`Tool ${toolName} is missing execute function.`);
+        const errorText = `Tool ${toolName} is missing execute function.`;
+        onToolCall({
+          tool: toolName,
+          args,
+          ok: false,
+          error: errorText,
+        });
+        throw new Error(errorText);
       }
-      return executeFn(args);
+      try {
+        const output = await executeFn(args);
+        const maybeError =
+          output && typeof output === "object" && "error" in (output as Record<string, unknown>)
+            ? String((output as { error: unknown }).error)
+            : null;
+        onToolCall({
+          tool: toolName,
+          args,
+          ok: !maybeError,
+          ...(maybeError ? { error: maybeError } : { output }),
+        });
+        return output;
+      } catch (error) {
+        onToolCall({
+          tool: toolName,
+          args,
+          ok: false,
+          error: String(error),
+        });
+        throw error;
+      }
     };
     return [toolName, wrapper] as const;
   });
-  return Object.fromEntries(entries);
+  return { functions: Object.fromEntries(entries), docs };
 }
 
 function createBaseContext() {
@@ -251,7 +301,19 @@ async function bindSessionRuntime(
   const { agent, event, channelId, executeCtx, apiFetch, emitEvent, session, runState, promptText, depth } =
     input;
   const context = session.context as Record<string, unknown>;
-  const toolFns = createToolFunctions(agent, event, channelId, executeCtx, apiFetch, emitEvent);
+  const toolRuntime = createToolFunctions(
+    agent,
+    event,
+    channelId,
+    executeCtx,
+    apiFetch,
+    emitEvent,
+    (record) => {
+      runState.toolCallsThisStep.push(record);
+    },
+  );
+  const toolFns = toolRuntime.functions;
+  const toolDocs = toolRuntime.docs;
   Object.assign(context, toolFns);
   Object.assign(context, {
     prompt: promptText,
@@ -268,8 +330,34 @@ async function bindSessionRuntime(
       }
       return "Context cleared.";
     },
+    listTools: () =>
+      toolDocs.map((tool) => ({
+        name: tool.name,
+        description: tool.description ?? "",
+      })),
+    toolHelp: (name?: string) => {
+      if (!name) {
+        return toolDocs.map((tool) => ({
+          name: tool.name,
+          description: tool.description ?? "",
+          parameters: formatValue(tool.parameters),
+        }));
+      }
+      const tool = toolDocs.find((candidate) => candidate.name === name);
+      if (!tool) {
+        return {
+          error: `Unknown tool: ${name}`,
+          availableTools: toolDocs.map((candidate) => candidate.name),
+        };
+      }
+      return {
+        name: tool.name,
+        description: tool.description ?? "",
+        parameters: formatValue(tool.parameters),
+      };
+    },
     help: () =>
-      "Use `prompt`, tool functions (events_*/fs_*/shell_run/proc_*), done(result), and spawnSubagent(promptText).",
+      "Use `prompt`, tool functions (events_*/fs_*/shell_run/proc_*), listTools(), toolHelp(name?), done(result), and spawnSubagent(promptText).",
   });
   context.spawnSubagent = async (subPromptText: string) => {
     if (typeof subPromptText !== "string" || !subPromptText.trim()) {
@@ -297,7 +385,7 @@ async function bindSessionRuntime(
         depth: childSession.depth,
       },
     });
-    await bindSessionRuntime({
+    const childToolDocs = await bindSessionRuntime({
       agent,
       event,
       channelId,
@@ -321,6 +409,7 @@ async function bindSessionRuntime(
       promptText: subPromptText,
       depth: depth + 1,
       maxSteps: RLM_MAX_STEPS,
+      toolDocs: childToolDocs,
       includeChannelMessages: false,
       generateFn: input.generateFn,
     });
@@ -347,7 +436,10 @@ async function bindSessionRuntime(
   session.reservedKeys.add("done");
   session.reservedKeys.add("spawnSubagent");
   session.reservedKeys.add("help");
+  session.reservedKeys.add("listTools");
+  session.reservedKeys.add("toolHelp");
   session.reservedKeys.add("clear");
+  return toolDocs;
 }
 
 async function runReplLoop(input: RunReplLoopInput): Promise<{ done: boolean; doneValue: unknown }> {
@@ -358,9 +450,11 @@ async function runReplLoop(input: RunReplLoopInput): Promise<{ done: boolean; do
     executeCtx,
     emitEvent,
     session,
+    runState,
     promptText,
     depth,
     maxSteps,
+    toolDocs,
     includeChannelMessages,
     baseMessages,
     generateFn,
@@ -386,7 +480,28 @@ async function runReplLoop(input: RunReplLoopInput): Promise<{ done: boolean; do
       ),
     },
   ];
+  if (toolDocs && toolDocs.length > 0) {
+    localMessages.push({
+      role: "user",
+      content: JSON.stringify(
+        {
+          type: "rlm.tools.available",
+          depth,
+          totalTools: toolDocs.length,
+          tools: toolDocs.map((tool) => ({
+            name: tool.name,
+            description: tool.description ?? "",
+          })),
+          discoveryHint:
+            "Tool functions are injected as globals. Use listTools() for names and toolHelp(name?) for argument details.",
+        },
+        null,
+        2,
+      ),
+    });
+  }
   for (let step = 1; step <= maxSteps; step += 1) {
+    runState.toolCallsThisStep = [];
     const messages: LlmMessage[] = [];
     if (includeChannelMessages && baseMessages) {
       messages.push(...baseMessages);
@@ -444,6 +559,18 @@ async function runReplLoop(input: RunReplLoopInput): Promise<{ done: boolean; do
       outputText = truncateText(String(error), RLM_MAX_OUTPUT_CHARS).text;
       executionError = String(error);
     }
+    const toolCallsForStep = runState.toolCallsThisStep.map((record) => ({
+      tool: record.tool,
+      args: record.args,
+      ok: record.ok,
+      ...(record.ok
+        ? {
+            output: truncateText(formatValue(record.output), RLM_MAX_OUTPUT_CHARS).text,
+          }
+        : {
+            error: record.error ?? "Unknown tool error",
+          }),
+    }));
     await emitEvent({
       type: executionError ? "audit.rlm.repl_output.error" : "audit.rlm.repl_output",
       source: `agent:${agent.name}`,
@@ -454,6 +581,7 @@ async function runReplLoop(input: RunReplLoopInput): Promise<{ done: boolean; do
         step,
         text: outputText,
         truncated: outputTruncated,
+        toolCalls: toolCallsForStep,
         ...(executionError ? { error: executionError } : {}),
       },
     });
@@ -465,6 +593,7 @@ async function runReplLoop(input: RunReplLoopInput): Promise<{ done: boolean; do
           depth,
           step,
           output: outputText,
+          toolCalls: toolCallsForStep,
         },
         null,
         2,
@@ -542,8 +671,8 @@ export async function runRlmEvent(input: {
       rootSession = await createSession({ agent, depth: 0 });
       rootSessions.set(agent.name, rootSession);
     }
-    const runState: RunState = { spawnedSubagents: 0 };
-    await bindSessionRuntime({
+    const runState: RunState = { spawnedSubagents: 0, toolCallsThisStep: [] };
+    const rootToolDocs = await bindSessionRuntime({
       agent,
       event,
       channelId,
@@ -568,6 +697,7 @@ export async function runRlmEvent(input: {
       promptText,
       depth: 0,
       maxSteps: RLM_MAX_STEPS,
+      toolDocs: rootToolDocs,
       includeChannelMessages: true,
       baseMessages,
       generateFn,

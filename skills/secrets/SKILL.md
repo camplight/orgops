@@ -13,13 +13,13 @@ All commands require `ORGOPS_RUNNER_TOKEN` and use `ORGOPS_API_URL` (default `ht
 ### Set a secret
 
 ```bash
-bun run {baseDir}/assets/set.ts -- <package> <key> <value>
+node --import tsx {baseDir}/assets/set.ts -- <package> <key> <value>
 ```
 
 Example: store OpenAI key for the `llm` package:
 
 ```bash
-ORGOPS_RUNNER_TOKEN=... bun run {baseDir}/assets/set.ts -- llm OPENAI_API_KEY sk-...
+ORGOPS_RUNNER_TOKEN=... node --import tsx {baseDir}/assets/set.ts -- llm OPENAI_API_KEY sk-...
 ```
 
 ### List secret keys
@@ -27,26 +27,26 @@ ORGOPS_RUNNER_TOKEN=... bun run {baseDir}/assets/set.ts -- llm OPENAI_API_KEY sk
 Returns key names only (and package), never values.
 
 ```bash
-bun run {baseDir}/assets/list-keys.ts -- [package]
+node --import tsx {baseDir}/assets/list-keys.ts -- [package]
 ```
 
 Examples:
 
 ```bash
-bun run {baseDir}/assets/list-keys.ts --           # all packages
-bun run {baseDir}/assets/list-keys.ts -- llm       # only keys for package "llm"
+node --import tsx {baseDir}/assets/list-keys.ts --           # all packages
+node --import tsx {baseDir}/assets/list-keys.ts -- llm       # only keys for package "llm"
 ```
 
 ### Delete a secret
 
 ```bash
-bun run {baseDir}/assets/delete.ts -- <package> <key>
+node --import tsx {baseDir}/assets/delete.ts -- <package> <key>
 ```
 
 Example:
 
 ```bash
-bun run {baseDir}/assets/delete.ts -- llm OPENAI_API_KEY
+node --import tsx {baseDir}/assets/delete.ts -- llm OPENAI_API_KEY
 ```
 
 ## Package names

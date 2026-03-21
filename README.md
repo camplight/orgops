@@ -23,18 +23,17 @@ files/            Runtime file storage (gitignored)
 
 ## Requirements
 
-- Bun 1.2+
-- SQLite (bundled via Bun)
-- Node 18+ (for tooling)
+- Node 22+
+- SQLite
 - Python 3.11+ for browser-use skill
 
 ## Quickstart
 
 ```bash
-bun install
+npm install
 
 # Dev: API + agent-runner + UI
-bun run dev:all
+npm run dev:all
 ```
 
 Open `http://localhost:5173` for UI, API on `http://localhost:8787`.
@@ -42,7 +41,7 @@ Open `http://localhost:5173` for UI, API on `http://localhost:8787`.
 ## Production
 
 ```bash
-bun run prod:all
+npm run prod:all
 ```
 
 This builds the UI and runs the API, runner, and UI preview.
@@ -59,13 +58,13 @@ This builds the UI and runs the API, runner, and UI preview.
 ## Tests
 
 ```bash
-bun test
+npm test
 ```
 
 Scenario e2e checks against running services:
 
 ```bash
-bun run scenario:test:countdown
+npm run scenario:test:countdown
 ```
 
 ## Skills

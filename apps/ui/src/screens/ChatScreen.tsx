@@ -175,8 +175,12 @@ export function ChatScreen({
     return [...stateByAgent.entries()]
       .filter(([, value]) => {
         if (value.latestActivityAt <= 0) return false;
-        if (value.latestTerminalAt === null) return true;
-        if (value.latestTerminalAt < value.latestActivityAt) return true;
+        if (value.latestTerminalAt === null) {
+          return now - value.latestActivityAt <= INDICATOR_GRACE_MS;
+        }
+        if (value.latestTerminalAt < value.latestActivityAt) {
+          return now - value.latestActivityAt <= INDICATOR_GRACE_MS;
+        }
         return now - value.latestTerminalAt <= INDICATOR_GRACE_MS;
       })
       .sort((left, right) => right[1].latestActivityAt - left[1].latestActivityAt)

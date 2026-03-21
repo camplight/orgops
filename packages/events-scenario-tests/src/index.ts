@@ -1,5 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 type Primitive = string | number | boolean | null;
 
@@ -60,7 +61,7 @@ type OrgEvent = {
 
 const API_URL = process.env.ORGOPS_API_URL ?? "http://localhost:8787";
 const RUNNER_TOKEN = process.env.ORGOPS_RUNNER_TOKEN ?? "dev-runner-token";
-const PACKAGE_ROOT = resolve(import.meta.dir, "..");
+const PACKAGE_ROOT = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const SCENARIOS_DIR = resolve(PACKAGE_ROOT, "scenarios");
 const PROJECT_ROOT = resolve(PACKAGE_ROOT, "..", "..");
 

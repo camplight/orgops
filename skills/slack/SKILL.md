@@ -24,8 +24,8 @@ Per-agent keys (recommended):
 Example:
 
 ```bash
-bun run skills/secrets/assets/set.ts -- slack SLACK_BOT_TOKEN__worker1 xoxb-...
-bun run skills/secrets/assets/set.ts -- slack SLACK_APP_TOKEN__worker1 xapp-...
+node --import tsx skills/secrets/assets/set.ts -- slack SLACK_BOT_TOKEN__worker1 xoxb-...
+node --import tsx skills/secrets/assets/set.ts -- slack SLACK_APP_TOKEN__worker1 xapp-...
 ```
 
 ## Slack app setup (minimum)
@@ -132,7 +132,7 @@ The exact typed validators live in `skills/slack/event-shapes.ts` and are dynami
 Run one listener process per agent:
 
 ```bash
-bun run skills/slack/assets/socket-listen.ts -- --agent worker1
+node --import tsx skills/slack/assets/socket-listen.ts -- --agent worker1
 ```
 
 Optional routing granularity:

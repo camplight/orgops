@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { createNodeWebSocket } from "@hono/node-ws";
 import {
   existsSync,
   mkdirSync,
@@ -56,6 +57,7 @@ type AppEnv = {
 
 export function createApp(config: AppConfig = {}) {
   const app = new Hono<AppEnv>();
+  const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
   const PROJECT_ROOT = (() => {
     const envRoot = process.env.ORGOPS_PROJECT_ROOT;
     if (envRoot) return envRoot;
@@ -394,7 +396,7 @@ export function createApp(config: AppConfig = {}) {
     insertEvent,
   });
 
-  registerWsRoutes(app as any, { bus });
+  registerWsRoutes(app as any, { bus, upgradeWebSocket });
 
-  return { app, db, bus };
+  return { app, db, bus, injectWebSocket };
 }
