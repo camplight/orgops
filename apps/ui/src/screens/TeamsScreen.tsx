@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Agent, Human, Team, TeamMember } from "../types";
 import { Button, Card, Input, Select } from "../components/ui";
+import { useEscapeKey } from "../hooks/useEscapeKey";
 
 type TeamsScreenProps = {
   teams: Team[];
@@ -74,6 +75,16 @@ export function TeamsScreen({
   const availableMemberOptions = selectedMemberType === "AGENT" ? availableAgents : availableHumans;
   const noMembersMessage =
     selectedMemberType === "AGENT" ? "All agents already added" : "All humans already added";
+
+  useEscapeKey(createDrawerOpen || isDetailsOpen, () => {
+    if (isDetailsOpen) {
+      setSelectedTeamId(null);
+      return;
+    }
+    if (createDrawerOpen) {
+      setCreateDrawerOpen(false);
+    }
+  });
 
   const handleCreateTeam = async () => {
     setError(null);

@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Button, Card, Input } from "../components/ui";
+import { useEscapeKey } from "../hooks/useEscapeKey";
 import type { Human } from "../types";
 
 type HumansScreenProps = {
@@ -30,6 +31,16 @@ export function HumansScreen({ humans, onInviteHuman, onRefresh }: HumansScreenP
     [humans]
   );
   const selectedHuman = sortedHumans.find((human) => human.id === activeHumanId) ?? null;
+
+  useEscapeKey(createDrawerOpen || Boolean(selectedHuman), () => {
+    if (selectedHuman) {
+      setActiveHumanId(null);
+      return;
+    }
+    if (createDrawerOpen) {
+      setCreateDrawerOpen(false);
+    }
+  });
 
   const handleInvite = async () => {
     const trimmedUsername = newHuman.username.trim();

@@ -7,6 +7,7 @@ import type {
   SkillMeta
 } from "../types";
 import { Button, Card, Input, Textarea } from "../components/ui";
+import { useEscapeKey } from "../hooks/useEscapeKey";
 import { formatTimestamp } from "../utils/formatTimestamp";
 
 type AgentForm = {
@@ -163,6 +164,20 @@ export function AgentsScreen({
     setSelectedEventId(null);
     setOpenFile(null);
   };
+
+  useEscapeKey(drawerOpen || eventDetailsDrawerOpen || Boolean(openFile), () => {
+    if (openFile) {
+      setOpenFile(null);
+      return;
+    }
+    if (eventDetailsDrawerOpen) {
+      setSelectedEventId(null);
+      return;
+    }
+    if (drawerOpen) {
+      closeDrawer();
+    }
+  });
 
   const openEventsTab = async () => {
     if (!selectedAgent) return;

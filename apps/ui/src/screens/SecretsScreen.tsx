@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { SecretRow } from "../types";
 import { Button, Card, Input, Select } from "../components/ui";
+import { useEscapeKey } from "../hooks/useEscapeKey";
 import { formatTimestamp } from "../utils/formatTimestamp";
 
 type SecretsScreenProps = {
@@ -26,6 +27,16 @@ export function SecretsScreen({ secrets, onAddSecret, onDeleteSecret }: SecretsS
   const [deletingSecretId, setDeletingSecretId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const selectedSecret = secrets.find((secret) => secret.id === activeSecretId) ?? null;
+
+  useEscapeKey(createDrawerOpen || Boolean(selectedSecret), () => {
+    if (selectedSecret) {
+      setActiveSecretId(null);
+      return;
+    }
+    if (createDrawerOpen) {
+      setCreateDrawerOpen(false);
+    }
+  });
 
   const handleSave = async () => {
     setError(null);

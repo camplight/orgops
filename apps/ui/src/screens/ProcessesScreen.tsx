@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import type { ProcessOutputRow, ProcessRow } from "../types";
 import { Button, Card } from "../components/ui";
+import { useEscapeKey } from "../hooks/useEscapeKey";
 import { formatTimestamp } from "../utils/formatTimestamp";
 
 type ProcessesScreenProps = {
@@ -43,6 +44,9 @@ export function ProcessesScreen({
     () => processes.find((process) => process.id === activeProcessId) ?? null,
     [activeProcessId, processes]
   );
+  useEscapeKey(Boolean(selectedProcess), () => {
+    onSelectProcess(null);
+  });
   const output = activeProcessId ? (processOutput[activeProcessId] ?? []) : [];
   const canExitProcess = (process: ProcessRow) =>
     process.state === "RUNNING" || process.state === "STARTING";

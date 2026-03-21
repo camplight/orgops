@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Channel, EventRow, EventTypeInfo } from "../types";
 import { Button, Card, Input } from "../components/ui";
+import { useEscapeKey } from "../hooks/useEscapeKey";
 import { formatTimestamp } from "../utils/formatTimestamp";
 
 type EventFilters = {
@@ -205,6 +206,10 @@ export function EventsScreen({
     () => filteredAndSortedEvents.find((event) => event.id === selectedEventId) ?? null,
     [filteredAndSortedEvents, selectedEventId]
   );
+
+  useEscapeKey(Boolean(selectedEvent), () => {
+    setSelectedEventId(null);
+  });
 
   useEffect(() => {
     if (currentPage > totalPages) {

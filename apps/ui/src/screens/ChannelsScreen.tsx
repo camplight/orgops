@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { Agent, Channel, ChannelParticipant, EventRow } from "../types";
 import { Button, Card, Input, Select } from "../components/ui";
+import { useEscapeKey } from "../hooks/useEscapeKey";
 import { formatTimestamp } from "../utils/formatTimestamp";
 
 type ChannelsScreenProps = {
@@ -45,6 +46,21 @@ export function ChannelsScreen({
   const [error, setError] = useState<string | null>(null);
   const selectedChannel = channels.find((channel) => channel.id === activeChannelId) ?? null;
   const selectedEvent = channelEvents.find((event) => event.id === selectedEventId) ?? null;
+
+  useEscapeKey(createDrawerOpen || Boolean(selectedChannel) || Boolean(selectedEvent), () => {
+    if (selectedEvent) {
+      setSelectedEventId(null);
+      return;
+    }
+    if (selectedChannel) {
+      setSelectedEventId(null);
+      onSelectChannel(null);
+      return;
+    }
+    if (createDrawerOpen) {
+      setCreateDrawerOpen(false);
+    }
+  });
 
   useEffect(() => {
     setSelectedEventId(null);
