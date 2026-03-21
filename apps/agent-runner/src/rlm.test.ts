@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { LlmMessage } from "@orgops/llm";
-import { getCoreEventShapes, validateEventAgainstShapes } from "@orgops/schemas";
+import {
+  getCoreEventShapes,
+  validateEventAgainstShapes,
+} from "@orgops/schemas";
 import { __resetRlmSessionsForTests, runRlmEvent } from "./rlm";
 import type { Agent, Event } from "./types";
 
@@ -45,10 +48,18 @@ function makeExecuteContext(agent: Agent, event: Event) {
   };
 }
 
-function parseDepthStep(messages: LlmMessage[]): { depth: number; step: number } {
-  const lastUser = [...messages].reverse().find((message) => message.role === "user");
+function parseDepthStep(messages: LlmMessage[]): {
+  depth: number;
+  step: number;
+} {
+  const lastUser = [...messages]
+    .reverse()
+    .find((message) => message.role === "user");
   if (!lastUser) return { depth: 0, step: 1 };
-  const parsed = JSON.parse(lastUser.content) as { depth?: number; step?: number };
+  const parsed = JSON.parse(lastUser.content) as {
+    depth?: number;
+    step?: number;
+  };
   return { depth: parsed.depth ?? 0, step: parsed.step ?? 1 };
 }
 
@@ -91,8 +102,12 @@ describe("RLM mode", () => {
       generateFn: async () => ({ text: "done({ ok: true })" }),
     });
 
-    expect(emitted.some((entry) => entry.type === "audit.rlm.repl_input")).toBe(true);
-    expect(emitted.some((entry) => entry.type === "audit.rlm.repl_output")).toBe(true);
+    expect(emitted.some((entry) => entry.type === "audit.rlm.repl_input")).toBe(
+      true,
+    );
+    expect(
+      emitted.some((entry) => entry.type === "audit.rlm.repl_output"),
+    ).toBe(true);
     expect(emitted.some((entry) => entry.type === "audit.rlm.done")).toBe(true);
   });
 
@@ -153,7 +168,9 @@ describe("RLM mode", () => {
         }),
       emitEvent: async (draft) => {
         if ((draft as { type: string }).type === "audit.rlm.done") {
-          donePayloads.push((draft as { payload: { doneValue: string } }).payload.doneValue);
+          donePayloads.push(
+            (draft as { payload: { doneValue: string } }).payload.doneValue,
+          );
         }
       },
       generateFn: async () => ({
@@ -175,7 +192,9 @@ describe("RLM mode", () => {
         }),
       emitEvent: async (draft) => {
         if ((draft as { type: string }).type === "audit.rlm.done") {
-          donePayloads.push((draft as { payload: { doneValue: string } }).payload.doneValue);
+          donePayloads.push(
+            (draft as { payload: { doneValue: string } }).payload.doneValue,
+          );
         }
       },
       generateFn: async () => ({
@@ -187,4 +206,3 @@ describe("RLM mode", () => {
     expect(String(donePayloads[1])).toContain("1");
   });
 });
-

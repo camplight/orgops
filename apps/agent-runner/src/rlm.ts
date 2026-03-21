@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
-import * as vm from "node:vm";
+import { PassThrough } from "node:stream";
+import * as repl from "node:repl";
 import { inspect } from "node:util";
 import { generate, type LlmMessage, type LlmTool } from "@orgops/llm";
 import { createRunnerTools, executeTool, type ExecuteContext } from "./tools";
@@ -12,7 +13,10 @@ const DEFAULT_EVAL_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_SUBAGENT_DEPTH = 3;
 const DEFAULT_MAX_SUBAGENTS_PER_EVENT = 12;
 
-function readPositiveIntEnv(value: string | undefined, fallback: number): number {
+function readPositiveIntEnv(
+  value: string | undefined,
+  fallback: number,
+): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
 }
@@ -49,7 +53,8 @@ const RLM_MAX_SUBAGENTS_PER_EVENT = readPositiveIntEnv(
 type RlmSession = {
   id: string;
   depth: number;
-  context: vm.Context;
+  replServer: repl.REPLServer;
+  context: Record<string, unknown>;
   reservedKeys: Set<string>;
   done: boolean;
   doneValue: unknown;
@@ -108,7 +113,10 @@ function newSessionId(agentName: string, depth: number) {
   return `${agentName}:${depth}:${Date.now()}:${Math.floor(Math.random() * 1_000_000)}`;
 }
 
-function truncateText(value: string, maxChars: number): { text: string; truncated: boolean } {
+function truncateText(
+  value: string,
+  maxChars: number,
+): { text: string; truncated: boolean } {
   if (value.length <= maxChars) return { text: value, truncated: false };
   return {
     text: `${value.slice(0, maxChars)}\n...[truncated ${value.length - maxChars} chars]`,
@@ -119,7 +127,9 @@ function truncateText(value: string, maxChars: number): { text: string; truncate
 function extractCode(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) return "";
-  const fenced = trimmed.match(/```(?:repl|js|javascript|ts|typescript)?\s*([\s\S]*?)\s*```/i);
+  const fenced = trimmed.match(
+    /```(?:repl|js|javascript|ts|typescript)?\s*([\s\S]*?)\s*```/i,
+  );
   return fenced?.[1] ? fenced[1].trim() : trimmed;
 }
 
@@ -163,9 +173,19 @@ async function evaluateInput(
   session: RlmSession,
   code: string,
 ): Promise<{ value: unknown; outputText: string; outputTruncated: boolean }> {
-  const scriptValue = vm.runInContext(code, session.context, {
-    timeout: RLM_EVAL_TIMEOUT_MS,
-    displayErrors: true,
+  const scriptValue = await new Promise<unknown>((resolve, reject) => {
+    session.replServer.eval(
+      code,
+      session.context as any,
+      "rlm-repl",
+      (error, result) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve(result);
+      },
+    );
   });
   const value =
     scriptValue && typeof (scriptValue as Promise<unknown>).then === "function"
@@ -213,7 +233,9 @@ function createToolFunctions(
       try {
         const output = await executeFn(args);
         const maybeError =
-          output && typeof output === "object" && "error" in (output as Record<string, unknown>)
+          output &&
+          typeof output === "object" &&
+          "error" in (output as Record<string, unknown>)
             ? String((output as { error: unknown }).error)
             : null;
         onToolCall({
@@ -276,31 +298,62 @@ function buildSystemMessage(depth: number): string {
   ].join("\n");
 }
 
-async function createSession(input: { agent: Agent; depth: number }): Promise<RlmSession> {
+async function createSession(input: {
+  agent: Agent;
+  depth: number;
+}): Promise<RlmSession> {
   const { agent, depth } = input;
-  const context = vm.createContext(createBaseContext());
+  const inputStream = new PassThrough();
+  const outputStream = new PassThrough();
+  const replServer = repl.start({
+    prompt: "",
+    terminal: false,
+    input: inputStream,
+    output: outputStream,
+    useGlobal: false,
+    ignoreUndefined: false,
+    useColors: false,
+  });
+  const context = replServer.context as Record<string, unknown>;
+  Object.assign(context, createBaseContext());
   const session: RlmSession = {
     id: newSessionId(agent.name, depth),
     depth,
+    replServer,
     context,
     reservedKeys: new Set(),
     done: false,
     doneValue: undefined,
   };
-  session.reservedKeys = new Set(Object.keys(context as Record<string, unknown>));
+  session.reservedKeys = new Set(
+    Object.keys(context as Record<string, unknown>),
+  );
   return session;
 }
 
 async function bindSessionRuntime(
-  input: Omit<RunReplLoopInput, "includeChannelMessages" | "baseMessages" | "maxSteps"> & {
+  input: Omit<
+    RunReplLoopInput,
+    "includeChannelMessages" | "baseMessages" | "maxSteps"
+  > & {
     runState: RunState;
     promptText: string;
     depth: number;
   },
 ) {
-  const { agent, event, channelId, executeCtx, apiFetch, emitEvent, session, runState, promptText, depth } =
-    input;
-  const context = session.context as Record<string, unknown>;
+  const {
+    agent,
+    event,
+    channelId,
+    executeCtx,
+    apiFetch,
+    emitEvent,
+    session,
+    runState,
+    promptText,
+    depth,
+  } = input;
+  const context = session.context;
   const toolRuntime = createToolFunctions(
     agent,
     event,
@@ -424,11 +477,17 @@ async function bindSessionRuntime(
         done: childResult.done,
       },
     });
+    childSession.replServer.close();
     return childResult.doneValue;
   };
   for (const key of Object.keys(context)) {
     if (session.reservedKeys.has(key)) continue;
-    if (key.startsWith("events_") || key.startsWith("fs_") || key.startsWith("proc_") || key === "shell_run") {
+    if (
+      key.startsWith("events_") ||
+      key.startsWith("fs_") ||
+      key.startsWith("proc_") ||
+      key === "shell_run"
+    ) {
       session.reservedKeys.add(key);
     }
   }
@@ -442,7 +501,9 @@ async function bindSessionRuntime(
   return toolDocs;
 }
 
-async function runReplLoop(input: RunReplLoopInput): Promise<{ done: boolean; doneValue: unknown }> {
+async function runReplLoop(
+  input: RunReplLoopInput,
+): Promise<{ done: boolean; doneValue: unknown }> {
   const {
     agent,
     event,
@@ -518,7 +579,8 @@ async function runReplLoop(input: RunReplLoopInput): Promise<{ done: boolean; do
           triggerEventId: event.id,
           promptAvailableInRepl: true,
           promptReplPath: "globalThis.prompt",
-          promptReminder: "Read global `prompt` and produce one JS REPL input. Call done(result) when complete.",
+          promptReminder:
+            "Read global `prompt` and produce one JS REPL input. Call done(result) when complete.",
         },
         null,
         2,
@@ -565,14 +627,19 @@ async function runReplLoop(input: RunReplLoopInput): Promise<{ done: boolean; do
       ok: record.ok,
       ...(record.ok
         ? {
-            output: truncateText(formatValue(record.output), RLM_MAX_OUTPUT_CHARS).text,
+            output: truncateText(
+              formatValue(record.output),
+              RLM_MAX_OUTPUT_CHARS,
+            ).text,
           }
         : {
             error: record.error ?? "Unknown tool error",
           }),
     }));
     await emitEvent({
-      type: executionError ? "audit.rlm.repl_output.error" : "audit.rlm.repl_output",
+      type: executionError
+        ? "audit.rlm.repl_output.error"
+        : "audit.rlm.repl_output",
       source: `agent:${agent.name}`,
       channelId,
       payload: {
@@ -608,7 +675,10 @@ async function runReplLoop(input: RunReplLoopInput): Promise<{ done: boolean; do
           sessionId: session.id,
           depth,
           step,
-          doneValue: truncateText(formatValue(session.doneValue), RLM_MAX_OUTPUT_CHARS).text,
+          doneValue: truncateText(
+            formatValue(session.doneValue),
+            RLM_MAX_OUTPUT_CHARS,
+          ).text,
         },
       });
       return { done: true, doneValue: session.doneValue };
@@ -648,63 +718,61 @@ export async function runRlmEvent(input: {
     apiFetch,
     emitEvent,
     generateFn,
-  } =
-    input;
-    const promptText = [
-      systemPrompt,
-      "Incoming event:",
-      JSON.stringify(
-        {
-          id: event.id,
-          type: event.type,
-          source: event.source,
-          channelId: event.channelId,
-          parentEventId: event.parentEventId,
-          payload: event.payload ?? {},
-        },
-        null,
-        2,
-      ),
-    ].join("\n\n");
-    let rootSession = rootSessions.get(agent.name);
-    if (!rootSession) {
-      rootSession = await createSession({ agent, depth: 0 });
-      rootSessions.set(agent.name, rootSession);
-    }
-    const runState: RunState = { spawnedSubagents: 0, toolCallsThisStep: [] };
-    const rootToolDocs = await bindSessionRuntime({
-      agent,
-      event,
-      channelId,
-      executeCtx,
-      apiFetch,
-      emitEvent,
-      session: rootSession,
-      runState,
-      promptText,
-      depth: 0,
-      generateFn,
-    });
-    await runReplLoop({
-      agent,
-      event,
-      channelId,
-      executeCtx,
-      apiFetch,
-      emitEvent,
-      session: rootSession,
-      runState,
-      promptText,
-      depth: 0,
-      maxSteps: RLM_MAX_STEPS,
-      toolDocs: rootToolDocs,
-      includeChannelMessages: true,
-      baseMessages,
-      generateFn,
-    });
+  } = input;
+  const promptText = [
+    systemPrompt,
+    "Incoming event:",
+    JSON.stringify(
+      {
+        id: event.id,
+        type: event.type,
+        source: event.source,
+        channelId: event.channelId,
+        parentEventId: event.parentEventId,
+        payload: event.payload ?? {},
+      },
+      null,
+      2,
+    ),
+  ].join("\n\n");
+  let rootSession = rootSessions.get(agent.name);
+  if (!rootSession) {
+    rootSession = await createSession({ agent, depth: 0 });
+    rootSessions.set(agent.name, rootSession);
+  }
+  const runState: RunState = { spawnedSubagents: 0, toolCallsThisStep: [] };
+  const rootToolDocs = await bindSessionRuntime({
+    agent,
+    event,
+    channelId,
+    executeCtx,
+    apiFetch,
+    emitEvent,
+    session: rootSession,
+    runState,
+    promptText,
+    depth: 0,
+    generateFn,
+  });
+  await runReplLoop({
+    agent,
+    event,
+    channelId,
+    executeCtx,
+    apiFetch,
+    emitEvent,
+    session: rootSession,
+    runState,
+    promptText,
+    depth: 0,
+    maxSteps: RLM_MAX_STEPS,
+    toolDocs: rootToolDocs,
+    includeChannelMessages: true,
+    baseMessages,
+    generateFn,
+  });
 }
 
 export function __resetRlmSessionsForTests() {
   rootSessions.clear();
 }
-
