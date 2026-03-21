@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { ExecuteContext, ToolDef } from "./types";
 import { resolveAgentPath } from "./path-access";
+import { getShellLaunch } from "./shell-launch";
 
 const envSchema = z.record(z.string(), z.string()).optional();
 const procStartSchema = z.object({
@@ -140,7 +141,8 @@ export async function execute(
     );
     const env = parsed.env ?? {};
     const processId = randomUUID();
-    const child = spawn("/bin/bash", ["-lc", cmd], {
+    const shell = getShellLaunch(cmd);
+    const child = spawn(shell.command, shell.args, {
       cwd,
       env: { ...process.env, ...ctx.injectionEnv, ...env },
     });

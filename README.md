@@ -54,6 +54,8 @@ This builds the UI and runs the API, runner, and UI preview.
 - `ORGOPS_API_URL` (agent-runner API base URL)
 - `ORGOPS_EVENT_MAX_FAILURES` (default: 25)
 - `OPENAI_API_KEY` (for OpenAI models)
+- `ORGOPS_GIT_BASH_PATH` (optional Windows path to `bash.exe`; defaults to `C:\Program Files\Git\bin\bash.exe`)
+- `ORGOPS_SHELL_PATH` / `ORGOPS_SHELL_ARGS` (optional shell override for `shell_run` and `proc_start`)
 
 ## Tests
 

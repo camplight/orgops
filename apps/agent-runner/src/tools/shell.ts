@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { z } from "zod";
 import type { ExecuteContext, ToolDef } from "./types";
 import { resolveAgentPath } from "./path-access";
+import { getShellLaunch } from "./shell-launch";
 
 const envSchema = z.record(z.string(), z.string()).optional();
 const shellRunSchema = z.object({
@@ -48,7 +49,8 @@ export async function execute(
     ctx.extraAllowedRoots ?? [],
   );
   const env = parsed.data.env ?? {};
-  const result = spawnSync("/bin/bash", ["-lc", cmd], {
+  const shell = getShellLaunch(cmd);
+  const result = spawnSync(shell.command, shell.args, {
     cwd,
     env: { ...process.env, ...ctx.injectionEnv, ...env },
     encoding: "utf-8",
