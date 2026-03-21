@@ -84,6 +84,7 @@ export type Channel = {
   id: string;
   name: string;
   description?: string;
+  metadata?: Record<string, unknown> | null;
   kind?: string;
   directParticipantKey?: string;
   participants?: ChannelParticipant[];

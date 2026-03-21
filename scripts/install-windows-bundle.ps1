@@ -29,6 +29,7 @@ function Invoke-RobocopyMirror {
   if ($exitCode -gt 7) {
     throw "robocopy mirror failed with exit code $exitCode"
   }
+  $global:LASTEXITCODE = 0
 }
 
 function Install-OrgOpsBundle {

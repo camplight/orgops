@@ -176,6 +176,9 @@ export function ChannelsScreen({
     return channel.description;
   };
 
+  const hasMetadata = (channel: Channel | null) =>
+    Boolean(channel?.metadata && Object.keys(channel.metadata).length > 0);
+
   return (
     <div className="space-y-4">
       <Card title={`Channels (${channels.length})`}>
@@ -295,6 +298,14 @@ export function ChannelsScreen({
                   ? channelSubtitle(selectedChannel) ?? "No description"
                   : "Select a channel to view details."}
               </p>
+              {hasMetadata(selectedChannel) ? (
+                <div className="mt-2 rounded border border-slate-800 bg-slate-950 p-2">
+                  <div className="text-xs uppercase tracking-wide text-slate-500">Metadata</div>
+                  <pre className="mt-1 overflow-auto whitespace-pre-wrap break-words rounded bg-slate-900 p-2 text-xs text-slate-300">
+                    {formatJson(selectedChannel?.metadata)}
+                  </pre>
+                </div>
+              ) : null}
             </div>
             <div className="flex items-center gap-2">
               <Button

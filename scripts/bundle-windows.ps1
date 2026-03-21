@@ -27,6 +27,7 @@ function Invoke-Robocopy {
   if ($exitCode -gt 7) {
     throw "robocopy failed with exit code $exitCode"
   }
+  $global:LASTEXITCODE = 0
 }
 
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
@@ -124,3 +125,4 @@ Compress-Archive -Path $BundleRoot -DestinationPath $ArchivePath -CompressionLev
 Write-Host "Bundle ready:"
 Write-Host "  Folder: $BundleRoot"
 Write-Host "  Zip:    $ArchivePath"
+exit 0
