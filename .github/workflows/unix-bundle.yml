@@ -1,0 +1,36 @@
+name: Build Unix Bundles
+
+on:
+  workflow_dispatch:
+
+jobs:
+  bundle:
+    name: Bundle for ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux
+            runner: ubuntu-latest
+          - target: macos
+            runner: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build bundle
+        shell: bash
+        run: bash ./scripts/bundle-unix.sh dist
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: orgops-${{ matrix.target }}-bundle
+          path: dist/orgops-*-bundle.tar.gz
+          if-no-files-found: error

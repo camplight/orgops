@@ -46,6 +46,14 @@ npm run prod:all
 
 This builds the UI and runs the API, runner, and UI preview.
 
+## Bundle builds
+
+- Windows bundle script: `scripts/bundle-windows.ps1`
+- Linux/macOS bundle script: `scripts/bundle-unix.sh`
+- GitHub Actions workflows:
+  - `.github/workflows/windows-bundle.yml`
+  - `.github/workflows/unix-bundle.yml`
+
 ## Environment variables
 
 - `ORGOPS_ADMIN_USER` / `ORGOPS_ADMIN_PASS` (defaults to `admin`)
