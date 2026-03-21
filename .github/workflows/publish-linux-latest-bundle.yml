@@ -1,0 +1,47 @@
+name: Publish Linux Latest Bundle
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: Build and publish latest Linux bundle
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build Linux bundle
+        shell: bash
+        run: bash ./scripts/bundle-unix.sh dist
+
+      - name: Ensure bundles-latest release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release view bundles-latest --repo "${{ github.repository }}" >/dev/null 2>&1 || \
+          gh release create bundles-latest \
+            --repo "${{ github.repository }}" \
+            --title "Latest Bundles" \
+            --notes "Rolling release with latest Linux bundle artifact."
+
+      - name: Upload latest Linux bundle asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release upload bundles-latest dist/orgops-linux-x64-bundle.tar.gz \
+            --repo "${{ github.repository }}" \
+            --clobber

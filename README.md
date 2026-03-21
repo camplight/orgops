@@ -50,9 +50,43 @@ This builds the UI and runs the API, runner, and UI preview.
 
 - Windows bundle script: `scripts/bundle-windows.ps1`
 - Linux/macOS bundle script: `scripts/bundle-unix.sh`
+- Windows installer script: `scripts/install-windows-bundle.ps1`
+- Linux VM installer script: `scripts/install-linux-bundle.sh`
+- Linux latest-release installer helper: `scripts/install-linux-latest.sh`
 - GitHub Actions workflows:
   - `.github/workflows/windows-bundle.yml`
   - `.github/workflows/unix-bundle.yml`
+  - `.github/workflows/publish-linux-latest-bundle.yml`
+
+### Quick Linux VM install (paste into shell)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/<branch>/scripts/install-linux-bundle.sh | bash -s -- "<linux-bundle-url>"
+```
+
+### Quick Linux VM install from stable latest release URL
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/<branch>/scripts/install-linux-latest.sh | bash -s -- "<org>/<repo>" /opt/orgops
+```
+
+For systemd setup:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/<branch>/scripts/install-linux-latest.sh | sudo ORGOPS_SYSTEMD_SERVICE=1 bash -s -- "<org>/<repo>" /opt/orgops
+```
+
+### Quick Windows VM install (paste into PowerShell)
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/<org>/<repo>/<branch>/scripts/install-windows-bundle.ps1 | iex; Install-OrgOpsBundle -BundleSource "<windows-bundle-url>" -InstallDir "C:\orgops"
+```
+
+Installer behavior (Windows + Unix):
+
+- Idempotent update: replaces code/runtime files while preserving `.orgops-data`, `files`, and `.env`
+- Safe for repeated upgrades in-place
+- DB migrations run automatically on next API start
 
 ## Environment variables
 

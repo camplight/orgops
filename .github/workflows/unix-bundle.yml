@@ -2,6 +2,9 @@ name: Build Unix Bundles
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
   bundle:
