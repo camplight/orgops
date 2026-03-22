@@ -41,6 +41,7 @@ const lifecycleChannels = new Map<string, string>();
 const HEARTBEAT_INTERVAL_MS = 5000;
 const DEFAULT_MAX_HISTORY_EVENTS = 120;
 const DEFAULT_MAX_HISTORY_CHARS = 120_000;
+let apiFetchRequestCounter = 0;
 
 function readPositiveIntEnv(
   value: string | undefined,
@@ -103,16 +104,76 @@ function queryEventTypes(
   });
 }
 
+function getErrorSummary(error: unknown) {
+  const err = error as
+    | (Error & {
+        code?: string;
+        errno?: number | string;
+        syscall?: string;
+        cause?: unknown;
+      })
+    | undefined;
+  const cause = err?.cause as
+    | (Error & {
+        code?: string;
+        errno?: number | string;
+        syscall?: string;
+      })
+    | undefined;
+  return {
+    message: err?.message ?? String(error),
+    name: err?.name,
+    code: err?.code,
+    errno: err?.errno,
+    syscall: err?.syscall,
+    cause: cause
+      ? {
+          message: cause.message ?? String(cause),
+          name: cause.name,
+          code: cause.code,
+          errno: cause.errno,
+          syscall: cause.syscall,
+        }
+      : undefined,
+  };
+}
+
 async function apiFetch(path: string, init?: RequestInit) {
   const runnerToken = process.env.ORGOPS_RUNNER_TOKEN ?? "dev-runner-token";
   const headers = new Headers(init?.headers);
   if (runnerToken) headers.set("x-orgops-runner-token", runnerToken);
-  const res = await fetch(`${API_URL}${path}`, { ...init, headers });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`API ${path} failed: ${res.status} ${text}`);
+  const method = init?.method ?? "GET";
+  const url = `${API_URL}${path}`;
+  const requestId = `${Date.now()}-${++apiFetchRequestCounter}`;
+  const startedAt = Date.now();
+  try {
+    const res = await fetch(url, { ...init, headers });
+    if (!res.ok) {
+      const text = await res.text();
+      const elapsedMs = Date.now() - startedAt;
+      console.error("runner.apiFetch.http_error", {
+        requestId,
+        method,
+        path,
+        status: res.status,
+        elapsedMs,
+        responseBodyPreview: text.slice(0, 1000),
+      });
+      throw new Error(`API ${path} failed: ${res.status} ${text}`);
+    }
+    return res;
+  } catch (error) {
+    const elapsedMs = Date.now() - startedAt;
+    console.error("runner.apiFetch.transport_error", {
+      requestId,
+      method,
+      path,
+      url,
+      elapsedMs,
+      error: getErrorSummary(error),
+    });
+    throw error;
   }
-  return res;
 }
 
 async function listAgents(): Promise<Agent[]> {

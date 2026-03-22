@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { z } from "zod";
 import type { ExecuteContext, ToolDef } from "./types";
 import { resolveAgentPath } from "./path-access";
@@ -56,31 +56,89 @@ export async function execute(
   );
   const env = parsed.data.env ?? {};
   const shell = getShellLaunch(cmd);
-  const result = spawnSync(shell.command, shell.args, {
+  const child = spawn(shell.command, shell.args, {
     cwd,
     env: { ...process.env, ...ctx.injectionEnv, ...env },
-    encoding: "utf-8",
-    timeout: timeoutMs,
-    killSignal: "SIGKILL",
-    maxBuffer: DEFAULT_MAX_BUFFER,
+    stdio: ["ignore", "pipe", "pipe"],
   });
-  const spawnError = result.error as NodeJS.ErrnoException | undefined;
-  const timedOut = spawnError
-    ? spawnError.code === "ETIMEDOUT" ||
-      spawnError.message.includes("ETIMEDOUT")
-    : false;
+  const stdoutChunks: Buffer[] = [];
+  const stderrChunks: Buffer[] = [];
+  let stdoutBytes = 0;
+  let stderrBytes = 0;
+  let timedOut = false;
+  let bufferExceeded = false;
+  const onData = (
+    chunk: Buffer | string,
+    targetChunks: Buffer[],
+    currentBytes: number,
+  ): number => {
+    const normalized = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    if (currentBytes >= DEFAULT_MAX_BUFFER) return currentBytes;
+    const remaining = DEFAULT_MAX_BUFFER - currentBytes;
+    if (normalized.length <= remaining) {
+      targetChunks.push(normalized);
+      return currentBytes + normalized.length;
+    }
+    targetChunks.push(normalized.subarray(0, remaining));
+    bufferExceeded = true;
+    child.kill("SIGKILL");
+    return DEFAULT_MAX_BUFFER;
+  };
+  child.stdout?.on("data", (chunk: Buffer | string) => {
+    stdoutBytes = onData(chunk, stdoutChunks, stdoutBytes);
+  });
+  child.stderr?.on("data", (chunk: Buffer | string) => {
+    stderrBytes = onData(chunk, stderrChunks, stderrBytes);
+  });
+  const timer = setTimeout(() => {
+    timedOut = true;
+    child.kill("SIGKILL");
+  }, timeoutMs);
+  const result = await new Promise<{
+    code: number | null;
+    signal: NodeJS.Signals | null;
+    error?: Error;
+  }>((resolve) => {
+    let settled = false;
+    const settle = (value: { code: number | null; signal: NodeJS.Signals | null; error?: Error }) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    child.once("error", (error) => settle({ code: null, signal: null, error }));
+    child.once("close", (code, signal) => settle({ code, signal }));
+  });
+  clearTimeout(timer);
+  const stdout = Buffer.concat(stdoutChunks).toString("utf-8");
+  const stderr = Buffer.concat(stderrChunks).toString("utf-8");
+  if (result.error) {
+    return {
+      stdout,
+      stderr: [stderr, String(result.error)].filter(Boolean).join("\n"),
+      exitCode: 1,
+    };
+  }
   if (timedOut) {
     return {
-      stdout: result.stdout ?? "",
+      stdout,
       stderr:
-        (result.stderr ?? "") +
+        stderr +
         `\nCommand timed out after ${timeoutMs}ms. If this is expected to run long, use proc_start.`,
       exitCode: 124,
     };
   }
+  if (bufferExceeded) {
+    return {
+      stdout,
+      stderr:
+        stderr +
+        `\nCommand output exceeded ${DEFAULT_MAX_BUFFER} bytes and was terminated.`,
+      exitCode: 1,
+    };
+  }
   return {
-    stdout: result.stdout ?? "",
-    stderr: result.stderr ?? "",
-    exitCode: result.status ?? 0,
+    stdout,
+    stderr,
+    exitCode: result.code ?? 0,
   };
 }

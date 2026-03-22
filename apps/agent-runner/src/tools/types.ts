@@ -48,6 +48,13 @@ export type CreateExecuteFn = (
 export function createWrapExecute(deps: RunnerToolDeps): CreateExecuteFn {
   const { agent, event, channelId, runTool, apiFetch, emitEvent } = deps;
   return (toolName: string) => async (args: Record<string, unknown>) => {
+    let phase:
+      | "emit_started"
+      | "run_tool"
+      | "mark_trigger_failed_on_tool_error"
+      | "emit_executed"
+      | "emit_failed_audit"
+      | "mark_trigger_failed_in_catch" = "emit_started";
     try {
       await emitEvent({
         type: "audit.tool.started",
@@ -55,8 +62,10 @@ export function createWrapExecute(deps: RunnerToolDeps): CreateExecuteFn {
         source: `agent:${agent.name}`,
         ...(channelId ? { channelId } : {}),
       });
+      phase = "run_tool";
       const output = await runTool(toolName, args);
       if (output && typeof output === "object" && "error" in output) {
+        phase = "mark_trigger_failed_on_tool_error";
         await apiFetch(`/api/events/${event.id}/fail`, {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -65,6 +74,7 @@ export function createWrapExecute(deps: RunnerToolDeps): CreateExecuteFn {
           }),
         });
       }
+      phase = "emit_executed";
       await emitEvent({
         type: "audit.tool.executed",
         payload: { tool: toolName, args, output },
@@ -73,17 +83,29 @@ export function createWrapExecute(deps: RunnerToolDeps): CreateExecuteFn {
       });
       return output;
     } catch (error) {
-      await emitEvent({
-        type: "audit.tool.failed",
-        payload: { tool: toolName, args, error: String(error) },
-        source: `agent:${agent.name}`,
-        ...(channelId ? { channelId } : {}),
-      });
-      await apiFetch(`/api/events/${event.id}/fail`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ error: String(error) }),
-      });
+      const failedPhase = phase;
+      phase = "emit_failed_audit";
+      try {
+        await emitEvent({
+          type: "audit.tool.failed",
+          payload: {
+            tool: toolName,
+            args,
+            error: String(error),
+            wrapperPhase: failedPhase,
+          },
+          source: `agent:${agent.name}`,
+          ...(channelId ? { channelId } : {}),
+        });
+      } catch {}
+      phase = "mark_trigger_failed_in_catch";
+      try {
+        await apiFetch(`/api/events/${event.id}/fail`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ error: String(error) }),
+        });
+      } catch {}
       return { error: String(error) };
     }
   };
