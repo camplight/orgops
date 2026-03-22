@@ -5,6 +5,8 @@ import { inspect } from "node:util";
 import { generate, type LlmMessage, type LlmTool } from "@orgops/llm";
 import { createRunnerTools, executeTool, type ExecuteContext } from "./tools";
 import type { Agent, Event } from "./types";
+import { pullInjectedEventMessages } from "./channel-injection";
+import { shouldHandleEventForAgent } from "./event-routing";
 
 const DEFAULT_MAX_STEPS = 24;
 const DEFAULT_MAX_OUTPUT_CHARS = 16_000;
@@ -95,6 +97,8 @@ type RunReplLoopInput = {
   includeChannelMessages: boolean;
   baseMessages?: LlmMessage[];
   generateFn?: RlmGenerateFn;
+  seenEventIds?: Set<string>;
+  enableChannelInjection?: boolean;
 };
 
 type RlmGenerateFn = (
@@ -465,6 +469,7 @@ async function bindSessionRuntime(
       toolDocs: childToolDocs,
       includeChannelMessages: false,
       generateFn: input.generateFn,
+      enableChannelInjection: false,
     });
     await emitEvent({
       type: "audit.rlm.subagent.finished",
@@ -519,6 +524,8 @@ async function runReplLoop(
     includeChannelMessages,
     baseMessages,
     generateFn,
+    seenEventIds,
+    enableChannelInjection,
   } = input;
   session.done = false;
   session.doneValue = undefined;
@@ -683,6 +690,18 @@ async function runReplLoop(
       });
       return { done: true, doneValue: session.doneValue };
     }
+    if (enableChannelInjection && seenEventIds) {
+      const injected = await pullInjectedEventMessages({
+        apiFetch: executeCtx.apiFetch,
+        agent,
+        channelId,
+        seenEventIds,
+        shouldInclude: shouldHandleEventForAgent,
+      });
+      if (injected) {
+        localMessages.push(...injected.messages);
+      }
+    }
   }
   await emitEvent({
     type: "audit.rlm.max_steps_reached",
@@ -741,6 +760,7 @@ export async function runRlmEvent(input: {
     rootSessions.set(agent.name, rootSession);
   }
   const runState: RunState = { spawnedSubagents: 0, toolCallsThisStep: [] };
+  const seenEventIds = new Set<string>([event.id]);
   const rootToolDocs = await bindSessionRuntime({
     agent,
     event,
@@ -770,6 +790,8 @@ export async function runRlmEvent(input: {
     includeChannelMessages: true,
     baseMessages,
     generateFn,
+    seenEventIds,
+    enableChannelInjection: true,
   });
 }
 

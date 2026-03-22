@@ -324,6 +324,33 @@ export default function App() {
     await data.refreshEvents();
   }, [data.refreshEvents]);
 
+  const handleUpdateScheduledEvent = useCallback(
+    async (eventId: string, input: { deliverAt: number; payload?: unknown }) => {
+      const body: Record<string, unknown> = { deliverAt: input.deliverAt };
+      if (input.payload !== undefined) {
+        body.payload = input.payload;
+      }
+      await apiFetch(`/api/events/${encodeURIComponent(eventId)}`, {
+        method: "PATCH",
+        headers: getApiHeaders(),
+        body: JSON.stringify(body)
+      });
+      await handleApplyEventFilters();
+    },
+    [handleApplyEventFilters]
+  );
+
+  const handleDeleteScheduledEvent = useCallback(
+    async (eventId: string) => {
+      await apiFetch(`/api/events/${encodeURIComponent(eventId)}`, {
+        method: "DELETE",
+        headers: getApiHeaders()
+      });
+      await handleApplyEventFilters();
+    },
+    [handleApplyEventFilters]
+  );
+
   if (!authChecked) {
     return (
       <div className="min-h-screen flex items-center justify-center text-slate-400">
@@ -585,6 +612,8 @@ export default function App() {
           onClearEvents={handleClearEvents}
           onEmitEvent={handleEmitEvent}
           onRefreshEventTypes={data.refreshEventTypes}
+          onUpdateScheduledEvent={handleUpdateScheduledEvent}
+          onDeleteScheduledEvent={handleDeleteScheduledEvent}
         />
       )}
 

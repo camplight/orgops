@@ -1,4 +1,4 @@
-name: Publish Linux Latest Bundle
+name: Publish Latest Bundles
 
 on:
   workflow_dispatch:
@@ -10,8 +10,24 @@ permissions:
   contents: write
 
 jobs:
-  publish:
+  ensure-release:
+    name: Ensure bundles-latest release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ensure bundles-latest release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release view bundles-latest --repo "${{ github.repository }}" >/dev/null 2>&1 || \
+          gh release create bundles-latest \
+            --repo "${{ github.repository }}" \
+            --title "Latest Bundles" \
+            --notes "Rolling release with latest Linux and Windows bundle artifacts."
+
+  publish-linux:
     name: Build and publish latest Linux bundle
+    needs: ensure-release
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -26,17 +42,6 @@ jobs:
         shell: bash
         run: bash ./scripts/bundle-unix.sh dist
 
-      - name: Ensure bundles-latest release exists
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          gh release view bundles-latest --repo "${{ github.repository }}" >/dev/null 2>&1 || \
-          gh release create bundles-latest \
-            --repo "${{ github.repository }}" \
-            --title "Latest Bundles" \
-            --notes "Rolling release with latest Linux bundle artifact."
-
       - name: Upload latest Linux bundle asset
         env:
           GH_TOKEN: ${{ github.token }}
@@ -44,4 +49,30 @@ jobs:
         run: |
           gh release upload bundles-latest dist/orgops-linux-x64-bundle.tar.gz \
             --repo "${{ github.repository }}" \
+            --clobber
+
+  publish-windows:
+    name: Build and publish latest Windows bundle
+    needs: ensure-release
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build Windows bundle
+        shell: pwsh
+        run: ./scripts/bundle-windows.ps1 -OutputDir dist
+
+      - name: Upload latest Windows bundle asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          gh release upload bundles-latest dist/orgops-windows-bundle.zip `
+            --repo "${{ github.repository }}" `
             --clobber

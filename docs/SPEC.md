@@ -1,598 +1,279 @@
-# OrgOps MVP SPEC (builder-ready)
+# OrgOps Implementation Spec (Current)
 
 ## Goal
 
-Build **OrgOps**: a single-company, single-VPS system where **humans and autonomous agents** collaborate via an **event bus**. Agents can run **host-wide shell and filesystem operations** (root), manage **long-running processes**, and stream outputs back to humans/models. The MVP prioritizes **verified ingress + mandatory audit logging** over sandboxing.
+OrgOps is a single-company, single-node system where humans and agents collaborate through an event bus persisted in SQLite. Agents can execute shell/filesystem/process tools, emit typed events, and stream process output to API/WebSocket clients.
 
-## Non-goals (MVP)
+This document describes the current implementation in this repository.
 
-- Multi-company / multi-tenant
-- Sandbox/guardrails for shell/fs (explicitly not desired in MVP)
-- Horizontal scaling / multi-node
-- Perfect “exactly once” delivery (use at-least-once + idempotency)
+## Stack
 
-## Tech stack
+- Runtime: Node.js (monorepo, npm workspaces)
+- API: Hono + `@hono/node-ws`
+- DB: SQLite + Drizzle ORM
+- Realtime: WebSocket topic pub/sub via in-process event bus
+- UI: React + Tailwind
+- LLM wrapper: `@orgops/llm` (`generate()` abstraction)
+- Schemas/validation: Zod-based event shapes in `@orgops/schemas`
 
-- Runtime: **Node.js**
-- API framework: **Hono** (HTTP JSON)
-- Realtime: **WebSocket** (single `/ws` endpoint + topic pub/sub)
-- DB: **SQLite** (WAL enabled)
-- UI: **React + Tailwind**
-- LLM abstraction: **Vercel AI SDK** (library only; no gateway dependency)
-- Repo: **Monorepo** with shared packages
+## Monorepo Layout
 
-## Repository layout (monorepo)
-
-```
-orgops/
-  apps/
-    api/                  # Hono HTTP + WS server, single-writer DB access
-    ui/                   # React + Tailwind SPA
-    agent-runner/         # One daemon supervises all agents, executes tools, LLM loop
-  packages/
-    db/                   # schema, migrations, query helpers
-    schemas/              # Zod schemas for API payloads + typed event shapes
-    event-bus/            # topic routing helpers, pub/sub interface
-    llm/                  # AI SDK provider wrapper + model registry resolver
-    crypto/               # secrets encryption helpers
-    skills/               # skill indexing + metadata parsing
-  skills/                 # built-in skills (+ optional event-shapes.ts per skill)
-  files/                  # runtime files (gitignored)
-  .orgops-data/           # runtime data (gitignored)
-    orgops.sqlite
-    workspaces/
+```text
+apps/
+  api/            Hono HTTP + WS server
+  agent-runner/   Agent polling loop + tool/runtime execution
+  ui/             React UI
+packages/
+  crypto/         Secret encryption/decryption helpers
+  db/             Drizzle schema + SQLite migrations
+  event-bus/      In-process pub/sub
+  llm/            Provider/model wrapper
+  schemas/        Event schema registry + validators
+  skills/         Skill discovery and loading
+skills/           Built-in skills (SKILL.md, optional event-shapes.ts)
+files/            Uploaded file storage
+.orgops-data/     Runtime DB/workspaces/soul files
 ```
 
-## Core concepts
+## Core Data Model
 
-### Agent
+### Agents
 
-- Unique `name` (globally unique within org)
-- Has:
-  - `soul.md` path (role)
-  - `systemInstructions` (string)
-  - `skills` (references to skill directories)
-  - `modelId` (from Model Registry)
-  - `workspacePath` (created if missing)
-  - memberships: can be in multiple teams
+Stored in `agents`:
 
-### Skill (NOT a tool)
+- identity/config: `id`, `name`, `icon`, `description`, `model_id`
+- prompting/runtime config: `system_instructions`, `soul_path`, `soul_contents`
+- workspace/safety: `workspace_path`, `allow_outside_workspace`
+- mode/state: `mode` (`CLASSIC` | `RLM_REPL`), `desired_state`, `runtime_state`, `last_heartbeat_at`
+- skills: `enabled_skills_json`, `always_preloaded_skills_json`
 
-A skill is a folder with docs + optional runnable assets.
+### Collaboration
 
-```
-skills/<skillName>/
-  SKILL.md
-  assets/...
-```
+- `humans`: login users, password hash, `must_change_password`, inviter metadata
+- `teams`, `team_memberships`
+- `channels`: includes `kind`, optional `metadata_json`, optional `direct_participant_key`
+- `channel_subscriptions`: channel participants/subscribers
+- `conversations`, `threads`
 
-`SKILL.md` format (OpenCode/OpenClaw-style YAML frontmatter):
+### Events and Delivery
 
-```
----
-name: example-skill
-description: Example skill docs.
-metadata: {"openclaw":{"requires":{"env":["ORGOPS_RUNNER_TOKEN"]}}}
----
+- `events`: append-only event log (`type`, `payload_json`, `source`, `channel_id`, `deliver_at`, `status`, failure counters, idempotency key)
+- `event_receipts`: per-agent delivery state (`PENDING`/`DELIVERED`) used by runner polling
 
-# Example Skill
-...full docs...
-```
+### Processes / Files / Secrets / Models
 
-Each skill should expose one interface style: either HTTP API usage or CLI usage. Do not include both in one skill.
+- `processes`, `process_output`
+- `files`
+- `secrets`
+- `models`
 
-Agents receive a **short skill catalog** in prompt (name/description/location/path). If they need details, they use fs tools to read `SKILL.md`. If an executable is missing, they attempt install via shell and proceed.
+## Event Contract
 
-### Tools (primitive runtime capabilities)
+Envelope fields used by API/runner:
 
-Only these are “tools” the runtime exposes to the agent reasoning loop:
+- required: `type`, `payload`, `source`
+- contextual: `channelId`, `parentEventId`
+- scheduling: `deliverAt`
+- dedupe: `idempotencyKey`
 
-- `shell_run` (bounded command)
-- `proc_start|proc_stop|proc_status|proc_tail` (long-running process mgmt; can be backed by PTY)
-- `fs_read|fs_write|fs_list|fs_stat|fs_mkdir|fs_rm|fs_move` (host-wide for MVP)
+Validation is dynamic and composed from:
 
-Optional convenience: `orgops.request` (HTTP call helper), but agent can also `curl`.
+- core definitions: `packages/schemas/src/event-shapes.ts`
+- optional skill definitions: `skills/*/event-shapes.ts`
 
-> browser-use is a skill (docs + scripts), executed via shell.
+`POST /api/events` validates payloads against this composed registry.
 
-### Event
+## Auth and Access
 
-Append-only record of “something happened” (ingress, message, task, process output, etc.)
+### Human Auth
 
-Mandatory fields:
+- Session-cookie login: `POST /api/auth/login`
+- Profile/password update: `PATCH /api/auth/profile`
+- Logout/me endpoints supported
+- Invited humans must rotate temporary password before accessing most API routes
 
-- `id`
-- `type`
-- `payload` (JSON)
-- `source` (e.g., `human:<username>`, `agent:<name>`, `webhook:<name>`, `system`)
-- routing:
-  - `channelId` (required for `message.created`; direct messages are channels)
-  - `teamId?`
-- threading:
-  - `parentEventId?`
-- delivery:
-  - `deliverAt?` (for scheduled delivery)
-  - `status` (`PENDING|DELIVERED|ACKED|FAILED|DEAD`)
-- `idempotencyKey?` (for webhook/retry safety)
+### Runner Auth
 
-## Database (SQLite)
+- Trusted runner token header: `x-orgops-runner-token`
+- Runner-only endpoint for secret env injection: `GET /api/secrets/env`
 
-### SQLite settings (on boot)
+### Tool Filesystem Access
 
-- `PRAGMA journal_mode=WAL;`
-- `PRAGMA synchronous=NORMAL;` (or `FULL` if you prefer durability)
-- `PRAGMA busy_timeout=5000;` (plus app-level retry)
-- All writes go through **API process** (single-writer discipline).
+Runner tools resolve paths through an allowlist:
 
-### Tables (minimum)
-
-#### `agents`
-
-- `id` TEXT PK (uuid)
-- `name` TEXT UNIQUE NOT NULL
-- `icon` TEXT NULL
-- `description` TEXT NULL
-- `model_id` TEXT NOT NULL
-- `system_instructions` TEXT NOT NULL DEFAULT ''
-- `soul_path` TEXT NOT NULL
-- `workspace_path` TEXT NOT NULL
-- `desired_state` TEXT NOT NULL DEFAULT 'RUNNING' -- RUNNING|STOPPED
-- `runtime_state` TEXT NOT NULL DEFAULT 'STOPPED' -- STARTING|RUNNING|STOPPED|CRASHED
-- `last_heartbeat_at` INTEGER NULL
-- `created_at` INTEGER NOT NULL
-- `updated_at` INTEGER NOT NULL
-
-#### `teams`
-
-- `id` TEXT PK
-- `name` TEXT UNIQUE NOT NULL
-- `description` TEXT NULL
-- `created_at` INTEGER NOT NULL
-
-#### `team_memberships`
-
-- `team_id` TEXT NOT NULL
-- `member_type` TEXT NOT NULL -- HUMAN|AGENT
-- `member_id` TEXT NOT NULL -- humanId or agentId
-- PK (`team_id`, `member_type`, `member_id`)
-
-#### `channels`
-
-- `id` TEXT PK
-- `name` TEXT UNIQUE NOT NULL
-- `description` TEXT NULL
-- `created_at` INTEGER NOT NULL
-
-#### `channel_subscriptions`
-
-- `channel_id` TEXT NOT NULL
-- `subscriber_type` TEXT NOT NULL -- HUMAN|AGENT|TEAM
-- `subscriber_id` TEXT NOT NULL
-- PK (`channel_id`, `subscriber_type`, `subscriber_id`)
-
-#### `conversations`
-
-- `id` TEXT PK
-- `kind` TEXT NOT NULL -- HUMAN_AGENT | HUMAN_CHANNEL
-- `human_id` TEXT NOT NULL
-- `agent_name` TEXT NULL
-- `channel_id` TEXT NULL
-- `title` TEXT NULL
-- `created_at` INTEGER NOT NULL
-
-#### `threads`
-
-- `id` TEXT PK
-- `conversation_id` TEXT NOT NULL
-- `title` TEXT NULL
-- `created_at` INTEGER NOT NULL
-
-#### `events`
-
-- `id` TEXT PK
-- `type` TEXT NOT NULL
-- `payload_json` TEXT NOT NULL
-- `source` TEXT NOT NULL
-- `channel_id` TEXT NULL
-- `team_id` TEXT NULL
-- `parent_event_id` TEXT NULL
-- `deliver_at` INTEGER NULL
-- `status` TEXT NOT NULL DEFAULT 'PENDING'
-- `fail_count` INTEGER NOT NULL DEFAULT 0
-- `last_error` TEXT NULL
-- `idempotency_key` TEXT NULL
-- `created_at` INTEGER NOT NULL
-
-Indexes:
-
-- `idx_events_deliver_at` on (`status`, `deliver_at`)
-- `idx_events_channel` on (`channel_id`, `created_at`)
-- unique optional: `uidx_events_idempotency` on (`idempotency_key`) where not null
-
-#### `processes`
-
-- `id` TEXT PK
-- `agent_name` TEXT NOT NULL
-- `channel_id` TEXT NULL
-- `cmd` TEXT NOT NULL
-- `cwd` TEXT NOT NULL
-- `pid` INTEGER NULL
-- `state` TEXT NOT NULL -- STARTING|RUNNING|EXITED|FAILED
-- `exit_code` INTEGER NULL
-- `started_at` INTEGER NOT NULL
-- `ended_at` INTEGER NULL
-
-#### `process_output`
-
-- `id` TEXT PK
-- `process_id` TEXT NOT NULL
-- `seq` INTEGER NOT NULL
-- `stream` TEXT NOT NULL -- STDOUT|STDERR
-- `text` TEXT NOT NULL
-- `ts` INTEGER NOT NULL
-  Index: (`process_id`, `seq`) UNIQUE
-
-#### `files`
-
-- `id` TEXT PK
-- `storage_path` TEXT NOT NULL
-- `original_name` TEXT NOT NULL
-- `mime` TEXT NOT NULL
-- `size` INTEGER NOT NULL
-- `sha256` TEXT NOT NULL
-- `created_by_human_id` TEXT NULL
-- `created_by_agent_name` TEXT NULL
-- `created_at` INTEGER NOT NULL
-
-#### `secrets`
-
-- `id` TEXT PK
-- `name` TEXT NOT NULL
-- `scope_type` TEXT NOT NULL -- ORG|TEAM|AGENT
-- `scope_id` TEXT NULL -- teamId or agentName; null for ORG
-- `ciphertext_b64` TEXT NOT NULL
-- `created_at` INTEGER NOT NULL
-  Unique: (`name`, `scope_type`, `scope_id`)
-
-#### `models`
-
-- `id` TEXT PK -- e.g. openai:gpt-4o-mini
-- `provider` TEXT NOT NULL -- openai|anthropic|google|mistral|...
-- `model_name` TEXT NOT NULL -- provider native id
-- `enabled` INTEGER NOT NULL -- 0/1
-- `defaults_json` TEXT NOT NULL
-- `created_at` INTEGER NOT NULL
-
-## Secrets encryption (MVP)
-
-- Env var: `ORGOPS_MASTER_KEY` (32 bytes base64)
-- Use envelope encryption:
-  - AES-256-GCM with random nonce per secret
-  - store `{nonce,ciphertext,tag}` as base64 JSON
-- Decrypt only in API / agent-runner memory when injecting env.
-- **Audit:** every secret read/injection emits `audit.secret.accessed` (no plaintext).
-
-## Event delivery semantics
-
-- **At-least-once** delivery to agents/subscribers.
-- Idempotency:
-  - events should use `idempotencyKey` when retries are possible.
-- Scheduling:
-  - events with `deliverAt` remain `PENDING` until time <= now.
-- Dead-letter:
-  - after N failures (config, e.g. 25) set `status=DEAD`, increment `fail_count`, record `last_error`, and emit `event.deadlettered`.
-
-Config:
-
-- `ORGOPS_EVENT_MAX_FAILURES` (default 25)
+- default: agent workspace root only
+- if `allowOutsideWorkspace=true`: full host root allowed
+- extra allowed roots: enabled skill directories
 
 ## Realtime (WebSocket)
 
-### Endpoint
+Endpoint: `GET /ws`
 
-- `GET /ws` (authenticated)
+Client messages:
 
-### Messages (client → server)
-
-```
-{ "type": "subscribe", "topic": "conversation:CONV_ID" }
-{ "type": "unsubscribe", "topic": "conversation:CONV_ID" }
-{ "type": "subscribe", "topic": "channel:CHANNEL_ID" }
-{ "type": "subscribe", "topic": "process:PROCESS_ID" }
+```json
+{ "type": "subscribe", "topic": "channel:..." }
+{ "type": "unsubscribe", "topic": "channel:..." }
 { "type": "ping" }
 ```
 
-### Messages (server → client)
+Server messages:
 
-```
-{ "type": "subscribed", "topic": "conversation:..." }
-{ "type": "event", "topic": "conversation:...", "data": { ...event } }
-{ "type": "process_output", "topic": "process:...", "data": { "seq":1,"stream":"STDOUT","text":"..." } }
-{ "type": "agent_status", "topic": "org:agentStatus", "data": { "agentName":"...", "runtimeState":"RUNNING" } }
+```json
+{ "type": "subscribed", "topic": "..." }
+{ "type": "event", "topic": "...", "data": { "...": "..." } }
+{ "type": "process_output", "topic": "process:...", "data": { "...": "..." } }
+{ "type": "agent_status", "topic": "org:agentStatus", "data": { "...": "..." } }
 { "type": "error", "message": "..." }
 ```
 
-### Topic routing rules
+Published topics include:
 
-- `channel:<id>` receives all events with `channelId`
-- `process:<id>` receives `process_output` chunks
-- `org:agentStatus` receives agent state updates
+- `org:events`
+- `channel:<channelId>`
+- `process:<processId>`
+- `org:agentStatus`
+- `agent:<name>`-style source topics for agent-sourced events
 
-**Publishing rule:** API publishes to WS topics only when it successfully commits DB writes.
+## HTTP API Surface
 
-## HTTP API (Hono)
-
-### Auth (MVP)
-
-- Username/password (single admin user) OR local “invite code” flow
-- Session cookie stored server-side (or signed cookie)
-- Protect all endpoints except `/api/auth/*` and public file serving (if any)
-
-### Core endpoints
-
-#### Auth
+### Auth / Humans
 
 - `POST /api/auth/login`
 - `POST /api/auth/logout`
 - `GET /api/auth/me`
+- `PATCH /api/auth/profile`
+- `GET /api/humans`
+- `POST /api/humans/invite`
 
-#### Models
+### Models
 
 - `GET /api/models`
-- `POST /api/models` (admin)
-- `PATCH /api/models/:id` (enable/disable, defaults)
+- `POST /api/models`
+- `PATCH /api/models/:id`
 
-#### Agents
+### Agents
 
 - `GET /api/agents`
 - `POST /api/agents`
 - `GET /api/agents/:name`
 - `PATCH /api/agents/:name`
-- `POST /api/agents/:name/start|stop|restart`
-- `POST /api/agents/:name/reload-skills`
+- `POST /api/agents/:name/:action` where action is one of:
+  - `start`, `stop`, `restart`, `reload-skills`, `cleanup-workspace`
+- workspace browser endpoints:
+  - `GET /api/agents/:name/workspace`
+  - `GET /api/agents/:name/workspace/file`
+  - `GET /api/agents/:name/workspace/download`
 
-#### Teams / memberships
+### Teams / Channels / Conversations
 
-- `GET /api/teams`
-- `POST /api/teams`
-- `POST /api/teams/:id/members` (add human/agent)
-- `DELETE /api/teams/:id/members/:memberType/:memberId`
+- teams:
+  - `GET /api/teams`, `POST /api/teams`, `PATCH /api/teams/:id`, `DELETE /api/teams/:id`
+  - `POST /api/teams/:id/delete` (compat)
+  - membership: list/add/remove endpoints
+- channels:
+  - CRUD/list/clear: `GET/POST/PATCH/DELETE /api/channels...`
+  - participant management via subscribe/unsubscribe endpoints
+  - direct channel creation:
+    - `POST /api/channels/direct`
+    - `POST /api/channels/direct/human-agent`
+    - `POST /api/channels/direct/agent-agent`
+- conversations/threads:
+  - `GET /api/conversations`, `POST /api/conversations`
+  - `GET /api/conversations/:id/threads`, `POST /api/conversations/:id/threads`
 
-#### Channels
+### Events
 
-- `GET /api/channels`
-- `POST /api/channels`
-- `PATCH /api/channels/:id`
-- `POST /api/channels/:id/subscribe`
-- `POST /api/channels/:id/unsubscribe`
+- `POST /api/events`
+- `GET /api/events`
+- `GET /api/events/:id`
+- `POST /api/events/:id/ack`
+- `POST /api/events/:id/fail`
+- `DELETE /api/events` (filtered or all clear)
+- `DELETE /api/channels/:channelId/messages`
+- `GET /api/event-types`
 
-#### Conversations / threads
+### Runtime/Processes/Files
 
-- `GET /api/conversations`
-- `POST /api/conversations`
-- `GET /api/conversations/:id/threads`
-- `POST /api/conversations/:id/threads`
+- files: upload/get/meta
+- processes:
+  - list/create/delete single/delete bulk
+  - append output, mark exit, read output stream tail
 
-#### Events
+### Secrets / Skills
 
-- `POST /api/events` (emit event; supports `deliverAt` and idempotency)
-- `GET /api/events` (filters: channelId, agentName, after, limit)
-- `POST /api/events/:id/ack` (optional)
-- `POST /api/events/:id/fail` (increment failure count)
-- `GET /api/event-types` (list composed typed event definitions from core + enabled skills)
+- secrets:
+  - `GET /api/secrets`
+  - `GET /api/secrets/keys`
+  - `POST /api/secrets`
+  - `DELETE /api/secrets/:id`
+  - `DELETE /api/secrets` (by key/scope tuple)
+  - `GET /api/secrets/env` (runner auth only)
+- skills:
+  - `GET /api/skills`
 
-#### Files
+## Agent Runner Behavior
 
-- `POST /api/files` (multipart upload; store to `files/`)
-- `GET /api/files/:id` (serve file; auth required)
-- `GET /api/files/:id/meta`
+Runner loop:
 
-#### Secrets
+1. Poll agents from API.
+2. For each `desired_state=RUNNING` agent:
+   - ensure workspace exists
+   - heartbeat runtime state to API
+   - emit one-time lifecycle bootstrap event (`agent.lifecycle.started`)
+3. Pull pending events with per-agent receipt semantics.
+4. Filter control/audit/self-authored/agent-authored events.
+5. Group remaining pending events by channel and process each channel as a single handling batch.
+6. Build context from system prompt + bounded channel history + skills + soul, plus a synthetic merged-trigger message when a batch contains multiple events.
+7. Run model generation in step mode (single-step calls) and poll pending events for the same `(agent, channel)` between steps; inject newly arrived events into the ongoing conversation context.
+8. Execute one of two modes:
+   - `CLASSIC`: call LLM, enforce JSON event output with retries, validate and emit.
+   - `RLM_REPL`: run recursive REPL loop in child process with explicit `done(result)`.
+9. On handler failure, call `/api/events/:id/fail` for each event in the failed channel batch.
 
-- `GET /api/secrets` (names only + scope, no values)
-- `POST /api/secrets` (set value)
-- `DELETE /api/secrets/:id`
+Shutdown behavior:
 
-## Agent Runner (one daemon supervises all agents)
+- stops RLM children
+- terminates tracked long-running processes
 
-### Responsibilities
+## Runner Tooling
 
-- Keep **all enabled agents** running (desiredState RUNNING)
-- Maintain per-agent:
-  - workspace existence
-  - channel context isolation `(agentName, channelId)`
-- Execute tool calls:
-  - host shell/fs/proc (root)
-  - record everything in audit events
-- LLM interaction (Vercel AI SDK):
-  - resolve agent modelId via API Model Registry
-  - call provider with messages
-  - optionally stream tokens later (MVP can be non-streaming)
+Current tool families exposed to models:
 
-### Control plane
+- `shell_run` (timeout enforced; default 45s; accepts `timeoutMs`; force-kills on timeout)
+- `fs_read`, `fs_write`, `fs_list`, `fs_stat`, `fs_mkdir`, `fs_rm`, `fs_move`
+- `proc_start`, `proc_stop`, `proc_status`, `proc_tail`
+- event/navigation helpers:
+  - `events_emit`
+  - `events_channel_messages`, `events_search`, `events_agents_search`
+  - `events_channel_create`, `events_channel_update`, `events_channel_delete`
+  - `events_channel_participants`, `events_channel_participant_add`, `events_channel_participant_remove`
+  - `events_channels_list`, `events_event_types`, `events_scheduled_create`, `events_schedule_self`
 
-Runner periodically pulls desired state from API:
+Audit events are emitted around tool/process operations and RLM execution.
 
-- `GET /api/agents` (or a dedicated `GET /api/control/desired-state`)
+## Delivery and Failure Semantics
 
-Runner processes control events:
+- at-least-once delivery model
+- per-agent delivery tracking through `event_receipts`
+- idempotency supported with `idempotencyKey`
+- scheduled delivery via `deliverAt`
+- failure escalation via `/api/events/:id/fail` until dead-letter (`event.deadlettered`) at configured threshold
 
-- `agent.control.start|stop|restart|reload-skills`
+## Environment Variables (Implemented)
 
-### Event consumption loop
-
-Each agent has a heartbeat loop (in runner, not separate processes unless you want):
-
-1. Fetch events:
-   - `GET /api/events?agentName=<name>&after=<cursor>&limit=...`
-   - include events addressed directly, plus team/channel events the agent is subscribed to (API can resolve this server-side to simplify).
-2. For each new event:
-   - require `channelId` (fail event if missing)
-   - build prompt context:
-     - agent system instructions
-     - soul.md content
-     - short skill index
-     - full channel event history (messages + tool/audit/process events)
-3. Ask LLM to produce an action plan and/or tool calls.
-4. Execute tool calls (shell/fs/proc) and capture outputs.
-5. Emit resulting events back via `POST /api/events`:
-   - `message.created` (agent response)
-   - `process.started/output/exited`
-   - `audit.tool.started/executed/failed`
-
-### LLM call wrapper (AI SDK)
-
-`packages/llm` exposes:
-
-- `generate(agentModelId, messages, options)` returning:
-  - text
-  - optional tool-call JSON if you implement tool calling
-
-**MVP tool calling approach (simple):**
-
-- Use a strict JSON output protocol in the system prompt:
-  - model must output either:
-    - `{ "kind":"message", "text":"..." }`
-    - `{ "kind":"tool", "tool":"shell_run", "args":{...} }`
-    - `{ "kind":"multi", "steps":[...] }`
-    This works across providers reliably.
-
-### Process management
-
-- `proc_start` spawns child process (PTY preferred)
-- stream output into:
-  - `process_output` table
-  - WS topic `process:<id>`
-  - optionally also emit `process.output` events (append-only in `events`)
-
-**Audit is mandatory**: every command emits:
-
-- `audit.tool.started`
-- `audit.tool.executed`
-- `audit.tool.failed`
-
-## Event shape registry (typed + dynamic)
-
-Event validation is defined in TypeScript:
-
-- Core event shapes in `packages/schemas/src/event-shapes.ts`
-- Optional skill-owned shapes in `skills/<name>/event-shapes.ts`
-
-API and runner compose these validators dynamically for fast schema feedback on emit.
-
-## UI (React + Tailwind)
-
-### Screens
-
-1. **Login**
-2. **Dashboard**
-   - agent statuses (RUNNING/CRASHED)
-   - recent events
-3. **Agents**
-   - list/create/edit
-   - view soul.md + system instructions
-   - set model
-   - assign skills
-   - start/stop/restart
-4. **Channels**
-   - create/manage
-   - subscribe agents/humans/teams
-   - channel event feed + thread view
-5. **Chat**
-   - left: conversations (multi-convo per agent/channel)
-   - main: threaded messages
-   - right: session info + attached files + recent tool/audit actions
-6. **Events Explorer**
-   - filters (type/source/dest/channel/session)
-   - raw payload viewer
-7. **Processes**
-   - list running processes (by agent/session)
-   - live log tail (WS)
-8. **Skills**
-   - list installed skills (from `skills/`, `.opencode/skills`, `.claude/skills`, `.agents/skills`)
-   - view `SKILL.md`, show assets tree
-9. **Secrets**
-   - manage secrets (name/scope/value)
-   - show last accessed times (from audit)
-10. **Teams**
-   - create/manage
-   - add/remove memberships
-
-### UI Realtime
-
-- Connect to `/ws`
-- Subscribe to:
-  - active conversation topic
-  - active channel topic
-  - relevant process topics when viewing logs
-  - `org:agentStatus`
-
-## Deployment (single VPS)
-
-### Runtime layout
-
-- `.orgops-data/orgops.sqlite`
-- `.orgops-data/workspaces/<agentName>/...`
-- `skills/...`
-- `files/...`
-
-### Services
-
-- `npm run --workspace @orgops/api start`
-- `npm run --workspace @orgops/agent-runner start`
-- `npm run --workspace @orgops/ui preview` (or build static and serve via API/nginx)
-
-### Nginx (single domain)
-
-- `/` → UI
-- `/api/*` → API
-- `/ws` → API upgrade to WebSocket
-
-### Backups
-
-- nightly:
-  - copy SQLite file safely (use SQLite backup command or stop-writes momentarily)
-  - archive `skills`, `.orgops-data/workspaces` if desired
-- keep last N backups
-
-## MVP “Day 1” built-in content (skills, not tools)
-
-Ship these skill folders in `skills/`:
-
-- `orgops/` — docs + curl examples for OrgOps API (events, channels, agents)
-- `local-memory/` — patterns for `.md` memory files in workspace
-- `browser-use/` — docs + runnable script placeholder
-
-(They can start as docs-only; runnable assets can be added iteratively.)
-
-## Mandatory audit events (minimum list)
-
-- `audit.tool.started`
-- `audit.tool.executed`
-- `audit.tool.failed`
-- `audit.process.started`
-- `audit.process.output` (for long-running stream visibility)
-- `audit.process.exited`
-- `audit.secret.accessed`
-
-## Implementation order (MVP plan)
-
-1. DB schema + migrations + API skeleton (Hono)
-2. Auth + WS pub/sub + event write/read + publish-on-commit
-3. UI: login + conversations + live event feed
-4. agent-runner: fetch events → LLM → emit message events (no tools yet)
-5. Add shell/fs tools + audit logging
-6. Add proc manager + live logs via WS
-7. Skills index in prompt + skills UI
-
-## Acceptance criteria
-
-- Human can chat with an agent in multiple conversations; messages are stored and streamed live.
-- Agents can run shell commands and start long processes; output streams to UI and is persisted.
-- All actions are auditable as events.
-- System runs on one VPS under one domain with Node.js + SQLite.
-
-## Development commands
-
-- `npm run dev:all` starts API, agent-runner, and UI in dev mode
-- `npm run prod:all` builds UI and starts API, agent-runner, and UI preview
+- `ORGOPS_API_URL`
+- `ORGOPS_RUNNER_TOKEN`
+- `ORGOPS_ADMIN_USER`, `ORGOPS_ADMIN_PASS`
+- `ORGOPS_MASTER_KEY`
+- `ORGOPS_EVENT_MAX_FAILURES`
+- `ORGOPS_PROJECT_ROOT`
+- `ORGOPS_HISTORY_MAX_EVENTS`, `ORGOPS_HISTORY_MAX_CHARS`
+- RLM controls:
+  - `ORGOPS_RLM_MAX_STEPS`
+  - `ORGOPS_RLM_MAX_OUTPUT_CHARS`
+  - `ORGOPS_RLM_MAX_INPUT_CHARS`
+  - `ORGOPS_RLM_PROMPT_PREVIEW_MAX_CHARS`
+  - `ORGOPS_RLM_EVAL_TIMEOUT_MS`
+  - `ORGOPS_RLM_MAX_SUBAGENT_DEPTH`
+  - `ORGOPS_RLM_MAX_SUBAGENTS_PER_EVENT`

@@ -205,4 +205,66 @@ describe("RLM mode", () => {
     expect(String(donePayloads[0])).toContain("1");
     expect(String(donePayloads[1])).toContain("1");
   });
+
+  it("injects new pending channel events between RLM steps", async () => {
+    const agent = makeAgent("rlm-inject");
+    const event = makeEvent("evt-inject-root");
+    let pendingPolled = 0;
+    const executeCtx = {
+      ...makeExecuteContext(agent, event),
+      apiFetch: async (path: string) => {
+        if (path.startsWith("/api/events?")) {
+          pendingPolled += 1;
+          if (pendingPolled === 1) {
+            return new Response(
+              JSON.stringify([
+                {
+                  id: "evt-injected",
+                  type: "process.output",
+                  source: "system:process-runner",
+                  channelId: "chan-1",
+                  payload: { text: "build running" },
+                  createdAt: Date.now(),
+                },
+              ]),
+              {
+                status: 200,
+                headers: { "content-type": "application/json" },
+              },
+            );
+          }
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    };
+
+    await runRlmEvent({
+      agent,
+      event,
+      channelId: "chan-1",
+      systemPrompt: "system",
+      baseMessages: [],
+      executeCtx,
+      apiFetch: executeCtx.apiFetch,
+      emitEvent: async () => {},
+      generateFn: async (_modelId, messages) => {
+        const hasInjected = messages.some((message) =>
+          message.content.includes('"type": "process.output"'),
+        );
+        if (hasInjected) {
+          return { text: "done({ injected: true })" };
+        }
+        return { text: "globalThis.step = (globalThis.step ?? 0) + 1" };
+      },
+    });
+
+    expect(pendingPolled).toBeGreaterThanOrEqual(1);
+  });
 });

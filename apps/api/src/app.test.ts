@@ -1611,6 +1611,124 @@ describe("api app", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("updates and deletes a future scheduled event by id", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token"
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" })
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const deliverAt = Date.now() + 120_000;
+    const createRes = await app.request("http://localhost/api/events", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        type: "agent.scheduled.trigger",
+        payload: { text: "original", targetAgentName: "agent-future" },
+        source: "system:scheduler",
+        channelId: "scheduled-manage-channel",
+        deliverAt
+      })
+    });
+    expect(createRes.status).toBe(201);
+    const created = (await createRes.json()) as { id: string };
+
+    const updatedDeliverAt = Date.now() + 240_000;
+    const patchRes = await app.request(`http://localhost/api/events/${created.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        deliverAt: updatedDeliverAt,
+        payload: { text: "updated", targetAgentName: "agent-future" }
+      })
+    });
+    expect(patchRes.status).toBe(200);
+    const patched = (await patchRes.json()) as {
+      id: string;
+      deliverAt?: number;
+      payload?: { text?: string };
+    };
+    expect(patched.id).toBe(created.id);
+    expect(patched.deliverAt).toBe(updatedDeliverAt);
+    expect(patched.payload?.text).toBe("updated");
+
+    const deleteRes = await app.request(`http://localhost/api/events/${created.id}`, {
+      method: "DELETE",
+      headers: { cookie }
+    });
+    expect(deleteRes.status).toBe(200);
+    const deleteBody = (await deleteRes.json()) as { ok: boolean; deleted: boolean };
+    expect(deleteBody.ok).toBe(true);
+    expect(deleteBody.deleted).toBe(true);
+
+    const getDeletedRes = await app.request(`http://localhost/api/events/${created.id}`, {
+      headers: { cookie }
+    });
+    expect(getDeletedRes.status).toBe(404);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("rejects update/delete when event is not future-scheduled", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token"
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" })
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const createRes = await app.request("http://localhost/api/events", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        type: "message.created",
+        payload: { text: "immediate" },
+        source: "human:admin",
+        channelId: "scheduled-guard-channel"
+      })
+    });
+    expect(createRes.status).toBe(201);
+    const created = (await createRes.json()) as { id: string };
+
+    const patchRes = await app.request(`http://localhost/api/events/${created.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ deliverAt: Date.now() + 60_000 })
+    });
+    expect(patchRes.status).toBe(409);
+
+    const deleteRes = await app.request(`http://localhost/api/events/${created.id}`, {
+      method: "DELETE",
+      headers: { cookie }
+    });
+    expect(deleteRes.status).toBe(409);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("cleans an agent workspace directory", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");

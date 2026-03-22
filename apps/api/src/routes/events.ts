@@ -2,6 +2,7 @@ import type { Hono } from "hono";
 import { schema, type OrgOpsDrizzleDb } from "@orgops/db";
 import type { SkillMeta, SkillRoot } from "@orgops/skills";
 import type { EventShapeDefinition } from "@orgops/schemas";
+import { z } from "zod";
 import {
   and,
   asc,
@@ -71,6 +72,29 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
         loadErrors: Array<{ skill: string; error: string }>;
       }
     | undefined;
+  const scheduledEventUpdateSchema = z
+    .object({
+      type: z.string().min(1).optional(),
+      payload: z.unknown().optional(),
+      channelId: z.string().min(1).nullable().optional(),
+      parentEventId: z.string().min(1).nullable().optional(),
+      deliverAt: z.number().int().optional(),
+    })
+    .superRefine((value, ctx) => {
+      if (
+        value.type === undefined &&
+        value.payload === undefined &&
+        value.channelId === undefined &&
+        value.parentEventId === undefined &&
+        value.deliverAt === undefined
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "Provide at least one field to update: type, payload, channelId, parentEventId, or deliverAt.",
+        });
+      }
+    });
 
   async function getEventShapes() {
     const now = Date.now();
@@ -172,6 +196,115 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       return jsonResponse(c, { error: "Not found" }, 404);
     }
     return jsonResponse(c, eventRowToApi(row));
+  });
+
+  app.patch("/api/events/:id", async (c) => {
+    const id = c.req.param("id");
+    const existing = orm
+      .select()
+      .from(schema.events)
+      .where(eq(schema.events.id, id))
+      .get() as any | undefined;
+    if (!existing) {
+      return jsonResponse(c, { error: "Not found" }, 404);
+    }
+    const now = Date.now();
+    const isFutureScheduled =
+      existing.status === "PENDING" &&
+      typeof existing.deliver_at === "number" &&
+      existing.deliver_at > now;
+    if (!isFutureScheduled) {
+      return jsonResponse(
+        c,
+        {
+          error:
+            "Only future scheduled events (status=PENDING with deliverAt in the future) can be updated.",
+        },
+        409,
+      );
+    }
+
+    const raw = await c.req.text();
+    let body: unknown = {};
+    try {
+      body = raw ? JSON.parse(raw) : {};
+    } catch {
+      return jsonResponse(c, { error: "Invalid JSON" }, 400);
+    }
+    const parsed = scheduledEventUpdateSchema.safeParse(body);
+    if (!parsed.success) {
+      return jsonResponse(c, { error: "Invalid payload" }, 400);
+    }
+    if (parsed.data.deliverAt !== undefined && parsed.data.deliverAt <= now) {
+      return jsonResponse(c, { error: "deliverAt must be a future timestamp." }, 400);
+    }
+
+    const nextType = parsed.data.type ?? existing.type;
+    const nextPayload =
+      parsed.data.payload !== undefined
+        ? parsed.data.payload
+        : (() => {
+            try {
+              return JSON.parse(existing.payload_json ?? "{}");
+            } catch {
+              return {};
+            }
+          })();
+    const nextChannelId =
+      parsed.data.channelId !== undefined
+        ? parsed.data.channelId
+        : (existing.channel_id ?? undefined);
+    const nextParentEventId =
+      parsed.data.parentEventId !== undefined
+        ? parsed.data.parentEventId
+        : (existing.parent_event_id ?? undefined);
+    const nextDeliverAt = parsed.data.deliverAt ?? existing.deliver_at;
+
+    const eventShapes = await getEventShapes();
+    const validationResult = validateEventAgainstShapes(
+      {
+        type: nextType,
+        source: existing.source,
+        payload: nextPayload ?? {},
+        channelId: nextChannelId ?? undefined,
+        parentEventId: nextParentEventId ?? undefined,
+        deliverAt: nextDeliverAt ?? undefined,
+        idempotencyKey: existing.idempotency_key ?? undefined,
+      },
+      eventShapes.shapes,
+    );
+    if (!validationResult.ok) {
+      return jsonResponse(
+        c,
+        {
+          error: "Event payload validation failed",
+          validation: validationResult,
+        },
+        400,
+      );
+    }
+
+    orm
+      .update(schema.events)
+      .set({
+        type: nextType,
+        payload_json: JSON.stringify(nextPayload ?? {}),
+        channel_id: nextChannelId ?? null,
+        parent_event_id: nextParentEventId ?? null,
+        deliver_at: nextDeliverAt ?? null,
+      })
+      .where(eq(schema.events.id, id))
+      .run();
+
+    const updated = orm
+      .select()
+      .from(schema.events)
+      .where(eq(schema.events.id, id))
+      .get() as any | undefined;
+    if (!updated) {
+      return jsonResponse(c, { error: "Not found" }, 404);
+    }
+    return jsonResponse(c, eventRowToApi(updated));
   });
 
   app.get("/api/events", (c) => {
@@ -455,6 +588,37 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       },
     });
     return jsonResponse(c, { ok: true, deletedCount });
+  });
+
+  app.delete("/api/events/:id", (c) => {
+    const id = c.req.param("id");
+    const existing = orm
+      .select()
+      .from(schema.events)
+      .where(eq(schema.events.id, id))
+      .get() as any | undefined;
+    if (!existing) {
+      return jsonResponse(c, { error: "Not found" }, 404);
+    }
+    const now = Date.now();
+    const isFutureScheduled =
+      existing.status === "PENDING" &&
+      typeof existing.deliver_at === "number" &&
+      existing.deliver_at > now;
+    if (!isFutureScheduled) {
+      return jsonResponse(
+        c,
+        {
+          error:
+            "Only future scheduled events (status=PENDING with deliverAt in the future) can be deleted.",
+        },
+        409,
+      );
+    }
+
+    orm.delete(schema.eventReceipts).where(eq(schema.eventReceipts.event_id, id)).run();
+    orm.delete(schema.events).where(eq(schema.events.id, id)).run();
+    return jsonResponse(c, { ok: true, deleted: true, id });
   });
 
   app.delete("/api/channels/:channelId/messages", (c) => {

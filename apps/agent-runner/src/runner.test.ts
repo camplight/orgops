@@ -349,6 +349,60 @@ describe("agent runner", () => {
     expect(requests[0]?.body.deliverAt).toBeLessThanOrEqual(after);
   });
 
+  it("schedules trigger events for other agents via events_scheduled_create", async () => {
+    const requests: Array<{ path: string; body: any }> = [];
+    const before = Date.now();
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async (path: string, init?: RequestInit) => {
+        requests.push({
+          path,
+          body: JSON.parse(String(init?.body ?? "{}")),
+        });
+        return new Response(JSON.stringify({ id: "evt-scheduled-other" }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        });
+      },
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+    };
+
+    await executeTool(ctx, "events_scheduled_create", {
+      text: "follow up in 45s",
+      targetAgentName: "worker-a",
+      delaySeconds: 45,
+    });
+
+    const after = Date.now();
+    expect(requests.length).toBe(1);
+    expect(requests[0]?.path).toBe("/api/events");
+    expect(requests[0]?.body.type).toBe("agent.scheduled.trigger");
+    expect(requests[0]?.body.source).toBe("system:scheduler");
+    expect(requests[0]?.body.channelId).toBe("chan-1");
+    expect(requests[0]?.body.payload?.text).toBe("follow up in 45s");
+    expect(requests[0]?.body.payload?.targetAgentName).toBe("worker-a");
+    expect(requests[0]?.body.deliverAt).toBeGreaterThanOrEqual(before + 45_000);
+    expect(requests[0]?.body.deliverAt).toBeLessThanOrEqual(after + 45_000);
+  });
+
   it("emits custom channel events via events_emit", async () => {
     const requests: Array<{ path: string; body: any }> = [];
     const ctx = {
@@ -554,6 +608,159 @@ describe("agent runner", () => {
     expect(requests[0]?.path).toContain("order=desc");
     expect(requests[0]?.path).toContain("limit=20");
     expect(result.events).toHaveLength(2);
+  });
+
+  it("lists future scheduled events via events_scheduled_list", async () => {
+    const requests: string[] = [];
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        soulContents: "role prompt",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async (path: string) => {
+        requests.push(path);
+        return new Response(JSON.stringify([{ id: "evt-scheduled" }]), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+    };
+
+    const result = (await executeTool(ctx, "events_scheduled_list", {
+      channelId: "chan-1",
+      limit: 10,
+    })) as { events: Array<{ id: string }> };
+
+    expect(requests.length).toBe(1);
+    expect(requests[0]).toContain("/api/events?");
+    expect(requests[0]).toContain("scheduled=1");
+    expect(requests[0]).toContain("channelId=chan-1");
+    expect(result.events[0]?.id).toBe("evt-scheduled");
+  });
+
+  it("updates scheduled events via events_scheduled_update", async () => {
+    const requests: Array<{ path: string; method: string; body: any }> = [];
+    const before = Date.now();
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        soulContents: "role prompt",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async (path: string, init?: RequestInit) => {
+        const method = init?.method ?? "GET";
+        const bodyText = init?.body ? String(init.body) : "";
+        requests.push({
+          path,
+          method,
+          body: bodyText ? JSON.parse(bodyText) : {},
+        });
+        if (method === "GET") {
+          return new Response(
+            JSON.stringify({ id: "evt-scheduled", payload: { text: "old text" } }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
+        return new Response(
+          JSON.stringify({ id: "evt-scheduled", payload: { text: "new text" } }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      },
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+    };
+
+    const result = (await executeTool(ctx, "events_scheduled_update", {
+      eventId: "evt-scheduled",
+      delaySeconds: 60,
+      text: "new text",
+    })) as { eventId: string; event: { id: string } };
+    const patchRequest = requests.find((request) => request.method === "PATCH");
+    expect(requests.some((request) => request.method === "GET")).toBe(true);
+    expect(patchRequest?.path).toBe("/api/events/evt-scheduled");
+    expect(patchRequest?.body.payload?.text).toBe("new text");
+    expect(patchRequest?.body.deliverAt).toBeGreaterThanOrEqual(before + 60_000);
+    expect(result.eventId).toBe("evt-scheduled");
+    expect(result.event.id).toBe("evt-scheduled");
+  });
+
+  it("deletes scheduled events via events_scheduled_delete", async () => {
+    const requests: Array<{ path: string; method: string }> = [];
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        soulContents: "role prompt",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async (path: string, init?: RequestInit) => {
+        requests.push({ path, method: init?.method ?? "GET" });
+        return new Response(JSON.stringify({ ok: true, deleted: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+    };
+
+    const result = (await executeTool(ctx, "events_scheduled_delete", {
+      eventId: "evt-scheduled",
+    })) as { deleted?: boolean };
+    expect(requests).toEqual([
+      { path: "/api/events/evt-scheduled", method: "DELETE" },
+    ]);
+    expect(result.deleted).toBe(true);
   });
 
   it("returns a validation error for unknown events_search typePrefix", async () => {

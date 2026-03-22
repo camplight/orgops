@@ -13,6 +13,8 @@ export type GenerateOptions = {
   tools?: Record<string, LlmTool>;
   /** Env vars for API keys etc.; overrides process.env when set. Used by runner to inject package secrets. */
   env?: Record<string, string | undefined>;
+  /** Optional hook called between model steps to append fresh messages. */
+  pullMessages?: () => Promise<LlmMessage[] | undefined>;
 };
 
 export type GenerateResult = {

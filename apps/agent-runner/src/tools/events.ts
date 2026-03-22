@@ -8,20 +8,6 @@ const scheduleOptionsSchema = z.object({
   delaySeconds: z.number().int().nonnegative().optional(),
 });
 
-const dmSendSchema = z.object({
-  agentName: z.string().min(1),
-  text: z.string().min(1),
-}).merge(scheduleOptionsSchema);
-
-const dmReplySchema = z.object({
-  text: z.string().min(1),
-}).merge(scheduleOptionsSchema);
-
-const channelSendSchema = z.object({
-  channelId: z.string().min(1),
-  text: z.string().min(1),
-}).merge(scheduleOptionsSchema);
-
 const emitSchema = z.object({
   type: z.string().min(1),
   payload: z.unknown().optional(),
@@ -49,6 +35,42 @@ const searchSchema = z.object({
   order: z.enum(["asc", "desc"]).optional(),
   scheduled: z.boolean().optional(),
   all: z.boolean().optional(),
+});
+
+const scheduledListSchema = z.object({
+  channelId: z.string().min(1).optional(),
+  type: z.string().min(1).optional(),
+  source: z.string().min(1).optional(),
+  limit: z.number().int().min(1).max(500).optional(),
+  order: z.enum(["asc", "desc"]).optional(),
+});
+
+const scheduledUpdateSchema = z
+  .object({
+    eventId: z.string().min(1),
+    payload: z.unknown().optional(),
+    text: z.string().min(1).optional(),
+  })
+  .merge(scheduleOptionsSchema)
+  .superRefine((value, ctx) => {
+    if (
+      value.deliverAt === undefined &&
+      value.deliverAtIso === undefined &&
+      value.delayMs === undefined &&
+      value.delaySeconds === undefined &&
+      value.payload === undefined &&
+      value.text === undefined
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "Provide at least one update field: deliverAt, deliverAtIso, delayMs, delaySeconds, payload, or text.",
+      });
+    }
+  });
+
+const scheduledDeleteSchema = z.object({
+  eventId: z.string().min(1),
 });
 
 const agentsSearchSchema = z.object({
@@ -103,6 +125,37 @@ const eventTypesSchema = z.object({
   includeExamples: z.boolean().optional(),
 });
 
+const scheduledCreateSchema = z
+  .object({
+    text: z.string().min(1),
+    targetAgentName: z.string().min(1),
+    channelId: z.string().min(1).optional(),
+  })
+  .merge(scheduleOptionsSchema)
+  .superRefine((value, ctx) => {
+    const keys = [
+      value.deliverAt !== undefined ? "deliverAt" : null,
+      value.deliverAtIso !== undefined ? "deliverAtIso" : null,
+      value.delayMs !== undefined ? "delayMs" : null,
+      value.delaySeconds !== undefined ? "delaySeconds" : null,
+    ].filter(Boolean);
+    if (keys.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "Provide one scheduling field: deliverAt, deliverAtIso, delayMs, or delaySeconds.",
+      });
+      return;
+    }
+    if (keys.length > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "Provide only one scheduling field: deliverAt, deliverAtIso, delayMs, or delaySeconds.",
+      });
+    }
+  });
+
 const scheduleSelfSchema = z
   .object({
     text: z.string().min(1),
@@ -135,21 +188,6 @@ const scheduleSelfSchema = z
 
 export const eventsToolDefs: ToolDef[] = [
   [
-    "events_dm_send",
-    "Send a direct message to another agent. Optional scheduling via deliverAt, deliverAtIso, delayMs, or delaySeconds.",
-    dmSendSchema,
-  ],
-  [
-    "events_dm_reply",
-    "Reply in the current direct-message channel. Optional scheduling via deliverAt, deliverAtIso, delayMs, or delaySeconds.",
-    dmReplySchema,
-  ],
-  [
-    "events_channel_send",
-    "Send a message event to a specific channel. Optional scheduling via deliverAt, deliverAtIso, delayMs, or delaySeconds.",
-    channelSendSchema,
-  ],
-  [
     "events_emit",
     "Emit a custom event by type to a channel (or current channel). Optional scheduling via deliverAt, deliverAtIso, delayMs, or delaySeconds. Optional awaitDeliveryMs to wait until status leaves PENDING.",
     emitSchema,
@@ -163,6 +201,21 @@ export const eventsToolDefs: ToolDef[] = [
     "events_search",
     "Search events across all visible channels with optional filters (type/source/status/time/order).",
     searchSchema,
+  ],
+  [
+    "events_scheduled_list",
+    "List future scheduled events that are still pending, with optional filters.",
+    scheduledListSchema,
+  ],
+  [
+    "events_scheduled_update",
+    "Update a scheduled event (reschedule and/or update payload text). Requires eventId and at least one update field.",
+    scheduledUpdateSchema,
+  ],
+  [
+    "events_scheduled_delete",
+    "Delete a future scheduled event by id.",
+    scheduledDeleteSchema,
   ],
   [
     "events_agents_search",
@@ -210,6 +263,11 @@ export const eventsToolDefs: ToolDef[] = [
     eventTypesSchema,
   ],
   [
+    "events_scheduled_create",
+    "Schedule an agent trigger event for any target agent using exactly one of deliverAt, deliverAtIso, delayMs, or delaySeconds.",
+    scheduledCreateSchema,
+  ],
+  [
     "events_schedule_self",
     "Schedule an internal delayed trigger for this agent (not a user-visible message) using exactly one of deliverAt, deliverAtIso, delayMs, or delaySeconds.",
     scheduleSelfSchema,
@@ -239,46 +297,6 @@ function parseToolArgs<T>(
     };
   }
   return { ok: true, data: parsed.data };
-}
-
-async function ensureDirectChannel(
-  ctx: ExecuteContext,
-  targetAgentName: string,
-): Promise<string> {
-  const response = await ctx.apiFetch("/api/channels/direct/agent-agent", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      leftAgentName: ctx.agent.name,
-      rightAgentName: targetAgentName,
-    }),
-  });
-  const body = (await response.json()) as { id: string };
-  return body.id;
-}
-
-async function sendMessage(
-  ctx: ExecuteContext,
-  channelId: string,
-  text: string,
-  deliverAt?: number,
-) {
-  const eventDraft = {
-    type: "message.created",
-    source: `agent:${ctx.agent.name}`,
-    channelId,
-    payload: {
-      text,
-    },
-    ...(deliverAt !== undefined ? { deliverAt } : {}),
-  };
-  validateEventOrThrow(ctx, eventDraft);
-  const response = await ctx.apiFetch("/api/events", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(eventDraft),
-  });
-  return response.json();
 }
 
 function resolveDeliverAt(input: {
@@ -316,15 +334,8 @@ function resolveDeliverAt(input: {
   return undefined;
 }
 
-function ensureAgentMention(text: string, agentName: string) {
-  const mention = `@${agentName}`;
-  return text.includes(mention) ? text : `${mention} ${text}`.trim();
-}
-
-function agentNameFromSource(source: string | undefined): string | null {
-  if (!source?.startsWith("agent:")) return null;
-  const name = source.slice("agent:".length).trim();
-  return name || null;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function validateEventOrThrow(
@@ -436,81 +447,6 @@ export async function execute(
   tool: string,
   args: Record<string, unknown>,
 ): Promise<unknown> {
-  if (tool === "events_dm_send") {
-    const parsedResult = parseToolArgs(tool, dmSendSchema, args);
-    if (!parsedResult.ok) return { error: parsedResult.error };
-    const parsed = parsedResult.data;
-    let deliverAt: number | undefined;
-    try {
-      deliverAt = resolveDeliverAt(parsed);
-    } catch (error) {
-      return { error: String(error) };
-    }
-    const channelId = await ensureDirectChannel(ctx, parsed.agentName);
-    const text = ensureAgentMention(parsed.text, parsed.agentName);
-    const event = await sendMessage(
-      ctx,
-      channelId,
-      text,
-      deliverAt,
-    );
-    return { channelId, event };
-  }
-
-  if (tool === "events_dm_reply") {
-    const parsedResult = parseToolArgs(tool, dmReplySchema, args);
-    if (!parsedResult.ok) return { error: parsedResult.error };
-    const parsed = parsedResult.data;
-    let deliverAt: number | undefined;
-    try {
-      deliverAt = resolveDeliverAt(parsed);
-    } catch (error) {
-      return { error: String(error) };
-    }
-    if (!ctx.channelId) {
-      return { error: "No current channelId. Use events_dm_send instead." };
-    }
-    const triggerAgent = agentNameFromSource(ctx.triggerEvent.source);
-    const text =
-      triggerAgent && triggerAgent !== ctx.agent.name
-        ? ensureAgentMention(parsed.text, triggerAgent)
-        : parsed.text;
-    const event = await sendMessage(
-      ctx,
-      ctx.channelId,
-      text,
-      deliverAt,
-    );
-    return { channelId: ctx.channelId, event };
-  }
-
-  if (tool === "events_channel_send") {
-    const parsedResult = parseToolArgs(tool, channelSendSchema, args);
-    if (!parsedResult.ok) return { error: parsedResult.error };
-    const parsed = parsedResult.data;
-    let deliverAt: number | undefined;
-    try {
-      deliverAt = resolveDeliverAt(parsed);
-    } catch (error) {
-      return { error: String(error) };
-    }
-    const triggerAgent = agentNameFromSource(ctx.triggerEvent.source);
-    const channelId = parsed.channelId;
-    const text =
-      channelId === ctx.channelId &&
-      triggerAgent &&
-      triggerAgent !== ctx.agent.name
-        ? ensureAgentMention(parsed.text, triggerAgent)
-        : parsed.text;
-    const event = await sendMessage(
-      ctx,
-      channelId,
-      text,
-      deliverAt,
-    );
-    return { channelId, event };
-  }
-
   if (tool === "events_channel_messages") {
     const parsedResult = parseToolArgs(tool, channelMessagesSchema, args);
     if (!parsedResult.ok) return { error: parsedResult.error };
@@ -559,6 +495,80 @@ export async function execute(
     const response = await ctx.apiFetch(`/api/events?${query.toString()}`);
     const events = (await response.json()) as unknown[];
     return { filters: parsed, events };
+  }
+
+  if (tool === "events_scheduled_list") {
+    const parsedResult = parseToolArgs(tool, scheduledListSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const parsed = parsedResult.data;
+    const query = new URLSearchParams();
+    query.set("scheduled", "1");
+    if (parsed.channelId) query.set("channelId", parsed.channelId);
+    if (parsed.type) query.set("type", parsed.type);
+    if (parsed.source) query.set("source", parsed.source);
+    if (parsed.limit !== undefined) query.set("limit", String(parsed.limit));
+    if (parsed.order) query.set("order", parsed.order);
+    const response = await ctx.apiFetch(`/api/events?${query.toString()}`);
+    const events = (await response.json()) as unknown[];
+    return { filters: parsed, events };
+  }
+
+  if (tool === "events_scheduled_update") {
+    const parsedResult = parseToolArgs(tool, scheduledUpdateSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const parsed = parsedResult.data;
+    let deliverAt: number | undefined;
+    try {
+      deliverAt = resolveDeliverAt(parsed);
+    } catch (error) {
+      return { error: String(error) };
+    }
+    let payload: unknown = parsed.payload;
+    if (parsed.text !== undefined) {
+      if (payload !== undefined) {
+        if (!isRecord(payload)) {
+          return { error: "payload must be an object when text is provided." };
+        }
+        payload = { ...payload, text: parsed.text };
+      } else {
+        const existingResponse = await ctx.apiFetch(
+          `/api/events/${encodeURIComponent(parsed.eventId)}`,
+        );
+        const existingEvent = (await existingResponse.json()) as { payload?: unknown };
+        const existingPayload = isRecord(existingEvent.payload)
+          ? existingEvent.payload
+          : {};
+        payload = { ...existingPayload, text: parsed.text };
+      }
+    }
+
+    const body: Record<string, unknown> = {};
+    if (deliverAt !== undefined) body.deliverAt = deliverAt;
+    if (payload !== undefined) body.payload = payload;
+    const response = await ctx.apiFetch(
+      `/api/events/${encodeURIComponent(parsed.eventId)}`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
+    const event = await response.json();
+    return { eventId: parsed.eventId, event };
+  }
+
+  if (tool === "events_scheduled_delete") {
+    const parsedResult = parseToolArgs(tool, scheduledDeleteSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const parsed = parsedResult.data;
+    const response = await ctx.apiFetch(
+      `/api/events/${encodeURIComponent(parsed.eventId)}`,
+      {
+        method: "DELETE",
+      },
+    );
+    const result = await response.json();
+    return { eventId: parsed.eventId, ...result };
   }
 
   if (tool === "events_agents_search") {
@@ -810,6 +820,44 @@ export async function execute(
       channelId: targetChannelId,
       delivery,
     };
+  }
+
+  if (tool === "events_scheduled_create") {
+    const parsedResult = parseToolArgs(tool, scheduledCreateSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const parsed = parsedResult.data;
+    let deliverAt: number | undefined;
+    try {
+      deliverAt = resolveDeliverAt(parsed);
+    } catch (error) {
+      return { error: String(error) };
+    }
+    const channelId = parsed.channelId ?? ctx.channelId;
+    if (!channelId) {
+      return { error: "No current channelId. Provide channelId explicitly." };
+    }
+    const eventDraft = {
+      type: "agent.scheduled.trigger",
+      source: "system:scheduler",
+      channelId,
+      payload: {
+        text: parsed.text,
+        targetAgentName: parsed.targetAgentName,
+      },
+      ...(deliverAt !== undefined ? { deliverAt } : {}),
+    };
+    try {
+      validateEventOrThrow(ctx, eventDraft);
+    } catch (error) {
+      return { error: String(error) };
+    }
+    const response = await ctx.apiFetch("/api/events", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(eventDraft),
+    });
+    const event = await response.json();
+    return { channelId, event };
   }
 
   if (tool === "events_schedule_self") {

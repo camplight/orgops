@@ -5,16 +5,21 @@ import { resolveAgentPath } from "./path-access";
 import { getShellLaunch } from "./shell-launch";
 
 const envSchema = z.record(z.string(), z.string()).optional();
+const MIN_TIMEOUT_MS = 1_000;
+const MAX_TIMEOUT_MS = 300_000;
+const DEFAULT_TIMEOUT_MS = 45_000;
+const DEFAULT_MAX_BUFFER = 10 * 1024 * 1024;
 const shellRunSchema = z.object({
   cmd: z.string().min(1),
   cwd: z.string().optional(),
   env: envSchema,
+  timeoutMs: z.number().int().min(MIN_TIMEOUT_MS).max(MAX_TIMEOUT_MS).optional(),
 });
 
 export const shellToolDefs: ToolDef[] = [
   [
     "shell_run",
-    "Run a shell command.",
+    "Run a shell command with a timeout.",
     shellRunSchema,
   ],
 ];
@@ -43,6 +48,7 @@ export async function execute(
   }
   const cmd = parsed.data.cmd;
   const requestedCwd = parsed.data.cwd ?? ctx.agent.workspacePath;
+  const timeoutMs = parsed.data.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const cwd = resolveAgentPath(
     ctx.agent,
     requestedCwd,
@@ -54,7 +60,24 @@ export async function execute(
     cwd,
     env: { ...process.env, ...ctx.injectionEnv, ...env },
     encoding: "utf-8",
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
+    maxBuffer: DEFAULT_MAX_BUFFER,
   });
+  const spawnError = result.error as NodeJS.ErrnoException | undefined;
+  const timedOut = spawnError
+    ? spawnError.code === "ETIMEDOUT" ||
+      spawnError.message.includes("ETIMEDOUT")
+    : false;
+  if (timedOut) {
+    return {
+      stdout: result.stdout ?? "",
+      stderr:
+        (result.stderr ?? "") +
+        `\nCommand timed out after ${timeoutMs}ms. If this is expected to run long, use proc_start.`,
+      exitCode: 124,
+    };
+  }
   return {
     stdout: result.stdout ?? "",
     stderr: result.stderr ?? "",

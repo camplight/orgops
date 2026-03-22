@@ -56,7 +56,7 @@ All scripts accept `--agent <agentName>` and use:
 Agent operating rule:
 
 - Use `events_*` tools only. Do not use Slack CLI helpers for runtime interaction.
-- For Slack-triggered work, after posting back via events tools, return `[NO_REPLY]` to avoid duplicate OrgOps chat replies.
+- Use `events_emit` for outbound Slack-bound events during execution, then return a final validated event object for the runner.
 
 ## Outbound via Events API (bridged channel only)
 
@@ -69,10 +69,13 @@ Preferred tool call from agents:
 
 ```json
 {
-  "tool": "events_channel_send",
+  "tool": "events_emit",
   "args": {
+    "type": "message.created",
     "channelId": "<orgops-bridge-channel-id>",
-    "text": "hello from OrgOps"
+    "payload": {
+      "text": "hello from OrgOps"
+    }
   }
 }
 ```

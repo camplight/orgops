@@ -24,6 +24,8 @@ type EventsScreenProps = {
   onClearEvents: () => Promise<void>;
   onEmitEvent: (rawJson: string) => Promise<void>;
   onRefreshEventTypes: () => Promise<void> | void;
+  onUpdateScheduledEvent: (eventId: string, input: { deliverAt: number; payload?: unknown }) => Promise<void>;
+  onDeleteScheduledEvent: (eventId: string) => Promise<void>;
 };
 
 type SortKey =
@@ -50,7 +52,9 @@ export function EventsScreen({
   filters,
   onFiltersChange,
   onApplyFilters,
-  onClearEvents
+  onClearEvents,
+  onUpdateScheduledEvent,
+  onDeleteScheduledEvent
 }: EventsScreenProps) {
   const [sortKey, setSortKey] = useState<SortKey>("createdAt");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
@@ -58,6 +62,9 @@ export function EventsScreen({
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const [scheduledDeliverAtInput, setScheduledDeliverAtInput] = useState("");
+  const [scheduledTextInput, setScheduledTextInput] = useState("");
+  const [scheduledActionPending, setScheduledActionPending] = useState(false);
   const channelById = useMemo(
     () => new Map(channels.map((channel) => [channel.id, channel])),
     [channels]
@@ -206,6 +213,19 @@ export function EventsScreen({
     () => filteredAndSortedEvents.find((event) => event.id === selectedEventId) ?? null,
     [filteredAndSortedEvents, selectedEventId]
   );
+  const isSelectedFutureScheduledEvent =
+    Boolean(selectedEvent?.deliverAt) &&
+    (selectedEvent?.deliverAt ?? 0) > Date.now() &&
+    (selectedEvent?.status ?? "").toUpperCase() === "PENDING";
+
+  const toDateTimeLocalInputValue = (timestamp?: number) => {
+    if (!timestamp) return "";
+    const date = new Date(timestamp);
+    const pad = (value: number) => String(value).padStart(2, "0");
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(
+      date.getHours()
+    )}:${pad(date.getMinutes())}`;
+  };
 
   useEscapeKey(Boolean(selectedEvent), () => {
     setSelectedEventId(null);
@@ -225,10 +245,74 @@ export function EventsScreen({
     }
   }, [filteredAndSortedEvents, selectedEventId]);
 
+  useEffect(() => {
+    if (!selectedEvent) {
+      setScheduledDeliverAtInput("");
+      setScheduledTextInput("");
+      return;
+    }
+    setScheduledDeliverAtInput(toDateTimeLocalInputValue(selectedEvent.deliverAt));
+    const payload = selectedEvent.payload;
+    const payloadText =
+      payload &&
+      typeof payload === "object" &&
+      !Array.isArray(payload) &&
+      typeof (payload as Record<string, unknown>).text === "string"
+        ? String((payload as Record<string, unknown>).text)
+        : "";
+    setScheduledTextInput(payloadText);
+  }, [selectedEvent]);
+
   const handleResetFilters = () => {
     const resetFilters = { ...DEFAULT_FILTERS };
     onFiltersChange(resetFilters);
     onApplyFilters(resetFilters);
+  };
+
+  const handleSaveScheduledEvent = async () => {
+    if (!selectedEvent) return;
+    const deliverAt = Date.parse(scheduledDeliverAtInput);
+    if (!Number.isFinite(deliverAt)) {
+      alert("Please provide a valid date/time.");
+      return;
+    }
+    if (deliverAt <= Date.now()) {
+      alert("Scheduled time must be in the future.");
+      return;
+    }
+
+    let payloadUpdate: unknown = undefined;
+    if (selectedEvent.payload && typeof selectedEvent.payload === "object" && !Array.isArray(selectedEvent.payload)) {
+      const currentPayload = selectedEvent.payload as Record<string, unknown>;
+      if (typeof currentPayload.text === "string" && currentPayload.text !== scheduledTextInput) {
+        payloadUpdate = {
+          ...currentPayload,
+          text: scheduledTextInput
+        };
+      }
+    }
+
+    try {
+      setScheduledActionPending(true);
+      await onUpdateScheduledEvent(selectedEvent.id, {
+        deliverAt,
+        ...(payloadUpdate !== undefined ? { payload: payloadUpdate } : {})
+      });
+    } finally {
+      setScheduledActionPending(false);
+    }
+  };
+
+  const handleDeleteScheduledEvent = async () => {
+    if (!selectedEvent) return;
+    if (!confirm("Delete this scheduled event? This cannot be undone.")) return;
+    try {
+      setScheduledActionPending(true);
+      await onDeleteScheduledEvent(selectedEvent.id);
+      setSelectedEventId(null);
+    } finally {
+      setScheduledActionPending(false);
+    }
   };
 
   return (
@@ -517,6 +601,60 @@ export function EventsScreen({
                   {selectedEvent.deliverAt ? formatTimestamp(selectedEvent.deliverAt) : "-"}
                 </div>
               </div>
+
+              {isSelectedFutureScheduledEvent ? (
+                <div className="rounded border border-slate-800 bg-slate-950 p-3">
+                  <h4 className="mb-2 text-sm text-slate-300">Scheduled Event Actions</h4>
+                  <div className="space-y-3">
+                    <div>
+                      <label className="mb-1 block text-xs text-slate-500" htmlFor="scheduled-deliver-at">
+                        Deliver At
+                      </label>
+                      <Input
+                        id="scheduled-deliver-at"
+                        type="datetime-local"
+                        value={scheduledDeliverAtInput}
+                        onChange={(e) => setScheduledDeliverAtInput(e.target.value)}
+                        disabled={scheduledActionPending}
+                      />
+                    </div>
+                    {selectedEvent.payload &&
+                    typeof selectedEvent.payload === "object" &&
+                    !Array.isArray(selectedEvent.payload) &&
+                    typeof (selectedEvent.payload as Record<string, unknown>).text === "string" ? (
+                      <div>
+                        <label className="mb-1 block text-xs text-slate-500" htmlFor="scheduled-text">
+                          Payload text
+                        </label>
+                        <Input
+                          id="scheduled-text"
+                          value={scheduledTextInput}
+                          onChange={(e) => setScheduledTextInput(e.target.value)}
+                          disabled={scheduledActionPending}
+                        />
+                      </div>
+                    ) : null}
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        onClick={handleSaveScheduledEvent}
+                        disabled={scheduledActionPending}
+                      >
+                        Save scheduled changes
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        className="bg-rose-900 hover:bg-rose-800 text-rose-100"
+                        onClick={handleDeleteScheduledEvent}
+                        disabled={scheduledActionPending}
+                      >
+                        Delete scheduled event
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
 
               <div className="rounded border border-slate-800 bg-slate-950 p-3">
                 <h4 className="mb-2 text-sm text-slate-300">Payload</h4>
