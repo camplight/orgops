@@ -76,11 +76,24 @@ For systemd setup:
 curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/<branch>/scripts/install-linux-latest.sh | sudo ORGOPS_SYSTEMD_SERVICE=1 bash -s -- "<org>/<repo>" /opt/orgops
 ```
 
+For offline or transferred Unix bundle installs on a bare host:
+
+1. Extract `orgops-<platform>-<arch>-bundle.tar.gz`
+2. Run `./install-orgops.sh /opt/orgops` from the extracted bundle root (runs prereqs + idempotent install, does not start)
+3. Start manually with `/opt/orgops/start-orgops.sh`
+
 ### Quick Windows VM install (paste into PowerShell)
 
 ```powershell
 iwr -useb https://raw.githubusercontent.com/<org>/<repo>/<branch>/scripts/install-windows-bundle.ps1 | iex; Install-OrgOpsBundle -BundleSource "<windows-bundle-url>" -InstallDir "C:\orgops"
 ```
+
+For offline or transferred zip installs on a bare Windows host:
+
+1. Extract `orgops-windows-bundle.zip`
+2. Run `install-orgops.cmd` from the extracted bundle root (runs prereqs + idempotent install to `C:\orgops`, does not start)
+   - Optional custom install directory: `install-orgops.cmd D:\orgops`
+3. Start manually with `C:\orgops\start-orgops.cmd` (or your custom dir)
 
 Installer behavior (Windows + Unix):
 

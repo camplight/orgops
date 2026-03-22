@@ -37,6 +37,10 @@ $ArchivePath = Join-Path $OutputRoot "orgops-windows-bundle.zip"
 $RuntimeNodeRoot = Join-Path $BundleRoot "runtime\node"
 $RuntimeGitRoot = Join-Path $BundleRoot "runtime\git"
 $LaunchScriptPath = Join-Path $BundleRoot "start-orgops.cmd"
+$PrereqScriptPath = Join-Path $BundleRoot "install-prereqs.ps1"
+$PrereqCmdPath = Join-Path $BundleRoot "install-prereqs.cmd"
+$InstallOrgOpsScriptPath = Join-Path $BundleRoot "install-orgops.ps1"
+$InstallOrgOpsCmdPath = Join-Path $BundleRoot "install-orgops.cmd"
 
 Write-Host "Preparing output directory at $OutputRoot"
 if (Test-Path $OutputRoot) {
@@ -114,6 +118,59 @@ echo Starting OrgOps on Windows...
 call "%ROOT%runtime\node\npm.cmd" run prod:all
 '@
   Set-Content -Path $LaunchScriptPath -Value $LaunchScript -Encoding ASCII
+
+  $PrereqScript = @'
+param(
+  [switch]$IncludePython = $false,
+  [switch]$IncludeVCRedist = $true
+)
+
+$scriptPath = Join-Path $PSScriptRoot "scripts\install-windows-prereqs.ps1"
+if (-not (Test-Path -LiteralPath $scriptPath)) {
+  throw "Cannot find prerequisite installer at $scriptPath"
+}
+
+& $scriptPath -IncludePython:$IncludePython -IncludeVCRedist:$IncludeVCRedist
+'@
+  Set-Content -Path $PrereqScriptPath -Value $PrereqScript -Encoding ASCII
+
+  $PrereqCmd = @'
+@echo off
+setlocal
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0install-prereqs.ps1"
+'@
+  Set-Content -Path $PrereqCmdPath -Value $PrereqCmd -Encoding ASCII
+
+  $InstallOrgOpsScript = @'
+param(
+  [string]$InstallDir = "C:\orgops",
+  [switch]$IncludePython = $false,
+  [switch]$IncludeVCRedist = $true
+)
+
+$prereqScript = Join-Path $PSScriptRoot "install-prereqs.ps1"
+$installScript = Join-Path $PSScriptRoot "scripts\install-windows-extracted-bundle.ps1"
+
+if (-not (Test-Path -LiteralPath $prereqScript)) {
+  throw "Cannot find prerequisite installer at $prereqScript"
+}
+if (-not (Test-Path -LiteralPath $installScript)) {
+  throw "Cannot find bundle installer at $installScript"
+}
+
+& $prereqScript -IncludePython:$IncludePython -IncludeVCRedist:$IncludeVCRedist
+& $installScript -SourceDir $PSScriptRoot -InstallDir $InstallDir
+'@
+  Set-Content -Path $InstallOrgOpsScriptPath -Value $InstallOrgOpsScript -Encoding ASCII
+
+  $InstallOrgOpsCmd = @'
+@echo off
+setlocal
+set "INSTALL_DIR=%~1"
+if "%INSTALL_DIR%"=="" set "INSTALL_DIR=C:\orgops"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0install-orgops.ps1" -InstallDir "%INSTALL_DIR%"
+'@
+  Set-Content -Path $InstallOrgOpsCmdPath -Value $InstallOrgOpsCmd -Encoding ASCII
 }
 finally {
   Pop-Location

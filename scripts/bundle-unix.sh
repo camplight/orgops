@@ -92,6 +92,32 @@ echo "Starting OrgOps..."
 EOF
 
 chmod +x "${bundle_root}/start-orgops.sh"
+
+cat > "${bundle_root}/install-prereqs.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/scripts/install-unix-prereqs.sh"
+if [[ ! -f "${SCRIPT_PATH}" ]]; then
+  echo "Cannot find prerequisite installer at ${SCRIPT_PATH}" >&2
+  exit 1
+fi
+
+bash "${SCRIPT_PATH}"
+EOF
+
+cat > "${bundle_root}/install-orgops.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTALL_DIR="${1:-$HOME/orgops}"
+
+bash "${ROOT}/install-prereqs.sh"
+bash "${ROOT}/scripts/install-unix-extracted-bundle.sh" "${ROOT}" "${INSTALL_DIR}"
+EOF
+
+chmod +x "${bundle_root}/install-prereqs.sh" "${bundle_root}/install-orgops.sh"
 popd >/dev/null
 
 echo "Creating archive at ${archive_path}"
