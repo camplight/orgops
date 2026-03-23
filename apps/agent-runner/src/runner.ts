@@ -325,9 +325,10 @@ async function emitStartupEvent(agent: Agent) {
 
 async function listChannelEvents(channelId: string): Promise<Event[]> {
   const res = await apiFetch(
-    `/api/events?channelId=${encodeURIComponent(channelId)}&limit=200`,
+    `/api/events?channelId=${encodeURIComponent(channelId)}&limit=200&order=desc`,
   );
-  return res.json();
+  const events = (await res.json()) as Event[];
+  return events.slice().reverse();
 }
 
 export function toHistoryMessage(agent: Agent, event: Event) {
@@ -375,36 +376,97 @@ function buildHistoryTruncationMessage(
   };
 }
 
+function getToolEventName(event: Event): string | null {
+  const payload =
+    event.payload && typeof event.payload === "object"
+      ? (event.payload as { tool?: unknown })
+      : undefined;
+  const tool = payload?.tool;
+  return typeof tool === "string" && tool.trim().length > 0 ? tool : null;
+}
+
+function buildToolResultToStartIndexMap(channelEvents: Event[]) {
+  const startsByKey = new Map<string, number[]>();
+  const resultToStartIndex = new Map<number, number>();
+  for (let index = 0; index < channelEvents.length; index += 1) {
+    const event = channelEvents[index];
+    const toolName = getToolEventName(event);
+    if (!toolName) continue;
+    const key = `${event.source}::${toolName}`;
+    if (event.type === "audit.tool.started") {
+      const stack = startsByKey.get(key) ?? [];
+      stack.push(index);
+      startsByKey.set(key, stack);
+      continue;
+    }
+    if (
+      event.type !== "audit.tool.executed" &&
+      event.type !== "audit.tool.failed"
+    ) {
+      continue;
+    }
+    const stack = startsByKey.get(key);
+    const startIndex = stack?.pop();
+    if (startIndex !== undefined) {
+      resultToStartIndex.set(index, startIndex);
+    }
+  }
+  return resultToStartIndex;
+}
+
 export function buildModelMessages(
   agent: Agent,
   system: string,
   channelEvents: Event[],
 ) {
-  const boundedByEventCount =
-    channelEvents.length > HISTORY_MAX_EVENTS
-      ? channelEvents.slice(-HISTORY_MAX_EVENTS)
-      : channelEvents;
-  const historyMessages = boundedByEventCount.map((channelEvent) =>
+  const orderedChannelEvents = channelEvents
+    .slice()
+    .sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0));
+  const historyMessages = orderedChannelEvents.map((channelEvent) =>
     toHistoryMessage(agent, channelEvent),
   );
+  const resultToStartIndex = buildToolResultToStartIndexMap(orderedChannelEvents);
 
-  const keptFromEnd: Array<{ role: "user" | "assistant"; content: string }> =
-    [];
+  let keptStartIndex = historyMessages.length;
+  let keptMessageCount = 0;
   let totalHistoryChars = 0;
-  for (let index = historyMessages.length - 1; index >= 0; index -= 1) {
-    const message = historyMessages[index];
-    const messageChars = message.content.length;
+  for (
+    let index = historyMessages.length - 1;
+    index >= 0;
+    index -= 1
+  ) {
+    const messageChars = historyMessages[index]?.content.length ?? 0;
+    const exceedsMaxEvents = keptMessageCount + 1 > HISTORY_MAX_EVENTS;
+    const exceedsMaxChars =
+      keptMessageCount > 0 &&
+      totalHistoryChars + messageChars > HISTORY_MAX_CHARS;
     if (
-      keptFromEnd.length > 0 &&
-      totalHistoryChars + messageChars > HISTORY_MAX_CHARS
+      (keptStartIndex < historyMessages.length && exceedsMaxChars) ||
+      exceedsMaxEvents
     ) {
       break;
     }
-    keptFromEnd.push(message);
+    keptStartIndex = index;
+    keptMessageCount += 1;
     totalHistoryChars += messageChars;
   }
-  keptFromEnd.reverse();
-  const omittedCount = channelEvents.length - keptFromEnd.length;
+  for (;;) {
+    let advanced = false;
+    for (
+      let index = keptStartIndex;
+      index < historyMessages.length;
+      index += 1
+    ) {
+      const startIndex = resultToStartIndex.get(index);
+      if (startIndex !== undefined && startIndex < keptStartIndex) {
+        keptStartIndex = index + 1;
+        advanced = true;
+      }
+    }
+    if (!advanced) break;
+  }
+  const keptFromEnd = historyMessages.slice(keptStartIndex);
+  const omittedCount = orderedChannelEvents.length - keptFromEnd.length;
   return [
     { role: "system" as const, content: system },
     ...(omittedCount > 0

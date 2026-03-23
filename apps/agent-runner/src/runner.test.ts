@@ -114,6 +114,125 @@ describe("agent runner", () => {
     expect(eventIds[eventIds.length - 1]).toBe("evt-130");
   });
 
+  it("keeps newest events when history arrives newest-first", () => {
+    const agent: Agent = {
+      name: "tester",
+      systemInstructions: "",
+      soulPath: "",
+      workspacePath: "/tmp",
+      modelId: "openai:gpt-4o-mini",
+      desiredState: "RUNNING",
+      runtimeState: "RUNNING",
+    };
+    const eventsNewestFirst: Event[] = Array.from({ length: 130 }, (_, index) => ({
+      id: `evt-${index + 1}`,
+      type: "message.created",
+      payload: { text: `msg-${index + 1}` },
+      source: "human:alice",
+      channelId: "chan-1",
+      createdAt: index + 1,
+    })).reverse();
+
+    const messages = buildModelMessages(agent, "system prompt", eventsNewestFirst);
+    expect(messages[0]).toEqual({ role: "system", content: "system prompt" });
+    expect(messages[1]?.role).toBe("user");
+    const truncationMeta = JSON.parse(String(messages[1]?.content));
+    expect(truncationMeta.type).toBe("system.history.truncated");
+    const eventIds = messages
+      .slice(2)
+      .map((message) => JSON.parse(message.content as string).eventId);
+    expect(eventIds[0]).toBe("evt-11");
+    expect(eventIds[eventIds.length - 1]).toBe("evt-130");
+  });
+
+  it("does not keep tool result when matching start is truncated", () => {
+    const agent: Agent = {
+      name: "tester",
+      systemInstructions: "",
+      soulPath: "",
+      workspacePath: "/tmp",
+      modelId: "openai:gpt-4o-mini",
+      desiredState: "RUNNING",
+      runtimeState: "RUNNING",
+    };
+    const events: Event[] = Array.from({ length: 130 }, (_, index) => ({
+      id: `evt-${index + 1}`,
+      type: "message.created",
+      payload: { text: `msg-${index + 1}` },
+      source: "human:alice",
+      channelId: "chan-1",
+      createdAt: index + 1,
+    }));
+    events[9] = {
+      id: "evt-10",
+      type: "audit.tool.started",
+      payload: { tool: "shell_run", args: { cmd: "echo hi" } },
+      source: "agent:tester",
+      channelId: "chan-1",
+      createdAt: 10,
+    };
+    events[10] = {
+      id: "evt-11",
+      type: "audit.tool.executed",
+      payload: { tool: "shell_run", output: { ok: true } },
+      source: "agent:tester",
+      channelId: "chan-1",
+      createdAt: 11,
+    };
+
+    const messages = buildModelMessages(agent, "system prompt", events);
+    const eventIds = messages
+      .slice(2)
+      .map((message) => JSON.parse(message.content as string).eventId);
+    expect(eventIds).not.toContain("evt-11");
+    expect(eventIds[0]).toBe("evt-12");
+    expect(eventIds[eventIds.length - 1]).toBe("evt-130");
+  });
+
+  it("does not keep failed tool result when matching start is truncated", () => {
+    const agent: Agent = {
+      name: "tester",
+      systemInstructions: "",
+      soulPath: "",
+      workspacePath: "/tmp",
+      modelId: "openai:gpt-4o-mini",
+      desiredState: "RUNNING",
+      runtimeState: "RUNNING",
+    };
+    const events: Event[] = Array.from({ length: 130 }, (_, index) => ({
+      id: `evt-${index + 1}`,
+      type: "message.created",
+      payload: { text: `msg-${index + 1}` },
+      source: "human:alice",
+      channelId: "chan-1",
+      createdAt: index + 1,
+    }));
+    events[9] = {
+      id: "evt-10",
+      type: "audit.tool.started",
+      payload: { tool: "proc_start", args: { cmd: "bad" } },
+      source: "agent:tester",
+      channelId: "chan-1",
+      createdAt: 10,
+    };
+    events[10] = {
+      id: "evt-11",
+      type: "audit.tool.failed",
+      payload: { tool: "proc_start", error: "boom" },
+      source: "agent:tester",
+      channelId: "chan-1",
+      createdAt: 11,
+    };
+
+    const messages = buildModelMessages(agent, "system prompt", events);
+    const eventIds = messages
+      .slice(2)
+      .map((message) => JSON.parse(message.content as string).eventId);
+    expect(eventIds).not.toContain("evt-11");
+    expect(eventIds[0]).toBe("evt-12");
+    expect(eventIds[eventIds.length - 1]).toBe("evt-130");
+  });
+
   it("filters control, self, and agent-sourced channel events", async () => {
     const agent: Agent = {
       name: "tester",
