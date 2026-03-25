@@ -131,6 +131,82 @@ describe("api app", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("supports per-agent LLM timeout and classic max model steps overrides", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token"
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" })
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const createAgentRes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "tuned-agent",
+        modelId: "openai:gpt-4o-mini",
+        workspacePath: ".orgops-data/workspaces/tuned-agent",
+        llmCallTimeoutMs: 180000,
+        classicMaxModelSteps: 250
+      })
+    });
+    expect(createAgentRes.status).toBe(201);
+
+    const getCreatedRes = await app.request("http://localhost/api/agents/tuned-agent", {
+      headers: { cookie }
+    });
+    expect(getCreatedRes.status).toBe(200);
+    const createdAgent = (await getCreatedRes.json()) as {
+      llmCallTimeoutMs?: number | null;
+      classicMaxModelSteps?: number | null;
+    };
+    expect(createdAgent.llmCallTimeoutMs).toBe(180000);
+    expect(createdAgent.classicMaxModelSteps).toBe(250);
+
+    const patchRes = await app.request("http://localhost/api/agents/tuned-agent", {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        llmCallTimeoutMs: null,
+        classicMaxModelSteps: null
+      })
+    });
+    expect(patchRes.status).toBe(200);
+
+    const getPatchedRes = await app.request("http://localhost/api/agents/tuned-agent", {
+      headers: { cookie }
+    });
+    expect(getPatchedRes.status).toBe(200);
+    const patchedAgent = (await getPatchedRes.json()) as {
+      llmCallTimeoutMs?: number | null;
+      classicMaxModelSteps?: number | null;
+    };
+    expect(patchedAgent.llmCallTimeoutMs).toBeNull();
+    expect(patchedAgent.classicMaxModelSteps).toBeNull();
+
+    const invalidPatchRes = await app.request("http://localhost/api/agents/tuned-agent", {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        llmCallTimeoutMs: 0
+      })
+    });
+    expect(invalidPatchRes.status).toBe(400);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("authenticates and creates events", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");
@@ -1015,6 +1091,93 @@ describe("api app", () => {
       body: JSON.stringify({ name: "bad-direct", kind: "HUMAN_AGENT_DM" })
     });
     expect(invalidCreateRes.status).toBe(400);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("returns 409 when creating a duplicate channel name", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token"
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" })
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const firstCreateRes = await app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ name: "dup-channel-name", kind: "INTEGRATION_BRIDGE" })
+    });
+    expect(firstCreateRes.status).toBe(201);
+
+    const secondCreateRes = await app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ name: "dup-channel-name", kind: "INTEGRATION_BRIDGE" })
+    });
+    expect(secondCreateRes.status).toBe(409);
+    const secondCreateBody = (await secondCreateRes.json()) as { error?: string };
+    expect(secondCreateBody.error).toBe("Channel name already exists");
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("returns 409 when renaming a channel to an existing name", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token"
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" })
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const firstCreateRes = await app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ name: "existing-channel", kind: "INTEGRATION_BRIDGE" })
+    });
+    expect(firstCreateRes.status).toBe(201);
+
+    const secondCreateRes = await app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ name: "channel-to-rename", kind: "INTEGRATION_BRIDGE" })
+    });
+    expect(secondCreateRes.status).toBe(201);
+    const secondCreateBody = (await secondCreateRes.json()) as { id: string };
+
+    const patchRes = await app.request(
+      `http://localhost/api/channels/${secondCreateBody.id}`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ name: "existing-channel" })
+      }
+    );
+    expect(patchRes.status).toBe(409);
+    const patchBody = (await patchRes.json()) as { error?: string };
+    expect(patchBody.error).toBe("Channel name already exists");
 
     rmSync(dataDir, { recursive: true, force: true });
   });

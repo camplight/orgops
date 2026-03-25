@@ -3,6 +3,8 @@ import { createRunnerTools } from "./tools";
 import { executeTool } from "./tools";
 import {
   buildModelMessages,
+  resolveAgentClassicMaxModelSteps,
+  resolveAgentLlmCallTimeoutMs,
   shouldHandleEvent,
 } from "./runner";
 import { stopAllRunningProcesses } from "./tools/proc";
@@ -80,6 +82,41 @@ describe("agent runner", () => {
       .slice(1)
       .map((message) => JSON.parse(message.content as string).eventId);
     expect(eventIds).toEqual(["evt-1", "evt-2", "evt-3"]);
+  });
+
+  it("resolves per-agent timeout and model-step overrides with sane defaults", () => {
+    const baseAgent: Agent = {
+      name: "tester",
+      systemInstructions: "",
+      soulPath: "",
+      workspacePath: "/tmp",
+      modelId: "openai:gpt-4o-mini",
+      desiredState: "RUNNING",
+      runtimeState: "RUNNING",
+    };
+
+    expect(resolveAgentLlmCallTimeoutMs(baseAgent)).toBe(90000);
+    expect(resolveAgentClassicMaxModelSteps(baseAgent)).toBe(100);
+
+    expect(
+      resolveAgentLlmCallTimeoutMs({ ...baseAgent, llmCallTimeoutMs: 180_000 }),
+    ).toBe(180000);
+    expect(
+      resolveAgentClassicMaxModelSteps({
+        ...baseAgent,
+        classicMaxModelSteps: 250,
+      }),
+    ).toBe(250);
+
+    expect(
+      resolveAgentLlmCallTimeoutMs({ ...baseAgent, llmCallTimeoutMs: 0 }),
+    ).toBe(90000);
+    expect(
+      resolveAgentClassicMaxModelSteps({
+        ...baseAgent,
+        classicMaxModelSteps: -1,
+      }),
+    ).toBe(100);
   });
 
   it("truncates oversized history to stay within model budget", () => {
@@ -298,6 +335,13 @@ describe("agent runner", () => {
       source: "system:process-runner",
       channelId: "chan-1",
     };
+    const noopEvent: Event = {
+      id: "evt-noop",
+      type: "noop",
+      payload: { reason: "waiting_for_mention" },
+      source: "agent:coordinator",
+      channelId: "chan-1",
+    };
     const userEvent: Event = {
       id: "evt-user",
       type: "message.created",
@@ -357,11 +401,12 @@ describe("agent runner", () => {
     expect(await shouldHandleEvent(agent, processStartedEvent)).toBe(true);
     expect(await shouldHandleEvent(agent, processOutputEvent)).toBe(true);
     expect(await shouldHandleEvent(agent, processExitedEvent)).toBe(true);
+    expect(await shouldHandleEvent(agent, noopEvent)).toBe(false);
     expect(await shouldHandleEvent(agent, otherAgentChannelEvent)).toBe(true);
     expect(await shouldHandleEvent(agent, addressedByMention)).toBe(true);
     expect(await shouldHandleEvent(agent, agentThreadReply)).toBe(true);
     expect(await shouldHandleEvent(agent, highHopCount)).toBe(true);
-    expect(await shouldHandleEvent(agent, targetedToOtherAgent)).toBe(true);
+    expect(await shouldHandleEvent(agent, targetedToOtherAgent)).toBe(false);
     expect(await shouldHandleEvent(agent, targetedToThisAgent)).toBe(true);
     expect(await shouldHandleEvent(agent, userEvent)).toBe(true);
   });

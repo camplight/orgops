@@ -141,6 +141,37 @@ export function createApp(config: AppConfig = {}) {
     return c.json(data, status);
   }
 
+  function mapSqliteConstraintError(error: unknown) {
+    if (!error || typeof error !== "object") return null;
+    const code = (error as { code?: unknown }).code;
+    const message = (error as { message?: unknown }).message;
+    if (typeof code !== "string" && typeof message !== "string") return null;
+    const text = `${code ?? ""} ${message ?? ""}`;
+    if (!text.includes("SQLITE_CONSTRAINT")) return null;
+
+    if (text.includes("UNIQUE")) {
+      if (text.includes("channels.name")) {
+        return { status: 409, body: { error: "Channel name already exists" } };
+      }
+      return { status: 409, body: { error: "Resource already exists" } };
+    }
+    if (text.includes("FOREIGNKEY")) {
+      return { status: 400, body: { error: "Invalid reference in request" } };
+    }
+    if (text.includes("NOTNULL") || text.includes("CHECK")) {
+      return { status: 400, body: { error: "Invalid request payload" } };
+    }
+
+    return { status: 400, body: { error: "Invalid request" } };
+  }
+
+  app.onError((error, c) => {
+    const mapped = mapSqliteConstraintError(error);
+    if (mapped) return jsonResponse(c, mapped.body, mapped.status);
+    console.error(error);
+    return jsonResponse(c, { error: "Internal Server Error" }, 500);
+  });
+
   function requireAuth(c: any, next: any) {
     const runnerHeader = c.req.header("x-orgops-runner-token");
     if (RUNNER_TOKEN && runnerHeader === RUNNER_TOKEN) {

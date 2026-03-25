@@ -141,6 +141,19 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     return true;
   }
 
+  function parseOptionalPositiveInt(
+    value: unknown
+  ): { ok: true; value: number | null } | { ok: false; error: string } {
+    if (value === undefined) return { ok: true, value: null };
+    if (value === null) return { ok: true, value: null };
+    if (typeof value === "string" && !value.trim()) return { ok: true, value: null };
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return { ok: false, error: "must be a positive integer when provided" };
+    }
+    return { ok: true, value: Math.floor(parsed) };
+  }
+
   app.get("/api/agents", (c) => {
     const rows = orm.select().from(schema.agents).all() as any[];
     return jsonResponse(
@@ -158,6 +171,8 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         alwaysPreloadedSkills: parseStringArraySafe(row.always_preloaded_skills_json),
         workspacePath: row.workspace_path,
         allowOutsideWorkspace: Boolean(row.allow_outside_workspace),
+        llmCallTimeoutMs: row.llm_call_timeout_ms ?? null,
+        classicMaxModelSteps: row.classic_max_model_steps ?? null,
         mode: row.mode ?? "CLASSIC",
         desiredState: row.desired_state,
         runtimeState: row.runtime_state,
@@ -194,6 +209,18 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       alwaysPreloadedSkillsSet.has(name)
     );
     const allowOutsideWorkspace = Boolean(body.allowOutsideWorkspace);
+    const llmCallTimeoutParsed = parseOptionalPositiveInt(body.llmCallTimeoutMs);
+    if (!llmCallTimeoutParsed.ok) {
+      return jsonResponse(c, { error: `llmCallTimeoutMs ${llmCallTimeoutParsed.error}` }, 400);
+    }
+    const classicMaxModelStepsParsed = parseOptionalPositiveInt(body.classicMaxModelSteps);
+    if (!classicMaxModelStepsParsed.ok) {
+      return jsonResponse(
+        c,
+        { error: `classicMaxModelSteps ${classicMaxModelStepsParsed.error}` },
+        400
+      );
+    }
     orm
       .insert(schema.agents)
       .values({
@@ -207,6 +234,8 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         soul_contents: soulContents,
         workspace_path: workspacePath,
         allow_outside_workspace: allowOutsideWorkspace ? 1 : 0,
+        llm_call_timeout_ms: llmCallTimeoutParsed.value,
+        classic_max_model_steps: classicMaxModelStepsParsed.value,
         mode:
           typeof body.mode === "string" && body.mode.trim()
             ? body.mode.trim()
@@ -239,6 +268,8 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       alwaysPreloadedSkills: parseStringArraySafe(row.always_preloaded_skills_json),
       workspacePath: row.workspace_path,
       allowOutsideWorkspace: Boolean(row.allow_outside_workspace),
+      llmCallTimeoutMs: row.llm_call_timeout_ms ?? null,
+      classicMaxModelSteps: row.classic_max_model_steps ?? null,
       mode: row.mode ?? "CLASSIC",
       desiredState: row.desired_state,
       runtimeState: row.runtime_state,
@@ -283,6 +314,24 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       body.allowOutsideWorkspace !== undefined
         ? (body.allowOutsideWorkspace ? 1 : 0)
         : null;
+    const llmCallTimeoutParsed =
+      body.llmCallTimeoutMs !== undefined
+        ? parseOptionalPositiveInt(body.llmCallTimeoutMs)
+        : null;
+    if (llmCallTimeoutParsed && !llmCallTimeoutParsed.ok) {
+      return jsonResponse(c, { error: `llmCallTimeoutMs ${llmCallTimeoutParsed.error}` }, 400);
+    }
+    const classicMaxModelStepsParsed =
+      body.classicMaxModelSteps !== undefined
+        ? parseOptionalPositiveInt(body.classicMaxModelSteps)
+        : null;
+    if (classicMaxModelStepsParsed && !classicMaxModelStepsParsed.ok) {
+      return jsonResponse(
+        c,
+        { error: `classicMaxModelSteps ${classicMaxModelStepsParsed.error}` },
+        400
+      );
+    }
     orm
       .update(schema.agents)
       .set({
@@ -298,6 +347,12 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         workspace_path: workspacePath,
         allow_outside_workspace:
           allowOutsideWorkspace ?? existing.allow_outside_workspace,
+        llm_call_timeout_ms:
+          llmCallTimeoutParsed ? llmCallTimeoutParsed.value : existing.llm_call_timeout_ms,
+        classic_max_model_steps:
+          classicMaxModelStepsParsed
+            ? classicMaxModelStepsParsed.value
+            : existing.classic_max_model_steps,
         mode:
           typeof body.mode === "string" && body.mode.trim()
             ? body.mode.trim()

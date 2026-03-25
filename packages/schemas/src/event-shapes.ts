@@ -88,6 +88,22 @@ const auditToolPayloadSchema = z
 
 const coreEventShapes: EventShapeDefinition[] = [
   {
+    type: "noop",
+    description:
+      "No-op event for intentional non-action outcomes; persisted for traceability but not actionable.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1),
+      source: sourceSchema,
+      payload: z
+        .object({
+          reason: z.string().min(1).optional(),
+          note: z.string().optional(),
+        })
+        .passthrough(),
+    }),
+  },
+  {
     type: "message.created",
     description: "Human/agent message event in a channel.",
     source: "core",

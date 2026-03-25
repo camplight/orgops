@@ -7,6 +7,8 @@ export type Agent = {
   alwaysPreloadedSkills?: string[];
   workspacePath: string;
   allowOutsideWorkspace?: boolean;
+  llmCallTimeoutMs?: number | null;
+  classicMaxModelSteps?: number | null;
   mode?: "CLASSIC" | "RLM_REPL";
   modelId: string;
   desiredState: string;

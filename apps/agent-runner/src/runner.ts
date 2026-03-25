@@ -59,6 +59,7 @@ const HISTORY_MAX_CHARS = readPositiveIntEnv(
   DEFAULT_MAX_HISTORY_CHARS,
 );
 const DEFAULT_LLM_CALL_TIMEOUT_MS = 90_000;
+const DEFAULT_CLASSIC_MAX_MODEL_STEPS = 100;
 const LLM_CALL_TIMEOUT_MS = readPositiveIntEnv(
   process.env.ORGOPS_LLM_CALL_TIMEOUT_MS,
   DEFAULT_LLM_CALL_TIMEOUT_MS,
@@ -490,7 +491,22 @@ type ModelEventDraft = {
 };
 
 const MAX_EVENT_DISPATCH_ATTEMPTS = 3;
-const CLASSIC_MAX_MODEL_STEPS = 100;
+
+export function resolveAgentLlmCallTimeoutMs(agent: Agent): number {
+  const configured = agent.llmCallTimeoutMs;
+  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
+    return Math.floor(configured);
+  }
+  return LLM_CALL_TIMEOUT_MS;
+}
+
+export function resolveAgentClassicMaxModelSteps(agent: Agent): number {
+  const configured = agent.classicMaxModelSteps;
+  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
+    return Math.floor(configured);
+  }
+  return DEFAULT_CLASSIC_MAX_MODEL_STEPS;
+}
 
 function extractJsonObject(rawText: string): unknown {
   const text = rawText.trim();
@@ -808,12 +824,14 @@ async function handleEvent(agent: Agent, events: Event[]) {
   }
   const seenEventIds = new Set(events.map((event) => event.id));
   const retryMessages: Array<{ role: "user"; content: string }> = [];
+  const llmCallTimeoutMs = resolveAgentLlmCallTimeoutMs(agent);
+  const classicMaxModelSteps = resolveAgentClassicMaxModelSteps(agent);
   let lastResponseText = "";
   for (let attempt = 1; attempt <= MAX_EVENT_DISPATCH_ATTEMPTS; attempt += 1) {
     const result = await withTimeout(
       generate(agent.modelId, [...invokeMessages, ...retryMessages], {
         tools,
-        maxSteps: CLASSIC_MAX_MODEL_STEPS,
+        maxSteps: classicMaxModelSteps,
         env: injectionEnv,
         pullMessages: async () => {
           const injected = await pullInjectedEventMessages({
@@ -826,7 +844,7 @@ async function handleEvent(agent: Agent, events: Event[]) {
           return injected?.messages ?? [];
         },
       }),
-      LLM_CALL_TIMEOUT_MS,
+      llmCallTimeoutMs,
       `LLM generate (attempt ${attempt})`,
     );
     const responseText = result.text ?? "";

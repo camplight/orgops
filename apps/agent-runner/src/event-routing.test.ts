@@ -44,6 +44,12 @@ describe("event routing", () => {
         makeEvent({ type: "audit.tool.executed", source: "agent:worker-a" }),
       ),
     ).toBe(false);
+    expect(
+      shouldHandleEventForAgent(
+        agent,
+        makeEvent({ type: "noop", source: "agent:worker-a" }),
+      ),
+    ).toBe(false);
   });
 
   it("still allows normal channel events from others", () => {
@@ -51,6 +57,29 @@ describe("event routing", () => {
       shouldHandleEventForAgent(
         agent,
         makeEvent({ type: "message.created", source: "agent:worker-a" }),
+      ),
+    ).toBe(true);
+  });
+
+  it("only handles scheduled triggers for the target agent", () => {
+    expect(
+      shouldHandleEventForAgent(
+        agent,
+        makeEvent({
+          type: "agent.scheduled.trigger",
+          source: "system:scheduler",
+          payload: { text: "run later", targetAgentName: "worker-a" },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      shouldHandleEventForAgent(
+        agent,
+        makeEvent({
+          type: "agent.scheduled.trigger",
+          source: "system:scheduler",
+          payload: { text: "run later", targetAgentName: "browser" },
+        }),
       ),
     ).toBe(true);
   });

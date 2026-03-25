@@ -31,6 +31,8 @@ export const AgentSchema = z.object({
   soulPath: z.string(),
   workspacePath: z.string(),
   allowOutsideWorkspace: z.boolean().optional().default(false),
+  llmCallTimeoutMs: z.number().int().positive().optional().nullable(),
+  classicMaxModelSteps: z.number().int().positive().optional().nullable(),
   desiredState: z.enum(["RUNNING", "STOPPED"]).optional(),
   runtimeState: z
     .enum(["STARTING", "RUNNING", "STOPPED", "CRASHED"])

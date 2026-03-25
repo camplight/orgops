@@ -28,6 +28,19 @@ describe("schemas", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("validates noop core event shape", () => {
+    const result = validateEventAgainstShapes(
+      {
+        type: "noop",
+        source: "agent:worker-a",
+        channelId: "chan-1",
+        payload: { reason: "not_mentioned_in_group_channel" },
+      },
+      getCoreEventShapes(),
+    );
+    expect(result.ok).toBe(true);
+  });
+
   it("returns shape issues for invalid event payload", () => {
     const result = validateEventAgainstShapes(
       {
