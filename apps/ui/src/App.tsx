@@ -20,6 +20,7 @@ import { useAuth, useOrgOpsData, useWebSocket } from "./hooks";
 import type {
   AgentWorkspaceFileResponse,
   AgentWorkspaceListResponse,
+  Channel,
   EventRow,
   ProcessOutputRow,
   TeamMember
@@ -61,6 +62,49 @@ const DEFAULT_EVENT_FILTERS = {
 };
 type EventFilters = typeof DEFAULT_EVENT_FILTERS;
 
+function getAgentVisibleChannelIds(agentName: string, channels: Channel[]): Set<string> {
+  const visible = new Set<string>();
+  for (const channel of channels) {
+    const participants = channel.participants ?? [];
+    const hasAgentParticipant = participants.some(
+      (participant) =>
+        participant.subscriberType === "AGENT" && participant.subscriberId === agentName
+    );
+    if (hasAgentParticipant) visible.add(channel.id);
+  }
+  return visible;
+}
+
+function matchesAppliedEventFilters(
+  event: EventRow,
+  filters: EventFilters,
+  channels: Channel[],
+  now: number
+): boolean {
+  if (filters.channelId && event.channelId !== filters.channelId) return false;
+  if (filters.type && event.type !== filters.type) return false;
+  if (filters.source && event.source !== filters.source) return false;
+  if (filters.status && (event.status ?? "") !== filters.status) return false;
+  if (filters.auditOnly && !event.type.startsWith("audit.")) return false;
+
+  const deliverAt = typeof event.deliverAt === "number" ? event.deliverAt : null;
+  if (filters.scheduledOnly) {
+    if (!(deliverAt !== null && deliverAt > now)) return false;
+    if (!filters.status && (event.status ?? "") !== "PENDING") return false;
+  } else if (deliverAt !== null && deliverAt > now) {
+    // Mirror default API behavior, which hides future scheduled events unless scheduledOnly is set.
+    return false;
+  }
+
+  if (filters.agentName) {
+    if (!event.channelId) return false;
+    const visibleChannelIds = getAgentVisibleChannelIds(filters.agentName, channels);
+    if (!visibleChannelIds.has(event.channelId)) return false;
+  }
+
+  return true;
+}
+
 export default function App() {
   const [activeScreen, setActiveScreen] = useState<Screen>("dashboard");
   const [activeProcessId, setActiveProcessId] = useState<string | null>(null);
@@ -70,6 +114,7 @@ export default function App() {
   const [chatEvents, setChatEvents] = useState<EventRow[]>([]);
   const [messageText, setMessageText] = useState("");
   const [eventFilters, setEventFilters] = useState(DEFAULT_EVENT_FILTERS);
+  const [appliedEventFilters, setAppliedEventFilters] = useState(DEFAULT_EVENT_FILTERS);
 
   const { authChecked, authenticated, username, mustChangePassword, refreshAuth, logout } = useAuth();
   const data = useOrgOpsData(authenticated && !mustChangePassword);
@@ -105,11 +150,25 @@ export default function App() {
   }, [data.setAgents]);
 
   const handleWsEvent = useCallback((event: EventRow) => {
-    data.setEvents((prev) => upsertEvent(prev, event));
+    const now = Date.now();
+    const matchesFilters = matchesAppliedEventFilters(
+      event,
+      appliedEventFilters,
+      data.channels,
+      now
+    );
+    data.setEvents((prev) => {
+      const existingIndex = prev.findIndex((row) => row.id === event.id);
+      if (!matchesFilters) {
+        if (existingIndex === -1) return prev;
+        return prev.filter((row) => row.id !== event.id);
+      }
+      return upsertEvent(prev, event);
+    });
     if (eventMatchesChatTarget(event)) {
       setChatEvents((prev) => upsertEvent(prev, event));
     }
-  }, [data.setEvents, eventMatchesChatTarget, upsertEvent]);
+  }, [appliedEventFilters, data.channels, data.setEvents, eventMatchesChatTarget, upsertEvent]);
 
   const handleProcessOutput = useCallback(
     (processId: string, msgData: ProcessOutputRow[]) => {
@@ -294,6 +353,7 @@ export default function App() {
 
   const handleApplyEventFilters = useCallback(async (nextFilters?: EventFilters) => {
     const filtersToApply = nextFilters ?? eventFilters;
+    setAppliedEventFilters(filtersToApply);
     const params = new URLSearchParams();
     if (filtersToApply.agentName) params.set("agentName", filtersToApply.agentName);
     if (filtersToApply.channelId) params.set("channelId", filtersToApply.channelId);
