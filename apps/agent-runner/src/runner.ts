@@ -19,6 +19,7 @@ import { stopAllRunningProcesses } from "./tools/proc";
 import { createChannelLoopManager } from "./channel-loop";
 import { pullInjectedEventMessages } from "./channel-injection";
 import { shouldHandleEventForAgent } from "./event-routing";
+import { getReservedEventTypeError } from "./event-type-guard";
 import type { Agent, Event } from "./types";
 import { buildRunnerGuidance } from "./prompt";
 import { runRlmEventInChild, stopAllRlmChildren } from "./rlm-process";
@@ -518,6 +519,10 @@ function normalizeEventDraft(
   const type = typeof event.type === "string" ? event.type.trim() : "";
   if (!type) {
     throw new Error("JSON event is missing a non-empty `type`.");
+  }
+  const reservedTypeError = getReservedEventTypeError(type);
+  if (reservedTypeError) {
+    throw new Error(reservedTypeError);
   }
   const source =
     typeof event.source === "string" && event.source.trim()

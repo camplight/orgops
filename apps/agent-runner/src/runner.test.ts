@@ -673,6 +673,52 @@ describe("agent runner", () => {
     expect(requests[0]?.body.payload).toEqual({ step: "diff-ready" });
   });
 
+  it("rejects reserved runtime event types via events_emit", async () => {
+    const requests: Array<{ path: string; body: any }> = [];
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        soulContents: "role prompt",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async (path: string, init?: RequestInit) => {
+        requests.push({
+          path,
+          body: JSON.parse(String(init?.body ?? "{}")),
+        });
+        return new Response(JSON.stringify({ id: "evt-custom" }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        });
+      },
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+    };
+
+    for (const reservedType of ["agent.turn.completed", "audit.tool.executed"]) {
+      const result = (await executeTool(ctx, "events_emit", {
+        type: reservedType,
+        payload: {},
+      })) as { error?: string };
+      expect(result.error).toContain("reserved for runtime bookkeeping/audit");
+    }
+    expect(requests).toHaveLength(0);
+  });
+
   it("returns pending-timeout delivery hint when emitted event stays pending", async () => {
     const requests: Array<{ path: string; body: any }> = [];
     const ctx = {

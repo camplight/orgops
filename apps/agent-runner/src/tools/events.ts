@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { getReservedEventTypeError } from "../event-type-guard";
 import type { ExecuteContext, ToolDef } from "./types";
 
 const scheduleOptionsSchema = z.object({
@@ -819,6 +820,10 @@ export async function execute(
       ...(parsed.idempotencyKey ? { idempotencyKey: parsed.idempotencyKey } : {}),
       ...(deliverAt !== undefined ? { deliverAt } : {}),
     };
+    const reservedTypeError = getReservedEventTypeError(eventDraft.type);
+    if (reservedTypeError) {
+      return { error: reservedTypeError };
+    }
     try {
       validateEventOrThrow(ctx, eventDraft);
     } catch (error) {
