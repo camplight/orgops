@@ -21,8 +21,6 @@ type ChatScreenProps = {
   onClearMessages: () => Promise<void>;
 };
 
-const INDICATOR_GRACE_MS = 4000;
-
 function getAgentNameFromSource(source: string | undefined) {
   if (!source?.startsWith("agent:")) return null;
   return source.slice("agent:".length).trim() || null;
@@ -52,14 +50,49 @@ function getMessageRole(event: EventRow): "human" | "agent" | "system" {
 }
 
 function isTerminalAgentEvent(event: EventRow) {
-  if (event.type === "message.created") return true;
+  if (event.type === "message.created" && event.source.startsWith("agent:")) return true;
+  if (event.type === "agent.turn.completed" || event.type === "agent.turn.failed") return true;
   return /(completed|complete|done|finished|failed|error|cancelled|canceled|skipped|exited)$/i.test(
     event.type
   );
 }
 
+function getPayloadString(payload: Record<string, unknown>, key: string): string | null {
+  const value = payload[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function getAgentNameForStatusEvent(event: EventRow): string | null {
+  const fromSource = getAgentNameFromSource(event.source);
+  if (fromSource) return fromSource;
+  const payload = asObject(event.payload);
+  const fromPayload = getPayloadString(payload, "agentName") ?? getPayloadString(payload, "targetAgentName");
+  return fromPayload;
+}
+
 function toInlineAgentStatus(event: EventRow): string {
   const payload = asObject(event.payload);
+  if (event.type === "agent.turn.started") return "processing";
+  if (event.type === "agent.turn.completed") return "completed";
+  if (event.type === "agent.turn.failed") return "failed";
+  if (event.type === "agent.turn.phase") {
+    const phase = getPayloadString(payload, "phase");
+    if (phase) return phase.toLowerCase();
+  }
+  if (event.type === "audit.tool.started") {
+    const toolName = getPayloadString(payload, "tool");
+    return toolName ? `using ${toolName.replace(/[_-]+/g, " ")}` : "using a tool";
+  }
+  if (event.type === "audit.tool.executed") {
+    const toolName = getPayloadString(payload, "tool");
+    return toolName ? `finished ${toolName.replace(/[_-]+/g, " ")}` : "finished a tool";
+  }
+  if (event.type === "audit.tool.failed") {
+    const toolName = getPayloadString(payload, "tool");
+    return toolName ? `${toolName.replace(/[_-]+/g, " ")} failed` : "tool failed";
+  }
+  if (event.type === "process.output") return "running process";
+  if (event.type === "process.exited") return "process exited";
   const tool =
     typeof payload.tool === "string"
       ? payload.tool
@@ -92,7 +125,6 @@ export function ChatScreen({
   onSendMessage,
   onClearMessages
 }: ChatScreenProps) {
-  const [nowTick, setNowTick] = useState(0);
   const messageEvents = useMemo(
     () =>
       events
@@ -120,9 +152,7 @@ export function ChatScreen({
           if (!latestHumanMessage) return false;
           if ((event.createdAt ?? 0) < latestHumanMessageCreatedAt) return false;
           if (event.id === latestHumanMessage.id) return false;
-          const sourceAgent = getAgentNameFromSource(event.source);
-          if (sourceAgent) return true;
-          return event.type === "agent.scheduled.trigger";
+          return Boolean(getAgentNameForStatusEvent(event));
         })
         .sort((left, right) => {
           const leftTs = left.createdAt ?? 0;
@@ -133,63 +163,30 @@ export function ChatScreen({
     [events, latestHumanMessage, latestHumanMessageCreatedAt]
   );
   const typingIndicators = useMemo(() => {
-    const stateByAgent = new Map<
-      string,
-      { status: string; latestActivityAt: number; latestTerminalAt: number | null }
-    >();
+    const stateByAgent = new Map<string, { status: string; latestActivityAt: number }>();
     for (const event of activityEvents) {
-      const agentName = getAgentNameFromSource(event.source);
+      const agentName = getAgentNameForStatusEvent(event);
       if (!agentName) continue;
       const ts = event.createdAt ?? 0;
+      if (isTerminalAgentEvent(event)) {
+        stateByAgent.delete(agentName);
+        continue;
+      }
       const status = toInlineAgentStatus(event);
       const existing = stateByAgent.get(agentName);
-      if (!existing) {
-        stateByAgent.set(agentName, {
-          status,
-          latestActivityAt: isTerminalAgentEvent(event) ? 0 : ts,
-          latestTerminalAt: isTerminalAgentEvent(event) ? ts : null
-        });
-        continue;
-      }
-
-      if (isTerminalAgentEvent(event)) {
-        if (!existing.latestTerminalAt || ts >= existing.latestTerminalAt) {
-          stateByAgent.set(agentName, {
-            ...existing,
-            latestTerminalAt: ts
-          });
-        }
-        continue;
-      }
-
-      if (ts >= existing.latestActivityAt) {
-        stateByAgent.set(agentName, {
-          status,
-          latestActivityAt: ts,
-          latestTerminalAt: existing.latestTerminalAt
-        });
+      if (!existing || ts >= existing.latestActivityAt) {
+        stateByAgent.set(agentName, { status, latestActivityAt: ts });
       }
     }
 
-    const now = Date.now();
     return [...stateByAgent.entries()]
-      .filter(([, value]) => {
-        if (value.latestActivityAt <= 0) return false;
-        if (value.latestTerminalAt === null) {
-          return now - value.latestActivityAt <= INDICATOR_GRACE_MS;
-        }
-        if (value.latestTerminalAt < value.latestActivityAt) {
-          return now - value.latestActivityAt <= INDICATOR_GRACE_MS;
-        }
-        return now - value.latestTerminalAt <= INDICATOR_GRACE_MS;
-      })
       .sort((left, right) => right[1].latestActivityAt - left[1].latestActivityAt)
       .map(([agentName, value]) => ({
         agentName,
         status: value.status,
         at: value.latestActivityAt
       }));
-  }, [activityEvents, nowTick]);
+  }, [activityEvents]);
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const lastMessageId = messageEvents[messageEvents.length - 1]?.id ?? null;
   const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -201,13 +198,6 @@ export function ChatScreen({
   const handleExportPdf = () => {
     window.print();
   };
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setNowTick((prev) => prev + 1);
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
 
   useEffect(() => {
     if (!activeTargetId || !messagesContainerRef.current) {

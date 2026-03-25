@@ -240,6 +240,51 @@ describe("api app", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("rejects scheduled triggers when target agent is not in channel participants", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token"
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" })
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const createChannelRes = await app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ name: "scheduled-membership-guard-channel" })
+    });
+    expect(createChannelRes.status).toBe(201);
+    const channel = (await createChannelRes.json()) as { id: string };
+
+    const invalidEventRes = await app.request("http://localhost/api/events", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        type: "agent.scheduled.trigger",
+        payload: { text: "run later", targetAgentName: "worker-missing" },
+        source: "system:scheduler",
+        channelId: channel.id,
+        deliverAt: Date.now() + 60_000
+      })
+    });
+    expect(invalidEventRes.status).toBe(400);
+    const invalidBody = (await invalidEventRes.json()) as { error?: string };
+    expect(invalidBody.error).toContain("not an AGENT participant");
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("lists TypeScript event shape definitions from core and skills", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");
@@ -1309,10 +1354,10 @@ describe("api app", () => {
         channelId: "channel-a"
       },
       {
-        type: "agent.scheduled.trigger",
+        type: "process.started",
         payload: {
-          text: "keep different type",
-          targetAgentName: "agent-scheduled",
+          processId: "proc-keep-1",
+          cmd: "echo keep",
         },
         source: "system",
         channelId: "channel-a"
@@ -1352,7 +1397,7 @@ describe("api app", () => {
     expect(channelARes.status).toBe(200);
     const channelAEvents = (await channelARes.json()) as Array<{ type: string; payload?: unknown }>;
     const channelATypes = channelAEvents.map((event) => event.type);
-    expect(channelATypes.includes("agent.scheduled.trigger")).toBe(true);
+    expect(channelATypes.includes("process.started")).toBe(true);
     expect(channelATypes.includes("audit.events.cleared")).toBe(true);
     expect(channelAEvents.length).toBe(2);
     const auditEvent = channelAEvents.find((event) => event.type === "audit.events.cleared");
@@ -1407,10 +1452,10 @@ describe("api app", () => {
         channelId: "chat-a"
       },
       {
-        type: "agent.scheduled.trigger",
+        type: "process.started",
         payload: {
-          text: "keep non-message event",
-          targetAgentName: "agent-scheduled",
+          processId: "proc-keep-2",
+          cmd: "echo keep",
         },
         source: "system",
         channelId: "chat-a"
@@ -1445,7 +1490,7 @@ describe("api app", () => {
     expect(chatARes.status).toBe(200);
     const chatAEvents = (await chatARes.json()) as Array<{ type: string; payload?: unknown }>;
     const chatATypes = chatAEvents.map((event) => event.type);
-    expect(chatATypes.includes("agent.scheduled.trigger")).toBe(true);
+    expect(chatATypes.includes("process.started")).toBe(true);
     expect(chatATypes.includes("audit.events.cleared")).toBe(true);
     expect(chatATypes.includes("message.created")).toBe(false);
 
@@ -1630,6 +1675,36 @@ describe("api app", () => {
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
 
+    const createAgentRes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "agent-future",
+        modelId: "openai:gpt-4o-mini",
+        workspacePath: ".orgops-data/workspaces/agent-future",
+        soulContents: ""
+      })
+    });
+    expect(createAgentRes.status).toBe(201);
+
+    const createChannelRes = await app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ name: "scheduled-manage-channel" })
+    });
+    expect(createChannelRes.status).toBe(201);
+    const channel = (await createChannelRes.json()) as { id: string };
+
+    const subscribeRes = await app.request(
+      `http://localhost/api/channels/${channel.id}/subscribe`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ subscriberType: "AGENT", subscriberId: "agent-future" })
+      }
+    );
+    expect(subscribeRes.status).toBe(200);
+
     const deliverAt = Date.now() + 120_000;
     const createRes = await app.request("http://localhost/api/events", {
       method: "POST",
@@ -1638,7 +1713,7 @@ describe("api app", () => {
         type: "agent.scheduled.trigger",
         payload: { text: "original", targetAgentName: "agent-future" },
         source: "system:scheduler",
-        channelId: "scheduled-manage-channel",
+        channelId: channel.id,
         deliverAt
       })
     });

@@ -1,5 +1,14 @@
 import type { EventTypeSummary } from "@orgops/schemas";
 
+export type RunnerHostInfo = {
+  platform: string;
+  release: string;
+  arch: string;
+  hostname: string;
+  shell: string;
+  nodeVersion: string;
+};
+
 function stringifySchema(schema: unknown) {
   try {
     return JSON.stringify(schema);
@@ -26,11 +35,24 @@ function formatCoreEventTypesSection(coreEventTypes: EventTypeSummary[]) {
   ].join("\n");
 }
 
+function formatRunnerHostInfoSection(hostInfo: RunnerHostInfo) {
+  return [
+    "- Runner host info (authoritative; do not guess):",
+    `  - platform: ${hostInfo.platform}`,
+    `  - release: ${hostInfo.release}`,
+    `  - arch: ${hostInfo.arch}`,
+    `  - hostname: ${hostInfo.hostname}`,
+    `  - shell: ${hostInfo.shell}`,
+    `  - nodeVersion: ${hostInfo.nodeVersion}`,
+  ].join("\n");
+}
+
 export function buildRunnerGuidance(
   nowMs: number,
   nowIso: string,
   skillRootPath: string,
   coreEventTypes: EventTypeSummary[],
+  hostInfo: RunnerHostInfo,
 ) {
   return [
     "Runner environment contract:",
@@ -45,6 +67,7 @@ export function buildRunnerGuidance(
     "- Use event types that validate against available schemas (core + enabled skills).",
     "- Do not include markdown or prose outside of JSON.",
     `- Current UTC time is ${nowIso} (${nowMs} unix ms).`,
+    formatRunnerHostInfoSection(hostInfo),
     formatCoreEventTypesSection(coreEventTypes),
   ].join("\n");
 }

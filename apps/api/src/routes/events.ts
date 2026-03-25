@@ -22,6 +22,7 @@ type EventsDeps = {
   jsonResponse: (c: any, data: unknown, status?: number) => Response;
   eventRowToApi: (row: any) => any;
   insertEvent: (input: any) => any;
+  publishEventRow: (row: any) => void;
   EventSchema: {
     safeParse: (data: unknown) => { success: boolean; data?: any };
   };
@@ -56,6 +57,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     jsonResponse,
     eventRowToApi,
     insertEvent,
+    publishEventRow,
     SKILL_ROOT,
     listSkills,
     loadSkillEventShapes,
@@ -109,6 +111,52 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       loadErrors: loaded.errors,
     };
     return eventShapesCache;
+  }
+
+  function scheduledTriggerMembershipError(
+    type: string,
+    channelId: string | undefined,
+    payload: unknown,
+  ): string | null {
+    if (type !== "agent.scheduled.trigger") return null;
+    if (!channelId) {
+      return "agent.scheduled.trigger requires channelId.";
+    }
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return "agent.scheduled.trigger requires payload.targetAgentName.";
+    }
+    const targetAgentNameRaw = (payload as { targetAgentName?: unknown })
+      .targetAgentName;
+    const targetAgentName =
+      typeof targetAgentNameRaw === "string"
+        ? targetAgentNameRaw.trim()
+        : "";
+    if (!targetAgentName) {
+      return "agent.scheduled.trigger requires payload.targetAgentName.";
+    }
+    const channel = orm
+      .select({ id: schema.channels.id })
+      .from(schema.channels)
+      .where(eq(schema.channels.id, channelId))
+      .get() as { id: string } | undefined;
+    if (!channel) {
+      return `Unknown channelId: ${channelId}`;
+    }
+    const subscription = orm
+      .select({ subscriberId: schema.channelSubscriptions.subscriber_id })
+      .from(schema.channelSubscriptions)
+      .where(
+        and(
+          eq(schema.channelSubscriptions.channel_id, channelId),
+          eq(schema.channelSubscriptions.subscriber_type, "AGENT"),
+          eq(schema.channelSubscriptions.subscriber_id, targetAgentName),
+        ),
+      )
+      .get() as { subscriberId: string } | undefined;
+    if (!subscription) {
+      return `agent.scheduled.trigger targetAgentName "${targetAgentName}" is not an AGENT participant in channel "${channelId}".`;
+    }
+    return null;
   }
 
   app.post("/api/events", async (c) => {
@@ -170,6 +218,14 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
         },
         400,
       );
+    }
+    const postMembershipError = scheduledTriggerMembershipError(
+      type,
+      parsed.data.channelId,
+      parsed.data.payload ?? {},
+    );
+    if (postMembershipError) {
+      return jsonResponse(c, { error: postMembershipError }, 400);
     }
 
     if (parsed.data.idempotencyKey) {
@@ -283,6 +339,14 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
         400,
       );
     }
+    const patchMembershipError = scheduledTriggerMembershipError(
+      nextType,
+      nextChannelId ?? undefined,
+      nextPayload ?? {},
+    );
+    if (patchMembershipError) {
+      return jsonResponse(c, { error: patchMembershipError }, 400);
+    }
 
     orm
       .update(schema.events)
@@ -304,6 +368,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     if (!updated) {
       return jsonResponse(c, { error: "Not found" }, 404);
     }
+    publishEventRow(updated);
     return jsonResponse(c, eventRowToApi(updated));
   });
 
@@ -463,6 +528,14 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
                   .set({ status: "DELIVERED" })
                   .where(eq(schema.events.id, eventId))
                   .run();
+                const updated = orm
+                  .select()
+                  .from(schema.events)
+                  .where(eq(schema.events.id, eventId))
+                  .get() as any | undefined;
+                if (updated) {
+                  publishEventRow(updated);
+                }
               }
             }
           }
@@ -665,6 +738,14 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       .set({ status: "ACKED" })
       .where(eq(schema.events.id, id))
       .run();
+    const updated = orm
+      .select()
+      .from(schema.events)
+      .where(eq(schema.events.id, id))
+      .get() as any | undefined;
+    if (updated) {
+      publishEventRow(updated);
+    }
     return jsonResponse(c, { ok: true });
   });
 
@@ -689,6 +770,14 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       })
       .where(eq(schema.events.id, id))
       .run();
+    const updated = orm
+      .select()
+      .from(schema.events)
+      .where(eq(schema.events.id, id))
+      .get() as any | undefined;
+    if (updated) {
+      publishEventRow(updated);
+    }
     if (nextStatus === "DEAD") {
       insertEvent({
         type: "event.deadlettered",

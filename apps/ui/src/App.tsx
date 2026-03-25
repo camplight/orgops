@@ -80,9 +80,12 @@ export default function App() {
     }
   }, [mustChangePassword]);
 
-  const appendUniqueEvent = useCallback((list: EventRow[], incoming: EventRow) => {
-    if (list.some((event) => event.id === incoming.id)) return list;
-    return [...list, incoming];
+  const upsertEvent = useCallback((list: EventRow[], incoming: EventRow) => {
+    const existingIndex = list.findIndex((event) => event.id === incoming.id);
+    if (existingIndex === -1) return [...list, incoming];
+    const next = list.slice();
+    next[existingIndex] = incoming;
+    return next;
   }, []);
 
   const eventMatchesChatTarget = useCallback(
@@ -102,11 +105,11 @@ export default function App() {
   }, [data.setAgents]);
 
   const handleWsEvent = useCallback((event: EventRow) => {
-    data.setEvents((prev) => appendUniqueEvent(prev, event));
+    data.setEvents((prev) => upsertEvent(prev, event));
     if (eventMatchesChatTarget(event)) {
-      setChatEvents((prev) => appendUniqueEvent(prev, event));
+      setChatEvents((prev) => upsertEvent(prev, event));
     }
-  }, [appendUniqueEvent, data.setEvents, eventMatchesChatTarget]);
+  }, [data.setEvents, eventMatchesChatTarget, upsertEvent]);
 
   const handleProcessOutput = useCallback(
     (processId: string, msgData: ProcessOutputRow[]) => {

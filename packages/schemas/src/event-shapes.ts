@@ -106,7 +106,8 @@ const coreEventShapes: EventShapeDefinition[] = [
   },
   {
     type: "agent.scheduled.trigger",
-    description: "Internal scheduled trigger for an agent.",
+    description:
+      "Internal scheduled trigger for an agent. payload.targetAgentName must be an AGENT participant of channelId.",
     source: "core",
     eventSchema: z.object({
       channelId: z.string().min(1),
@@ -129,6 +130,70 @@ const coreEventShapes: EventShapeDefinition[] = [
           targetAgentName: z.string().min(1),
           text: z.string().min(1),
           startedAt: z.number().int(),
+        })
+        .passthrough(),
+    }),
+  },
+  {
+    type: "agent.turn.started",
+    description: "Agent began handling a triggered turn in a channel.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1),
+      source: sourceSchema,
+      payload: z
+        .object({
+          triggerEventId: z.string().min(1),
+          eventCount: z.number().int().positive().optional(),
+        })
+        .passthrough(),
+    }),
+  },
+  {
+    type: "agent.turn.phase",
+    description: "Agent emitted intermediate turn progress for UI status.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1),
+      source: sourceSchema,
+      payload: z
+        .object({
+          triggerEventId: z.string().min(1),
+          phase: z.string().min(1),
+          detail: z.string().optional(),
+          eventCount: z.number().int().positive().optional(),
+        })
+        .passthrough(),
+    }),
+  },
+  {
+    type: "agent.turn.completed",
+    description: "Agent finished handling a triggered turn in a channel.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1),
+      source: sourceSchema,
+      payload: z
+        .object({
+          triggerEventId: z.string().min(1),
+          eventCount: z.number().int().positive().optional(),
+          completedWithFallback: z.boolean().optional(),
+        })
+        .passthrough(),
+    }),
+  },
+  {
+    type: "agent.turn.failed",
+    description: "Agent failed while handling a triggered turn in a channel.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1),
+      source: sourceSchema,
+      payload: z
+        .object({
+          triggerEventId: z.string().min(1),
+          eventCount: z.number().int().positive().optional(),
+          error: z.string().min(1),
         })
         .passthrough(),
     }),

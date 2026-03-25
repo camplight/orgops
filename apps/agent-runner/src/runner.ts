@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { arch, hostname, release } from "node:os";
 import { join, resolve } from "node:path";
 import { generate } from "@orgops/llm";
 import {
@@ -13,10 +14,7 @@ import {
   serializeEventShapes,
   validateEventAgainstShapes,
 } from "@orgops/schemas";
-import {
-  createRunnerTools,
-  executeTool,
-} from "./tools";
+import { createRunnerTools, executeTool } from "./tools";
 import { stopAllRunningProcesses } from "./tools/proc";
 import { createChannelLoopManager } from "./channel-loop";
 import { pullInjectedEventMessages } from "./channel-injection";
@@ -425,16 +423,13 @@ export function buildModelMessages(
   const historyMessages = orderedChannelEvents.map((channelEvent) =>
     toHistoryMessage(agent, channelEvent),
   );
-  const resultToStartIndex = buildToolResultToStartIndexMap(orderedChannelEvents);
+  const resultToStartIndex =
+    buildToolResultToStartIndexMap(orderedChannelEvents);
 
   let keptStartIndex = historyMessages.length;
   let keptMessageCount = 0;
   let totalHistoryChars = 0;
-  for (
-    let index = historyMessages.length - 1;
-    index >= 0;
-    index -= 1
-  ) {
+  for (let index = historyMessages.length - 1; index >= 0; index -= 1) {
     const messageChars = historyMessages[index]?.content.length ?? 0;
     const exceedsMaxEvents = keptMessageCount + 1 > HISTORY_MAX_EVENTS;
     const exceedsMaxChars =
@@ -574,7 +569,9 @@ function buildFallbackMessageEvent(
     type: "message.created",
     source: `agent:${agentName}`,
     channelId,
-    payload: { text: text.trim() || "Unable to produce structured event output." },
+    payload: {
+      text: text.trim() || "Unable to produce structured event output.",
+    },
     ...(parentEventId ? { parentEventId } : {}),
   };
 }
@@ -628,6 +625,20 @@ const channelLoopManager = createChannelLoopManager({
     await handleEvent(agent, channelEvents);
   },
   onBatchError: async (_agent, _channelId, channelEvents, error) => {
+    const triggerEvent = channelEvents[channelEvents.length - 1];
+    const channelId = triggerEvent?.channelId;
+    if (triggerEvent && channelId) {
+      await emitEvent({
+        type: "agent.turn.failed",
+        source: `agent:${_agent.name}`,
+        channelId,
+        payload: {
+          triggerEventId: triggerEvent.id,
+          eventCount: channelEvents.length,
+          error: String(error),
+        },
+      });
+    }
     for (const event of channelEvents) {
       await apiFetch(`/api/events/${event.id}/fail`, {
         method: "POST",
@@ -643,6 +654,26 @@ async function handleEvent(agent: Agent, events: Event[]) {
   const triggerEvent = events[events.length - 1]!;
   const channelId = triggerEvent?.channelId;
   if (!channelId) return;
+  const emitTurnEvent = async (
+    type: string,
+    payload: Record<string, unknown>,
+  ) => {
+    try {
+      await emitEvent({
+        type,
+        source: `agent:${agent.name}`,
+        channelId,
+        payload: {
+          triggerEventId: triggerEvent.id,
+          eventCount: events.length,
+          ...payload,
+        },
+      });
+    } catch {
+      // Lifecycle telemetry should not block turn execution.
+    }
+  };
+  await emitTurnEvent("agent.turn.started", {});
   const channelRecord = await getChannelRecord(channelId);
   const injectionEnv = await getPackageSecretsEnv(agent.name, channelId);
   const soul = typeof agent.soulContents === "string" ? agent.soulContents : "";
@@ -683,11 +714,20 @@ async function handleEvent(agent: Agent, events: Event[]) {
     nowIso,
     SKILL_ROOT.path,
     coreEventTypes,
+    {
+      platform: process.platform,
+      release: release(),
+      arch: arch(),
+      hostname: hostname(),
+      shell: process.env.SHELL ?? process.env.ComSpec ?? "unknown",
+      nodeVersion: process.version,
+    },
   );
   const system = [
     agent.systemInstructions,
     runnerGuidance,
-    `Workspace:\n${agent.workspacePath}\n\n`,
+    `Your own workspace:\n${agent.workspacePath}\n`,
+    `OrgOps system path:\n${PROJECT_ROOT}\n`,
     `Current channel context:\n${JSON.stringify(
       channelRecord ?? { id: channelId, unresolved: true },
       null,
@@ -758,6 +798,7 @@ async function handleEvent(agent: Agent, events: Event[]) {
       apiFetch,
       emitEvent,
     });
+    await emitTurnEvent("agent.turn.completed", {});
     return;
   }
   const seenEventIds = new Set(events.map((event) => event.id));
@@ -819,6 +860,7 @@ async function handleEvent(agent: Agent, events: Event[]) {
     const validation = validateEventAgainstShapes(eventDraft, eventShapes);
     if (validation.ok) {
       await emitEvent(eventDraft);
+      await emitTurnEvent("agent.turn.completed", {});
       return;
     }
 
@@ -842,6 +884,9 @@ async function handleEvent(agent: Agent, events: Event[]) {
       triggerEvent.id,
     ),
   );
+  await emitTurnEvent("agent.turn.completed", {
+    completedWithFallback: true,
+  });
 }
 
 async function ensureWorkspace(agent: Agent) {

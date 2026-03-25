@@ -363,6 +363,7 @@ export function createApp(config: AppConfig = {}) {
     jsonResponse,
     eventRowToApi,
     insertEvent,
+    publishEventRow: publishEvent,
     EventSchema,
     SKILL_ROOT,
     listSkills,

@@ -233,7 +233,7 @@ describe("agent runner", () => {
     expect(eventIds[eventIds.length - 1]).toBe("evt-130");
   });
 
-  it("filters control, self, and agent-sourced channel events", async () => {
+  it("filters control/audit/self but accepts other agent channel events", async () => {
     const agent: Agent = {
       name: "tester",
       systemInstructions: "",
@@ -357,10 +357,10 @@ describe("agent runner", () => {
     expect(await shouldHandleEvent(agent, processStartedEvent)).toBe(true);
     expect(await shouldHandleEvent(agent, processOutputEvent)).toBe(true);
     expect(await shouldHandleEvent(agent, processExitedEvent)).toBe(true);
-    expect(await shouldHandleEvent(agent, otherAgentChannelEvent)).toBe(false);
-    expect(await shouldHandleEvent(agent, addressedByMention)).toBe(false);
-    expect(await shouldHandleEvent(agent, agentThreadReply)).toBe(false);
-    expect(await shouldHandleEvent(agent, highHopCount)).toBe(false);
+    expect(await shouldHandleEvent(agent, otherAgentChannelEvent)).toBe(true);
+    expect(await shouldHandleEvent(agent, addressedByMention)).toBe(true);
+    expect(await shouldHandleEvent(agent, agentThreadReply)).toBe(true);
+    expect(await shouldHandleEvent(agent, highHopCount)).toBe(true);
     expect(await shouldHandleEvent(agent, targetedToOtherAgent)).toBe(true);
     expect(await shouldHandleEvent(agent, targetedToThisAgent)).toBe(true);
     expect(await shouldHandleEvent(agent, userEvent)).toBe(true);
@@ -389,6 +389,20 @@ describe("agent runner", () => {
       channelId: "chan-1",
       injectionEnv: {},
       apiFetch: async (path: string, init?: RequestInit) => {
+        if (path === "/api/channels") {
+          return new Response(
+            JSON.stringify([
+              {
+                id: "chan-1",
+                participants: [{ subscriberType: "AGENT", subscriberId: "tester" }],
+              },
+            ]),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
         requests.push({
           path,
           body: JSON.parse(String(init?.body ?? "{}")),
@@ -442,6 +456,20 @@ describe("agent runner", () => {
       channelId: "chan-1",
       injectionEnv: {},
       apiFetch: async (path: string, init?: RequestInit) => {
+        if (path === "/api/channels") {
+          return new Response(
+            JSON.stringify([
+              {
+                id: "chan-1",
+                participants: [{ subscriberType: "AGENT", subscriberId: "tester" }],
+              },
+            ]),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
         requests.push({
           path,
           body: JSON.parse(String(init?.body ?? "{}")),
@@ -491,6 +519,23 @@ describe("agent runner", () => {
       channelId: "chan-1",
       injectionEnv: {},
       apiFetch: async (path: string, init?: RequestInit) => {
+        if (path === "/api/channels") {
+          return new Response(
+            JSON.stringify([
+              {
+                id: "chan-1",
+                participants: [
+                  { subscriberType: "AGENT", subscriberId: "tester" },
+                  { subscriberType: "AGENT", subscriberId: "worker-a" },
+                ],
+              },
+            ]),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
         requests.push({
           path,
           body: JSON.parse(String(init?.body ?? "{}")),
@@ -520,6 +565,63 @@ describe("agent runner", () => {
     expect(requests[0]?.body.payload?.targetAgentName).toBe("worker-a");
     expect(requests[0]?.body.deliverAt).toBeGreaterThanOrEqual(before + 45_000);
     expect(requests[0]?.body.deliverAt).toBeLessThanOrEqual(after + 45_000);
+  });
+
+  it("rejects scheduling when target agent is not a channel participant", async () => {
+    const requests: Array<string> = [];
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async (path: string) => {
+        requests.push(path);
+        if (path === "/api/channels") {
+          return new Response(
+            JSON.stringify([
+              {
+                id: "chan-1",
+                participants: [{ subscriberType: "AGENT", subscriberId: "tester" }],
+              },
+            ]),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
+        return new Response(JSON.stringify({ id: "evt-should-not-create" }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        });
+      },
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+    };
+
+    const result = (await executeTool(ctx, "events_scheduled_create", {
+      text: "follow up",
+      targetAgentName: "worker-a",
+      delaySeconds: 30,
+    })) as { error?: string };
+
+    expect(typeof result.error).toBe("string");
+    expect(result.error).toContain("not an AGENT participant");
+    expect(requests).toEqual(["/api/channels"]);
   });
 
   it("emits custom channel events via events_emit", async () => {

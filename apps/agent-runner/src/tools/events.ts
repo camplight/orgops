@@ -264,12 +264,12 @@ export const eventsToolDefs: ToolDef[] = [
   ],
   [
     "events_scheduled_create",
-    "Schedule an agent trigger event for any target agent using exactly one of deliverAt, deliverAtIso, delayMs, or delaySeconds.",
+    "Schedule an agent trigger event using exactly one of deliverAt, deliverAtIso, delayMs, or delaySeconds. targetAgentName must already be an AGENT participant in the destination channel.",
     scheduledCreateSchema,
   ],
   [
     "events_schedule_self",
-    "Schedule an internal delayed trigger for this agent (not a user-visible message) using exactly one of deliverAt, deliverAtIso, delayMs, or delaySeconds.",
+    "Schedule an internal delayed trigger for this agent (not a user-visible message) using exactly one of deliverAt, deliverAtIso, delayMs, or delaySeconds. This agent must be an AGENT participant in the destination channel.",
     scheduleSelfSchema,
   ],
 ];
@@ -416,6 +416,43 @@ async function ensureManageableChannel(
       ok: false,
       error:
         "Integration bridge channels are managed by integrations and cannot be modified by agent tools.",
+    };
+  }
+  return { ok: true };
+}
+
+function isAgentParticipant(
+  channel:
+    | {
+        id: string;
+        name?: string;
+        kind?: string;
+        participants?: Array<{ subscriberType?: string; subscriberId?: string }>;
+      }
+    | null,
+  agentName: string,
+): boolean {
+  if (!channel) return false;
+  return (channel.participants ?? []).some(
+    (participant) =>
+      String(participant.subscriberType ?? "").toUpperCase() === "AGENT" &&
+      participant.subscriberId === agentName,
+  );
+}
+
+async function ensureAgentParticipantInChannel(
+  ctx: ExecuteContext,
+  channelId: string,
+  agentName: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const channel = await getChannelById(ctx, channelId);
+  if (!channel) {
+    return { ok: false, error: `Unknown channelId: ${channelId}` };
+  }
+  if (!isAgentParticipant(channel, agentName)) {
+    return {
+      ok: false,
+      error: `Cannot schedule for agent "${agentName}" in channel "${channelId}" because that agent is not an AGENT participant in the channel.`,
     };
   }
   return { ok: true };
@@ -836,6 +873,14 @@ export async function execute(
     if (!channelId) {
       return { error: "No current channelId. Provide channelId explicitly." };
     }
+    const targetMembership = await ensureAgentParticipantInChannel(
+      ctx,
+      channelId,
+      parsed.targetAgentName,
+    );
+    if (!targetMembership.ok) {
+      return { error: targetMembership.error };
+    }
     const eventDraft = {
       type: "agent.scheduled.trigger",
       source: "system:scheduler",
@@ -873,6 +918,14 @@ export async function execute(
     const channelId = parsed.channelId ?? ctx.channelId;
     if (!channelId) {
       return { error: "No current channelId. Provide channelId explicitly." };
+    }
+    const selfMembership = await ensureAgentParticipantInChannel(
+      ctx,
+      channelId,
+      ctx.agent.name,
+    );
+    if (!selfMembership.ok) {
+      return { error: selfMembership.error };
     }
     const eventDraft = {
       type: "agent.scheduled.trigger",
