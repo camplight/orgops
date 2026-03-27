@@ -1,11 +1,13 @@
 import { Hono } from "hono";
 import { createNodeWebSocket } from "@hono/node-ws";
-import {
-  existsSync,
-  mkdirSync,
-} from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
+import {
+  randomBytes,
+  randomUUID,
+  scryptSync,
+  timingSafeEqual,
+} from "node:crypto";
 import { and, eq, inArray } from "drizzle-orm";
 
 import {

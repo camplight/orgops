@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
@@ -16,13 +23,13 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const loginRes = await app.request("http://localhost/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
+      body: JSON.stringify({ username: "admin", password: "admin" }),
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
@@ -35,23 +42,26 @@ describe("api app", () => {
         modelId: "openai:gpt-4o-mini",
         workspacePath: ".orgops-data/workspaces/soul-agent",
         allowOutsideWorkspace: true,
-        soulContents: "initial soul"
-      })
+        soulContents: "initial soul",
+      }),
     });
     expect(createAgentRes.status).toBe(201);
 
-    const patchRes = await app.request("http://localhost/api/agents/soul-agent", {
-      method: "PATCH",
-      headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({
-        soulContents: "updated soul from db",
-        allowOutsideWorkspace: false
-      })
-    });
+    const patchRes = await app.request(
+      "http://localhost/api/agents/soul-agent",
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({
+          soulContents: "updated soul from db",
+          allowOutsideWorkspace: false,
+        }),
+      },
+    );
     expect(patchRes.status).toBe(200);
 
     const getRes = await app.request("http://localhost/api/agents/soul-agent", {
-      headers: { cookie }
+      headers: { cookie },
     });
     expect(getRes.status).toBe(200);
     const agent = (await getRes.json()) as {
@@ -72,13 +82,13 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const loginRes = await app.request("http://localhost/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
+      body: JSON.stringify({ username: "admin", password: "admin" }),
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
@@ -91,14 +101,17 @@ describe("api app", () => {
         modelId: "openai:gpt-4o-mini",
         workspacePath: ".orgops-data/workspaces/skills-agent",
         enabledSkills: ["slack"],
-        alwaysPreloadedSkills: ["slack", "secrets"]
-      })
+        alwaysPreloadedSkills: ["slack", "secrets"],
+      }),
     });
     expect(createAgentRes.status).toBe(201);
 
-    const getAgentRes = await app.request("http://localhost/api/agents/skills-agent", {
-      headers: { cookie }
-    });
+    const getAgentRes = await app.request(
+      "http://localhost/api/agents/skills-agent",
+      {
+        headers: { cookie },
+      },
+    );
     expect(getAgentRes.status).toBe(200);
     const createdAgent = (await getAgentRes.json()) as {
       enabledSkills?: string[];
@@ -107,19 +120,25 @@ describe("api app", () => {
     expect(createdAgent.enabledSkills).toEqual(["slack"]);
     expect(createdAgent.alwaysPreloadedSkills).toEqual(["slack"]);
 
-    const patchRes = await app.request("http://localhost/api/agents/skills-agent", {
-      method: "PATCH",
-      headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({
-        enabledSkills: ["secrets"],
-        alwaysPreloadedSkills: ["slack", "secrets"]
-      })
-    });
+    const patchRes = await app.request(
+      "http://localhost/api/agents/skills-agent",
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({
+          enabledSkills: ["secrets"],
+          alwaysPreloadedSkills: ["slack", "secrets"],
+        }),
+      },
+    );
     expect(patchRes.status).toBe(200);
 
-    const patchedRes = await app.request("http://localhost/api/agents/skills-agent", {
-      headers: { cookie }
-    });
+    const patchedRes = await app.request(
+      "http://localhost/api/agents/skills-agent",
+      {
+        headers: { cookie },
+      },
+    );
     expect(patchedRes.status).toBe(200);
     const patchedAgent = (await patchedRes.json()) as {
       enabledSkills?: string[];
@@ -139,13 +158,13 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const loginRes = await app.request("http://localhost/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
+      body: JSON.stringify({ username: "admin", password: "admin" }),
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
@@ -158,14 +177,17 @@ describe("api app", () => {
         modelId: "openai:gpt-4o-mini",
         workspacePath: ".orgops-data/workspaces/tuned-agent",
         llmCallTimeoutMs: 180000,
-        classicMaxModelSteps: 250
-      })
+        classicMaxModelSteps: 250,
+      }),
     });
     expect(createAgentRes.status).toBe(201);
 
-    const getCreatedRes = await app.request("http://localhost/api/agents/tuned-agent", {
-      headers: { cookie }
-    });
+    const getCreatedRes = await app.request(
+      "http://localhost/api/agents/tuned-agent",
+      {
+        headers: { cookie },
+      },
+    );
     expect(getCreatedRes.status).toBe(200);
     const createdAgent = (await getCreatedRes.json()) as {
       llmCallTimeoutMs?: number | null;
@@ -174,19 +196,25 @@ describe("api app", () => {
     expect(createdAgent.llmCallTimeoutMs).toBe(180000);
     expect(createdAgent.classicMaxModelSteps).toBe(250);
 
-    const patchRes = await app.request("http://localhost/api/agents/tuned-agent", {
-      method: "PATCH",
-      headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({
-        llmCallTimeoutMs: null,
-        classicMaxModelSteps: null
-      })
-    });
+    const patchRes = await app.request(
+      "http://localhost/api/agents/tuned-agent",
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({
+          llmCallTimeoutMs: null,
+          classicMaxModelSteps: null,
+        }),
+      },
+    );
     expect(patchRes.status).toBe(200);
 
-    const getPatchedRes = await app.request("http://localhost/api/agents/tuned-agent", {
-      headers: { cookie }
-    });
+    const getPatchedRes = await app.request(
+      "http://localhost/api/agents/tuned-agent",
+      {
+        headers: { cookie },
+      },
+    );
     expect(getPatchedRes.status).toBe(200);
     const patchedAgent = (await getPatchedRes.json()) as {
       llmCallTimeoutMs?: number | null;
@@ -195,13 +223,16 @@ describe("api app", () => {
     expect(patchedAgent.llmCallTimeoutMs).toBeNull();
     expect(patchedAgent.classicMaxModelSteps).toBeNull();
 
-    const invalidPatchRes = await app.request("http://localhost/api/agents/tuned-agent", {
-      method: "PATCH",
-      headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({
-        llmCallTimeoutMs: 0
-      })
-    });
+    const invalidPatchRes = await app.request(
+      "http://localhost/api/agents/tuned-agent",
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({
+          llmCallTimeoutMs: 0,
+        }),
+      },
+    );
     expect(invalidPatchRes.status).toBe(400);
 
     rmSync(dataDir, { recursive: true, force: true });
@@ -215,19 +246,19 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const loginRes = await app.request("http://localhost/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
+      body: JSON.stringify({ username: "admin", password: "admin" }),
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
 
     const meRes = await app.request("http://localhost/api/auth/me", {
-      headers: { cookie }
+      headers: { cookie },
     });
     expect(meRes.status).toBe(200);
 
@@ -235,14 +266,14 @@ describe("api app", () => {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-orgops-runner-token": "test-token"
+        "x-orgops-runner-token": "test-token",
       },
       body: JSON.stringify({
         type: "message.created",
         payload: { text: "hello" },
         source: "test",
-        channelId: "test-channel"
-      })
+        channelId: "test-channel",
+      }),
     });
     expect(eventRes.status).toBe(201);
     const firstEvent = (await eventRes.json()) as { id: string };
@@ -251,27 +282,30 @@ describe("api app", () => {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-orgops-runner-token": "test-token"
+        "x-orgops-runner-token": "test-token",
       },
       body: JSON.stringify({
         type: "message.created",
         payload: { text: "hello again" },
         source: "test",
-        channelId: "test-channel"
-      })
+        channelId: "test-channel",
+      }),
     });
     expect(secondEventRes.status).toBe(201);
     const secondEvent = (await secondEventRes.json()) as { id: string };
 
     const listRes = await app.request("http://localhost/api/events?limit=10", {
-      headers: { "x-orgops-runner-token": "test-token" }
+      headers: { "x-orgops-runner-token": "test-token" },
     });
     const list = await listRes.json();
     expect(Array.isArray(list)).toBe(true);
 
-    const descListRes = await app.request("http://localhost/api/events?limit=10&order=desc", {
-      headers: { "x-orgops-runner-token": "test-token" }
-    });
+    const descListRes = await app.request(
+      "http://localhost/api/events?limit=10&order=desc",
+      {
+        headers: { "x-orgops-runner-token": "test-token" },
+      },
+    );
     expect(descListRes.status).toBe(200);
     const descList = (await descListRes.json()) as Array<{ id: string }>;
     expect(descList[0]?.id).toBe(secondEvent.id);
@@ -288,21 +322,21 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const invalidEventRes = await app.request("http://localhost/api/events", {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-orgops-runner-token": "test-token"
+        "x-orgops-runner-token": "test-token",
       },
       body: JSON.stringify({
         type: "message.created",
         payload: { text: "" },
         source: "agent:tester",
-        channelId: "chan-1"
-      })
+        channelId: "chan-1",
+      }),
     });
     expect(invalidEventRes.status).toBe(400);
     const invalidBody = (await invalidEventRes.json()) as {
@@ -324,22 +358,25 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const loginRes = await app.request("http://localhost/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
+      body: JSON.stringify({ username: "admin", password: "admin" }),
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
 
-    const createChannelRes = await app.request("http://localhost/api/channels", {
-      method: "POST",
-      headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({ name: "scheduled-membership-guard-channel" })
-    });
+    const createChannelRes = await app.request(
+      "http://localhost/api/channels",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ name: "scheduled-membership-guard-channel" }),
+      },
+    );
     expect(createChannelRes.status).toBe(201);
     const channel = (await createChannelRes.json()) as { id: string };
 
@@ -351,8 +388,8 @@ describe("api app", () => {
         payload: { text: "run later", targetAgentName: "worker-missing" },
         source: "system:scheduler",
         channelId: channel.id,
-        deliverAt: Date.now() + 60_000
-      })
+        deliverAt: Date.now() + 60_000,
+      }),
     });
     expect(invalidEventRes.status).toBe(400);
     const invalidBody = (await invalidEventRes.json()) as { error?: string };
@@ -369,23 +406,27 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
-    const eventTypesRes = await app.request("http://localhost/api/event-types", {
-      headers: { "x-orgops-runner-token": "test-token" }
-    });
+    const eventTypesRes = await app.request(
+      "http://localhost/api/event-types",
+      {
+        headers: { "x-orgops-runner-token": "test-token" },
+      },
+    );
     expect(eventTypesRes.status).toBe(200);
     const body = (await eventTypesRes.json()) as {
       eventTypes: Array<{ type: string; source: string }>;
     };
-    expect(body.eventTypes.some((entry) => entry.type === "message.created")).toBe(true);
+    expect(
+      body.eventTypes.some((entry) => entry.type === "message.created"),
+    ).toBe(true);
     expect(
       body.eventTypes.some(
         (entry) =>
-          entry.type === "message.created" &&
-          entry.source === "skill:slack"
-      )
+          entry.type === "message.created" && entry.source === "skill:slack",
+      ),
     ).toBe(true);
 
     rmSync(dataDir, { recursive: true, force: true });
@@ -399,13 +440,13 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const adminLoginRes = await app.request("http://localhost/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
+      body: JSON.stringify({ username: "admin", password: "admin" }),
     });
     expect(adminLoginRes.status).toBe(200);
     const adminCookie = adminLoginRes.headers.get("set-cookie") ?? "";
@@ -413,10 +454,12 @@ describe("api app", () => {
     const inviteRes = await app.request("http://localhost/api/humans/invite", {
       method: "POST",
       headers: { "content-type": "application/json", cookie: adminCookie },
-      body: JSON.stringify({ username: "alice" })
+      body: JSON.stringify({ username: "alice" }),
     });
     expect(inviteRes.status).toBe(201);
-    const inviteBody = (await inviteRes.json()) as { temporaryPassword: string };
+    const inviteBody = (await inviteRes.json()) as {
+      temporaryPassword: string;
+    };
     expect(typeof inviteBody.temporaryPassword).toBe("string");
     expect(inviteBody.temporaryPassword.length).toBeGreaterThanOrEqual(8);
 
@@ -425,28 +468,33 @@ describe("api app", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         username: "alice",
-        password: inviteBody.temporaryPassword
-      })
+        password: inviteBody.temporaryPassword,
+      }),
     });
     expect(humanLoginRes.status).toBe(200);
-    const humanLoginBody = (await humanLoginRes.json()) as { mustChangePassword?: boolean };
+    const humanLoginBody = (await humanLoginRes.json()) as {
+      mustChangePassword?: boolean;
+    };
     expect(humanLoginBody.mustChangePassword).toBe(true);
     const humanCookie = humanLoginRes.headers.get("set-cookie") ?? "";
 
     const blockedRes = await app.request("http://localhost/api/agents", {
-      headers: { cookie: humanCookie }
+      headers: { cookie: humanCookie },
     });
     expect(blockedRes.status).toBe(403);
 
     const profileRes = await app.request("http://localhost/api/auth/profile", {
       method: "PATCH",
       headers: { "content-type": "application/json", cookie: humanCookie },
-      body: JSON.stringify({ username: "alice", newPassword: "alice-password-123" })
+      body: JSON.stringify({
+        username: "alice",
+        newPassword: "alice-password-123",
+      }),
     });
     expect(profileRes.status).toBe(200);
 
     const allowedRes = await app.request("http://localhost/api/agents", {
-      headers: { cookie: humanCookie }
+      headers: { cookie: humanCookie },
     });
     expect(allowedRes.status).toBe(200);
 
@@ -461,13 +509,13 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const loginRes = await app.request("http://localhost/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
+      body: JSON.stringify({ username: "admin", password: "admin" }),
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
@@ -479,34 +527,46 @@ describe("api app", () => {
         name: "agent-one",
         modelId: "openai:gpt-4o-mini",
         workspacePath: ".orgops-data/workspaces/agent-one",
-        soulContents: ""
-      })
+        soulContents: "",
+      }),
     });
     expect(createAgentRes.status).toBe(201);
 
-    const startRes = await app.request("http://localhost/api/agents/agent-one/start", {
-      method: "POST",
-      headers: { cookie }
-    });
+    const startRes = await app.request(
+      "http://localhost/api/agents/agent-one/start",
+      {
+        method: "POST",
+        headers: { cookie },
+      },
+    );
     expect(startRes.status).toBe(200);
 
-    const afterStartRes = await app.request("http://localhost/api/agents/agent-one", {
-      headers: { cookie }
-    });
+    const afterStartRes = await app.request(
+      "http://localhost/api/agents/agent-one",
+      {
+        headers: { cookie },
+      },
+    );
     expect(afterStartRes.status).toBe(200);
     const afterStart = await afterStartRes.json();
     expect(afterStart.desiredState).toBe("RUNNING");
     expect(afterStart.runtimeState).toBe("STARTING");
 
-    const stopRes = await app.request("http://localhost/api/agents/agent-one/stop", {
-      method: "POST",
-      headers: { cookie }
-    });
+    const stopRes = await app.request(
+      "http://localhost/api/agents/agent-one/stop",
+      {
+        method: "POST",
+        headers: { cookie },
+      },
+    );
     expect(stopRes.status).toBe(200);
 
-    const afterStopRes = await app.request("http://localhost/api/agents/agent-one", {
-      headers: { cookie }
-    });
+    const afterStopRes = await app.request(
+      "http://localhost/api/agents/agent-one",
+      {
+        headers: { cookie },
+      },
+    );
     expect(afterStopRes.status).toBe(200);
     const afterStop = await afterStopRes.json();
     expect(afterStop.desiredState).toBe("STOPPED");
@@ -523,13 +583,13 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const loginRes = await app.request("http://localhost/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
+      body: JSON.stringify({ username: "admin", password: "admin" }),
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
@@ -541,62 +601,77 @@ describe("api app", () => {
         name: "agent-two",
         modelId: "openai:gpt-4o-mini",
         workspacePath: ".orgops-data/workspaces/agent-two",
-        soulContents: ""
-      })
+        soulContents: "",
+      }),
     });
     expect(createAgentRes.status).toBe(201);
 
-    const createChannelRes = await app.request("http://localhost/api/channels", {
-      method: "POST",
-      headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({ name: "agent-two-inbox" })
-    });
+    const createChannelRes = await app.request(
+      "http://localhost/api/channels",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ name: "agent-two-inbox" }),
+      },
+    );
     expect(createChannelRes.status).toBe(201);
     const channel = (await createChannelRes.json()) as { id: string };
-    const subscribeRes = await app.request(`http://localhost/api/channels/${channel.id}/subscribe`, {
-      method: "POST",
-      headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({ subscriberType: "AGENT", subscriberId: "agent-two" })
-    });
+    const subscribeRes = await app.request(
+      `http://localhost/api/channels/${channel.id}/subscribe`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({
+          subscriberType: "AGENT",
+          subscriberId: "agent-two",
+        }),
+      },
+    );
     expect(subscribeRes.status).toBe(200);
 
     const eventRes = await app.request("http://localhost/api/events", {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        cookie
+        cookie,
       },
       body: JSON.stringify({
         type: "message.created",
         payload: { text: "hello agent-two" },
         source: "human:admin",
-        channelId: channel.id
-      })
+        channelId: channel.id,
+      }),
     });
     expect(eventRes.status).toBe(201);
     const event = (await eventRes.json()) as { id: string };
 
     const uiListRes = await app.request(
       "http://localhost/api/events?agentName=agent-two&status=PENDING&limit=10",
-      { headers: { cookie } }
+      { headers: { cookie } },
     );
     expect(uiListRes.status).toBe(200);
-    const uiList = (await uiListRes.json()) as Array<{ id: string; status: string }>;
+    const uiList = (await uiListRes.json()) as Array<{
+      id: string;
+      status: string;
+    }>;
     expect(uiList.some((row) => row.id === event.id)).toBe(true);
     expect(uiList.find((row) => row.id === event.id)?.status).toBe("PENDING");
 
     const runnerListRes = await app.request(
       "http://localhost/api/events?agentName=agent-two&status=PENDING&limit=10",
-      { headers: { "x-orgops-runner-token": "test-token" } }
+      { headers: { "x-orgops-runner-token": "test-token" } },
     );
     expect(runnerListRes.status).toBe(200);
 
     const afterRunnerRes = await app.request(
       "http://localhost/api/events?agentName=agent-two&status=DELIVERED&limit=10",
-      { headers: { "x-orgops-runner-token": "test-token" } }
+      { headers: { "x-orgops-runner-token": "test-token" } },
     );
     expect(afterRunnerRes.status).toBe(200);
-    const afterRunner = (await afterRunnerRes.json()) as Array<{ id: string; status: string }>;
+    const afterRunner = (await afterRunnerRes.json()) as Array<{
+      id: string;
+      status: string;
+    }>;
     expect(afterRunner.some((row) => row.id === event.id)).toBe(true);
 
     rmSync(dataDir, { recursive: true, force: true });
@@ -610,13 +685,13 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const loginRes = await app.request("http://localhost/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
+      body: JSON.stringify({ username: "admin", password: "admin" }),
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
@@ -629,17 +704,20 @@ describe("api app", () => {
           name,
           modelId: "openai:gpt-4o-mini",
           workspacePath: `.orgops-data/workspaces/${name}`,
-          soulContents: ""
-        })
+          soulContents: "",
+        }),
       });
       expect(createAgentRes.status).toBe(201);
     }
 
-    const createChannelRes = await app.request("http://localhost/api/channels", {
-      method: "POST",
-      headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({ name: "fanout-channel" })
-    });
+    const createChannelRes = await app.request(
+      "http://localhost/api/channels",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ name: "fanout-channel" }),
+      },
+    );
     expect(createChannelRes.status).toBe(201);
     const channel = (await createChannelRes.json()) as { id: string };
 
@@ -649,8 +727,8 @@ describe("api app", () => {
         {
           method: "POST",
           headers: { "content-type": "application/json", cookie },
-          body: JSON.stringify({ subscriberType: "AGENT", subscriberId })
-        }
+          body: JSON.stringify({ subscriberType: "AGENT", subscriberId }),
+        },
       );
       expect(subscribeRes.status).toBe(200);
     }
@@ -659,21 +737,21 @@ describe("api app", () => {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        cookie
+        cookie,
       },
       body: JSON.stringify({
         type: "message.created",
         payload: { text: "fanout test" },
         source: "human:admin",
-        channelId: channel.id
-      })
+        channelId: channel.id,
+      }),
     });
     expect(eventRes.status).toBe(201);
     const event = (await eventRes.json()) as { id: string };
 
     const pollAgentARes = await app.request(
       "http://localhost/api/events?agentName=agent-a&status=PENDING&limit=10",
-      { headers: { "x-orgops-runner-token": "test-token" } }
+      { headers: { "x-orgops-runner-token": "test-token" } },
     );
     expect(pollAgentARes.status).toBe(200);
     const pollAgentA = (await pollAgentARes.json()) as Array<{ id: string }>;
@@ -681,18 +759,20 @@ describe("api app", () => {
 
     const afterAgentAStatusRes = await app.request(
       `http://localhost/api/events?channelId=${channel.id}&limit=10`,
-      { headers: { cookie } }
+      { headers: { cookie } },
     );
     expect(afterAgentAStatusRes.status).toBe(200);
     const afterAgentAStatus = (await afterAgentAStatusRes.json()) as Array<{
       id: string;
       status: string;
     }>;
-    expect(afterAgentAStatus.find((row) => row.id === event.id)?.status).toBe("PENDING");
+    expect(afterAgentAStatus.find((row) => row.id === event.id)?.status).toBe(
+      "PENDING",
+    );
 
     const pollAgentBRes = await app.request(
       "http://localhost/api/events?agentName=agent-b&status=PENDING&limit=10",
-      { headers: { "x-orgops-runner-token": "test-token" } }
+      { headers: { "x-orgops-runner-token": "test-token" } },
     );
     expect(pollAgentBRes.status).toBe(200);
     const pollAgentB = (await pollAgentBRes.json()) as Array<{ id: string }>;
@@ -700,7 +780,7 @@ describe("api app", () => {
 
     const afterAgentBStatusRes = await app.request(
       `http://localhost/api/events?channelId=${channel.id}&status=DELIVERED&limit=10`,
-      { headers: { cookie } }
+      { headers: { cookie } },
     );
     expect(afterAgentBStatusRes.status).toBe(200);
     const afterAgentBStatus = (await afterAgentBStatusRes.json()) as Array<{
@@ -720,13 +800,13 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const loginRes = await app.request("http://localhost/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
+      body: JSON.stringify({ username: "admin", password: "admin" }),
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
@@ -734,7 +814,7 @@ describe("api app", () => {
     const createTeamRes = await app.request("http://localhost/api/teams", {
       method: "POST",
       headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({ name: "Team Alpha" })
+      body: JSON.stringify({ name: "Team Alpha" }),
     });
     expect(createTeamRes.status).toBe(201);
     const createTeamBody = (await createTeamRes.json()) as { id: string };
@@ -744,19 +824,22 @@ describe("api app", () => {
       {
         method: "POST",
         headers: { "content-type": "application/json", cookie },
-        body: JSON.stringify({ memberType: "AGENT", memberId: "agent-one" })
-      }
+        body: JSON.stringify({ memberType: "AGENT", memberId: "agent-one" }),
+      },
     );
     expect(addMemberRes.status).toBe(200);
 
-    const deleteRes = await app.request(`http://localhost/api/teams/${createTeamBody.id}`, {
-      method: "DELETE",
-      headers: { cookie }
-    });
+    const deleteRes = await app.request(
+      `http://localhost/api/teams/${createTeamBody.id}`,
+      {
+        method: "DELETE",
+        headers: { cookie },
+      },
+    );
     expect(deleteRes.status).toBe(200);
 
     const teamsRes = await app.request("http://localhost/api/teams", {
-      headers: { cookie }
+      headers: { cookie },
     });
     const teams = (await teamsRes.json()) as Array<{ id: string }>;
     expect(teams.some((team) => team.id === createTeamBody.id)).toBe(false);
@@ -764,8 +847,8 @@ describe("api app", () => {
     const membersRes = await app.request(
       `http://localhost/api/teams/${createTeamBody.id}/members`,
       {
-        headers: { cookie }
-      }
+        headers: { cookie },
+      },
     );
     const members = await membersRes.json();
     expect(members).toEqual([]);
@@ -781,22 +864,25 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const loginRes = await app.request("http://localhost/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
+      body: JSON.stringify({ username: "admin", password: "admin" }),
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
 
-    const createChannelRes = await app.request("http://localhost/api/channels", {
-      method: "POST",
-      headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({ name: "team-targeted-channel" })
-    });
+    const createChannelRes = await app.request(
+      "http://localhost/api/channels",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ name: "team-targeted-channel" }),
+      },
+    );
     expect(createChannelRes.status).toBe(201);
     const createChannelBody = (await createChannelRes.json()) as { id: string };
 
@@ -805,16 +891,19 @@ describe("api app", () => {
       {
         method: "POST",
         headers: { "content-type": "application/json", cookie },
-        body: JSON.stringify({ subscriberType: "TEAM", subscriberId: "team-1" })
-      }
+        body: JSON.stringify({
+          subscriberType: "TEAM",
+          subscriberId: "team-1",
+        }),
+      },
     );
     expect(subscribeRes.status).toBe(400);
 
     const participantsRes = await app.request(
       `http://localhost/api/channels/${createChannelBody.id}/participants`,
       {
-        headers: { cookie }
-      }
+        headers: { cookie },
+      },
     );
     const participants = await participantsRes.json();
     expect(participants).toEqual([]);
@@ -830,13 +919,13 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const loginRes = await app.request("http://localhost/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
+      body: JSON.stringify({ username: "admin", password: "admin" }),
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
@@ -844,7 +933,7 @@ describe("api app", () => {
     const createTeamRes = await app.request("http://localhost/api/teams", {
       method: "POST",
       headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({ name: "Team Beta" })
+      body: JSON.stringify({ name: "Team Beta" }),
     });
     expect(createTeamRes.status).toBe(201);
     const createTeamBody = (await createTeamRes.json()) as { id: string };
@@ -853,13 +942,13 @@ describe("api app", () => {
       `http://localhost/api/teams/${createTeamBody.id}/delete`,
       {
         method: "POST",
-        headers: { cookie }
-      }
+        headers: { cookie },
+      },
     );
     expect(deleteRes.status).toBe(200);
 
     const teamsRes = await app.request("http://localhost/api/teams", {
-      headers: { cookie }
+      headers: { cookie },
     });
     const teams = (await teamsRes.json()) as Array<{ id: string }>;
     expect(teams.some((team) => team.id === createTeamBody.id)).toBe(false);
@@ -875,22 +964,25 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const loginRes = await app.request("http://localhost/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
+      body: JSON.stringify({ username: "admin", password: "admin" }),
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
 
-    const createChannelRes = await app.request("http://localhost/api/channels", {
-      method: "POST",
-      headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({ name: "deletable-channel" })
-    });
+    const createChannelRes = await app.request(
+      "http://localhost/api/channels",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ name: "deletable-channel" }),
+      },
+    );
     expect(createChannelRes.status).toBe(201);
     const createChannelBody = (await createChannelRes.json()) as { id: string };
 
@@ -901,8 +993,8 @@ describe("api app", () => {
         name: "agent-one",
         modelId: "test:model",
         systemInstructions: "",
-        workspacePath: ".orgops-data/workspaces/agent-one"
-      })
+        workspacePath: ".orgops-data/workspaces/agent-one",
+      }),
     });
     expect(createAgentRes.status).toBe(201);
 
@@ -911,8 +1003,11 @@ describe("api app", () => {
       {
         method: "POST",
         headers: { "content-type": "application/json", cookie },
-        body: JSON.stringify({ subscriberType: "AGENT", subscriberId: "agent-one" })
-      }
+        body: JSON.stringify({
+          subscriberType: "AGENT",
+          subscriberId: "agent-one",
+        }),
+      },
     );
     expect(subscribeRes.status).toBe(200);
 
@@ -920,22 +1015,24 @@ describe("api app", () => {
       `http://localhost/api/channels/${createChannelBody.id}/delete`,
       {
         method: "POST",
-        headers: { cookie }
-      }
+        headers: { cookie },
+      },
     );
     expect(deleteRes.status).toBe(200);
 
     const channelsRes = await app.request("http://localhost/api/channels", {
-      headers: { cookie }
+      headers: { cookie },
     });
     const channels = (await channelsRes.json()) as Array<{ id: string }>;
-    expect(channels.some((channel) => channel.id === createChannelBody.id)).toBe(false);
+    expect(
+      channels.some((channel) => channel.id === createChannelBody.id),
+    ).toBe(false);
 
     const participantsRes = await app.request(
       `http://localhost/api/channels/${createChannelBody.id}/participants`,
       {
-        headers: { cookie }
-      }
+        headers: { cookie },
+      },
     );
     const participants = await participantsRes.json();
     expect(participants).toEqual([]);
@@ -951,13 +1048,13 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const loginRes = await app.request("http://localhost/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
+      body: JSON.stringify({ username: "admin", password: "admin" }),
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
@@ -969,38 +1066,50 @@ describe("api app", () => {
         name: "agent-bulk-delete",
         modelId: "test:model",
         systemInstructions: "",
-        workspacePath: ".orgops-data/workspaces/agent-bulk-delete"
-      })
+        workspacePath: ".orgops-data/workspaces/agent-bulk-delete",
+      }),
     });
     expect(createAgentRes.status).toBe(201);
 
     for (const channelName of ["bulk-delete-a", "bulk-delete-b"]) {
-      const createChannelRes = await app.request("http://localhost/api/channels", {
-        method: "POST",
-        headers: { "content-type": "application/json", cookie },
-        body: JSON.stringify({ name: channelName })
-      });
+      const createChannelRes = await app.request(
+        "http://localhost/api/channels",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", cookie },
+          body: JSON.stringify({ name: channelName }),
+        },
+      );
       expect(createChannelRes.status).toBe(201);
       const channel = (await createChannelRes.json()) as { id: string };
-      const subscribeRes = await app.request(`http://localhost/api/channels/${channel.id}/subscribe`, {
-        method: "POST",
-        headers: { "content-type": "application/json", cookie },
-        body: JSON.stringify({ subscriberType: "AGENT", subscriberId: "agent-bulk-delete" })
-      });
+      const subscribeRes = await app.request(
+        `http://localhost/api/channels/${channel.id}/subscribe`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", cookie },
+          body: JSON.stringify({
+            subscriberType: "AGENT",
+            subscriberId: "agent-bulk-delete",
+          }),
+        },
+      );
       expect(subscribeRes.status).toBe(200);
     }
 
     const deleteRes = await app.request("http://localhost/api/channels", {
       method: "DELETE",
-      headers: { cookie }
+      headers: { cookie },
     });
     expect(deleteRes.status).toBe(200);
-    const deleteBody = (await deleteRes.json()) as { ok: boolean; deletedCount: number };
+    const deleteBody = (await deleteRes.json()) as {
+      ok: boolean;
+      deletedCount: number;
+    };
     expect(deleteBody.ok).toBe(true);
     expect(deleteBody.deletedCount).toBe(2);
 
     const channelsRes = await app.request("http://localhost/api/channels", {
-      headers: { cookie }
+      headers: { cookie },
     });
     const channels = (await channelsRes.json()) as Array<{ id: string }>;
     expect(channels).toEqual([]);
@@ -1008,8 +1117,8 @@ describe("api app", () => {
     const participantsRes = await app.request(
       "http://localhost/api/channels/nonexistent/participants",
       {
-        headers: { cookie }
-      }
+        headers: { cookie },
+      },
     );
     expect(participantsRes.status).toBe(200);
     const participants = await participantsRes.json();
@@ -1026,21 +1135,24 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const loginRes = await app.request("http://localhost/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
+      body: JSON.stringify({ username: "admin", password: "admin" }),
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
 
-    const deleteRes = await app.request("http://localhost/api/channels/missing-id/delete", {
-      method: "POST",
-      headers: { cookie }
-    });
+    const deleteRes = await app.request(
+      "http://localhost/api/channels/missing-id/delete",
+      {
+        method: "POST",
+        headers: { cookie },
+      },
+    );
     expect(deleteRes.status).toBe(200);
     const body = (await deleteRes.json()) as { ok: boolean; deleted: boolean };
     expect(body.ok).toBe(true);
@@ -1057,39 +1169,53 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const loginRes = await app.request("http://localhost/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
+      body: JSON.stringify({ username: "admin", password: "admin" }),
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
 
-    const createSlackBridgeRes = await app.request("http://localhost/api/channels", {
-      method: "POST",
-      headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({ name: "slack:T1:C123", kind: "INTEGRATION_BRIDGE" })
-    });
+    const createSlackBridgeRes = await app.request(
+      "http://localhost/api/channels",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({
+          name: "slack:T1:C123",
+          kind: "INTEGRATION_BRIDGE",
+        }),
+      },
+    );
     expect(createSlackBridgeRes.status).toBe(201);
-    const createdSlackBridge = (await createSlackBridgeRes.json()) as { id: string };
+    const createdSlackBridge = (await createSlackBridgeRes.json()) as {
+      id: string;
+    };
 
     const channelsRes = await app.request("http://localhost/api/channels", {
-      headers: { cookie }
+      headers: { cookie },
     });
     expect(channelsRes.status).toBe(200);
-    const channels = (await channelsRes.json()) as Array<{ id: string; kind: string }>;
-    expect(channels.find((channel) => channel.id === createdSlackBridge.id)?.kind).toBe(
-      "INTEGRATION_BRIDGE"
-    );
+    const channels = (await channelsRes.json()) as Array<{
+      id: string;
+      kind: string;
+    }>;
+    expect(
+      channels.find((channel) => channel.id === createdSlackBridge.id)?.kind,
+    ).toBe("INTEGRATION_BRIDGE");
 
-    const invalidCreateRes = await app.request("http://localhost/api/channels", {
-      method: "POST",
-      headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({ name: "bad-direct", kind: "HUMAN_AGENT_DM" })
-    });
+    const invalidCreateRes = await app.request(
+      "http://localhost/api/channels",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ name: "bad-direct", kind: "HUMAN_AGENT_DM" }),
+      },
+    );
     expect(invalidCreateRes.status).toBe(400);
 
     rmSync(dataDir, { recursive: true, force: true });
@@ -1103,13 +1229,13 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const loginRes = await app.request("http://localhost/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
+      body: JSON.stringify({ username: "admin", password: "admin" }),
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
@@ -1117,17 +1243,25 @@ describe("api app", () => {
     const firstCreateRes = await app.request("http://localhost/api/channels", {
       method: "POST",
       headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({ name: "dup-channel-name", kind: "INTEGRATION_BRIDGE" })
+      body: JSON.stringify({
+        name: "dup-channel-name",
+        kind: "INTEGRATION_BRIDGE",
+      }),
     });
     expect(firstCreateRes.status).toBe(201);
 
     const secondCreateRes = await app.request("http://localhost/api/channels", {
       method: "POST",
       headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({ name: "dup-channel-name", kind: "INTEGRATION_BRIDGE" })
+      body: JSON.stringify({
+        name: "dup-channel-name",
+        kind: "INTEGRATION_BRIDGE",
+      }),
     });
     expect(secondCreateRes.status).toBe(409);
-    const secondCreateBody = (await secondCreateRes.json()) as { error?: string };
+    const secondCreateBody = (await secondCreateRes.json()) as {
+      error?: string;
+    };
     expect(secondCreateBody.error).toBe("Channel name already exists");
 
     rmSync(dataDir, { recursive: true, force: true });
@@ -1141,13 +1275,13 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const loginRes = await app.request("http://localhost/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
+      body: JSON.stringify({ username: "admin", password: "admin" }),
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
@@ -1155,14 +1289,20 @@ describe("api app", () => {
     const firstCreateRes = await app.request("http://localhost/api/channels", {
       method: "POST",
       headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({ name: "existing-channel", kind: "INTEGRATION_BRIDGE" })
+      body: JSON.stringify({
+        name: "existing-channel",
+        kind: "INTEGRATION_BRIDGE",
+      }),
     });
     expect(firstCreateRes.status).toBe(201);
 
     const secondCreateRes = await app.request("http://localhost/api/channels", {
       method: "POST",
       headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({ name: "channel-to-rename", kind: "INTEGRATION_BRIDGE" })
+      body: JSON.stringify({
+        name: "channel-to-rename",
+        kind: "INTEGRATION_BRIDGE",
+      }),
     });
     expect(secondCreateRes.status).toBe(201);
     const secondCreateBody = (await secondCreateRes.json()) as { id: string };
@@ -1172,8 +1312,8 @@ describe("api app", () => {
       {
         method: "PATCH",
         headers: { "content-type": "application/json", cookie },
-        body: JSON.stringify({ name: "existing-channel" })
-      }
+        body: JSON.stringify({ name: "existing-channel" }),
+      },
     );
     expect(patchRes.status).toBe(409);
     const patchBody = (await patchRes.json()) as { error?: string };
@@ -1190,13 +1330,13 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const loginRes = await app.request("http://localhost/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
+      body: JSON.stringify({ username: "admin", password: "admin" }),
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
@@ -1213,16 +1353,16 @@ describe("api app", () => {
             connection: "worker1",
             teamId: "T123",
             channelId: "C456",
-            threadTs: "1710000000.000100"
-          }
-        }
-      })
+            threadTs: "1710000000.000100",
+          },
+        },
+      }),
     });
     expect(createRes.status).toBe(201);
     const created = (await createRes.json()) as { id: string };
 
     const listRes = await app.request("http://localhost/api/channels", {
-      headers: { cookie }
+      headers: { cookie },
     });
     expect(listRes.status).toBe(200);
     const list = (await listRes.json()) as Array<{
@@ -1238,27 +1378,35 @@ describe("api app", () => {
     const row = list.find((channel) => channel.id === created.id);
     expect(row?.metadata?.integrationBridge?.provider).toBe("slack");
     expect(row?.metadata?.integrationBridge?.channelId).toBe("C456");
-    expect(row?.metadata?.integrationBridge?.threadTs).toBe("1710000000.000100");
+    expect(row?.metadata?.integrationBridge?.threadTs).toBe(
+      "1710000000.000100",
+    );
 
-    const patchRes = await app.request(`http://localhost/api/channels/${created.id}`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({
-        metadata: {
-          integrationBridge: {
-            provider: "slack",
-            connection: "worker1",
-            teamId: "T123",
-            dmUserId: "U999"
-          }
-        }
-      })
-    });
+    const patchRes = await app.request(
+      `http://localhost/api/channels/${created.id}`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({
+          metadata: {
+            integrationBridge: {
+              provider: "slack",
+              connection: "worker1",
+              teamId: "T123",
+              dmUserId: "U999",
+            },
+          },
+        }),
+      },
+    );
     expect(patchRes.status).toBe(200);
 
-    const listAfterPatchRes = await app.request("http://localhost/api/channels", {
-      headers: { cookie }
-    });
+    const listAfterPatchRes = await app.request(
+      "http://localhost/api/channels",
+      {
+        headers: { cookie },
+      },
+    );
     expect(listAfterPatchRes.status).toBe(200);
     const listAfterPatch = (await listAfterPatchRes.json()) as Array<{
       id: string;
@@ -1282,13 +1430,13 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const loginRes = await app.request("http://localhost/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
+      body: JSON.stringify({ username: "admin", password: "admin" }),
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
@@ -1300,16 +1448,19 @@ describe("api app", () => {
         name: "coordinator",
         modelId: "test:model",
         systemInstructions: "",
-        workspacePath: ".orgops-data/workspaces/coordinator"
-      })
+        workspacePath: ".orgops-data/workspaces/coordinator",
+      }),
     });
     expect(createAgentRes.status).toBe(201);
 
-    const ensureRes = await app.request("http://localhost/api/channels/direct/human-agent", {
-      method: "POST",
-      headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({ agentName: "coordinator" })
-    });
+    const ensureRes = await app.request(
+      "http://localhost/api/channels/direct/human-agent",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ agentName: "coordinator" }),
+      },
+    );
     expect(ensureRes.status).toBe(201);
     const channel = (await ensureRes.json()) as { id: string; kind: string };
     expect(channel.kind).toBe("HUMAN_AGENT_DM");
@@ -1317,8 +1468,8 @@ describe("api app", () => {
     const participantsRes = await app.request(
       `http://localhost/api/channels/${channel.id}/participants`,
       {
-        headers: { cookie }
-      }
+        headers: { cookie },
+      },
     );
     expect(participantsRes.status).toBe(200);
     const participants = (await participantsRes.json()) as Array<{
@@ -1327,7 +1478,7 @@ describe("api app", () => {
     }>;
     expect(participants).toEqual([
       { subscriberType: "AGENT", subscriberId: "coordinator" },
-      { subscriberType: "HUMAN", subscriberId: "admin" }
+      { subscriberType: "HUMAN", subscriberId: "admin" },
     ]);
 
     rmSync(dataDir, { recursive: true, force: true });
@@ -1341,22 +1492,25 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const loginRes = await app.request("http://localhost/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
+      body: JSON.stringify({ username: "admin", password: "admin" }),
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
 
-    const ensureRes = await app.request("http://localhost/api/channels/direct/human-agent", {
-      method: "POST",
-      headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({ agentName: "slack" })
-    });
+    const ensureRes = await app.request(
+      "http://localhost/api/channels/direct/human-agent",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ agentName: "slack" }),
+      },
+    );
     expect(ensureRes.status).toBe(404);
 
     rmSync(dataDir, { recursive: true, force: true });
@@ -1370,17 +1524,23 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
-    const ensureRes = await app.request("http://localhost/api/channels/direct/agent-agent", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-orgops-runner-token": "test-token"
+    const ensureRes = await app.request(
+      "http://localhost/api/channels/direct/agent-agent",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-orgops-runner-token": "test-token",
+        },
+        body: JSON.stringify({
+          leftAgentName: "coordinator",
+          rightAgentName: "browser-use",
+        }),
       },
-      body: JSON.stringify({ leftAgentName: "coordinator", rightAgentName: "browser-use" })
-    });
+    );
     expect(ensureRes.status).toBe(404);
 
     rmSync(dataDir, { recursive: true, force: true });
@@ -1394,22 +1554,25 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const loginRes = await app.request("http://localhost/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
+      body: JSON.stringify({ username: "admin", password: "admin" }),
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
 
-    const createChannelRes = await app.request("http://localhost/api/channels", {
-      method: "POST",
-      headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({ name: "source-test-channel" })
-    });
+    const createChannelRes = await app.request(
+      "http://localhost/api/channels",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ name: "source-test-channel" }),
+      },
+    );
     expect(createChannelRes.status).toBe(201);
     const createChannelBody = (await createChannelRes.json()) as { id: string };
 
@@ -1420,8 +1583,8 @@ describe("api app", () => {
         type: "message.created",
         payload: { text: "hello" },
         source: "human:spoofed-user",
-        channelId: createChannelBody.id
-      })
+        channelId: createChannelBody.id,
+      }),
     });
     expect(eventRes.status).toBe(201);
     const created = (await eventRes.json()) as { source: string };
@@ -1438,13 +1601,13 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const loginRes = await app.request("http://localhost/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
+      body: JSON.stringify({ username: "admin", password: "admin" }),
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
@@ -1453,31 +1616,37 @@ describe("api app", () => {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        cookie
+        cookie,
       },
       body: JSON.stringify({
         type: "message.created",
         payload: { text: "to be deleted" },
         source: "human:admin",
-        channelId: "cleanup-channel"
-      })
+        channelId: "cleanup-channel",
+      }),
     });
     expect(eventRes.status).toBe(201);
 
     const clearRes = await app.request("http://localhost/api/events", {
       method: "DELETE",
-      headers: { cookie }
+      headers: { cookie },
     });
     expect(clearRes.status).toBe(200);
 
     const listRes = await app.request("http://localhost/api/events?limit=10", {
-      headers: { cookie }
+      headers: { cookie },
     });
     expect(listRes.status).toBe(200);
-    const list = (await listRes.json()) as Array<{ type: string; payload?: unknown }>;
+    const list = (await listRes.json()) as Array<{
+      type: string;
+      payload?: unknown;
+    }>;
     expect(list.length).toBe(1);
     expect(list[0]?.type).toBe("audit.events.cleared");
-    const payload = (list[0]?.payload ?? {}) as { scope?: string; deletedCount?: number };
+    const payload = (list[0]?.payload ?? {}) as {
+      scope?: string;
+      deletedCount?: number;
+    };
     expect(payload.scope).toBe("all");
     expect(payload.deletedCount).toBe(1);
 
@@ -1492,13 +1661,13 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const loginRes = await app.request("http://localhost/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
+      body: JSON.stringify({ username: "admin", password: "admin" }),
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
@@ -1508,13 +1677,13 @@ describe("api app", () => {
         type: "message.created",
         payload: { text: "delete me 1" },
         source: "human:admin",
-        channelId: "channel-a"
+        channelId: "channel-a",
       },
       {
         type: "message.created",
         payload: { text: "delete me 2" },
         source: "human:admin",
-        channelId: "channel-a"
+        channelId: "channel-a",
       },
       {
         type: "process.started",
@@ -1523,21 +1692,21 @@ describe("api app", () => {
           cmd: "echo keep",
         },
         source: "system",
-        channelId: "channel-a"
+        channelId: "channel-a",
       },
       {
         type: "message.created",
         payload: { text: "keep different channel" },
         source: "human:admin",
-        channelId: "channel-b"
-      }
+        channelId: "channel-b",
+      },
     ];
 
     for (const input of eventInputs) {
       const createRes = await app.request("http://localhost/api/events", {
         method: "POST",
         headers: { "content-type": "application/json", cookie },
-        body: JSON.stringify(input)
+        body: JSON.stringify(input),
       });
       expect(createRes.status).toBe(201);
     }
@@ -1546,36 +1715,46 @@ describe("api app", () => {
       "http://localhost/api/events?channelId=channel-a&type=message.created",
       {
         method: "DELETE",
-        headers: { cookie }
-      }
+        headers: { cookie },
+      },
     );
     expect(clearRes.status).toBe(200);
 
     const channelARes = await app.request(
       "http://localhost/api/events?channelId=channel-a&all=1&order=asc",
       {
-        headers: { cookie }
-      }
+        headers: { cookie },
+      },
     );
     expect(channelARes.status).toBe(200);
-    const channelAEvents = (await channelARes.json()) as Array<{ type: string; payload?: unknown }>;
+    const channelAEvents = (await channelARes.json()) as Array<{
+      type: string;
+      payload?: unknown;
+    }>;
     const channelATypes = channelAEvents.map((event) => event.type);
     expect(channelATypes.includes("process.started")).toBe(true);
     expect(channelATypes.includes("audit.events.cleared")).toBe(true);
     expect(channelAEvents.length).toBe(2);
-    const auditEvent = channelAEvents.find((event) => event.type === "audit.events.cleared");
-    const auditPayload = (auditEvent?.payload ?? {}) as { scope?: string; deletedCount?: number };
+    const auditEvent = channelAEvents.find(
+      (event) => event.type === "audit.events.cleared",
+    );
+    const auditPayload = (auditEvent?.payload ?? {}) as {
+      scope?: string;
+      deletedCount?: number;
+    };
     expect(auditPayload.scope).toBe("filtered");
     expect(auditPayload.deletedCount).toBe(2);
 
     const channelBRes = await app.request(
       "http://localhost/api/events?channelId=channel-b&all=1&order=asc",
       {
-        headers: { cookie }
-      }
+        headers: { cookie },
+      },
     );
     expect(channelBRes.status).toBe(200);
-    const channelBEvents = (await channelBRes.json()) as Array<{ type: string }>;
+    const channelBEvents = (await channelBRes.json()) as Array<{
+      type: string;
+    }>;
     expect(channelBEvents.length).toBe(1);
     expect(channelBEvents[0]?.type).toBe("message.created");
 
@@ -1590,13 +1769,13 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const loginRes = await app.request("http://localhost/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
+      body: JSON.stringify({ username: "admin", password: "admin" }),
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
@@ -1606,13 +1785,13 @@ describe("api app", () => {
         type: "message.created",
         payload: { text: "delete me 1" },
         source: "human:admin",
-        channelId: "chat-a"
+        channelId: "chat-a",
       },
       {
         type: "message.created",
         payload: { text: "delete me 2" },
         source: "human:admin",
-        channelId: "chat-a"
+        channelId: "chat-a",
       },
       {
         type: "process.started",
@@ -1621,50 +1800,67 @@ describe("api app", () => {
           cmd: "echo keep",
         },
         source: "system",
-        channelId: "chat-a"
+        channelId: "chat-a",
       },
       {
         type: "message.created",
         payload: { text: "different channel" },
         source: "human:admin",
-        channelId: "chat-b"
-      }
+        channelId: "chat-b",
+      },
     ];
     for (const input of createEvents) {
       const createRes = await app.request("http://localhost/api/events", {
         method: "POST",
         headers: { "content-type": "application/json", cookie },
-        body: JSON.stringify(input)
+        body: JSON.stringify(input),
       });
       expect(createRes.status).toBe(201);
     }
 
-    const clearRes = await app.request("http://localhost/api/channels/chat-a/messages", {
-      method: "DELETE",
-      headers: { cookie }
-    });
+    const clearRes = await app.request(
+      "http://localhost/api/channels/chat-a/messages",
+      {
+        method: "DELETE",
+        headers: { cookie },
+      },
+    );
     expect(clearRes.status).toBe(200);
     const clearBody = (await clearRes.json()) as { deletedCount?: number };
     expect(clearBody.deletedCount).toBe(2);
 
-    const chatARes = await app.request("http://localhost/api/events?channelId=chat-a&all=1&order=asc", {
-      headers: { cookie }
-    });
+    const chatARes = await app.request(
+      "http://localhost/api/events?channelId=chat-a&all=1&order=asc",
+      {
+        headers: { cookie },
+      },
+    );
     expect(chatARes.status).toBe(200);
-    const chatAEvents = (await chatARes.json()) as Array<{ type: string; payload?: unknown }>;
+    const chatAEvents = (await chatARes.json()) as Array<{
+      type: string;
+      payload?: unknown;
+    }>;
     const chatATypes = chatAEvents.map((event) => event.type);
     expect(chatATypes.includes("process.started")).toBe(true);
     expect(chatATypes.includes("audit.events.cleared")).toBe(true);
     expect(chatATypes.includes("message.created")).toBe(false);
 
-    const auditEvent = chatAEvents.find((event) => event.type === "audit.events.cleared");
-    const payload = (auditEvent?.payload ?? {}) as { scope?: string; deletedCount?: number };
+    const auditEvent = chatAEvents.find(
+      (event) => event.type === "audit.events.cleared",
+    );
+    const payload = (auditEvent?.payload ?? {}) as {
+      scope?: string;
+      deletedCount?: number;
+    };
     expect(payload.scope).toBe("channel_messages");
     expect(payload.deletedCount).toBe(2);
 
-    const chatBRes = await app.request("http://localhost/api/events?channelId=chat-b&all=1&order=asc", {
-      headers: { cookie }
-    });
+    const chatBRes = await app.request(
+      "http://localhost/api/events?channelId=chat-b&all=1&order=asc",
+      {
+        headers: { cookie },
+      },
+    );
     expect(chatBRes.status).toBe(200);
     const chatBEvents = (await chatBRes.json()) as Array<{ type: string }>;
     expect(chatBEvents.length).toBe(1);
@@ -1681,13 +1877,13 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const loginRes = await app.request("http://localhost/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
+      body: JSON.stringify({ username: "admin", password: "admin" }),
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
@@ -1697,28 +1893,34 @@ describe("api app", () => {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          cookie
+          cookie,
         },
         body: JSON.stringify({
           type: "message.created",
           payload: { text: `event-${index}` },
           source: "human:admin",
-          channelId: "bulk-channel"
-        })
+          channelId: "bulk-channel",
+        }),
       });
       expect(eventRes.status).toBe(201);
     }
 
-    const defaultListRes = await app.request("http://localhost/api/events?order=desc", {
-      headers: { cookie }
-    });
+    const defaultListRes = await app.request(
+      "http://localhost/api/events?order=desc",
+      {
+        headers: { cookie },
+      },
+    );
     expect(defaultListRes.status).toBe(200);
     const defaultList = (await defaultListRes.json()) as unknown[];
     expect(defaultList.length).toBe(100);
 
-    const allListRes = await app.request("http://localhost/api/events?all=1&order=desc", {
-      headers: { cookie }
-    });
+    const allListRes = await app.request(
+      "http://localhost/api/events?all=1&order=desc",
+      {
+        headers: { cookie },
+      },
+    );
     expect(allListRes.status).toBe(200);
     const allList = (await allListRes.json()) as unknown[];
     expect(allList.length).toBe(120);
@@ -1734,13 +1936,13 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const loginRes = await app.request("http://localhost/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
+      body: JSON.stringify({ username: "admin", password: "admin" }),
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
@@ -1752,24 +1954,33 @@ describe("api app", () => {
         name: "agent-future",
         modelId: "openai:gpt-4o-mini",
         workspacePath: ".orgops-data/workspaces/agent-future",
-        soulContents: ""
-      })
+        soulContents: "",
+      }),
     });
     expect(createAgentRes.status).toBe(201);
 
-    const createChannelRes = await app.request("http://localhost/api/channels", {
-      method: "POST",
-      headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({ name: "future-schedule-channel" })
-    });
+    const createChannelRes = await app.request(
+      "http://localhost/api/channels",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ name: "future-schedule-channel" }),
+      },
+    );
     expect(createChannelRes.status).toBe(201);
     const channel = (await createChannelRes.json()) as { id: string };
 
-    const subscribeRes = await app.request(`http://localhost/api/channels/${channel.id}/subscribe`, {
-      method: "POST",
-      headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({ subscriberType: "AGENT", subscriberId: "agent-future" })
-    });
+    const subscribeRes = await app.request(
+      `http://localhost/api/channels/${channel.id}/subscribe`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({
+          subscriberType: "AGENT",
+          subscriberId: "agent-future",
+        }),
+      },
+    );
     expect(subscribeRes.status).toBe(200);
 
     const immediateRes = await app.request("http://localhost/api/events", {
@@ -1779,8 +1990,8 @@ describe("api app", () => {
         type: "message.created",
         payload: { text: "immediate message" },
         source: "human:admin",
-        channelId: channel.id
-      })
+        channelId: channel.id,
+      }),
     });
     expect(immediateRes.status).toBe(201);
     const immediateEvent = (await immediateRes.json()) as { id: string };
@@ -1793,15 +2004,15 @@ describe("api app", () => {
         payload: { text: "future reminder" },
         source: "agent:agent-future",
         channelId: channel.id,
-        deliverAt: Date.now() + 60_000
-      })
+        deliverAt: Date.now() + 60_000,
+      }),
     });
     expect(futureRes.status).toBe(201);
     const futureEvent = (await futureRes.json()) as { id: string };
 
     const uiFeedRes = await app.request(
       `http://localhost/api/events?channelId=${channel.id}&limit=50`,
-      { headers: { cookie } }
+      { headers: { cookie } },
     );
     expect(uiFeedRes.status).toBe(200);
     const uiFeed = (await uiFeedRes.json()) as Array<{ id: string }>;
@@ -1810,7 +2021,7 @@ describe("api app", () => {
 
     const scheduledRes = await app.request(
       `http://localhost/api/events?channelId=${channel.id}&scheduled=1&limit=50`,
-      { headers: { cookie } }
+      { headers: { cookie } },
     );
     expect(scheduledRes.status).toBe(200);
     const scheduled = (await scheduledRes.json()) as Array<{ id: string }>;
@@ -1827,13 +2038,13 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const loginRes = await app.request("http://localhost/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
+      body: JSON.stringify({ username: "admin", password: "admin" }),
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
@@ -1845,16 +2056,19 @@ describe("api app", () => {
         name: "agent-future",
         modelId: "openai:gpt-4o-mini",
         workspacePath: ".orgops-data/workspaces/agent-future",
-        soulContents: ""
-      })
+        soulContents: "",
+      }),
     });
     expect(createAgentRes.status).toBe(201);
 
-    const createChannelRes = await app.request("http://localhost/api/channels", {
-      method: "POST",
-      headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({ name: "scheduled-manage-channel" })
-    });
+    const createChannelRes = await app.request(
+      "http://localhost/api/channels",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ name: "scheduled-manage-channel" }),
+      },
+    );
     expect(createChannelRes.status).toBe(201);
     const channel = (await createChannelRes.json()) as { id: string };
 
@@ -1863,8 +2077,11 @@ describe("api app", () => {
       {
         method: "POST",
         headers: { "content-type": "application/json", cookie },
-        body: JSON.stringify({ subscriberType: "AGENT", subscriberId: "agent-future" })
-      }
+        body: JSON.stringify({
+          subscriberType: "AGENT",
+          subscriberId: "agent-future",
+        }),
+      },
     );
     expect(subscribeRes.status).toBe(200);
 
@@ -1877,21 +2094,24 @@ describe("api app", () => {
         payload: { text: "original", targetAgentName: "agent-future" },
         source: "system:scheduler",
         channelId: channel.id,
-        deliverAt
-      })
+        deliverAt,
+      }),
     });
     expect(createRes.status).toBe(201);
     const created = (await createRes.json()) as { id: string };
 
     const updatedDeliverAt = Date.now() + 240_000;
-    const patchRes = await app.request(`http://localhost/api/events/${created.id}`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({
-        deliverAt: updatedDeliverAt,
-        payload: { text: "updated", targetAgentName: "agent-future" }
-      })
-    });
+    const patchRes = await app.request(
+      `http://localhost/api/events/${created.id}`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({
+          deliverAt: updatedDeliverAt,
+          payload: { text: "updated", targetAgentName: "agent-future" },
+        }),
+      },
+    );
     expect(patchRes.status).toBe(200);
     const patched = (await patchRes.json()) as {
       id: string;
@@ -1902,18 +2122,27 @@ describe("api app", () => {
     expect(patched.deliverAt).toBe(updatedDeliverAt);
     expect(patched.payload?.text).toBe("updated");
 
-    const deleteRes = await app.request(`http://localhost/api/events/${created.id}`, {
-      method: "DELETE",
-      headers: { cookie }
-    });
+    const deleteRes = await app.request(
+      `http://localhost/api/events/${created.id}`,
+      {
+        method: "DELETE",
+        headers: { cookie },
+      },
+    );
     expect(deleteRes.status).toBe(200);
-    const deleteBody = (await deleteRes.json()) as { ok: boolean; deleted: boolean };
+    const deleteBody = (await deleteRes.json()) as {
+      ok: boolean;
+      deleted: boolean;
+    };
     expect(deleteBody.ok).toBe(true);
     expect(deleteBody.deleted).toBe(true);
 
-    const getDeletedRes = await app.request(`http://localhost/api/events/${created.id}`, {
-      headers: { cookie }
-    });
+    const getDeletedRes = await app.request(
+      `http://localhost/api/events/${created.id}`,
+      {
+        headers: { cookie },
+      },
+    );
     expect(getDeletedRes.status).toBe(404);
 
     rmSync(dataDir, { recursive: true, force: true });
@@ -1927,13 +2156,13 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const loginRes = await app.request("http://localhost/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
+      body: JSON.stringify({ username: "admin", password: "admin" }),
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
@@ -1945,23 +2174,29 @@ describe("api app", () => {
         type: "message.created",
         payload: { text: "immediate" },
         source: "human:admin",
-        channelId: "scheduled-guard-channel"
-      })
+        channelId: "scheduled-guard-channel",
+      }),
     });
     expect(createRes.status).toBe(201);
     const created = (await createRes.json()) as { id: string };
 
-    const patchRes = await app.request(`http://localhost/api/events/${created.id}`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({ deliverAt: Date.now() + 60_000 })
-    });
+    const patchRes = await app.request(
+      `http://localhost/api/events/${created.id}`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ deliverAt: Date.now() + 60_000 }),
+      },
+    );
     expect(patchRes.status).toBe(409);
 
-    const deleteRes = await app.request(`http://localhost/api/events/${created.id}`, {
-      method: "DELETE",
-      headers: { cookie }
-    });
+    const deleteRes = await app.request(
+      `http://localhost/api/events/${created.id}`,
+      {
+        method: "DELETE",
+        headers: { cookie },
+      },
+    );
     expect(deleteRes.status).toBe(409);
 
     rmSync(dataDir, { recursive: true, force: true });
@@ -1975,13 +2210,13 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const loginRes = await app.request("http://localhost/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
+      body: JSON.stringify({ username: "admin", password: "admin" }),
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
@@ -1999,8 +2234,8 @@ describe("api app", () => {
         name: "agent-cleanup",
         modelId: "openai:gpt-4o-mini",
         workspacePath,
-        soulContents: ""
-      })
+        soulContents: "",
+      }),
     });
     expect(createAgentRes.status).toBe(201);
 
@@ -2008,8 +2243,8 @@ describe("api app", () => {
       "http://localhost/api/agents/agent-cleanup/cleanup-workspace",
       {
         method: "POST",
-        headers: { cookie }
-      }
+        headers: { cookie },
+      },
     );
     expect(cleanupRes.status).toBe(200);
 
@@ -2027,13 +2262,13 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const loginRes = await app.request("http://localhost/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
+      body: JSON.stringify({ username: "admin", password: "admin" }),
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
@@ -2041,25 +2276,31 @@ describe("api app", () => {
     const child = spawn("/bin/bash", ["-lc", "sleep 30"]);
     const processId = randomUUID();
     try {
-      const createProcessRes = await app.request("http://localhost/api/processes", {
-        method: "POST",
-        headers: { "content-type": "application/json", cookie },
-        body: JSON.stringify({
-          id: processId,
-          agentName: "test-agent",
-          cmd: "sleep 30",
-          cwd: dataDir,
-          pid: child.pid ?? null,
-          state: "RUNNING",
-          startedAt: Date.now()
-        })
-      });
+      const createProcessRes = await app.request(
+        "http://localhost/api/processes",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", cookie },
+          body: JSON.stringify({
+            id: processId,
+            agentName: "test-agent",
+            cmd: "sleep 30",
+            cwd: dataDir,
+            pid: child.pid ?? null,
+            state: "RUNNING",
+            startedAt: Date.now(),
+          }),
+        },
+      );
       expect(createProcessRes.status).toBe(201);
 
-      const exitRes = await app.request(`http://localhost/api/processes/${processId}`, {
-        method: "DELETE",
-        headers: { cookie }
-      });
+      const exitRes = await app.request(
+        `http://localhost/api/processes/${processId}`,
+        {
+          method: "DELETE",
+          headers: { cookie },
+        },
+      );
       expect(exitRes.status).toBe(200);
       const body = (await exitRes.json()) as { ok: boolean; signaled: boolean };
       expect(body.ok).toBe(true);
@@ -2081,13 +2322,13 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const loginRes = await app.request("http://localhost/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
+      body: JSON.stringify({ username: "admin", password: "admin" }),
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
@@ -2095,19 +2336,22 @@ describe("api app", () => {
     const child = spawn("/bin/bash", ["-lc", "sleep 30"]);
     const processId = randomUUID();
     try {
-      const createProcessRes = await app.request("http://localhost/api/processes", {
-        method: "POST",
-        headers: { "content-type": "application/json", cookie },
-        body: JSON.stringify({
-          id: processId,
-          agentName: "test-agent",
-          cmd: "sleep 30",
-          cwd: dataDir,
-          pid: child.pid ?? null,
-          state: "RUNNING",
-          startedAt: Date.now()
-        })
-      });
+      const createProcessRes = await app.request(
+        "http://localhost/api/processes",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", cookie },
+          body: JSON.stringify({
+            id: processId,
+            agentName: "test-agent",
+            cmd: "sleep 30",
+            cwd: dataDir,
+            pid: child.pid ?? null,
+            state: "RUNNING",
+            startedAt: Date.now(),
+          }),
+        },
+      );
       expect(createProcessRes.status).toBe(201);
 
       if (child.exitCode === null && child.signalCode === null) {
@@ -2115,9 +2359,12 @@ describe("api app", () => {
       }
       await new Promise((resolve) => setTimeout(resolve, 25));
 
-      const listRes = await app.request("http://localhost/api/processes?reconcile=1", {
-        headers: { cookie }
-      });
+      const listRes = await app.request(
+        "http://localhost/api/processes?reconcile=1",
+        {
+          headers: { cookie },
+        },
+      );
       expect(listRes.status).toBe(200);
       const list = (await listRes.json()) as Array<{
         id: string;
@@ -2145,37 +2392,43 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const loginRes = await app.request("http://localhost/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
+      body: JSON.stringify({ username: "admin", password: "admin" }),
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
 
     const processId = randomUUID();
-    const createProcessRes = await app.request("http://localhost/api/processes", {
-      method: "POST",
-      headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({
-        id: processId,
-        agentName: "test-agent",
-        cmd: "sleep 30",
-        cwd: dataDir,
-        pid: 999_999_999,
-        state: "RUNNING",
-        startedAt: Date.now()
-      })
-    });
+    const createProcessRes = await app.request(
+      "http://localhost/api/processes",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({
+          id: processId,
+          agentName: "test-agent",
+          cmd: "sleep 30",
+          cwd: dataDir,
+          pid: 999_999_999,
+          state: "RUNNING",
+          startedAt: Date.now(),
+        }),
+      },
+    );
     expect(createProcessRes.status).toBe(201);
 
-    const exitRes = await app.request(`http://localhost/api/processes/${processId}`, {
-      method: "DELETE",
-      headers: { cookie }
-    });
+    const exitRes = await app.request(
+      `http://localhost/api/processes/${processId}`,
+      {
+        method: "DELETE",
+        headers: { cookie },
+      },
+    );
     expect(exitRes.status).toBe(200);
     const body = (await exitRes.json()) as {
       ok: boolean;
@@ -2187,7 +2440,7 @@ describe("api app", () => {
     expect(body.markedExited).toBe(true);
 
     const listRes = await app.request("http://localhost/api/processes", {
-      headers: { cookie }
+      headers: { cookie },
     });
     expect(listRes.status).toBe(200);
     const list = (await listRes.json()) as Array<{
@@ -2211,13 +2464,13 @@ describe("api app", () => {
       dataDir,
       adminUser: "admin",
       adminPass: "admin",
-      runnerToken: "test-token"
+      runnerToken: "test-token",
     });
 
     const loginRes = await app.request("http://localhost/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "admin" })
+      body: JSON.stringify({ username: "admin", password: "admin" }),
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
@@ -2227,57 +2480,69 @@ describe("api app", () => {
     const completedId = randomUUID();
     const now = Date.now();
 
-    const createRunningRes = await app.request("http://localhost/api/processes", {
-      method: "POST",
-      headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({
-        id: runningId,
-        agentName: "test-agent",
-        cmd: "sleep 30",
-        cwd: dataDir,
-        pid: null,
-        state: "RUNNING",
-        startedAt: now
-      })
-    });
+    const createRunningRes = await app.request(
+      "http://localhost/api/processes",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({
+          id: runningId,
+          agentName: "test-agent",
+          cmd: "sleep 30",
+          cwd: dataDir,
+          pid: null,
+          state: "RUNNING",
+          startedAt: now,
+        }),
+      },
+    );
     expect(createRunningRes.status).toBe(201);
 
-    const createExitedRes = await app.request("http://localhost/api/processes", {
-      method: "POST",
-      headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({
-        id: exitedId,
-        agentName: "test-agent",
-        cmd: "echo done",
-        cwd: dataDir,
-        pid: null,
-        state: "EXITED",
-        startedAt: now - 2000,
-        endedAt: now - 1000
-      })
-    });
+    const createExitedRes = await app.request(
+      "http://localhost/api/processes",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({
+          id: exitedId,
+          agentName: "test-agent",
+          cmd: "echo done",
+          cwd: dataDir,
+          pid: null,
+          state: "EXITED",
+          startedAt: now - 2000,
+          endedAt: now - 1000,
+        }),
+      },
+    );
     expect(createExitedRes.status).toBe(201);
 
-    const createCompletedRes = await app.request("http://localhost/api/processes", {
-      method: "POST",
-      headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({
-        id: completedId,
-        agentName: "test-agent",
-        cmd: "echo complete",
-        cwd: dataDir,
-        pid: null,
-        state: "COMPLETED",
-        startedAt: now - 2000,
-        endedAt: now - 1000
-      })
-    });
+    const createCompletedRes = await app.request(
+      "http://localhost/api/processes",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({
+          id: completedId,
+          agentName: "test-agent",
+          cmd: "echo complete",
+          cwd: dataDir,
+          pid: null,
+          state: "COMPLETED",
+          startedAt: now - 2000,
+          endedAt: now - 1000,
+        }),
+      },
+    );
     expect(createCompletedRes.status).toBe(201);
 
-    const clearRes = await app.request("http://localhost/api/processes?scope=exited", {
-      method: "DELETE",
-      headers: { cookie }
-    });
+    const clearRes = await app.request(
+      "http://localhost/api/processes?scope=exited",
+      {
+        method: "DELETE",
+        headers: { cookie },
+      },
+    );
     expect(clearRes.status).toBe(200);
     const clearBody = (await clearRes.json()) as {
       ok: boolean;
@@ -2291,7 +2556,7 @@ describe("api app", () => {
     expect(clearBody.terminatedCount).toBe(0);
 
     const listRes = await app.request("http://localhost/api/processes", {
-      headers: { cookie }
+      headers: { cookie },
     });
     expect(listRes.status).toBe(200);
     const list = (await listRes.json()) as Array<{ id: string; state: string }>;
@@ -2301,5 +2566,4 @@ describe("api app", () => {
 
     rmSync(dataDir, { recursive: true, force: true });
   });
-
 });

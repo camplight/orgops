@@ -95,7 +95,7 @@ describe("agent runner", () => {
       runtimeState: "RUNNING",
     };
 
-    expect(resolveAgentLlmCallTimeoutMs(baseAgent)).toBe(90000);
+    expect(resolveAgentLlmCallTimeoutMs(baseAgent)).toBe(10800000);
     expect(resolveAgentClassicMaxModelSteps(baseAgent)).toBe(100);
 
     expect(
@@ -110,7 +110,7 @@ describe("agent runner", () => {
 
     expect(
       resolveAgentLlmCallTimeoutMs({ ...baseAgent, llmCallTimeoutMs: 0 }),
-    ).toBe(90000);
+    ).toBe(10800000);
     expect(
       resolveAgentClassicMaxModelSteps({
         ...baseAgent,
@@ -180,6 +180,70 @@ describe("agent runner", () => {
       .map((message) => JSON.parse(message.content as string).eventId);
     expect(eventIds[0]).toBe("evt-11");
     expect(eventIds[eventIds.length - 1]).toBe("evt-130");
+  });
+
+  it("injects latest session summary and replaces middle session events", () => {
+    const agent: Agent = {
+      name: "tester",
+      systemInstructions: "",
+      soulPath: "",
+      workspacePath: "/tmp",
+      modelId: "openai:gpt-4o-mini",
+      desiredState: "RUNNING",
+      runtimeState: "RUNNING",
+      contextSessionGapMs: 300_000,
+    };
+    const baseTs = Date.now();
+    const events: Event[] = [
+      {
+        id: "evt-1",
+        type: "message.created",
+        payload: { text: "first" },
+        source: "human:alice",
+        channelId: "chan-1",
+        createdAt: baseTs,
+      },
+      {
+        id: "evt-2",
+        type: "message.created",
+        payload: { text: "second" },
+        source: "human:alice",
+        channelId: "chan-1",
+        createdAt: baseTs + 10_000,
+      },
+      {
+        id: "evt-summary",
+        type: "session.summary.created",
+        payload: {
+          summary: "Conversation so far is summarized.",
+          sessionStartAt: baseTs,
+          sessionEndAt: baseTs + 20_000,
+        },
+        source: "system:sidecar:session-summary",
+        channelId: "chan-1",
+        createdAt: baseTs + 20_000,
+      },
+      {
+        id: "evt-3",
+        type: "message.created",
+        payload: { text: "latest" },
+        source: "human:alice",
+        channelId: "chan-1",
+        createdAt: baseTs + 30_000,
+      },
+    ];
+
+    const messages = buildModelMessages(agent, "system prompt", events, {
+      contextSessionGapMs: 300_000,
+    });
+    expect(messages[1]?.role).toBe("user");
+    const summaryMessage = JSON.parse(String(messages[1]?.content));
+    expect(summaryMessage.type).toBe("system.session.summary");
+    expect(summaryMessage.sourceEventId).toBe("evt-summary");
+    const eventIds = messages
+      .slice(2)
+      .map((message) => JSON.parse(message.content as string).eventId);
+    expect(eventIds).toEqual(["evt-3"]);
   });
 
   it("does not keep tool result when matching start is truncated", () => {

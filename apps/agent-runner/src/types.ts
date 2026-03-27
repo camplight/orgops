@@ -9,6 +9,7 @@ export type Agent = {
   allowOutsideWorkspace?: boolean;
   llmCallTimeoutMs?: number | null;
   classicMaxModelSteps?: number | null;
+  contextSessionGapMs?: number | null;
   mode?: "CLASSIC" | "RLM_REPL";
   modelId: string;
   desiredState: string;

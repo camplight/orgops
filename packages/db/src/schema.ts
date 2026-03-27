@@ -29,6 +29,7 @@ export const agents = sqliteTable("agents", {
     .default(0),
   llm_call_timeout_ms: integer("llm_call_timeout_ms"),
   classic_max_model_steps: integer("classic_max_model_steps"),
+  context_session_gap_ms: integer("context_session_gap_ms"),
   mode: text("mode").notNull().default("CLASSIC"),
   desired_state: text("desired_state").notNull().default("RUNNING"),
   runtime_state: text("runtime_state").notNull().default("STOPPED"),

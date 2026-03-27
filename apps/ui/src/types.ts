@@ -13,6 +13,7 @@ export type Agent = {
   allowOutsideWorkspace?: boolean;
   llmCallTimeoutMs?: number | null;
   classicMaxModelSteps?: number | null;
+  contextSessionGapMs?: number | null;
   mode?: "CLASSIC" | "RLM_REPL";
 };
 
@@ -57,6 +58,7 @@ export type SkillMeta = {
   name: string;
   description: string;
   license?: string;
+  metadata?: Record<string, unknown>;
   path: string;
 };
 

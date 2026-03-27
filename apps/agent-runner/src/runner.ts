@@ -17,12 +17,19 @@ import {
 import { createRunnerTools, executeTool } from "./tools";
 import { stopAllRunningProcesses } from "./tools/proc";
 import { createChannelLoopManager } from "./channel-loop";
+import { listChannelEvents } from "./channel-events";
 import { pullInjectedEventMessages } from "./channel-injection";
 import { shouldHandleEventForAgent } from "./event-routing";
 import { getReservedEventTypeError } from "./event-type-guard";
+import { createMaintenanceLoop } from "./maintenance-loop";
 import type { Agent, Event } from "./types";
 import { buildRunnerGuidance } from "./prompt";
 import { runRlmEventInChild, stopAllRlmChildren } from "./rlm-process";
+import {
+  DEFAULT_CONTEXT_SESSION_GAP_MS,
+  loadAgentMemoryContext,
+  resolveAgentContextSessionGapMs,
+} from "./context-maintenance";
 
 const API_URL = process.env.ORGOPS_API_URL ?? "http://localhost:8787";
 const PROJECT_ROOT = (() => {
@@ -38,6 +45,8 @@ const heartbeats = new Map<string, number>();
 const bootstrappedAgents = new Set<string>();
 const lifecycleChannels = new Map<string, string>();
 const HEARTBEAT_INTERVAL_MS = 5000;
+const DEFAULT_AGENT_SUMMARY_INTERVAL_MS = 10_000;
+const DEFAULT_AGENT_LOCAL_MEMORY_INTERVAL_MS = 60_000;
 const DEFAULT_MAX_HISTORY_EVENTS = 120;
 const DEFAULT_MAX_HISTORY_CHARS = 120_000;
 let apiFetchRequestCounter = 0;
@@ -58,11 +67,19 @@ const HISTORY_MAX_CHARS = readPositiveIntEnv(
   process.env.ORGOPS_HISTORY_MAX_CHARS,
   DEFAULT_MAX_HISTORY_CHARS,
 );
-const DEFAULT_LLM_CALL_TIMEOUT_MS = 90_000;
+const DEFAULT_LLM_CALL_TIMEOUT_MS = 10_800_000;
 const DEFAULT_CLASSIC_MAX_MODEL_STEPS = 100;
 const LLM_CALL_TIMEOUT_MS = readPositiveIntEnv(
   process.env.ORGOPS_LLM_CALL_TIMEOUT_MS,
   DEFAULT_LLM_CALL_TIMEOUT_MS,
+);
+const AGENT_SUMMARY_INTERVAL_MS = readPositiveIntEnv(
+  process.env.ORGOPS_AGENT_SUMMARY_INTERVAL_MS,
+  DEFAULT_AGENT_SUMMARY_INTERVAL_MS,
+);
+const AGENT_LOCAL_MEMORY_INTERVAL_MS = readPositiveIntEnv(
+  process.env.ORGOPS_AGENT_LOCAL_MEMORY_INTERVAL_MS,
+  DEFAULT_AGENT_LOCAL_MEMORY_INTERVAL_MS,
 );
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string) {
@@ -323,14 +340,6 @@ async function emitStartupEvent(agent: Agent) {
   });
 }
 
-async function listChannelEvents(channelId: string): Promise<Event[]> {
-  const res = await apiFetch(
-    `/api/events?channelId=${encodeURIComponent(channelId)}&limit=200&order=desc`,
-  );
-  const events = (await res.json()) as Event[];
-  return events.slice().reverse();
-}
-
 export function toHistoryMessage(agent: Agent, event: Event) {
   const role =
     event.source === `agent:${agent.name}`
@@ -418,15 +427,83 @@ export function buildModelMessages(
   agent: Agent,
   system: string,
   channelEvents: Event[],
+  options?: { contextSessionGapMs?: number },
 ) {
   const orderedChannelEvents = channelEvents
     .slice()
     .sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0));
-  const historyMessages = orderedChannelEvents.map((channelEvent) =>
+  const contextEligibleEvents = orderedChannelEvents;
+  const contextSessionGapMs =
+    options?.contextSessionGapMs && options.contextSessionGapMs > 0
+      ? Math.floor(options.contextSessionGapMs)
+      : DEFAULT_CONTEXT_SESSION_GAP_MS;
+  let sessionSummaryMessage:
+    | {
+        role: "user";
+        content: string;
+      }
+    | undefined;
+  let eventsForHistory = contextEligibleEvents;
+  if (contextEligibleEvents.length > 0) {
+    let sessionStartIndex = contextEligibleEvents.length - 1;
+    for (
+      let index = contextEligibleEvents.length - 1;
+      index > 0;
+      index -= 1
+    ) {
+      const currentTs = contextEligibleEvents[index]?.createdAt ?? 0;
+      const previousTs = contextEligibleEvents[index - 1]?.createdAt ?? 0;
+      if (currentTs - previousTs > contextSessionGapMs) break;
+      sessionStartIndex = index - 1;
+    }
+    const sessionEvents = contextEligibleEvents.slice(sessionStartIndex);
+    let latestSummaryIndex = -1;
+    for (let index = sessionEvents.length - 1; index >= 0; index -= 1) {
+      const event = sessionEvents[index];
+      if (event?.type !== "session.summary.created") continue;
+      const payload =
+        event.payload && typeof event.payload === "object"
+          ? (event.payload as { summary?: unknown; sessionStartAt?: unknown; sessionEndAt?: unknown })
+          : undefined;
+      const summary =
+        typeof payload?.summary === "string" ? payload.summary.trim() : "";
+      if (!summary) continue;
+      latestSummaryIndex = index;
+      sessionSummaryMessage = {
+        role: "user",
+        content: JSON.stringify(
+          {
+            type: "system.session.summary",
+            sourceEventId: event.id,
+            sessionStartAt:
+              typeof payload?.sessionStartAt === "number"
+                ? payload.sessionStartAt
+                : undefined,
+            sessionEndAt:
+              typeof payload?.sessionEndAt === "number"
+                ? payload.sessionEndAt
+                : undefined,
+            summary,
+          },
+          null,
+          2,
+        ),
+      };
+      break;
+    }
+    if (latestSummaryIndex >= 0) {
+      const absoluteSummaryIndex = sessionStartIndex + latestSummaryIndex;
+      eventsForHistory = [
+        ...contextEligibleEvents.slice(0, sessionStartIndex),
+        ...contextEligibleEvents.slice(absoluteSummaryIndex + 1),
+      ];
+    }
+  }
+  const historyMessages = eventsForHistory.map((channelEvent) =>
     toHistoryMessage(agent, channelEvent),
   );
   const resultToStartIndex =
-    buildToolResultToStartIndexMap(orderedChannelEvents);
+    buildToolResultToStartIndexMap(eventsForHistory);
 
   let keptStartIndex = historyMessages.length;
   let keptMessageCount = 0;
@@ -463,9 +540,10 @@ export function buildModelMessages(
     if (!advanced) break;
   }
   const keptFromEnd = historyMessages.slice(keptStartIndex);
-  const omittedCount = orderedChannelEvents.length - keptFromEnd.length;
+  const omittedCount = eventsForHistory.length - keptFromEnd.length;
   return [
     { role: "system" as const, content: system },
+    ...(sessionSummaryMessage ? [sessionSummaryMessage] : []),
     ...(omittedCount > 0
       ? [
           buildHistoryTruncationMessage(
@@ -576,7 +654,7 @@ function formatValidationErrors(validation: EventValidationResult): string {
   if (validation.ok) return "";
   return validation.issues
     .slice(0, 8)
-    .map((issue) => `- [${issue.source}] ${issue.message}`)
+    .map((issue: any) => `- [${issue.source}] ${issue.message}`)
     .join("\n");
 }
 
@@ -670,6 +748,17 @@ const channelLoopManager = createChannelLoopManager({
   },
 });
 
+const maintenanceLoop = createMaintenanceLoop({
+  listChannels,
+  ensureLifecycleChannel,
+  getPackageSecretsEnv: (agentName: string, channelId?: string) =>
+    getPackageSecretsEnv(agentName, channelId),
+  emitEvent,
+  apiFetch,
+  summaryIntervalMs: AGENT_SUMMARY_INTERVAL_MS,
+  localMemoryIntervalMs: AGENT_LOCAL_MEMORY_INTERVAL_MS,
+});
+
 async function handleEvent(agent: Agent, events: Event[]) {
   if (events.length === 0) return;
   const triggerEvent = events[events.length - 1]!;
@@ -695,16 +784,16 @@ async function handleEvent(agent: Agent, events: Event[]) {
     }
   };
   await emitTurnEvent("agent.turn.started", {});
-  const channelRecord = await getChannelRecord(channelId);
   const injectionEnv = await getPackageSecretsEnv(agent.name, channelId);
+  const channelRecord = await getChannelRecord(channelId);
   const soul = typeof agent.soulContents === "string" ? agent.soulContents : "";
   const allSkills = listSkills(SKILL_ROOT);
   const enabledSkillSet = new Set(agent.enabledSkills ?? []);
   const alwaysPreloadedSkillSet = new Set(agent.alwaysPreloadedSkills ?? []);
-  const selectedSkills = allSkills.filter((skill) =>
+  const selectedSkills = allSkills.filter((skill: any) =>
     enabledSkillSet.has(skill.name),
   );
-  const alwaysPreloadedSkills = selectedSkills.filter((skill) =>
+  const alwaysPreloadedSkills = selectedSkills.filter((skill: any) =>
     alwaysPreloadedSkillSet.has(skill.name),
   );
   const loadedSkillEventShapes = await loadSkillEventShapes(selectedSkills);
@@ -716,17 +805,17 @@ async function handleEvent(agent: Agent, events: Event[]) {
   });
   const skillIndex = selectedSkills
     .map(
-      (skill) =>
+      (skill: any) =>
         `${skill.name} | ${skill.description} | ${join(skill.path, "SKILL.md")}`,
     )
     .join("\n");
   const preloadedSkillsContext = alwaysPreloadedSkills
-    .map((skill) => {
+    .map((skill: any) => {
       const contents = getSkillMarkdownContents(skill.path);
       if (!contents) return null;
       return `# ${skill.name}\n${contents}`;
     })
-    .filter((entry): entry is string => Boolean(entry))
+    .filter((entry: unknown): entry is string => Boolean(entry))
     .join("\n\n");
   const nowMs = Date.now();
   const nowIso = new Date(nowMs).toISOString();
@@ -744,6 +833,9 @@ async function handleEvent(agent: Agent, events: Event[]) {
       nodeVersion: process.version,
     },
   );
+  const contextSessionGapMs = resolveAgentContextSessionGapMs(agent);
+  const eventHistory = await listChannelEvents(apiFetch, channelId);
+  const memoryContext = loadAgentMemoryContext(agent);
   const system = [
     agent.systemInstructions,
     runnerGuidance,
@@ -755,6 +847,7 @@ async function handleEvent(agent: Agent, events: Event[]) {
       2,
     )}`,
     soul ? `Your soul:\n${soul}` : "",
+    memoryContext ? `Your local memory:\n${memoryContext}` : "",
     "Your skills:\n" + skillIndex,
     preloadedSkillsContext
       ? `Always pre-loaded skills (full SKILL.md contents):\n${preloadedSkillsContext}`
@@ -762,8 +855,9 @@ async function handleEvent(agent: Agent, events: Event[]) {
   ]
     .filter(Boolean)
     .join("\n\n");
-  const eventHistory = await listChannelEvents(channelId);
-  const baseMessages = buildModelMessages(agent, system, eventHistory);
+  const baseMessages = buildModelMessages(agent, system, eventHistory, {
+    contextSessionGapMs,
+  });
   const mergedTriggerMessage = buildBatchedTriggerMessage(events);
   const invokeMessages = mergedTriggerMessage
     ? [...baseMessages, mergedTriggerMessage]
@@ -773,7 +867,7 @@ async function handleEvent(agent: Agent, events: Event[]) {
     agent,
     triggerEvent,
     channelId,
-    extraAllowedRoots: selectedSkills.map((skill) => skill.path),
+    extraAllowedRoots: selectedSkills.map((skill: any) => skill.path),
     injectionEnv,
     apiFetch,
     emitEvent,
@@ -828,7 +922,7 @@ async function handleEvent(agent: Agent, events: Event[]) {
   const classicMaxModelSteps = resolveAgentClassicMaxModelSteps(agent);
   let lastResponseText = "";
   for (let attempt = 1; attempt <= MAX_EVENT_DISPATCH_ATTEMPTS; attempt += 1) {
-    const result = await withTimeout(
+    const result = (await withTimeout(
       generate(agent.modelId, [...invokeMessages, ...retryMessages], {
         tools,
         maxSteps: classicMaxModelSteps,
@@ -846,7 +940,7 @@ async function handleEvent(agent: Agent, events: Event[]) {
       }),
       llmCallTimeoutMs,
       `LLM generate (attempt ${attempt})`,
-    );
+    )) as { text?: string };
     const responseText = result.text ?? "";
     lastResponseText = responseText;
 
@@ -924,6 +1018,7 @@ async function pollAgent(agent: Agent) {
   if (agent.desiredState !== "RUNNING") {
     heartbeats.delete(agent.name);
     bootstrappedAgents.delete(agent.name);
+    maintenanceLoop.clearAgent(agent.name);
     if (agent.runtimeState !== "STOPPED") {
       await patchAgentState(agent.name, { runtimeState: "STOPPED" });
     }
@@ -948,6 +1043,7 @@ async function pollAgent(agent: Agent) {
       console.error(`failed to emit startup event for ${agent.name}`, error);
     }
   }
+  maintenanceLoop.schedule(agent);
   const query = `agentName=${encodeURIComponent(agent.name)}&status=PENDING&limit=50`;
   const res = await apiFetch(`/api/events?${query}`);
   const events = (await res.json()) as Event[];
@@ -1005,6 +1101,7 @@ export async function loop() {
   }
   process.off("SIGINT", onSigint);
   process.off("SIGTERM", onSigterm);
+  await maintenanceLoop.awaitInFlight();
   stopAllRlmChildren();
   const processShutdownSummary = await stopAllRunningProcesses();
   if (processShutdownSummary.processCount > 0) {

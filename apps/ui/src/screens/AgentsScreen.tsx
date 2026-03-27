@@ -14,6 +14,8 @@ type AgentForm = {
   name: string;
   modelId: string;
   mode: "CLASSIC" | "RLM_REPL";
+  llmCallTimeoutMs: string;
+  contextSessionGapMs: string;
   workspacePath: string;
   allowOutsideWorkspace: boolean;
   soulContents: string;
@@ -25,12 +27,27 @@ const DEFAULT_AGENT_FORM: AgentForm = {
   name: "",
   modelId: "openai:gpt-4o-mini",
   mode: "CLASSIC",
+  llmCallTimeoutMs: "",
+  contextSessionGapMs: "",
   workspacePath: ".orgops-data/workspaces/default",
   allowOutsideWorkspace: false,
   soulContents: "",
   enabledSkills: [],
   alwaysPreloadedSkills: []
 };
+
+function parseOptionalPositiveIntInput(
+  value: string,
+  fieldName: string
+): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`${fieldName} must be a positive integer when provided.`);
+  }
+  return Math.floor(parsed);
+}
 
 type AgentsScreenProps = {
   agents: Agent[];
@@ -112,6 +129,14 @@ export function AgentsScreen({
       name: selectedAgent.name,
       modelId: selectedAgent.modelId ?? "openai:gpt-4o-mini",
       mode: selectedAgent.mode ?? "CLASSIC",
+      llmCallTimeoutMs:
+        selectedAgent.llmCallTimeoutMs && selectedAgent.llmCallTimeoutMs > 0
+          ? String(selectedAgent.llmCallTimeoutMs)
+          : "",
+      contextSessionGapMs:
+        selectedAgent.contextSessionGapMs && selectedAgent.contextSessionGapMs > 0
+          ? String(selectedAgent.contextSessionGapMs)
+          : "",
       workspacePath:
         selectedAgent.workspacePath ??
         `.orgops-data/workspaces/${selectedAgent.name}`,
@@ -248,6 +273,14 @@ export function AgentsScreen({
     setIsSubmitting(true);
     setSaveStatus(null);
     try {
+      const llmCallTimeoutMs = parseOptionalPositiveIntInput(
+        form.llmCallTimeoutMs,
+        "LLM call timeout"
+      );
+      const contextSessionGapMs = parseOptionalPositiveIntInput(
+        form.contextSessionGapMs,
+        "Context session gap"
+      );
       if (isCreating) {
         const normalizedName = form.name.trim();
         await onCreateAgent({
@@ -255,6 +288,9 @@ export function AgentsScreen({
           name: normalizedName,
           modelId: form.modelId.trim(),
           mode: form.mode,
+          llmCallTimeoutMs: llmCallTimeoutMs === null ? "" : String(llmCallTimeoutMs),
+          contextSessionGapMs:
+            contextSessionGapMs === null ? "" : String(contextSessionGapMs),
           workspacePath: form.workspacePath.trim(),
           allowOutsideWorkspace: form.allowOutsideWorkspace,
           soulContents: form.soulContents,
@@ -275,6 +311,9 @@ export function AgentsScreen({
       await onUpdateAgent(selectedAgent.name, {
         modelId: form.modelId.trim(),
         mode: form.mode,
+        llmCallTimeoutMs: llmCallTimeoutMs === null ? "" : String(llmCallTimeoutMs),
+        contextSessionGapMs:
+          contextSessionGapMs === null ? "" : String(contextSessionGapMs),
         workspacePath: form.workspacePath.trim(),
         allowOutsideWorkspace: form.allowOutsideWorkspace,
         soulContents: form.soulContents,
@@ -535,6 +574,35 @@ export function AgentsScreen({
                         <option value="CLASSIC">CLASSIC</option>
                         <option value="RLM_REPL">RLM_REPL</option>
                       </select>
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-sm text-slate-400">LLM call timeout (ms)</div>
+                      <Input
+                        value={form.llmCallTimeoutMs}
+                        onChange={(e) => {
+                          setIsFormDirty(true);
+                          setSaveStatus(null);
+                          setForm((prev) => ({ ...prev, llmCallTimeoutMs: e.target.value }));
+                        }}
+                        placeholder="Leave empty to use system default (10800000)"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-sm text-slate-400">
+                        Session gap threshold (ms)
+                      </div>
+                      <Input
+                        value={form.contextSessionGapMs}
+                        onChange={(e) => {
+                          setIsFormDirty(true);
+                          setSaveStatus(null);
+                          setForm((prev) => ({
+                            ...prev,
+                            contextSessionGapMs: e.target.value,
+                          }));
+                        }}
+                        placeholder="Leave empty to use default (300000)"
+                      />
                     </div>
                     <div className="space-y-1">
                       <div className="text-sm text-slate-400">Workspace directory</div>

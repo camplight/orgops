@@ -302,6 +302,41 @@ const coreEventShapes: EventShapeDefinition[] = [
     }),
   },
   {
+    type: "session.summary.created",
+    description: "Runner-generated summary for the active channel session.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1),
+      source: sourceSchema,
+      payload: z
+        .object({
+          agentName: z.string().min(1),
+          summary: z.string().min(1),
+          sessionStartAt: z.number().int(),
+          sessionEndAt: z.number().int(),
+          eventCount: z.number().int().positive(),
+        })
+        .passthrough(),
+    }),
+  },
+  {
+    type: "audit.local-memory.recorded",
+    description: "Runner recorded local memory updates for an agent.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1),
+      source: sourceSchema,
+      payload: z
+        .object({
+          agentName: z.string().min(1),
+          filePath: z.string().min(1),
+          entriesWritten: z.number().int().nonnegative(),
+          channelsProcessed: z.number().int().nonnegative(),
+        })
+        .passthrough(),
+    }),
+  },
+  {
     type: "audit.events.cleared",
     description: "Audit record for event clear operation.",
     source: "core",

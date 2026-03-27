@@ -173,6 +173,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         allowOutsideWorkspace: Boolean(row.allow_outside_workspace),
         llmCallTimeoutMs: row.llm_call_timeout_ms ?? null,
         classicMaxModelSteps: row.classic_max_model_steps ?? null,
+        contextSessionGapMs: row.context_session_gap_ms ?? null,
         mode: row.mode ?? "CLASSIC",
         desiredState: row.desired_state,
         runtimeState: row.runtime_state,
@@ -221,6 +222,14 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         400
       );
     }
+    const contextSessionGapParsed = parseOptionalPositiveInt(body.contextSessionGapMs);
+    if (!contextSessionGapParsed.ok) {
+      return jsonResponse(
+        c,
+        { error: `contextSessionGapMs ${contextSessionGapParsed.error}` },
+        400
+      );
+    }
     orm
       .insert(schema.agents)
       .values({
@@ -236,6 +245,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         allow_outside_workspace: allowOutsideWorkspace ? 1 : 0,
         llm_call_timeout_ms: llmCallTimeoutParsed.value,
         classic_max_model_steps: classicMaxModelStepsParsed.value,
+        context_session_gap_ms: contextSessionGapParsed.value,
         mode:
           typeof body.mode === "string" && body.mode.trim()
             ? body.mode.trim()
@@ -270,6 +280,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       allowOutsideWorkspace: Boolean(row.allow_outside_workspace),
       llmCallTimeoutMs: row.llm_call_timeout_ms ?? null,
       classicMaxModelSteps: row.classic_max_model_steps ?? null,
+      contextSessionGapMs: row.context_session_gap_ms ?? null,
       mode: row.mode ?? "CLASSIC",
       desiredState: row.desired_state,
       runtimeState: row.runtime_state,
@@ -332,6 +343,17 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         400
       );
     }
+    const contextSessionGapParsed =
+      body.contextSessionGapMs !== undefined
+        ? parseOptionalPositiveInt(body.contextSessionGapMs)
+        : null;
+    if (contextSessionGapParsed && !contextSessionGapParsed.ok) {
+      return jsonResponse(
+        c,
+        { error: `contextSessionGapMs ${contextSessionGapParsed.error}` },
+        400
+      );
+    }
     orm
       .update(schema.agents)
       .set({
@@ -353,6 +375,10 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
           classicMaxModelStepsParsed
             ? classicMaxModelStepsParsed.value
             : existing.classic_max_model_steps,
+        context_session_gap_ms:
+          contextSessionGapParsed
+            ? contextSessionGapParsed.value
+            : existing.context_session_gap_ms,
         mode:
           typeof body.mode === "string" && body.mode.trim()
             ? body.mode.trim()
