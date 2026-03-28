@@ -177,6 +177,14 @@ function normalizeMemoryItem(item: string): string {
   return item.replace(/\s+/g, " ").trim();
 }
 
+function memoryDedupKey(item: string): string {
+  return normalizeMemoryItem(item)
+    .toLowerCase()
+    .replace(/[.,;:!?'"`*_~()[\]{}]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function parseExistingMemoryItems(memoryText: string): string[] {
   return memoryText
     .split(/\r?\n/)
@@ -192,7 +200,8 @@ function uniqueItems(items: string[]): string[] {
   for (const item of items) {
     const normalized = normalizeMemoryItem(item);
     if (!normalized) continue;
-    const key = normalized.toLowerCase();
+    const key = memoryDedupKey(normalized);
+    if (!key) continue;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(normalized);
@@ -240,8 +249,10 @@ export async function refreshAgentLocalMemory(input: {
     "Take existing memory and latest session events, then produce a compact merged list.",
     "Keep only durable facts: decisions, stable constraints, preferences, commitments, unresolved follow-ups.",
     "Exclude transient chatter and anything secret-looking.",
-    "De-duplicate and compress overlap. Keep at most 40 items.",
-    "Return strict JSON: {\"items\":[\"...\"]}",
+    "De-duplicate aggressively: if two entries overlap in meaning, keep only one canonical entry.",
+    "Ensure every returned item is unique (including near-duplicates with different wording, punctuation, or casing).",
+    "Keep at most 40 items.",
+    "Return strict JSON only: {\"items\":[\"...\"]}",
     "",
     `Agent: ${input.agent.name}`,
     `Channel: ${input.channelId}`,

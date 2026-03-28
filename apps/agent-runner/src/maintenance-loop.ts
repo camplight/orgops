@@ -33,6 +33,15 @@ function isAuditEvent(event: Event): boolean {
   return typeof event.type === "string" && event.type.startsWith("audit.");
 }
 
+function isMeaningfulMemoryEvent(event: Event): boolean {
+  if (isAuditEvent(event)) return false;
+  return event.type !== "session.summary.created";
+}
+
+function normalizeTs(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : 0;
+}
+
 function isAgentSubscribed(channel: ChannelRecord, agentName: string): boolean {
   return (channel.participants ?? []).some(
     (participant) =>
@@ -123,7 +132,14 @@ export function createMaintenanceLoop(deps: Dependencies) {
             memoryAfter,
           );
           const memoryEvents = memoryEventsAll.filter((event) => !isAuditEvent(event));
-          if (memoryEvents.length > 0) {
+          const meaningfulMemoryEvents = memoryEventsAll.filter(isMeaningfulMemoryEvent);
+          const hasNewMeaningfulEvents =
+            typeof memoryProcessedAt !== "number"
+              ? meaningfulMemoryEvents.length > 0
+              : meaningfulMemoryEvents.some(
+                  (event) => normalizeTs(event.createdAt) > memoryProcessedAt,
+                );
+          if (hasNewMeaningfulEvents) {
             const injectionEnv = await ensureInjectionEnv(channel.id);
             const lifecycleChannelId = await ensureLifecycleChannelId();
             await refreshAgentLocalMemory({
