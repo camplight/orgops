@@ -233,6 +233,86 @@ export const models = sqliteTable("models", {
   created_at: integer("created_at").notNull()
 });
 
+export const channelMemoryRecent = sqliteTable(
+  "channel_memory_recent",
+  {
+    agent_name: text("agent_name").notNull(),
+    channel_id: text("channel_id").notNull(),
+    summary_text: text("summary_text").notNull().default(""),
+    window_start_at: integer("window_start_at").notNull().default(0),
+    last_processed_at: integer("last_processed_at").notNull().default(0),
+    last_processed_event_id: text("last_processed_event_id"),
+    version: integer("version").notNull().default(0),
+    created_at: integer("created_at").notNull(),
+    updated_at: integer("updated_at").notNull()
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.agent_name, table.channel_id] }),
+    idxChannelMemoryRecentAgentUpdated: index("idx_channel_memory_recent_agent_updated").on(
+      table.agent_name,
+      table.updated_at
+    )
+  })
+);
+
+export const channelMemoryFull = sqliteTable(
+  "channel_memory_full",
+  {
+    agent_name: text("agent_name").notNull(),
+    channel_id: text("channel_id").notNull(),
+    summary_text: text("summary_text").notNull().default(""),
+    last_processed_at: integer("last_processed_at").notNull().default(0),
+    last_processed_event_id: text("last_processed_event_id"),
+    version: integer("version").notNull().default(0),
+    created_at: integer("created_at").notNull(),
+    updated_at: integer("updated_at").notNull()
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.agent_name, table.channel_id] }),
+    idxChannelMemoryFullAgentUpdated: index("idx_channel_memory_full_agent_updated").on(
+      table.agent_name,
+      table.updated_at
+    )
+  })
+);
+
+export const crossChannelMemoryRecent = sqliteTable(
+  "cross_channel_memory_recent",
+  {
+    agent_name: text("agent_name").primaryKey(),
+    summary_text: text("summary_text").notNull().default(""),
+    window_start_at: integer("window_start_at").notNull().default(0),
+    last_processed_at: integer("last_processed_at").notNull().default(0),
+    last_processed_event_id: text("last_processed_event_id"),
+    version: integer("version").notNull().default(0),
+    created_at: integer("created_at").notNull(),
+    updated_at: integer("updated_at").notNull()
+  },
+  (table) => ({
+    idxCrossChannelMemoryRecentUpdated: index("idx_cross_channel_memory_recent_updated").on(
+      table.updated_at
+    )
+  })
+);
+
+export const crossChannelMemoryFull = sqliteTable(
+  "cross_channel_memory_full",
+  {
+    agent_name: text("agent_name").primaryKey(),
+    summary_text: text("summary_text").notNull().default(""),
+    last_processed_at: integer("last_processed_at").notNull().default(0),
+    last_processed_event_id: text("last_processed_event_id"),
+    version: integer("version").notNull().default(0),
+    created_at: integer("created_at").notNull(),
+    updated_at: integer("updated_at").notNull()
+  },
+  (table) => ({
+    idxCrossChannelMemoryFullUpdated: index("idx_cross_channel_memory_full_updated").on(
+      table.updated_at
+    )
+  })
+);
+
 export const schema = {
   migrations,
   agents,
@@ -249,5 +329,9 @@ export const schema = {
   processOutput,
   files,
   secrets,
-  models
+  models,
+  channelMemoryRecent,
+  channelMemoryFull,
+  crossChannelMemoryRecent,
+  crossChannelMemoryFull
 };

@@ -1,10 +1,10 @@
 import {
-  ensureChannelSessionSummary,
-  refreshAgentLocalMemory,
-  resolveAgentContextSessionGapMs,
+  refreshChannelFullMemory,
+  refreshChannelRecentMemory,
+  refreshCrossChannelFullMemory,
+  refreshCrossChannelRecentMemory,
 } from "./context-maintenance";
-import { listChannelEventsAfter } from "./channel-events";
-import type { Agent, Event } from "./types";
+import type { Agent } from "./types";
 
 type ChannelParticipant = {
   subscriberType?: string;
@@ -18,29 +18,17 @@ type ChannelRecord = {
 
 type Dependencies = {
   listChannels: () => Promise<ChannelRecord[]>;
-  ensureLifecycleChannel: (agentName: string) => Promise<string>;
   getPackageSecretsEnv: (
     agentName: string,
     channelId?: string,
   ) => Promise<Record<string, string>>;
   emitEvent: (event: unknown) => Promise<void>;
   apiFetch: (path: string, init?: RequestInit) => Promise<Response>;
-  summaryIntervalMs: number;
-  localMemoryIntervalMs: number;
+  channelRecentMemoryIntervalMs: number;
+  channelFullMemoryIntervalMs: number;
+  crossRecentMemoryIntervalMs: number;
+  crossFullMemoryIntervalMs: number;
 };
-
-function isAuditEvent(event: Event): boolean {
-  return typeof event.type === "string" && event.type.startsWith("audit.");
-}
-
-function isMeaningfulMemoryEvent(event: Event): boolean {
-  if (isAuditEvent(event)) return false;
-  return event.type !== "session.summary.created";
-}
-
-function normalizeTs(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : 0;
-}
 
 function isAgentSubscribed(channel: ChannelRecord, agentName: string): boolean {
   return (channel.participants ?? []).some(
@@ -52,16 +40,14 @@ function isAgentSubscribed(channel: ChannelRecord, agentName: string): boolean {
 
 export function createMaintenanceLoop(deps: Dependencies) {
   const maintenanceInFlight = new Map<string, Promise<void>>();
-  const summaryLastRunAtByChannel = new Map<string, number>();
-  const memoryLastRunAtByChannel = new Map<string, number>();
-  const summaryProcessedAtByChannel = new Map<string, number>();
-  const memoryProcessedAtByChannel = new Map<string, number>();
+  const channelRecentLastRunAtByChannel = new Map<string, number>();
+  const channelFullLastRunAtByChannel = new Map<string, number>();
+  const crossRecentLastRunAtByAgent = new Map<string, number>();
+  const crossFullLastRunAtByAgent = new Map<string, number>();
 
   async function runAgentMaintenancePass(agent: Agent) {
-    const sessionGapMs = resolveAgentContextSessionGapMs(agent);
     const channels = await deps.listChannels();
     const injectionEnvByChannel = new Map<string, Record<string, string>>();
-    let cachedLifecycleChannelId: string | null = null;
     const ensureInjectionEnv = async (
       channelId: string,
     ): Promise<Record<string, string>> => {
@@ -71,100 +57,102 @@ export function createMaintenanceLoop(deps: Dependencies) {
       injectionEnvByChannel.set(channelId, env);
       return env;
     };
-    const ensureLifecycleChannelId = async (): Promise<string> => {
-      if (cachedLifecycleChannelId) return cachedLifecycleChannelId;
-      cachedLifecycleChannelId = await deps.ensureLifecycleChannel(agent.name);
-      return cachedLifecycleChannelId;
+    let crossMemoryEnv: Record<string, string> | null = null;
+    const ensureCrossMemoryEnv = async (): Promise<Record<string, string>> => {
+      if (crossMemoryEnv) return crossMemoryEnv;
+      crossMemoryEnv = await deps.getPackageSecretsEnv(agent.name);
+      return crossMemoryEnv;
     };
     const subscribedChannels = channels.filter((channel) =>
       isAgentSubscribed(channel, agent.name),
     );
+    const subscribedChannelIds = subscribedChannels
+      .map((channel) => channel.id)
+      .filter((channelId): channelId is string => Boolean(channelId));
     const now = Date.now();
+    let updatedAnyChannelRecent = false;
+    let updatedAnyChannelFull = false;
     for (const channel of subscribedChannels) {
       if (!channel.id) continue;
       const channelKey = `${agent.name}::${channel.id}`;
-      const summaryLastRun = summaryLastRunAtByChannel.get(channelKey) ?? 0;
-      const memoryLastRun = memoryLastRunAtByChannel.get(channelKey) ?? 0;
-      const shouldRunSummary = now - summaryLastRun >= deps.summaryIntervalMs;
-      const shouldRunMemory = now - memoryLastRun >= deps.localMemoryIntervalMs;
-      if (!shouldRunSummary && !shouldRunMemory) continue;
+      const channelRecentLastRun =
+        channelRecentLastRunAtByChannel.get(channelKey) ?? 0;
+      const channelFullLastRun = channelFullLastRunAtByChannel.get(channelKey) ?? 0;
+      const shouldRunChannelRecent =
+        now - channelRecentLastRun >= deps.channelRecentMemoryIntervalMs;
+      const shouldRunChannelFull =
+        now - channelFullLastRun >= deps.channelFullMemoryIntervalMs;
+      if (!shouldRunChannelRecent && !shouldRunChannelFull) continue;
       try {
-        if (shouldRunSummary) {
-          const summaryProcessedAt = summaryProcessedAtByChannel.get(channelKey);
-          const summaryAfter =
-            typeof summaryProcessedAt === "number"
-              ? Math.max(0, summaryProcessedAt - sessionGapMs - 1)
-              : undefined;
-          const summaryEventsAll = await listChannelEventsAfter(
-            deps.apiFetch,
-            channel.id,
-            summaryAfter,
-          );
-          const summaryEvents = summaryEventsAll.filter((event) => !isAuditEvent(event));
-          if (summaryEvents.length > 0) {
-            const injectionEnv = await ensureInjectionEnv(channel.id);
-            await ensureChannelSessionSummary({
-              agent,
-              channelId: channel.id,
-              events: summaryEvents,
-              sessionGapMs,
-              env: injectionEnv,
-              emitEvent: deps.emitEvent,
-            });
-          }
-          const maxSummaryTs = summaryEventsAll.reduce(
-            (max, event) =>
-              Math.max(max, typeof event.createdAt === "number" ? event.createdAt : 0),
-            summaryProcessedAt ?? 0,
-          );
-          summaryProcessedAtByChannel.set(channelKey, maxSummaryTs);
-          summaryLastRunAtByChannel.set(channelKey, now);
+        if (shouldRunChannelRecent) {
+          const result = await refreshChannelRecentMemory({
+            agent,
+            channelId: channel.id,
+            apiFetch: deps.apiFetch,
+            getEnv: () => ensureInjectionEnv(channel.id),
+            emitEvent: deps.emitEvent,
+          });
+          if (result) updatedAnyChannelRecent = true;
+          channelRecentLastRunAtByChannel.set(channelKey, now);
         }
-        if (shouldRunMemory) {
-          const memoryProcessedAt = memoryProcessedAtByChannel.get(channelKey);
-          const memoryAfter =
-            typeof memoryProcessedAt === "number"
-              ? Math.max(0, memoryProcessedAt - sessionGapMs - 1)
-              : undefined;
-          const memoryEventsAll = await listChannelEventsAfter(
-            deps.apiFetch,
-            channel.id,
-            memoryAfter,
-          );
-          const memoryEvents = memoryEventsAll.filter((event) => !isAuditEvent(event));
-          const meaningfulMemoryEvents = memoryEventsAll.filter(isMeaningfulMemoryEvent);
-          const hasNewMeaningfulEvents =
-            typeof memoryProcessedAt !== "number"
-              ? meaningfulMemoryEvents.length > 0
-              : meaningfulMemoryEvents.some(
-                  (event) => normalizeTs(event.createdAt) > memoryProcessedAt,
-                );
-          if (hasNewMeaningfulEvents) {
-            const injectionEnv = await ensureInjectionEnv(channel.id);
-            const lifecycleChannelId = await ensureLifecycleChannelId();
-            await refreshAgentLocalMemory({
-              agent,
-              channelId: channel.id,
-              events: memoryEvents,
-              sessionGapMs,
-              env: injectionEnv,
-              lifecycleChannelId,
-              emitEvent: deps.emitEvent,
-            });
-          }
-          const maxMemoryTs = memoryEventsAll.reduce(
-            (max, event) =>
-              Math.max(max, typeof event.createdAt === "number" ? event.createdAt : 0),
-            memoryProcessedAt ?? 0,
-          );
-          memoryProcessedAtByChannel.set(channelKey, maxMemoryTs);
-          memoryLastRunAtByChannel.set(channelKey, now);
+        if (shouldRunChannelFull) {
+          const result = await refreshChannelFullMemory({
+            agent,
+            channelId: channel.id,
+            apiFetch: deps.apiFetch,
+            getEnv: () => ensureInjectionEnv(channel.id),
+            emitEvent: deps.emitEvent,
+          });
+          if (result) updatedAnyChannelFull = true;
+          channelFullLastRunAtByChannel.set(channelKey, now);
         }
       } catch (error) {
         console.warn(
           `runner maintenance failed for ${agent.name} channel=${channel.id}`,
           error,
         );
+      }
+    }
+
+    const crossRecentLastRun = crossRecentLastRunAtByAgent.get(agent.name) ?? 0;
+    const crossFullLastRun = crossFullLastRunAtByAgent.get(agent.name) ?? 0;
+    const shouldRunCrossRecent =
+      updatedAnyChannelRecent ||
+      now - crossRecentLastRun >= deps.crossRecentMemoryIntervalMs;
+    const shouldRunCrossFull =
+      updatedAnyChannelFull ||
+      now - crossFullLastRun >= deps.crossFullMemoryIntervalMs;
+    if (subscribedChannelIds.length === 0) return;
+    if (shouldRunCrossRecent) {
+      try {
+        const env = await ensureCrossMemoryEnv();
+        await refreshCrossChannelRecentMemory({
+          agent,
+          channelIds: subscribedChannelIds,
+          apiFetch: deps.apiFetch,
+          getEnv: ensureCrossMemoryEnv,
+          emitEvent: deps.emitEvent,
+        });
+      } catch (error) {
+        console.warn(`runner cross recent memory failed for ${agent.name}`, error);
+      } finally {
+        crossRecentLastRunAtByAgent.set(agent.name, now);
+      }
+    }
+    if (shouldRunCrossFull) {
+      try {
+        const env = await ensureCrossMemoryEnv();
+        await refreshCrossChannelFullMemory({
+          agent,
+          channelIds: subscribedChannelIds,
+          apiFetch: deps.apiFetch,
+          getEnv: ensureCrossMemoryEnv,
+          emitEvent: deps.emitEvent,
+        });
+      } catch (error) {
+        console.warn(`runner cross full memory failed for ${agent.name}`, error);
+      } finally {
+        crossFullLastRunAtByAgent.set(agent.name, now);
       }
     }
   }
@@ -183,12 +171,12 @@ export function createMaintenanceLoop(deps: Dependencies) {
 
   function clearAgent(agentName: string) {
     maintenanceInFlight.delete(agentName);
-    for (const key of [...summaryLastRunAtByChannel.keys()]) {
+    crossRecentLastRunAtByAgent.delete(agentName);
+    crossFullLastRunAtByAgent.delete(agentName);
+    for (const key of [...channelRecentLastRunAtByChannel.keys()]) {
       if (!key.startsWith(`${agentName}::`)) continue;
-      summaryLastRunAtByChannel.delete(key);
-      memoryLastRunAtByChannel.delete(key);
-      summaryProcessedAtByChannel.delete(key);
-      memoryProcessedAtByChannel.delete(key);
+      channelRecentLastRunAtByChannel.delete(key);
+      channelFullLastRunAtByChannel.delete(key);
     }
   }
 

@@ -124,6 +124,98 @@ function toInlineAgentStatus(event: EventRow): string {
   return `processing ${humanizeEventType(event.type)}`;
 }
 
+type AgentContextUsage = {
+  agentName: string;
+  usedTokens: number;
+  availableTokens: number;
+  contextWindowTokens: number;
+  utilizationPct: number;
+  updatedAt: number;
+};
+
+function parseAgentContextUsage(event: EventRow): AgentContextUsage | null {
+  if (event.type !== "audit.context.window.updated") return null;
+  const payload = asObject(event.payload);
+  const agentNameRaw = payload.agentName;
+  const agentName =
+    typeof agentNameRaw === "string" && agentNameRaw.trim().length > 0
+      ? agentNameRaw.trim()
+      : getAgentNameForStatusEvent(event);
+  if (!agentName) return null;
+  const usedTokens =
+    typeof payload.estimatedUsedTokens === "number" && Number.isFinite(payload.estimatedUsedTokens)
+      ? Math.max(0, Math.floor(payload.estimatedUsedTokens))
+      : 0;
+  const availableTokens =
+    typeof payload.estimatedAvailableTokens === "number" &&
+    Number.isFinite(payload.estimatedAvailableTokens)
+      ? Math.max(0, Math.floor(payload.estimatedAvailableTokens))
+      : 0;
+  const contextWindowTokens =
+    typeof payload.contextWindowTokens === "number" && Number.isFinite(payload.contextWindowTokens)
+      ? Math.max(1, Math.floor(payload.contextWindowTokens))
+      : usedTokens + availableTokens;
+  const computedPct = contextWindowTokens > 0 ? (usedTokens / contextWindowTokens) * 100 : 0;
+  const utilizationPct =
+    typeof payload.utilizationPct === "number" && Number.isFinite(payload.utilizationPct)
+      ? Math.max(0, Math.min(100, payload.utilizationPct))
+      : Math.max(0, Math.min(100, computedPct));
+  return {
+    agentName,
+    usedTokens,
+    availableTokens,
+    contextWindowTokens,
+    utilizationPct,
+    updatedAt: event.createdAt ?? 0,
+  };
+}
+
+function ContextRing({
+  usedPct,
+}: {
+  usedPct: number;
+}) {
+  const size = 36;
+  const stroke = 4;
+  const radius = (size - stroke) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const clamped = Math.max(0, Math.min(100, usedPct));
+  const dashOffset = circumference - (clamped / 100) * circumference;
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="shrink-0">
+      <circle
+        cx={size / 2}
+        cy={size / 2}
+        r={radius}
+        stroke="rgb(51 65 85)"
+        strokeWidth={stroke}
+        fill="transparent"
+      />
+      <circle
+        cx={size / 2}
+        cy={size / 2}
+        r={radius}
+        stroke={clamped >= 90 ? "rgb(248 113 113)" : clamped >= 75 ? "rgb(250 204 21)" : "rgb(56 189 248)"}
+        strokeWidth={stroke}
+        strokeLinecap="round"
+        fill="transparent"
+        strokeDasharray={circumference}
+        strokeDashoffset={dashOffset}
+        transform={`rotate(-90 ${size / 2} ${size / 2})`}
+      />
+      <text
+        x="50%"
+        y="50%"
+        dominantBaseline="middle"
+        textAnchor="middle"
+        className="fill-slate-200 text-[9px] font-medium"
+      >
+        {Math.round(clamped)}%
+      </text>
+    </svg>
+  );
+}
+
 export function ChatScreen({
   targetOptions,
   activeTargetId,
@@ -208,6 +300,26 @@ export function ChatScreen({
         at: value.latestActivityAt
       }));
   }, [activityEvents]);
+  const contextUsageByAgent = useMemo(() => {
+    const latestByAgent = new Map<string, AgentContextUsage>();
+    const ordered = events
+      .slice()
+      .sort((left, right) => {
+        const leftTs = left.createdAt ?? 0;
+        const rightTs = right.createdAt ?? 0;
+        if (leftTs !== rightTs) return leftTs - rightTs;
+        return left.id.localeCompare(right.id);
+      });
+    for (const event of ordered) {
+      const usage = parseAgentContextUsage(event);
+      if (!usage) continue;
+      const existing = latestByAgent.get(usage.agentName);
+      if (!existing || usage.updatedAt >= existing.updatedAt) {
+        latestByAgent.set(usage.agentName, usage);
+      }
+    }
+    return [...latestByAgent.values()].sort((left, right) => right.updatedAt - left.updatedAt);
+  }, [events]);
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const lastChatLineId = chatLines[chatLines.length - 1]?.id ?? null;
   const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -259,6 +371,32 @@ export function ChatScreen({
               <div className="rounded border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-300">
                 <span className="text-slate-400">Participants:</span>{" "}
                 {activeChannelParticipants}
+              </div>
+            )}
+            {contextUsageByAgent.length > 0 && (
+              <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3 chat-print-hide">
+                <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">
+                  Agent Context Usage
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {contextUsageByAgent.map((usage) => (
+                    <div
+                      key={`context-${usage.agentName}`}
+                      className="flex items-center gap-3 rounded border border-slate-800 bg-slate-900/60 px-2 py-2"
+                    >
+                      <ContextRing usedPct={usage.utilizationPct} />
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium text-slate-100">{usage.agentName}</div>
+                        <div className="text-xs text-slate-400">
+                          {usage.usedTokens.toLocaleString()} used / {usage.contextWindowTokens.toLocaleString()} max
+                        </div>
+                        <div className="text-[11px] text-slate-500">
+                          {usage.availableTokens.toLocaleString()} tokens available
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
             <div

@@ -182,7 +182,7 @@ describe("agent runner", () => {
     expect(eventIds[eventIds.length - 1]).toBe("evt-130");
   });
 
-  it("injects latest session summary and replaces middle session events", () => {
+  it("injects memory summaries as system messages", () => {
     const agent: Agent = {
       name: "tester",
       systemInstructions: "",
@@ -191,9 +191,7 @@ describe("agent runner", () => {
       modelId: "openai:gpt-4o-mini",
       desiredState: "RUNNING",
       runtimeState: "RUNNING",
-      contextSessionGapMs: 300_000,
     };
-    const baseTs = Date.now();
     const events: Event[] = [
       {
         id: "evt-1",
@@ -201,49 +199,26 @@ describe("agent runner", () => {
         payload: { text: "first" },
         source: "human:alice",
         channelId: "chan-1",
-        createdAt: baseTs,
-      },
-      {
-        id: "evt-2",
-        type: "message.created",
-        payload: { text: "second" },
-        source: "human:alice",
-        channelId: "chan-1",
-        createdAt: baseTs + 10_000,
-      },
-      {
-        id: "evt-summary",
-        type: "session.summary.created",
-        payload: {
-          summary: "Conversation so far is summarized.",
-          sessionStartAt: baseTs,
-          sessionEndAt: baseTs + 20_000,
-        },
-        source: "system:sidecar:session-summary",
-        channelId: "chan-1",
-        createdAt: baseTs + 20_000,
-      },
-      {
-        id: "evt-3",
-        type: "message.created",
-        payload: { text: "latest" },
-        source: "human:alice",
-        channelId: "chan-1",
-        createdAt: baseTs + 30_000,
       },
     ];
 
     const messages = buildModelMessages(agent, "system prompt", events, {
-      contextSessionGapMs: 300_000,
+      systemContextMessages: [
+        "Channel Recent Summary (last 10 minutes)\nA recent summary.",
+        "Channel Full Memory\nA full summary.",
+      ],
     });
-    expect(messages[1]?.role).toBe("user");
-    const summaryMessage = JSON.parse(String(messages[1]?.content));
-    expect(summaryMessage.type).toBe("system.session.summary");
-    expect(summaryMessage.sourceEventId).toBe("evt-summary");
-    const eventIds = messages
-      .slice(2)
-      .map((message) => JSON.parse(message.content as string).eventId);
-    expect(eventIds).toEqual(["evt-3"]);
+    expect(messages[0]).toEqual({ role: "system", content: "system prompt" });
+    expect(messages[1]).toEqual({
+      role: "system",
+      content: "Channel Recent Summary (last 10 minutes)\nA recent summary.",
+    });
+    expect(messages[2]).toEqual({
+      role: "system",
+      content: "Channel Full Memory\nA full summary.",
+    });
+    expect(messages[3]?.role).toBe("user");
+    expect(JSON.parse(String(messages[3]?.content)).eventId).toBe("evt-1");
   });
 
   it("does not keep tool result when matching start is truncated", () => {

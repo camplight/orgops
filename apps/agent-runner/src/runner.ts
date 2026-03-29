@@ -17,7 +17,6 @@ import {
 import { createRunnerTools, executeTool } from "./tools";
 import { stopAllRunningProcesses } from "./tools/proc";
 import { createChannelLoopManager } from "./channel-loop";
-import { listChannelEvents } from "./channel-events";
 import { pullInjectedEventMessages } from "./channel-injection";
 import { shouldHandleEventForAgent } from "./event-routing";
 import { getReservedEventTypeError } from "./event-type-guard";
@@ -26,9 +25,14 @@ import type { Agent, Event } from "./types";
 import { buildRunnerGuidance } from "./prompt";
 import { runRlmEventInChild, stopAllRlmChildren } from "./rlm-process";
 import {
-  DEFAULT_CONTEXT_SESSION_GAP_MS,
-  loadAgentMemoryContext,
-  resolveAgentContextSessionGapMs,
+  buildChannelRecentDeltaSystemMessage,
+  buildSystemMemoryMessage,
+  getChannelFullMemoryRecord,
+  getChannelRecentMemoryRecord,
+  getCrossFullMemoryRecord,
+  getCrossRecentMemoryRecord,
+  getMeaningfulEvents,
+  listEventsAfterTimestamp,
 } from "./context-maintenance";
 
 const API_URL = process.env.ORGOPS_API_URL ?? "http://localhost:8787";
@@ -45,8 +49,10 @@ const heartbeats = new Map<string, number>();
 const bootstrappedAgents = new Set<string>();
 const lifecycleChannels = new Map<string, string>();
 const HEARTBEAT_INTERVAL_MS = 5000;
-const DEFAULT_AGENT_SUMMARY_INTERVAL_MS = 10_000;
-const DEFAULT_AGENT_LOCAL_MEMORY_INTERVAL_MS = 60_000;
+const DEFAULT_CHANNEL_RECENT_MEMORY_INTERVAL_MS = 10_000;
+const DEFAULT_CHANNEL_FULL_MEMORY_INTERVAL_MS = 60_000;
+const DEFAULT_CROSS_RECENT_MEMORY_INTERVAL_MS = 15_000;
+const DEFAULT_CROSS_FULL_MEMORY_INTERVAL_MS = 120_000;
 const DEFAULT_MAX_HISTORY_EVENTS = 120;
 const DEFAULT_MAX_HISTORY_CHARS = 120_000;
 let apiFetchRequestCounter = 0;
@@ -73,13 +79,21 @@ const LLM_CALL_TIMEOUT_MS = readPositiveIntEnv(
   process.env.ORGOPS_LLM_CALL_TIMEOUT_MS,
   DEFAULT_LLM_CALL_TIMEOUT_MS,
 );
-const AGENT_SUMMARY_INTERVAL_MS = readPositiveIntEnv(
-  process.env.ORGOPS_AGENT_SUMMARY_INTERVAL_MS,
-  DEFAULT_AGENT_SUMMARY_INTERVAL_MS,
+const CHANNEL_RECENT_MEMORY_INTERVAL_MS = readPositiveIntEnv(
+  process.env.ORGOPS_CHANNEL_RECENT_MEMORY_INTERVAL_MS,
+  DEFAULT_CHANNEL_RECENT_MEMORY_INTERVAL_MS,
 );
-const AGENT_LOCAL_MEMORY_INTERVAL_MS = readPositiveIntEnv(
-  process.env.ORGOPS_AGENT_LOCAL_MEMORY_INTERVAL_MS,
-  DEFAULT_AGENT_LOCAL_MEMORY_INTERVAL_MS,
+const CHANNEL_FULL_MEMORY_INTERVAL_MS = readPositiveIntEnv(
+  process.env.ORGOPS_CHANNEL_FULL_MEMORY_INTERVAL_MS,
+  DEFAULT_CHANNEL_FULL_MEMORY_INTERVAL_MS,
+);
+const CROSS_RECENT_MEMORY_INTERVAL_MS = readPositiveIntEnv(
+  process.env.ORGOPS_CROSS_RECENT_MEMORY_INTERVAL_MS,
+  DEFAULT_CROSS_RECENT_MEMORY_INTERVAL_MS,
+);
+const CROSS_FULL_MEMORY_INTERVAL_MS = readPositiveIntEnv(
+  process.env.ORGOPS_CROSS_FULL_MEMORY_INTERVAL_MS,
+  DEFAULT_CROSS_FULL_MEMORY_INTERVAL_MS,
 );
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string) {
@@ -427,83 +441,16 @@ export function buildModelMessages(
   agent: Agent,
   system: string,
   channelEvents: Event[],
-  options?: { contextSessionGapMs?: number },
+  options?: { systemContextMessages?: string[] },
 ) {
   const orderedChannelEvents = channelEvents
     .slice()
     .sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0));
-  const contextEligibleEvents = orderedChannelEvents;
-  const contextSessionGapMs =
-    options?.contextSessionGapMs && options.contextSessionGapMs > 0
-      ? Math.floor(options.contextSessionGapMs)
-      : DEFAULT_CONTEXT_SESSION_GAP_MS;
-  let sessionSummaryMessage:
-    | {
-        role: "user";
-        content: string;
-      }
-    | undefined;
-  let eventsForHistory = contextEligibleEvents;
-  if (contextEligibleEvents.length > 0) {
-    let sessionStartIndex = contextEligibleEvents.length - 1;
-    for (
-      let index = contextEligibleEvents.length - 1;
-      index > 0;
-      index -= 1
-    ) {
-      const currentTs = contextEligibleEvents[index]?.createdAt ?? 0;
-      const previousTs = contextEligibleEvents[index - 1]?.createdAt ?? 0;
-      if (currentTs - previousTs > contextSessionGapMs) break;
-      sessionStartIndex = index - 1;
-    }
-    const sessionEvents = contextEligibleEvents.slice(sessionStartIndex);
-    let latestSummaryIndex = -1;
-    for (let index = sessionEvents.length - 1; index >= 0; index -= 1) {
-      const event = sessionEvents[index];
-      if (event?.type !== "session.summary.created") continue;
-      const payload =
-        event.payload && typeof event.payload === "object"
-          ? (event.payload as { summary?: unknown; sessionStartAt?: unknown; sessionEndAt?: unknown })
-          : undefined;
-      const summary =
-        typeof payload?.summary === "string" ? payload.summary.trim() : "";
-      if (!summary) continue;
-      latestSummaryIndex = index;
-      sessionSummaryMessage = {
-        role: "user",
-        content: JSON.stringify(
-          {
-            type: "system.session.summary",
-            sourceEventId: event.id,
-            sessionStartAt:
-              typeof payload?.sessionStartAt === "number"
-                ? payload.sessionStartAt
-                : undefined,
-            sessionEndAt:
-              typeof payload?.sessionEndAt === "number"
-                ? payload.sessionEndAt
-                : undefined,
-            summary,
-          },
-          null,
-          2,
-        ),
-      };
-      break;
-    }
-    if (latestSummaryIndex >= 0) {
-      const absoluteSummaryIndex = sessionStartIndex + latestSummaryIndex;
-      eventsForHistory = [
-        ...contextEligibleEvents.slice(0, sessionStartIndex),
-        ...contextEligibleEvents.slice(absoluteSummaryIndex + 1),
-      ];
-    }
-  }
-  const historyMessages = eventsForHistory.map((channelEvent) =>
+  const historyMessages = orderedChannelEvents.map((channelEvent) =>
     toHistoryMessage(agent, channelEvent),
   );
   const resultToStartIndex =
-    buildToolResultToStartIndexMap(eventsForHistory);
+    buildToolResultToStartIndexMap(orderedChannelEvents);
 
   let keptStartIndex = historyMessages.length;
   let keptMessageCount = 0;
@@ -540,10 +487,13 @@ export function buildModelMessages(
     if (!advanced) break;
   }
   const keptFromEnd = historyMessages.slice(keptStartIndex);
-  const omittedCount = eventsForHistory.length - keptFromEnd.length;
+  const omittedCount = orderedChannelEvents.length - keptFromEnd.length;
   return [
     { role: "system" as const, content: system },
-    ...(sessionSummaryMessage ? [sessionSummaryMessage] : []),
+    ...((options?.systemContextMessages ?? [])
+      .map((content) => content.trim())
+      .filter((content) => content.length > 0)
+      .map((content) => ({ role: "system" as const, content }))),
     ...(omittedCount > 0
       ? [
           buildHistoryTruncationMessage(
@@ -556,6 +506,32 @@ export function buildModelMessages(
       : []),
     ...keptFromEnd,
   ];
+}
+
+const FALLBACK_MODEL_CONTEXT_WINDOW_TOKENS = 128_000;
+const CHARS_PER_TOKEN_ESTIMATE = 4;
+
+function resolveModelContextWindowTokens(modelId: string): number {
+  const normalized = modelId.toLowerCase();
+  if (normalized.includes("gpt-4o-mini")) return 128_000;
+  if (normalized.includes("gpt-4o")) return 128_000;
+  if (normalized.includes("gpt-4.1-mini")) return 1_000_000;
+  if (normalized.includes("gpt-4.1")) return 1_000_000;
+  if (normalized.includes("gpt-5")) return 1_000_000;
+  return FALLBACK_MODEL_CONTEXT_WINDOW_TOKENS;
+}
+
+function estimateTokensForText(text: string): number {
+  if (!text) return 0;
+  return Math.ceil(text.length / CHARS_PER_TOKEN_ESTIMATE);
+}
+
+function estimateContextUsage(messages: Array<{ role: string; content: string }>) {
+  const usedTokens = messages.reduce(
+    (sum, message) => sum + estimateTokensForText(message.content),
+    0,
+  );
+  return usedTokens;
 }
 
 type ModelEventDraft = {
@@ -750,13 +726,14 @@ const channelLoopManager = createChannelLoopManager({
 
 const maintenanceLoop = createMaintenanceLoop({
   listChannels,
-  ensureLifecycleChannel,
   getPackageSecretsEnv: (agentName: string, channelId?: string) =>
     getPackageSecretsEnv(agentName, channelId),
   emitEvent,
   apiFetch,
-  summaryIntervalMs: AGENT_SUMMARY_INTERVAL_MS,
-  localMemoryIntervalMs: AGENT_LOCAL_MEMORY_INTERVAL_MS,
+  channelRecentMemoryIntervalMs: CHANNEL_RECENT_MEMORY_INTERVAL_MS,
+  channelFullMemoryIntervalMs: CHANNEL_FULL_MEMORY_INTERVAL_MS,
+  crossRecentMemoryIntervalMs: CROSS_RECENT_MEMORY_INTERVAL_MS,
+  crossFullMemoryIntervalMs: CROSS_FULL_MEMORY_INTERVAL_MS,
 });
 
 async function handleEvent(agent: Agent, events: Event[]) {
@@ -833,9 +810,51 @@ async function handleEvent(agent: Agent, events: Event[]) {
       nodeVersion: process.version,
     },
   );
-  const contextSessionGapMs = resolveAgentContextSessionGapMs(agent);
-  const eventHistory = await listChannelEvents(apiFetch, channelId);
-  const memoryContext = loadAgentMemoryContext(agent);
+  const [channelRecentMemory, channelFullMemory, crossRecentMemory, crossFullMemory] =
+    await Promise.all([
+      getChannelRecentMemoryRecord(apiFetch, agent.name, channelId),
+      getChannelFullMemoryRecord(apiFetch, agent.name, channelId),
+      getCrossRecentMemoryRecord(apiFetch, agent.name),
+      getCrossFullMemoryRecord(apiFetch, agent.name),
+    ]);
+  const recentSummaryWatermark = channelRecentMemory?.lastProcessedAt;
+  const rawDeltaEvents = await listEventsAfterTimestamp(
+    apiFetch,
+    channelId,
+    typeof recentSummaryWatermark === "number" && recentSummaryWatermark > 0
+      ? recentSummaryWatermark
+      : undefined,
+  );
+  const eventHistory = getMeaningfulEvents(rawDeltaEvents);
+  const systemContextMessages = [
+    channelRecentMemory?.summaryText
+      ? buildSystemMemoryMessage(
+          `Channel Recent Summary (last 10 minutes, ${channelId})`,
+          channelRecentMemory.summaryText,
+        )
+      : "",
+    eventHistory.length > 0
+      ? buildChannelRecentDeltaSystemMessage({ channelId, events: eventHistory })
+      : "",
+    channelFullMemory?.summaryText
+      ? buildSystemMemoryMessage(
+          `Channel Full Memory (${channelId})`,
+          channelFullMemory.summaryText,
+        )
+      : "",
+    crossRecentMemory?.summaryText
+      ? buildSystemMemoryMessage(
+          "Cross-Channel Recent Summary (last 10 minutes)",
+          crossRecentMemory.summaryText,
+        )
+      : "",
+    crossFullMemory?.summaryText
+      ? buildSystemMemoryMessage(
+          "Cross-Channel Full Memory",
+          crossFullMemory.summaryText,
+        )
+      : "",
+  ].filter(Boolean);
   const system = [
     agent.systemInstructions,
     runnerGuidance,
@@ -847,7 +866,6 @@ async function handleEvent(agent: Agent, events: Event[]) {
       2,
     )}`,
     soul ? `Your soul:\n${soul}` : "",
-    memoryContext ? `Your local memory:\n${memoryContext}` : "",
     "Your skills:\n" + skillIndex,
     preloadedSkillsContext
       ? `Always pre-loaded skills (full SKILL.md contents):\n${preloadedSkillsContext}`
@@ -856,12 +874,59 @@ async function handleEvent(agent: Agent, events: Event[]) {
     .filter(Boolean)
     .join("\n\n");
   const baseMessages = buildModelMessages(agent, system, eventHistory, {
-    contextSessionGapMs,
+    systemContextMessages,
   });
   const mergedTriggerMessage = buildBatchedTriggerMessage(events);
   const invokeMessages = mergedTriggerMessage
     ? [...baseMessages, mergedTriggerMessage]
     : baseMessages;
+  const systemContextChars = systemContextMessages.reduce(
+    (sum, message) => sum + message.length,
+    0,
+  );
+  const systemChars = system.length;
+  const totalPromptChars = invokeMessages.reduce(
+    (sum, message) => sum + String(message.content ?? "").length,
+    0,
+  );
+  const estimatedUsedTokens = estimateContextUsage(
+    invokeMessages.map((message) => ({
+      role: message.role,
+      content: String(message.content ?? ""),
+    })),
+  );
+  const contextWindowTokens = resolveModelContextWindowTokens(agent.modelId);
+  const estimatedAvailableTokens = Math.max(
+    0,
+    contextWindowTokens - estimatedUsedTokens,
+  );
+  const utilizationPct =
+    contextWindowTokens > 0
+      ? Math.min(100, (estimatedUsedTokens / contextWindowTokens) * 100)
+      : 0;
+  try {
+    await emitEvent({
+      type: "audit.context.window.updated",
+      source: "system:runner:context",
+      status: "DELIVERED",
+      channelId,
+      payload: {
+        agentName: agent.name,
+        modelId: agent.modelId,
+        contextWindowTokens,
+        estimatedUsedTokens,
+        estimatedAvailableTokens,
+        utilizationPct: Math.round(utilizationPct * 100) / 100,
+        messageCount: invokeMessages.length,
+        systemChars,
+        systemContextChars,
+        historyChars: Math.max(0, totalPromptChars - systemChars - systemContextChars),
+        triggerEventId: triggerEvent.id,
+      },
+    });
+  } catch {
+    // Context telemetry should never block turn execution.
+  }
 
   const executeCtx = {
     agent,

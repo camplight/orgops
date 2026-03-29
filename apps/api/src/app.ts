@@ -36,6 +36,7 @@ import { registerModelsRoutes } from "./routes/models";
 import { registerAgentsRoutes } from "./routes/agents";
 import { registerCollabRoutes } from "./routes/collab";
 import { registerEventsRoutes } from "./routes/events";
+import { registerMemoryRoutes } from "./routes/memory";
 import { registerRuntimeRoutes } from "./routes/runtime";
 import { registerSkillsRoutes } from "./routes/skills";
 import { registerSecretsRoutes } from "./routes/secrets";
@@ -411,6 +412,8 @@ export function createApp(config: AppConfig = {}) {
     validateEventAgainstShapes,
     serializeEventShapes,
   });
+
+  registerMemoryRoutes(app as any, { orm, jsonResponse });
 
   registerRuntimeRoutes(app as any, {
     orm,

@@ -2566,4 +2566,135 @@ describe("api app", () => {
 
     rmSync(dataDir, { recursive: true, force: true });
   });
+
+  it("stores and retrieves separate recent/full channel memory records", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+    const runnerHeaders = {
+      "content-type": "application/json",
+      "x-orgops-runner-token": "test-token",
+    };
+
+    const putRecentRes = await app.request("http://localhost/api/memory/channel/recent", {
+      method: "PUT",
+      headers: runnerHeaders,
+      body: JSON.stringify({
+        agentName: "memory-agent",
+        channelId: "chan-1",
+        summaryText: "recent summary",
+        windowStartAt: 1000,
+        lastProcessedAt: 2000,
+        lastProcessedEventId: "evt-2",
+      }),
+    });
+    expect(putRecentRes.status).toBe(200);
+    const putRecentBody = (await putRecentRes.json()) as {
+      record?: { summaryText?: string; windowStartAt?: number; version?: number };
+    };
+    expect(putRecentBody.record?.summaryText).toBe("recent summary");
+    expect(putRecentBody.record?.windowStartAt).toBe(1000);
+    expect(putRecentBody.record?.version).toBe(1);
+
+    const putFullRes = await app.request("http://localhost/api/memory/channel/full", {
+      method: "PUT",
+      headers: runnerHeaders,
+      body: JSON.stringify({
+        agentName: "memory-agent",
+        channelId: "chan-1",
+        summaryText: "full summary",
+        lastProcessedAt: 3000,
+      }),
+    });
+    expect(putFullRes.status).toBe(200);
+    const putFullBody = (await putFullRes.json()) as {
+      record?: { summaryText?: string; windowStartAt?: number };
+    };
+    expect(putFullBody.record?.summaryText).toBe("full summary");
+    expect(putFullBody.record?.windowStartAt).toBeUndefined();
+
+    const getRecentRes = await app.request(
+      "http://localhost/api/memory/channel/recent?agentName=memory-agent&channelId=chan-1",
+      { headers: { "x-orgops-runner-token": "test-token" } },
+    );
+    expect(getRecentRes.status).toBe(200);
+    const getRecentBody = (await getRecentRes.json()) as {
+      record?: { summaryText?: string; lastProcessedEventId?: string };
+    };
+    expect(getRecentBody.record?.summaryText).toBe("recent summary");
+    expect(getRecentBody.record?.lastProcessedEventId).toBe("evt-2");
+
+    const listRecentRes = await app.request(
+      "http://localhost/api/memory/channel/recent?agentName=memory-agent",
+      { headers: { "x-orgops-runner-token": "test-token" } },
+    );
+    expect(listRecentRes.status).toBe(200);
+    const listRecentBody = (await listRecentRes.json()) as {
+      records?: Array<{ channelId: string }>;
+    };
+    expect(listRecentBody.records?.map((row) => row.channelId)).toEqual(["chan-1"]);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("stores cross-channel memory and enforces expectedVersion conflict", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+    const runnerHeaders = {
+      "content-type": "application/json",
+      "x-orgops-runner-token": "test-token",
+    };
+
+    const putRes = await app.request("http://localhost/api/memory/cross/full", {
+      method: "PUT",
+      headers: runnerHeaders,
+      body: JSON.stringify({
+        agentName: "memory-agent",
+        summaryText: "global summary",
+        lastProcessedAt: 5000,
+      }),
+    });
+    expect(putRes.status).toBe(200);
+    const putBody = (await putRes.json()) as { record?: { version?: number } };
+    expect(putBody.record?.version).toBe(1);
+
+    const conflictRes = await app.request("http://localhost/api/memory/cross/full", {
+      method: "PUT",
+      headers: runnerHeaders,
+      body: JSON.stringify({
+        agentName: "memory-agent",
+        summaryText: "stale update",
+        lastProcessedAt: 6000,
+        expectedVersion: 0,
+      }),
+    });
+    expect(conflictRes.status).toBe(409);
+
+    const getRes = await app.request(
+      "http://localhost/api/memory/cross/full?agentName=memory-agent",
+      { headers: { "x-orgops-runner-token": "test-token" } },
+    );
+    expect(getRes.status).toBe(200);
+    const getBody = (await getRes.json()) as {
+      record?: { summaryText?: string; lastProcessedAt?: number; version?: number };
+    };
+    expect(getBody.record?.summaryText).toBe("global summary");
+    expect(getBody.record?.lastProcessedAt).toBe(5000);
+    expect(getBody.record?.version).toBe(1);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
 });

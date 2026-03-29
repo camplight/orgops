@@ -337,6 +337,54 @@ const coreEventShapes: EventShapeDefinition[] = [
     }),
   },
   {
+    type: "audit.context.window.updated",
+    description: "Runner estimated context window usage for an agent turn.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1),
+      source: sourceSchema,
+      payload: z
+        .object({
+          agentName: z.string().min(1),
+          modelId: z.string().min(1),
+          contextWindowTokens: z.number().int().positive(),
+          estimatedUsedTokens: z.number().int().nonnegative(),
+          estimatedAvailableTokens: z.number().int().nonnegative(),
+          utilizationPct: z.number().nonnegative(),
+          messageCount: z.number().int().positive(),
+          systemChars: z.number().int().nonnegative(),
+          systemContextChars: z.number().int().nonnegative(),
+          historyChars: z.number().int().nonnegative(),
+          triggerEventId: z.string().min(1).optional(),
+        })
+        .passthrough(),
+    }),
+  },
+  {
+    type: "audit.memory.channel.recent.updated",
+    description: "Runner updated recent channel memory summary record.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "audit.memory.channel.full.updated",
+    description: "Runner updated full channel memory summary record.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "audit.memory.cross.recent.updated",
+    description: "Runner updated recent cross-channel memory summary record.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "audit.memory.cross.full.updated",
+    description: "Runner updated full cross-channel memory summary record.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
     type: "audit.events.cleared",
     description: "Audit record for event clear operation.",
     source: "core",
