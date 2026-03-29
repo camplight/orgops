@@ -4,9 +4,16 @@ import { shellToolDefs, execute as executeShell } from "./shell";
 import { fsToolDefs, execute as executeFs } from "./fs";
 import { procToolDefs, execute as executeProc } from "./proc";
 import { eventsToolDefs, execute as executeEvents } from "./events";
+import { memoryToolDefs, execute as executeMemory } from "./memory";
 import type { ExecuteContext, RunnerToolDeps } from "./types";
 
-const allToolDefs = [...shellToolDefs, ...fsToolDefs, ...procToolDefs, ...eventsToolDefs];
+const allToolDefs = [
+  ...shellToolDefs,
+  ...fsToolDefs,
+  ...procToolDefs,
+  ...eventsToolDefs,
+  ...memoryToolDefs,
+];
 
 export function createRunnerTools(
   deps: RunnerToolDeps,
@@ -30,6 +37,7 @@ export async function executeTool(
   if (tool.startsWith("fs_")) return executeFs(ctx, tool, args);
   if (tool.startsWith("proc_")) return executeProc(ctx, tool, args);
   if (tool.startsWith("events_")) return executeEvents(ctx, tool, args);
+  if (tool.startsWith("memory_")) return executeMemory(ctx, tool, args);
   return { error: `Unsupported tool: ${tool}` };
 }
 
@@ -38,3 +46,4 @@ export { shellToolDefs } from "./shell";
 export { fsToolDefs } from "./fs";
 export { procToolDefs } from "./proc";
 export { eventsToolDefs } from "./events";
+export { memoryToolDefs } from "./memory";

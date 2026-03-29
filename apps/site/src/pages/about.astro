@@ -1,0 +1,124 @@
+---
+import BaseHead from '../components/BaseHead.astro';
+import Footer from '../components/Footer.astro';
+import Header from '../components/Header.astro';
+import { SITE_DESCRIPTION, SITE_TITLE } from '../consts';
+---
+
+<!doctype html>
+<html lang="en">
+	<head>
+		<BaseHead title={`${SITE_TITLE} — About`} description={SITE_DESCRIPTION} />
+	</head>
+	<body>
+		<Header />
+		<main>
+			<header class="page-hero">
+				<h1>About</h1>
+				<p class="lede">
+					Camplight is a small idea with a big goal: make agent-driven operations understandable, observable, and safe.
+				</p>
+			</header>
+
+			<section class="section">
+				<h2>Mission</h2>
+				<p>
+					Build an event-driven coordination layer that helps teams ship faster without losing control of what happened,
+					when, and why.
+				</p>
+			</section>
+
+			<section class="section">
+				<h2>Principles</h2>
+				<ul class="principles">
+					<li>
+						<strong>Traceability over magic.</strong>
+						<span>Prefer explicit events, logs, and schemas to hidden side effects.</span>
+					</li>
+					<li>
+						<strong>Small core, composable edges.</strong>
+						<span>Keep the runtime minimal; add capabilities as skills.</span>
+					</li>
+					<li>
+						<strong>Guardrails by default.</strong>
+						<span>Make the safe path the easy path: idempotency, auditing, and scoped secrets.</span>
+					</li>
+					<li>
+						<strong>Human-in-the-loop when it matters.</strong>
+						<span>Agents should collaborate with humans, not replace accountability.</span>
+					</li>
+				</ul>
+			</section>
+
+			<section class="section cta">
+				<h2>Want to collaborate?</h2>
+				<p class="muted">This is placeholder copy. Add contact links, docs, and community channels when ready.</p>
+				<div class="cta-row">
+					<a class="button primary" href="/features">See features</a>
+					<a class="button" href="/blog">Read the blog</a>
+				</div>
+			</section>
+		</main>
+		<Footer />
+	</body>
+</html>
+
+<style>
+	.page-hero {
+		padding-top: 1rem;
+	}
+	.lede {
+		color: rgb(var(--muted));
+		max-width: 65ch;
+	}
+	.section {
+		margin-top: 2.5rem;
+	}
+	.principles {
+		list-style: none;
+		padding: 0;
+		margin: 1rem 0 0 0;
+		display: grid;
+		gap: 0.75rem;
+	}
+	.principles li {
+		background: rgb(var(--surface));
+		border: 1px solid rgba(var(--border), 0.9);
+		border-radius: 14px;
+		padding: 1rem 1.25rem;
+		display: grid;
+		gap: 0.25rem;
+	}
+	.principles span {
+		color: rgb(var(--muted));
+	}
+	.cta {
+		margin-top: 3rem;
+	}
+	.muted {
+		color: rgb(var(--muted));
+	}
+	.cta-row {
+		display: flex;
+		gap: 0.75rem;
+		flex-wrap: wrap;
+		margin-top: 1rem;
+	}
+	.button {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		padding: 0.7rem 1rem;
+		border-radius: 999px;
+		border: 1px solid rgba(var(--border), 0.9);
+		background: rgb(var(--surface));
+		color: rgb(var(--text));
+		text-decoration: none;
+		font-weight: 600;
+	}
+	.button.primary {
+		background: rgba(var(--accent-rgb), 0.95);
+		border-color: rgba(var(--accent-rgb), 0.95);
+		color: white;
+	}
+</style>

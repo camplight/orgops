@@ -1,0 +1,60 @@
+---
+import type { CollectionEntry } from 'astro:content';
+import SiteLayout from './SiteLayout.astro';
+import FormattedDate from '../components/FormattedDate.astro';
+
+type Props = CollectionEntry<'blog'>['data'];
+
+const { title, description, pubDate, updatedDate } = Astro.props;
+---
+
+<SiteLayout title={title} description={description}>
+	<article class="article">
+		<header class="header">
+			<p class="meta">
+				<FormattedDate date={pubDate} />
+				{updatedDate ? ` • Updated ${updatedDate.toLocaleDateString()}` : ''}
+			</p>
+			<h1>{title}</h1>
+			{description ? <p class="desc">{description}</p> : null}
+		</header>
+
+		<div class="prose">
+			<slot />
+		</div>
+	</article>
+</SiteLayout>
+
+<style>
+	.article {
+		max-width: 75ch;
+		margin: 0 auto;
+	}
+	.header {
+		margin-bottom: 1.5rem;
+	}
+	.meta {
+		margin: 0;
+		font-size: 0.95rem;
+	}
+	.desc {
+		margin: 0.75rem 0 0;
+	}
+	.prose :global(p) {
+		margin: 0.9rem 0;
+	}
+	.prose :global(a) {
+		color: var(--accent-2);
+	}
+	.prose :global(pre) {
+		padding: 1rem;
+		border-radius: 0.75rem;
+		overflow: auto;
+		background: rgba(var(--black), 4%);
+		border: 1px solid rgba(var(--black), 10%);
+	}
+	:global(html[data-theme='dark']) .prose :global(pre) {
+		background: rgba(255, 255, 255, 6%);
+		border-color: rgba(255, 255, 255, 14%);
+	}
+</style>

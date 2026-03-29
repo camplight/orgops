@@ -1,0 +1,114 @@
+---
+import BaseHead from '../components/BaseHead.astro';
+import Footer from '../components/Footer.astro';
+import Header from '../components/Header.astro';
+import { SITE_DESCRIPTION, SITE_TITLE } from '../consts';
+
+const features = [
+	{
+		title: 'Event-driven core',
+		description:
+			'Everything is an event: messages, tool calls, schedules, and outcomes. Build workflows that are easy to replay and reason about.',
+	},
+	{
+		title: 'Channels for coordination',
+		description:
+			'Keep work organized by channel. Delegate to agents with @mentions and keep humans in the loop with structured updates.',
+	},
+	{
+		title: 'Skills + tools',
+		description:
+			'Add capabilities as skills. Each skill can expose tools, schemas, and conventions—without bloating the core runtime.',
+	},
+	{
+		title: 'Scheduling + idempotency',
+		description:
+			'Schedule triggers, retry safely, and avoid duplicate side effects with idempotency keys and explicit command events.',
+	},
+	{
+		title: 'Auditability',
+		description:
+			'Observe what happened and why. Tool invocations and outputs are recorded for traceability and debugging.',
+	},
+	{
+		title: 'Secrets management',
+		description:
+			'Store tokens encrypted. Agents can set/list/delete keys but cannot read secret values back.',
+	},
+];
+---
+
+<!doctype html>
+<html lang="en">
+	<head>
+		<BaseHead title={`${SITE_TITLE} — Features`} description={SITE_DESCRIPTION} />
+	</head>
+	<body>
+		<Header />
+		<main>
+			<header class="page-hero">
+				<h1>Features</h1>
+				<p class="lede">A pragmatic toolkit for building reliable agent workflows.</p>
+			</header>
+
+			<section class="cards">
+				{features.map((f) => (
+					<article class="card">
+						<h2>{f.title}</h2>
+						<p>{f.description}</p>
+					</article>
+				))}
+			</section>
+
+			<section class="section">
+				<h2>What’s next</h2>
+				<p class="muted">
+					This page is intentionally lightweight. Add screenshots, architecture diagrams, and real-world examples as the
+					product story solidifies.
+				</p>
+			</section>
+		</main>
+		<Footer />
+	</body>
+</html>
+
+<style>
+	.page-hero {
+		padding-top: 1rem;
+	}
+	.lede {
+		color: rgb(var(--muted));
+		max-width: 60ch;
+	}
+	.cards {
+		margin-top: 1.5rem;
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 1rem;
+	}
+	.card {
+		background: rgb(var(--surface));
+		border: 1px solid rgba(var(--border), 0.9);
+		border-radius: 14px;
+		padding: 1.25rem;
+	}
+	.card h2 {
+		font-size: 1.25rem;
+		margin-bottom: 0.5rem;
+	}
+	.card p {
+		margin: 0;
+		color: rgb(var(--muted));
+	}
+	.section {
+		margin-top: 2.5rem;
+	}
+	.muted {
+		color: rgb(var(--muted));
+	}
+	@media (max-width: 900px) {
+		.cards {
+			grid-template-columns: 1fr;
+		}
+	}
+</style>

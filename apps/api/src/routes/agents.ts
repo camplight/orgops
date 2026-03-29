@@ -10,7 +10,7 @@ import { basename, extname, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 
 import { schema, type OrgOpsDrizzleDb } from "@orgops/db";
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import type { EventBus } from "@orgops/event-bus";
 
 type AgentsDeps = {
@@ -23,6 +23,12 @@ type AgentsDeps = {
   resolveWorkspacePath: (workspacePath: string) => string;
   insertEvent: (input: any) => any;
 };
+
+const AGENT_MEMORY_CONTEXT_MODES = new Set([
+  "PER_CHANNEL_CROSS_CHANNEL",
+  "FULL_CHANNEL_EVENTS",
+  "OFF",
+] as const);
 
 export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
   const {
@@ -154,6 +160,37 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     return { ok: true, value: Math.floor(parsed) };
   }
 
+  function parseMemoryContextMode(
+    value: unknown,
+    fallback: string
+  ): { ok: true; value: string } | { ok: false; error: string } {
+    if (value === undefined || value === null) {
+      return { ok: true, value: fallback };
+    }
+    const normalized = String(value).trim().toUpperCase();
+    if (AGENT_MEMORY_CONTEXT_MODES.has(normalized as any)) {
+      return { ok: true, value: normalized };
+    }
+    return {
+      ok: false,
+      error:
+        "memoryContextMode must be one of PER_CHANNEL_CROSS_CHANNEL, FULL_CHANNEL_EVENTS, OFF"
+    };
+  }
+
+  function parseJsonRecordSafe(input: string | null | undefined): Record<string, unknown> | null {
+    if (!input) return null;
+    try {
+      const parsed = JSON.parse(input);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   app.get("/api/agents", (c) => {
     const rows = orm.select().from(schema.agents).all() as any[];
     return jsonResponse(
@@ -174,6 +211,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         llmCallTimeoutMs: row.llm_call_timeout_ms ?? null,
         classicMaxModelSteps: row.classic_max_model_steps ?? null,
         contextSessionGapMs: row.context_session_gap_ms ?? null,
+        memoryContextMode: row.memory_context_mode ?? "PER_CHANNEL_CROSS_CHANNEL",
         mode: row.mode ?? "CLASSIC",
         desiredState: row.desired_state,
         runtimeState: row.runtime_state,
@@ -230,6 +268,13 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         400
       );
     }
+    const memoryContextModeParsed = parseMemoryContextMode(
+      body.memoryContextMode,
+      "PER_CHANNEL_CROSS_CHANNEL"
+    );
+    if (!memoryContextModeParsed.ok) {
+      return jsonResponse(c, { error: memoryContextModeParsed.error }, 400);
+    }
     orm
       .insert(schema.agents)
       .values({
@@ -246,6 +291,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         llm_call_timeout_ms: llmCallTimeoutParsed.value,
         classic_max_model_steps: classicMaxModelStepsParsed.value,
         context_session_gap_ms: contextSessionGapParsed.value,
+        memory_context_mode: memoryContextModeParsed.value,
         mode:
           typeof body.mode === "string" && body.mode.trim()
             ? body.mode.trim()
@@ -281,6 +327,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       llmCallTimeoutMs: row.llm_call_timeout_ms ?? null,
       classicMaxModelSteps: row.classic_max_model_steps ?? null,
       contextSessionGapMs: row.context_session_gap_ms ?? null,
+      memoryContextMode: row.memory_context_mode ?? "PER_CHANNEL_CROSS_CHANNEL",
       mode: row.mode ?? "CLASSIC",
       desiredState: row.desired_state,
       runtimeState: row.runtime_state,
@@ -354,6 +401,16 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         400
       );
     }
+    const memoryContextModeParsed =
+      body.memoryContextMode !== undefined
+        ? parseMemoryContextMode(
+            body.memoryContextMode,
+            existing.memory_context_mode ?? "PER_CHANNEL_CROSS_CHANNEL"
+          )
+        : null;
+    if (memoryContextModeParsed && !memoryContextModeParsed.ok) {
+      return jsonResponse(c, { error: memoryContextModeParsed.error }, 400);
+    }
     orm
       .update(schema.agents)
       .set({
@@ -379,6 +436,10 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
           contextSessionGapParsed
             ? contextSessionGapParsed.value
             : existing.context_session_gap_ms,
+        memory_context_mode:
+          memoryContextModeParsed
+            ? memoryContextModeParsed.value
+            : existing.memory_context_mode,
         mode:
           typeof body.mode === "string" && body.mode.trim()
             ? body.mode.trim()
@@ -459,6 +520,64 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       source: "system"
     });
     return jsonResponse(c, { ok: true });
+  });
+
+  app.get("/api/agents/:name/debug/system-prompt", (c) => {
+    const name = c.req.param("name");
+    const promptEvents = orm
+      .select({
+        id: schema.events.id,
+        channelId: schema.events.channel_id,
+        createdAt: schema.events.created_at,
+        payloadJson: schema.events.payload_json
+      })
+      .from(schema.events)
+      .where(eq(schema.events.type, "audit.prompt.composed"))
+      .orderBy(desc(schema.events.created_at))
+      .limit(5000)
+      .all() as Array<{
+      id: string;
+      channelId?: string | null;
+      createdAt: number;
+      payloadJson: string;
+    }>;
+    const matching = promptEvents.find((event) => {
+      const payload = parseJsonRecordSafe(event.payloadJson);
+      return payload?.agentName === name;
+    });
+    if (!matching) {
+      return jsonResponse(c, {
+        found: false,
+        error:
+          "No composed prompt found yet for this agent. Wait for the agent to process at least one event."
+      });
+    }
+    const payload = parseJsonRecordSafe(matching.payloadJson) ?? {};
+    const messagesRaw = Array.isArray(payload.messages) ? payload.messages : [];
+    const messages = messagesRaw
+      .map((entry) => {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+        const record = entry as Record<string, unknown>;
+        return {
+          role: typeof record.role === "string" ? record.role : "unknown",
+          content: typeof record.content === "string" ? record.content : ""
+        };
+      })
+      .filter((entry): entry is { role: string; content: string } => Boolean(entry));
+    const promptText = messages
+      .map((message, index) => `--- ${index + 1}. ${message.role.toUpperCase()} ---\n${message.content}`)
+      .join("\n\n");
+    return jsonResponse(c, {
+      found: true,
+      eventId: matching.id,
+      createdAt: matching.createdAt,
+      channelId: matching.channelId ?? null,
+      modelId: typeof payload.modelId === "string" ? payload.modelId : null,
+      triggerEventId:
+        typeof payload.triggerEventId === "string" ? payload.triggerEventId : null,
+      promptText,
+      messages
+    });
   });
 
   app.get("/api/agents/:name/workspace", (c) => {

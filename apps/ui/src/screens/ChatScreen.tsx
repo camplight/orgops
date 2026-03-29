@@ -201,11 +201,15 @@ function parseAgentContextUsage(event: EventRow): AgentContextUsage | null {
 
 function ContextRing({
   usedPct,
+  size = 36,
+  stroke = 4,
+  showLabel = true
 }: {
   usedPct: number;
+  size?: number;
+  stroke?: number;
+  showLabel?: boolean;
 }) {
-  const size = 36;
-  const stroke = 4;
   const radius = (size - stroke) / 2;
   const circumference = 2 * Math.PI * radius;
   const clamped = Math.max(0, Math.min(100, usedPct));
@@ -232,15 +236,17 @@ function ContextRing({
         strokeDashoffset={dashOffset}
         transform={`rotate(-90 ${size / 2} ${size / 2})`}
       />
-      <text
-        x="50%"
-        y="50%"
-        dominantBaseline="middle"
-        textAnchor="middle"
-        className="fill-slate-200 text-[9px] font-medium"
-      >
-        {Math.round(clamped)}%
-      </text>
+      {showLabel ? (
+        <text
+          x="50%"
+          y="50%"
+          dominantBaseline="middle"
+          textAnchor="middle"
+          className="fill-slate-200 text-[9px] font-medium"
+        >
+          {Math.round(clamped)}%
+        </text>
+      ) : null}
     </svg>
   );
 }
@@ -487,32 +493,6 @@ export function ChatScreen({
                 {activeChannelParticipants}
               </div>
             )}
-            {contextUsageByAgent.length > 0 && (
-              <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3 chat-print-hide">
-                <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">
-                  Agent Context Usage
-                </div>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {contextUsageByAgent.map((usage) => (
-                    <div
-                      key={`context-${usage.agentName}`}
-                      className="flex items-center gap-3 rounded border border-slate-800 bg-slate-900/60 px-2 py-2"
-                    >
-                      <ContextRing usedPct={usage.utilizationPct} />
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-medium text-slate-100">{usage.agentName}</div>
-                        <div className="text-xs text-slate-400">
-                          {usage.usedTokens.toLocaleString()} used / {usage.contextWindowTokens.toLocaleString()} max
-                        </div>
-                        <div className="text-[11px] text-slate-500">
-                          {usage.availableTokens.toLocaleString()} tokens available
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
             <div
               ref={messagesContainerRef}
               className="max-h-[34rem] space-y-3 overflow-auto rounded-xl border border-slate-800 bg-slate-950/70 p-3 text-sm chat-print-messages"
@@ -634,30 +614,86 @@ export function ChatScreen({
                 onChange={(e) => onMessageTextChange(e.target.value)}
                 onKeyDown={handleComposerKeyDown}
               />
-              <div className="flex items-center gap-2">
-                <Button onClick={onSendMessage}>Send message</Button>
-                <Button variant="secondary" onClick={handleExportPdf}>
-                  Export PDF
-                </Button>
-                <Button
-                  variant="secondary"
-                  onClick={() => setMemoryDrawerOpen(true)}
-                  disabled={!activeChannelId || activeAgentNames.length === 0}
-                >
-                  View memory
-                </Button>
-                <Button
-                  variant="secondary"
-                  className="bg-rose-900 text-rose-100 hover:bg-rose-800"
-                  onClick={async () => {
-                    if (!confirm("Clear all messages in this channel? This cannot be undone.")) {
-                      return;
-                    }
-                    await onClearMessages();
-                  }}
-                >
-                  Clear messages
-                </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button onClick={onSendMessage}>Send message</Button>
+                  <Button variant="secondary" onClick={handleExportPdf}>
+                    Export PDF
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    onClick={() => setMemoryDrawerOpen(true)}
+                    disabled={!activeChannelId || activeAgentNames.length === 0}
+                  >
+                    View memory
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    className="bg-rose-900 text-rose-100 hover:bg-rose-800"
+                    onClick={async () => {
+                      if (!confirm("Clear all messages in this channel? This cannot be undone.")) {
+                        return;
+                      }
+                      await onClearMessages();
+                    }}
+                  >
+                    Clear messages
+                  </Button>
+                </div>
+                {contextUsageByAgent.length > 0 && (
+                  <div className="ml-auto flex flex-wrap items-center gap-1.5 text-[11px] text-slate-400">
+                    <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
+                      Context
+                    </span>
+                    {contextUsageByAgent.map((usage) => (
+                      <div
+                        key={`context-footer-${usage.agentName}`}
+                        className="group relative flex items-center gap-1.5 rounded border border-slate-800 bg-slate-900/70 px-1.5 py-1"
+                        tabIndex={0}
+                      >
+                        <ContextRing usedPct={usage.utilizationPct} size={18} stroke={2.5} showLabel={false} />
+                        <span className="max-w-24 truncate text-[11px] font-medium text-slate-200">
+                          {usage.agentName}
+                        </span>
+                        <span className="text-[10px] text-slate-400">{Math.round(usage.utilizationPct)}%</span>
+                        <div className="pointer-events-none absolute bottom-full right-0 z-20 mb-2 w-56 max-w-[calc(100vw-1rem)] translate-y-1 rounded-lg border border-slate-700 bg-slate-900/95 p-2.5 text-left opacity-0 shadow-xl transition-all duration-150 sm:w-60 group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:translate-y-0 group-focus-within:opacity-100">
+                          <div className="mb-1.5 border-b border-slate-700 pb-1.5 text-xs font-semibold text-slate-100">
+                            {usage.agentName}
+                          </div>
+                          <div className="space-y-1 text-[11px]">
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="text-slate-400">Utilization</span>
+                              <span className="font-medium text-slate-200">
+                                {Math.round(usage.utilizationPct)}%
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="text-slate-400">Used</span>
+                              <span className="font-medium text-slate-200">
+                                {usage.usedTokens.toLocaleString()} tokens
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="text-slate-400">Available</span>
+                              <span className="font-medium text-slate-200">
+                                {usage.availableTokens.toLocaleString()} tokens
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="text-slate-400">Context window</span>
+                              <span className="font-medium text-slate-200">
+                                {usage.contextWindowTokens.toLocaleString()} tokens
+                              </span>
+                            </div>
+                            <div className="mt-1 border-t border-slate-700 pt-1 text-[10px] text-slate-500">
+                              Updated {usage.updatedAt ? formatTimestamp(usage.updatedAt) : "unknown"}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           </div>

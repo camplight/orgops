@@ -38,6 +38,11 @@ function isAgentSubscribed(channel: ChannelRecord, agentName: string): boolean {
   );
 }
 
+function shouldRunMemoryMaintenance(agent: Agent): boolean {
+  const mode = agent.memoryContextMode ?? "PER_CHANNEL_CROSS_CHANNEL";
+  return mode === "PER_CHANNEL_CROSS_CHANNEL";
+}
+
 export function createMaintenanceLoop(deps: Dependencies) {
   const maintenanceInFlight = new Map<string, Promise<void>>();
   const channelRecentLastRunAtByChannel = new Map<string, number>();
@@ -46,6 +51,7 @@ export function createMaintenanceLoop(deps: Dependencies) {
   const crossFullLastRunAtByAgent = new Map<string, number>();
 
   async function runAgentMaintenancePass(agent: Agent) {
+    if (!shouldRunMemoryMaintenance(agent)) return;
     const channels = await deps.listChannels();
     const injectionEnvByChannel = new Map<string, Record<string, string>>();
     const ensureInjectionEnv = async (

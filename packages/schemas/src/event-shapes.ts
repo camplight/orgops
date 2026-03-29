@@ -361,6 +361,35 @@ const coreEventShapes: EventShapeDefinition[] = [
     }),
   },
   {
+    type: "audit.prompt.composed",
+    description: "Runner captured the composed prompt/messages for an agent turn.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1),
+      source: sourceSchema,
+      payload: z
+        .object({
+          agentName: z.string().min(1),
+          modelId: z.string().min(1),
+          memoryContextMode: z
+            .enum(["PER_CHANNEL_CROSS_CHANNEL", "FULL_CHANNEL_EVENTS", "OFF"])
+            .optional(),
+          triggerEventId: z.string().min(1).optional(),
+          systemPrompt: z.string(),
+          systemContextMessages: z.array(z.string()).optional(),
+          messages: z
+            .array(
+              z.object({
+                role: z.string().min(1),
+                content: z.string(),
+              }),
+            )
+            .optional(),
+        })
+        .passthrough(),
+    }),
+  },
+  {
     type: "audit.memory.channel.recent.updated",
     description: "Runner updated recent channel memory summary record.",
     source: "core",

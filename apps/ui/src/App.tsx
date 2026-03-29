@@ -528,6 +528,17 @@ export default function App() {
               `/api/agents/${encodeURIComponent(name)}/workspace/file?${params.toString()}`
             );
           }}
+          loadAgentSystemPrompt={(name) =>
+            data.apiJson<{
+              found: boolean;
+              promptText?: string;
+              error?: string;
+              createdAt?: number;
+              channelId?: string | null;
+              modelId?: string | null;
+              triggerEventId?: string | null;
+            }>(`/api/agents/${encodeURIComponent(name)}/debug/system-prompt`)
+          }
           onDownloadAgentWorkspaceFile={(name, path) => {
             const params = new URLSearchParams();
             params.set("path", path);

@@ -4,6 +4,7 @@ import { executeTool } from "./tools";
 import {
   buildModelMessages,
   resolveAgentClassicMaxModelSteps,
+  resolveAgentMemoryContextMode,
   resolveAgentLlmCallTimeoutMs,
   shouldHandleEvent,
 } from "./runner";
@@ -35,6 +36,10 @@ describe("agent runner", () => {
     });
     expect(Object.keys(tools).length).toBeGreaterThan(0);
     expect(Object.keys(tools)).toContain("shell_run");
+    expect(Object.keys(tools)).toContain("memory_channel_recent_get");
+    expect(Object.keys(tools)).toContain("memory_cross_full_get");
+    expect(Object.keys(tools)).toContain("memory_channel_full_update");
+    expect(Object.keys(tools)).toContain("memory_cross_recent_update");
   });
 
   it("builds model messages from all channel events", () => {
@@ -97,6 +102,7 @@ describe("agent runner", () => {
 
     expect(resolveAgentLlmCallTimeoutMs(baseAgent)).toBe(10800000);
     expect(resolveAgentClassicMaxModelSteps(baseAgent)).toBe(100);
+    expect(resolveAgentMemoryContextMode(baseAgent)).toBe("PER_CHANNEL_CROSS_CHANNEL");
 
     expect(
       resolveAgentLlmCallTimeoutMs({ ...baseAgent, llmCallTimeoutMs: 180_000 }),
@@ -117,6 +123,24 @@ describe("agent runner", () => {
         classicMaxModelSteps: -1,
       }),
     ).toBe(100);
+    expect(
+      resolveAgentMemoryContextMode({
+        ...baseAgent,
+        memoryContextMode: "FULL_CHANNEL_EVENTS",
+      }),
+    ).toBe("FULL_CHANNEL_EVENTS");
+    expect(
+      resolveAgentMemoryContextMode({
+        ...baseAgent,
+        memoryContextMode: "OFF",
+      }),
+    ).toBe("OFF");
+    expect(
+      resolveAgentMemoryContextMode({
+        ...baseAgent,
+        memoryContextMode: "invalid" as any,
+      }),
+    ).toBe("PER_CHANNEL_CROSS_CHANNEL");
   });
 
   it("truncates oversized history to stay within model budget", () => {
@@ -515,6 +539,302 @@ describe("agent runner", () => {
     expect(requests[0]?.body.payload?.targetAgentName).toBe("tester");
     expect(requests[0]?.body.deliverAt).toBeGreaterThanOrEqual(before + 30_000);
     expect(requests[0]?.body.deliverAt).toBeLessThanOrEqual(after + 30_000);
+  });
+
+  it("gets channel recent memory via memory_channel_recent_get", async () => {
+    const requests: string[] = [];
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async (path: string) => {
+        requests.push(path);
+        return new Response(
+          JSON.stringify({
+            record: {
+              agentName: "tester",
+              channelId: "chan-1",
+              summaryText: "recent summary",
+              lastProcessedAt: 123,
+              version: 1,
+              createdAt: 123,
+              updatedAt: 123,
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      },
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+    };
+
+    const result = (await executeTool(
+      ctx,
+      "memory_channel_recent_get",
+      {},
+    )) as {
+      scope: string;
+      mode: string;
+      channelId: string;
+      record?: { summaryText?: string };
+    };
+
+    expect(requests).toEqual([
+      "/api/memory/channel/recent?agentName=tester&channelId=chan-1",
+    ]);
+    expect(result.scope).toBe("channel");
+    expect(result.mode).toBe("recent");
+    expect(result.channelId).toBe("chan-1");
+    expect(result.record?.summaryText).toBe("recent summary");
+  });
+
+  it("gets cross full memory via memory_cross_full_get", async () => {
+    const requests: string[] = [];
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async (path: string) => {
+        requests.push(path);
+        return new Response(
+          JSON.stringify({
+            record: {
+              agentName: "tester",
+              summaryText: "cross full summary",
+              lastProcessedAt: 456,
+              version: 1,
+              createdAt: 456,
+              updatedAt: 456,
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      },
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+    };
+
+    const result = (await executeTool(ctx, "memory_cross_full_get", {
+      channelIds: ["chan-1", "chan-2"],
+    })) as {
+      scope: string;
+      mode: string;
+      channelIds: string[];
+      record?: { summaryText?: string };
+    };
+
+    expect(requests).toEqual(["/api/memory/cross/full?agentName=tester"]);
+    expect(result.scope).toBe("cross");
+    expect(result.mode).toBe("full");
+    expect(result.channelIds).toEqual(["chan-1", "chan-2"]);
+    expect(result.record?.summaryText).toBe("cross full summary");
+  });
+
+  it("updates channel full memory via memory_channel_full_update", async () => {
+    const requests: Array<{ path: string; method: string; body: any }> = [];
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async (path: string, init?: RequestInit) => {
+        const method = init?.method ?? "GET";
+        requests.push({
+          path,
+          method,
+          body: init?.body ? JSON.parse(String(init.body)) : {},
+        });
+        if (method === "GET") {
+          return new Response(
+            JSON.stringify({
+              record: {
+                agentName: "tester",
+                channelId: "chan-1",
+                summaryText: "old summary",
+                lastProcessedAt: 777,
+                version: 3,
+                createdAt: 100,
+                updatedAt: 200,
+              },
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            record: {
+              agentName: "tester",
+              channelId: "chan-1",
+              summaryText: "new full summary",
+              lastProcessedAt: 777,
+              version: 4,
+              createdAt: 100,
+              updatedAt: 300,
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      },
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+    };
+
+    const result = (await executeTool(ctx, "memory_channel_full_update", {
+      summaryText: "new full summary",
+    })) as { record?: { summaryText?: string } };
+
+    const putRequest = requests.find((request) => request.method === "PUT");
+    expect(requests[0]?.path).toBe(
+      "/api/memory/channel/full?agentName=tester&channelId=chan-1",
+    );
+    expect(putRequest?.path).toBe("/api/memory/channel/full");
+    expect(putRequest?.body.agentName).toBe("tester");
+    expect(putRequest?.body.channelId).toBe("chan-1");
+    expect(putRequest?.body.summaryText).toBe("new full summary");
+    expect(putRequest?.body.lastProcessedAt).toBe(777);
+    expect(putRequest?.body.expectedVersion).toBe(3);
+    expect(result.record?.summaryText).toBe("new full summary");
+  });
+
+  it("updates cross recent memory via memory_cross_recent_update", async () => {
+    const requests: Array<{ path: string; method: string; body: any }> = [];
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async (path: string, init?: RequestInit) => {
+        const method = init?.method ?? "GET";
+        requests.push({
+          path,
+          method,
+          body: init?.body ? JSON.parse(String(init.body)) : {},
+        });
+        if (method === "GET") {
+          return new Response(
+            JSON.stringify({
+              record: {
+                agentName: "tester",
+                summaryText: "old cross recent",
+                windowStartAt: 50,
+                lastProcessedAt: 900,
+                version: 2,
+                createdAt: 100,
+                updatedAt: 200,
+              },
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            record: {
+              agentName: "tester",
+              summaryText: "new cross recent",
+              windowStartAt: 50,
+              lastProcessedAt: 900,
+              version: 3,
+              createdAt: 100,
+              updatedAt: 300,
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      },
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+    };
+
+    const result = (await executeTool(ctx, "memory_cross_recent_update", {
+      summaryText: "new cross recent",
+      channelIds: ["chan-1", "chan-2"],
+    })) as { channelIds?: string[]; record?: { summaryText?: string } };
+
+    const putRequest = requests.find((request) => request.method === "PUT");
+    expect(requests[0]?.path).toBe("/api/memory/cross/recent?agentName=tester");
+    expect(putRequest?.path).toBe("/api/memory/cross/recent");
+    expect(putRequest?.body.agentName).toBe("tester");
+    expect(putRequest?.body.summaryText).toBe("new cross recent");
+    expect(putRequest?.body.lastProcessedAt).toBe(900);
+    expect(putRequest?.body.expectedVersion).toBe(2);
+    expect(result.channelIds).toEqual(["chan-1", "chan-2"]);
+    expect(result.record?.summaryText).toBe("new cross recent");
   });
 
   it("allows zero-delay scheduling for immediate trigger", async () => {

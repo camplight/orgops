@@ -6,22 +6,23 @@ import { getShellLaunch } from "./shell-launch";
 
 const envSchema = z.record(z.string(), z.string()).optional();
 const MIN_TIMEOUT_MS = 1_000;
-const MAX_TIMEOUT_MS = 300_000;
+const MAX_TIMEOUT_MS = 45_000;
 const DEFAULT_TIMEOUT_MS = 45_000;
 const DEFAULT_MAX_BUFFER = 10 * 1024 * 1024;
 const shellRunSchema = z.object({
   cmd: z.string().min(1),
   cwd: z.string().optional(),
   env: envSchema,
-  timeoutMs: z.number().int().min(MIN_TIMEOUT_MS).max(MAX_TIMEOUT_MS).optional(),
+  timeoutMs: z
+    .number()
+    .int()
+    .min(MIN_TIMEOUT_MS)
+    .max(MAX_TIMEOUT_MS)
+    .optional(),
 });
 
 export const shellToolDefs: ToolDef[] = [
-  [
-    "shell_run",
-    "Run a shell command with a timeout.",
-    shellRunSchema,
-  ],
+  ["shell_run", "Run a shell command with a timeout.", shellRunSchema],
 ];
 
 function formatZodIssues(error: z.ZodError) {
@@ -100,7 +101,11 @@ export async function execute(
     error?: Error;
   }>((resolve) => {
     let settled = false;
-    const settle = (value: { code: number | null; signal: NodeJS.Signals | null; error?: Error }) => {
+    const settle = (value: {
+      code: number | null;
+      signal: NodeJS.Signals | null;
+      error?: Error;
+    }) => {
       if (settled) return;
       settled = true;
       resolve(value);

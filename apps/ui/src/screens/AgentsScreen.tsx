@@ -14,6 +14,7 @@ type AgentForm = {
   name: string;
   modelId: string;
   mode: "CLASSIC" | "RLM_REPL";
+  memoryContextMode: "PER_CHANNEL_CROSS_CHANNEL" | "FULL_CHANNEL_EVENTS" | "OFF";
   llmCallTimeoutMs: string;
   contextSessionGapMs: string;
   workspacePath: string;
@@ -27,6 +28,7 @@ const DEFAULT_AGENT_FORM: AgentForm = {
   name: "",
   modelId: "openai:gpt-4o-mini",
   mode: "CLASSIC",
+  memoryContextMode: "PER_CHANNEL_CROSS_CHANNEL",
   llmCallTimeoutMs: "",
   contextSessionGapMs: "",
   workspacePath: ".orgops-data/workspaces/default",
@@ -69,6 +71,17 @@ type AgentsScreenProps = {
     name: string,
     path: string
   ) => Promise<AgentWorkspaceFileResponse>;
+  loadAgentSystemPrompt: (
+    name: string
+  ) => Promise<{
+    found: boolean;
+    promptText?: string;
+    error?: string;
+    createdAt?: number;
+    channelId?: string | null;
+    modelId?: string | null;
+    triggerEventId?: string | null;
+  }>;
   onDownloadAgentWorkspaceFile: (name: string, path: string) => void;
 };
 
@@ -84,6 +97,7 @@ export function AgentsScreen({
   loadAgentEvents,
   loadAgentWorkspace,
   loadAgentWorkspaceFile,
+  loadAgentSystemPrompt,
   onDownloadAgentWorkspaceFile
 }: AgentsScreenProps) {
   const [selectedAgentName, setSelectedAgentName] = useState<string | null>(null);
@@ -110,6 +124,16 @@ export function AgentsScreen({
   const [openFile, setOpenFile] = useState<AgentWorkspaceFileResponse | null>(null);
   const [panelError, setPanelError] = useState<string | null>(null);
   const [crossMemoryDrawerOpen, setCrossMemoryDrawerOpen] = useState(false);
+  const [systemPromptDrawerOpen, setSystemPromptDrawerOpen] = useState(false);
+  const [systemPromptLoading, setSystemPromptLoading] = useState(false);
+  const [systemPromptError, setSystemPromptError] = useState<string | null>(null);
+  const [systemPromptText, setSystemPromptText] = useState("");
+  const [systemPromptMeta, setSystemPromptMeta] = useState<{
+    createdAt?: number;
+    channelId?: string | null;
+    modelId?: string | null;
+    triggerEventId?: string | null;
+  } | null>(null);
   const [crossMemoryLoading, setCrossMemoryLoading] = useState(false);
   const [crossMemoryError, setCrossMemoryError] = useState<string | null>(null);
   const [crossMemory, setCrossMemory] = useState<{
@@ -120,6 +144,18 @@ export function AgentsScreen({
   } | null>(null);
   const crossMemoryCacheRef = useRef<
     Map<string, { recent: string; full: string; updatedAtRecent?: number; updatedAtFull?: number }>
+  >(new Map());
+  const systemPromptCacheRef = useRef<
+    Map<
+      string,
+      {
+        promptText: string;
+        createdAt?: number;
+        channelId?: string | null;
+        modelId?: string | null;
+        triggerEventId?: string | null;
+      }
+    >
   >(new Map());
 
   const selectedAgent = useMemo(
@@ -145,6 +181,7 @@ export function AgentsScreen({
       name: selectedAgent.name,
       modelId: selectedAgent.modelId ?? "openai:gpt-4o-mini",
       mode: selectedAgent.mode ?? "CLASSIC",
+      memoryContextMode: selectedAgent.memoryContextMode ?? "PER_CHANNEL_CROSS_CHANNEL",
       llmCallTimeoutMs:
         selectedAgent.llmCallTimeoutMs && selectedAgent.llmCallTimeoutMs > 0
           ? String(selectedAgent.llmCallTimeoutMs)
@@ -170,6 +207,11 @@ export function AgentsScreen({
       setWorkspaceData(null);
       setOpenFile(null);
       setCrossMemoryDrawerOpen(false);
+      setSystemPromptDrawerOpen(false);
+      setSystemPromptLoading(false);
+      setSystemPromptError(null);
+      setSystemPromptText("");
+      setSystemPromptMeta(null);
       setCrossMemory(null);
       setCrossMemoryError(null);
       setCrossMemoryLoading(false);
@@ -189,6 +231,11 @@ export function AgentsScreen({
     setSelectedEventId(null);
     setOpenFile(null);
     setCrossMemoryDrawerOpen(false);
+    setSystemPromptDrawerOpen(false);
+    setSystemPromptLoading(false);
+    setSystemPromptError(null);
+    setSystemPromptText("");
+    setSystemPromptMeta(null);
   };
 
   const handleSelectAgent = (name: string) => {
@@ -201,6 +248,11 @@ export function AgentsScreen({
     setSelectedEventId(null);
     setOpenFile(null);
     setCrossMemoryDrawerOpen(false);
+    setSystemPromptDrawerOpen(false);
+    setSystemPromptLoading(false);
+    setSystemPromptError(null);
+    setSystemPromptText("");
+    setSystemPromptMeta(null);
   };
 
   const closeDrawer = () => {
@@ -213,23 +265,34 @@ export function AgentsScreen({
     setCrossMemoryDrawerOpen(false);
   };
 
-  useEscapeKey(drawerOpen || eventDetailsDrawerOpen || crossMemoryDrawerOpen || Boolean(openFile), () => {
-    if (crossMemoryDrawerOpen) {
-      setCrossMemoryDrawerOpen(false);
-      return;
+  useEscapeKey(
+    drawerOpen ||
+      eventDetailsDrawerOpen ||
+      crossMemoryDrawerOpen ||
+      systemPromptDrawerOpen ||
+      Boolean(openFile),
+    () => {
+      if (systemPromptDrawerOpen) {
+        setSystemPromptDrawerOpen(false);
+        return;
+      }
+      if (crossMemoryDrawerOpen) {
+        setCrossMemoryDrawerOpen(false);
+        return;
+      }
+      if (openFile) {
+        setOpenFile(null);
+        return;
+      }
+      if (eventDetailsDrawerOpen) {
+        setSelectedEventId(null);
+        return;
+      }
+      if (drawerOpen) {
+        closeDrawer();
+      }
     }
-    if (openFile) {
-      setOpenFile(null);
-      return;
-    }
-    if (eventDetailsDrawerOpen) {
-      setSelectedEventId(null);
-      return;
-    }
-    if (drawerOpen) {
-      closeDrawer();
-    }
-  });
+  );
 
   const openEventsTab = async () => {
     if (!selectedAgent) return;
@@ -322,6 +385,58 @@ export function AgentsScreen({
     await refreshCrossMemory(selectedAgent.name);
   };
 
+  const openSystemPromptDrawer = async () => {
+    if (!selectedAgent) return;
+    setSystemPromptDrawerOpen(true);
+    setSystemPromptError(null);
+    const cached = systemPromptCacheRef.current.get(selectedAgent.name);
+    if (cached) {
+      setSystemPromptText(cached.promptText);
+      setSystemPromptMeta({
+        createdAt: cached.createdAt,
+        channelId: cached.channelId,
+        modelId: cached.modelId,
+        triggerEventId: cached.triggerEventId
+      });
+      setSystemPromptLoading(false);
+      return;
+    }
+    setSystemPromptLoading(true);
+    try {
+      const data = await loadAgentSystemPrompt(selectedAgent.name);
+      if (!data.found || !data.promptText?.trim()) {
+        setSystemPromptText("");
+        setSystemPromptMeta(null);
+        setSystemPromptError(
+          data.error ??
+            "No composed prompt found yet for this agent. Wait for the next agent turn, then refresh."
+        );
+        return;
+      }
+      const payload = {
+        promptText: data.promptText,
+        createdAt: data.createdAt,
+        channelId: data.channelId,
+        modelId: data.modelId,
+        triggerEventId: data.triggerEventId
+      };
+      systemPromptCacheRef.current.set(selectedAgent.name, payload);
+      setSystemPromptText(payload.promptText);
+      setSystemPromptMeta({
+        createdAt: payload.createdAt,
+        channelId: payload.channelId,
+        modelId: payload.modelId,
+        triggerEventId: payload.triggerEventId
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to load composed system prompt.";
+      setSystemPromptError(message);
+    } finally {
+      setSystemPromptLoading(false);
+    }
+  };
+
   const handleSubmit = async () => {
     if (!form.name.trim() || !form.modelId.trim() || !form.workspacePath.trim()) {
       return;
@@ -344,6 +459,7 @@ export function AgentsScreen({
           name: normalizedName,
           modelId: form.modelId.trim(),
           mode: form.mode,
+          memoryContextMode: form.memoryContextMode,
           llmCallTimeoutMs: llmCallTimeoutMs === null ? "" : String(llmCallTimeoutMs),
           contextSessionGapMs:
             contextSessionGapMs === null ? "" : String(contextSessionGapMs),
@@ -367,6 +483,7 @@ export function AgentsScreen({
       await onUpdateAgent(selectedAgent.name, {
         modelId: form.modelId.trim(),
         mode: form.mode,
+        memoryContextMode: form.memoryContextMode,
         llmCallTimeoutMs: llmCallTimeoutMs === null ? "" : String(llmCallTimeoutMs),
         contextSessionGapMs:
           contextSessionGapMs === null ? "" : String(contextSessionGapMs),
@@ -472,6 +589,7 @@ export function AgentsScreen({
                 <th className="px-2 py-2">Desired</th>
                 <th className="px-2 py-2">Model</th>
                 <th className="px-2 py-2">Mode</th>
+                <th className="px-2 py-2">Memory Context</th>
                 <th className="px-2 py-2">Workspace</th>
               </tr>
             </thead>
@@ -496,6 +614,9 @@ export function AgentsScreen({
                   </td>
                   <td className="whitespace-nowrap px-2 py-2 text-slate-400">
                     {agent.mode ?? "CLASSIC"}
+                  </td>
+                  <td className="whitespace-nowrap px-2 py-2 text-slate-400">
+                    {agent.memoryContextMode ?? "PER_CHANNEL_CROSS_CHANNEL"}
                   </td>
                   <td className="max-w-[420px] truncate px-2 py-2 text-slate-500">
                     {agent.workspacePath ?? "-"}
@@ -605,6 +726,22 @@ export function AgentsScreen({
                         </div>
                       </div>
                     )}
+                    <div className="rounded border border-slate-800 bg-slate-950 p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-sm text-slate-300">System Prompt</div>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          className="px-2 py-1 text-xs"
+                          onClick={() => {
+                            void openSystemPromptDrawer();
+                          }}
+                          disabled={!selectedAgent}
+                        >
+                          View system prompt
+                        </Button>
+                      </div>
+                    </div>
                     <div className="space-y-1">
                       <div className="text-sm text-slate-400">Name</div>
                       <Input
@@ -646,6 +783,33 @@ export function AgentsScreen({
                       >
                         <option value="CLASSIC">CLASSIC</option>
                         <option value="RLM_REPL">RLM_REPL</option>
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-sm text-slate-400">Memory context mode</div>
+                      <select
+                        value={form.memoryContextMode}
+                        onChange={(e) => {
+                          setIsFormDirty(true);
+                          setSaveStatus(null);
+                          const mode = e.target.value;
+                          setForm((prev) => ({
+                            ...prev,
+                            memoryContextMode:
+                              mode === "FULL_CHANNEL_EVENTS"
+                                ? "FULL_CHANNEL_EVENTS"
+                                : mode === "OFF"
+                                  ? "OFF"
+                                  : "PER_CHANNEL_CROSS_CHANNEL"
+                          }));
+                        }}
+                        className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+                      >
+                        <option value="PER_CHANNEL_CROSS_CHANNEL">
+                          PER_CHANNEL_CROSS_CHANNEL
+                        </option>
+                        <option value="FULL_CHANNEL_EVENTS">FULL_CHANNEL_EVENTS</option>
+                        <option value="OFF">OFF</option>
                       </select>
                     </div>
                     <div className="space-y-1">
@@ -1104,6 +1268,81 @@ export function AgentsScreen({
                 {crossMemoryError ? (
                   <div className="rounded border border-rose-900/60 bg-rose-950/30 px-3 py-2 text-sm text-rose-300">
                     {crossMemoryError}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+
+          <div
+            className={`absolute inset-0 z-30 flex justify-end bg-black/35 transition-opacity ${
+              systemPromptDrawerOpen
+                ? "pointer-events-auto opacity-100"
+                : "pointer-events-none opacity-0"
+            }`}
+            onClick={() => setSystemPromptDrawerOpen(false)}
+          >
+            <div
+              className={`pointer-events-auto flex h-full w-full max-w-3xl flex-col border-l border-slate-800 bg-slate-950 shadow-2xl transition-transform duration-300 ${
+                systemPromptDrawerOpen ? "translate-x-0" : "translate-x-full"
+              }`}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+                <div>
+                  <h4 className="text-sm font-semibold text-slate-100">System Prompt</h4>
+                  <p className="text-xs text-slate-500">
+                    {selectedAgent ? selectedAgent.name : "New agent"}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="px-2 py-1 text-xs"
+                    disabled={!selectedAgent || systemPromptLoading}
+                    onClick={() => {
+                      if (!selectedAgent) return;
+                      systemPromptCacheRef.current.delete(selectedAgent.name);
+                      void openSystemPromptDrawer();
+                    }}
+                  >
+                    Refresh
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="px-2 py-1 text-xs"
+                    onClick={() => setSystemPromptDrawerOpen(false)}
+                  >
+                    Close
+                  </Button>
+                </div>
+              </div>
+              <div className="min-h-0 flex-1 space-y-2 overflow-auto px-4 py-4">
+                <div className="text-xs text-slate-500">
+                  Read-only prompt captured from the runner during the latest turn.
+                </div>
+                {systemPromptMeta && (
+                  <div className="rounded border border-slate-800 bg-slate-900/50 px-3 py-2 text-xs text-slate-400">
+                    Captured: {formatTimestamp(systemPromptMeta.createdAt)} | Model:{" "}
+                    {systemPromptMeta.modelId ?? "unknown"} | Channel:{" "}
+                    {systemPromptMeta.channelId ?? "unknown"}
+                  </div>
+                )}
+                {systemPromptLoading ? (
+                  <div className="text-sm text-slate-500">Loading composed prompt...</div>
+                ) : (
+                  <Textarea
+                    rows={18}
+                    value={systemPromptText}
+                    readOnly
+                    placeholder="No composed prompt found yet for this agent."
+                  />
+                )}
+                {systemPromptError ? (
+                  <div className="rounded border border-rose-900/60 bg-rose-950/30 px-3 py-2 text-sm text-rose-300">
+                    {systemPromptError}
                   </div>
                 ) : null}
               </div>

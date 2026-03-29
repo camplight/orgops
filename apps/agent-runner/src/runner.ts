@@ -545,6 +545,8 @@ type ModelEventDraft = {
 };
 
 const MAX_EVENT_DISPATCH_ATTEMPTS = 3;
+const DEFAULT_MEMORY_CONTEXT_MODE = "PER_CHANNEL_CROSS_CHANNEL" as const;
+type MemoryContextMode = "PER_CHANNEL_CROSS_CHANNEL" | "FULL_CHANNEL_EVENTS" | "OFF";
 
 export function resolveAgentLlmCallTimeoutMs(agent: Agent): number {
   const configured = agent.llmCallTimeoutMs;
@@ -560,6 +562,18 @@ export function resolveAgentClassicMaxModelSteps(agent: Agent): number {
     return Math.floor(configured);
   }
   return DEFAULT_CLASSIC_MAX_MODEL_STEPS;
+}
+
+export function resolveAgentMemoryContextMode(agent: Agent): MemoryContextMode {
+  const configured = agent.memoryContextMode;
+  if (
+    configured === "PER_CHANNEL_CROSS_CHANNEL" ||
+    configured === "FULL_CHANNEL_EVENTS" ||
+    configured === "OFF"
+  ) {
+    return configured;
+  }
+  return DEFAULT_MEMORY_CONTEXT_MODE;
 }
 
 function extractJsonObject(rawText: string): unknown {
@@ -810,51 +824,62 @@ async function handleEvent(agent: Agent, events: Event[]) {
       nodeVersion: process.version,
     },
   );
-  const [channelRecentMemory, channelFullMemory, crossRecentMemory, crossFullMemory] =
-    await Promise.all([
-      getChannelRecentMemoryRecord(apiFetch, agent.name, channelId),
-      getChannelFullMemoryRecord(apiFetch, agent.name, channelId),
-      getCrossRecentMemoryRecord(apiFetch, agent.name),
-      getCrossFullMemoryRecord(apiFetch, agent.name),
-    ]);
-  const recentSummaryWatermark = channelRecentMemory?.lastProcessedAt;
-  const rawDeltaEvents = await listEventsAfterTimestamp(
-    apiFetch,
-    channelId,
-    typeof recentSummaryWatermark === "number" && recentSummaryWatermark > 0
-      ? recentSummaryWatermark
-      : undefined,
-  );
-  const eventHistory = getMeaningfulEvents(rawDeltaEvents);
-  const systemContextMessages = [
-    channelRecentMemory?.summaryText
-      ? buildSystemMemoryMessage(
-          `Channel Recent Summary (last 10 minutes, ${channelId})`,
-          channelRecentMemory.summaryText,
-        )
-      : "",
-    eventHistory.length > 0
-      ? buildChannelRecentDeltaSystemMessage({ channelId, events: eventHistory })
-      : "",
-    channelFullMemory?.summaryText
-      ? buildSystemMemoryMessage(
-          `Channel Full Memory (${channelId})`,
-          channelFullMemory.summaryText,
-        )
-      : "",
-    crossRecentMemory?.summaryText
-      ? buildSystemMemoryMessage(
-          "Cross-Channel Recent Summary (last 10 minutes)",
-          crossRecentMemory.summaryText,
-        )
-      : "",
-    crossFullMemory?.summaryText
-      ? buildSystemMemoryMessage(
-          "Cross-Channel Full Memory",
-          crossFullMemory.summaryText,
-        )
-      : "",
-  ].filter(Boolean);
+  const memoryContextMode = resolveAgentMemoryContextMode(agent);
+  let eventHistory: Event[] = [];
+  let systemContextMessages: string[] = [];
+  if (memoryContextMode === "PER_CHANNEL_CROSS_CHANNEL") {
+    const [channelRecentMemory, channelFullMemory, crossRecentMemory, crossFullMemory] =
+      await Promise.all([
+        getChannelRecentMemoryRecord(apiFetch, agent.name, channelId),
+        getChannelFullMemoryRecord(apiFetch, agent.name, channelId),
+        getCrossRecentMemoryRecord(apiFetch, agent.name),
+        getCrossFullMemoryRecord(apiFetch, agent.name),
+      ]);
+    const recentSummaryWatermark = channelRecentMemory?.lastProcessedAt;
+    const rawDeltaEvents = await listEventsAfterTimestamp(
+      apiFetch,
+      channelId,
+      typeof recentSummaryWatermark === "number" && recentSummaryWatermark > 0
+        ? recentSummaryWatermark
+        : undefined,
+    );
+    eventHistory = getMeaningfulEvents(rawDeltaEvents);
+    systemContextMessages = [
+      channelRecentMemory?.summaryText
+        ? buildSystemMemoryMessage(
+            `Channel Recent Summary (last 10 minutes, ${channelId})`,
+            channelRecentMemory.summaryText,
+          )
+        : "",
+      eventHistory.length > 0
+        ? buildChannelRecentDeltaSystemMessage({ channelId, events: eventHistory })
+        : "",
+      channelFullMemory?.summaryText
+        ? buildSystemMemoryMessage(
+            `Channel Full Memory (${channelId})`,
+            channelFullMemory.summaryText,
+          )
+        : "",
+      crossRecentMemory?.summaryText
+        ? buildSystemMemoryMessage(
+            "Cross-Channel Recent Summary (last 10 minutes)",
+            crossRecentMemory.summaryText,
+          )
+        : "",
+      crossFullMemory?.summaryText
+        ? buildSystemMemoryMessage(
+            "Cross-Channel Full Memory",
+            crossFullMemory.summaryText,
+          )
+        : "",
+    ].filter(Boolean);
+  } else if (memoryContextMode === "FULL_CHANNEL_EVENTS") {
+    const fullChannelHistory = await listEventsAfterTimestamp(apiFetch, channelId);
+    eventHistory = getMeaningfulEvents(fullChannelHistory);
+  } else {
+    eventHistory = [];
+    systemContextMessages = [];
+  }
   const system = [
     agent.systemInstructions,
     runnerGuidance,
@@ -880,6 +905,28 @@ async function handleEvent(agent: Agent, events: Event[]) {
   const invokeMessages = mergedTriggerMessage
     ? [...baseMessages, mergedTriggerMessage]
     : baseMessages;
+  try {
+    await emitEvent({
+      type: "audit.prompt.composed",
+      source: "system:runner:prompt",
+      status: "DELIVERED",
+      channelId,
+      payload: {
+        agentName: agent.name,
+        modelId: agent.modelId,
+        memoryContextMode,
+        triggerEventId: triggerEvent.id,
+        systemPrompt: system,
+        systemContextMessages,
+        messages: invokeMessages.map((message) => ({
+          role: message.role,
+          content: String(message.content ?? ""),
+        })),
+      },
+    });
+  } catch {
+    // Prompt telemetry should never block turn execution.
+  }
   const systemContextChars = systemContextMessages.reduce(
     (sum, message) => sum + message.length,
     0,
@@ -917,6 +964,7 @@ async function handleEvent(agent: Agent, events: Event[]) {
         estimatedUsedTokens,
         estimatedAvailableTokens,
         utilizationPct: Math.round(utilizationPct * 100) / 100,
+        memoryContextMode,
         messageCount: invokeMessages.length,
         systemChars,
         systemContextChars,
@@ -1108,7 +1156,9 @@ async function pollAgent(agent: Agent) {
       console.error(`failed to emit startup event for ${agent.name}`, error);
     }
   }
-  maintenanceLoop.schedule(agent);
+  if (resolveAgentMemoryContextMode(agent) === "PER_CHANNEL_CROSS_CHANNEL") {
+    maintenanceLoop.schedule(agent);
+  }
   const query = `agentName=${encodeURIComponent(agent.name)}&status=PENDING&limit=50`;
   const res = await apiFetch(`/api/events?${query}`);
   const events = (await res.json()) as Event[];

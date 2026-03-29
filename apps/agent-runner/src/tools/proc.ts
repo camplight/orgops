@@ -14,11 +14,7 @@ const procStartSchema = z.object({
 const processRefSchema = z.object({ processId: z.string().min(1) });
 
 export const procToolDefs: ToolDef[] = [
-  [
-    "proc_start",
-    "Start a long-running process.",
-    procStartSchema,
-  ],
+  ["proc_start", "Start a long-running process async.", procStartSchema],
   ["proc_stop", "Stop a process.", processRefSchema],
   ["proc_status", "Check a process.", processRefSchema],
   ["proc_tail", "Tail process output.", processRefSchema],
@@ -255,9 +251,7 @@ export async function execute(
     const processId = parsedResult.data.processId;
     const entry = processes.get(processId);
     const running = Boolean(
-      entry &&
-        entry.proc.exitCode === null &&
-        entry.proc.signalCode === null,
+      entry && entry.proc.exitCode === null && entry.proc.signalCode === null,
     );
     if (entry && !running) {
       processes.delete(processId);

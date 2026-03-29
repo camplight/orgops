@@ -34,6 +34,9 @@ export const AgentSchema = z.object({
   llmCallTimeoutMs: z.number().int().positive().optional().nullable(),
   classicMaxModelSteps: z.number().int().positive().optional().nullable(),
   contextSessionGapMs: z.number().int().positive().optional().nullable(),
+  memoryContextMode: z
+    .enum(["PER_CHANNEL_CROSS_CHANNEL", "FULL_CHANNEL_EVENTS", "OFF"])
+    .optional(),
   desiredState: z.enum(["RUNNING", "STOPPED"]).optional(),
   runtimeState: z
     .enum(["STARTING", "RUNNING", "STOPPED", "CRASHED"])

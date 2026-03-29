@@ -1,0 +1,100 @@
+---
+import SiteLayout from '../layouts/SiteLayout.astro';
+import { BRAND_ICON } from '../consts';
+---
+
+<SiteLayout title="orgops">
+	<section class="hero">
+		<p class="kicker">{BRAND_ICON} orgops</p>
+		<h1>Operational tooling for teams.</h1>
+		<p class="lede">
+			Build event-driven workflows with strong observability, safe extensibility, and a monorepo-friendly
+			developer experience.
+		</p>
+		<div class="cta">
+			<a class="primary" href="/features">Explore features</a>
+			<a class="secondary" href="/blog">Read the blog</a>
+		</div>
+	</section>
+
+	<section class="grid">
+		<div class="card">
+			<h2>Event-driven</h2>
+			<p>Model work as structured events for traceability and automation.</p>
+		</div>
+		<div class="card">
+			<h2>Observable</h2>
+			<p>Audit logs and lifecycle events make it easy to understand what happened.</p>
+		</div>
+		<div class="card">
+			<h2>Extensible</h2>
+			<p>Add skills and integrations without turning your runtime into a black box.</p>
+		</div>
+	</section>
+</SiteLayout>
+
+<style>
+	.hero {
+		padding: 3rem 0 2rem;
+	}
+	.kicker {
+		font-weight: 600;
+		letter-spacing: 0.02em;
+		opacity: 0.9;
+	}
+	.lede {
+		max-width: 60ch;
+		font-size: 1.1rem;
+		opacity: 0.9;
+	}
+	.cta {
+		margin-top: 1.25rem;
+		display: flex;
+		gap: 0.75rem;
+		flex-wrap: wrap;
+	}
+	.primary,
+	.secondary {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		padding: 0.65rem 0.9rem;
+		border-radius: 0.75rem;
+		text-decoration: none;
+		font-weight: 600;
+	}
+	.primary {
+		background: var(--accent);
+		color: white;
+	}
+	.secondary {
+		border: 1px solid rgba(var(--black), 12%);
+		color: var(--text);
+		background: rgba(var(--black), 2%);
+	}
+	:global(html[data-theme='dark']) .secondary {
+		border-color: rgba(255, 255, 255, 14%);
+		background: rgba(255, 255, 255, 8%);
+	}
+	.grid {
+		margin-top: 2rem;
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 1rem;
+	}
+	.card {
+		padding: 1rem;
+		border-radius: 1rem;
+		border: 1px solid rgba(var(--black), 10%);
+		background: rgba(var(--black), 2%);
+	}
+	:global(html[data-theme='dark']) .card {
+		border-color: rgba(255, 255, 255, 14%);
+		background: rgba(255, 255, 255, 6%);
+	}
+	@media (max-width: 900px) {
+		.grid {
+			grid-template-columns: 1fr;
+		}
+	}
+</style>

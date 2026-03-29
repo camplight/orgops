@@ -14,6 +14,10 @@ export type Agent = {
   llmCallTimeoutMs?: number | null;
   classicMaxModelSteps?: number | null;
   contextSessionGapMs?: number | null;
+  memoryContextMode?:
+    | "PER_CHANNEL_CROSS_CHANNEL"
+    | "FULL_CHANNEL_EVENTS"
+    | "OFF";
   mode?: "CLASSIC" | "RLM_REPL";
 };
 

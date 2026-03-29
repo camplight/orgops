@@ -1,0 +1,64 @@
+---
+const label = 'Toggle theme';
+---
+
+<button class="theme-toggle" type="button" aria-label={label} title={label}>
+	<span class="sun" aria-hidden="true">☀️</span>
+	<span class="moon" aria-hidden="true">🌙</span>
+</button>
+
+<script is:inline>
+	const storageKey = 'orgops-theme';
+	const root = document.documentElement;
+
+	function apply(theme) {
+		root.dataset.theme = theme;
+		try {
+			localStorage.setItem(storageKey, theme);
+		} catch {}
+	}
+
+	function getPreferred() {
+		try {
+			const stored = localStorage.getItem(storageKey);
+			if (stored === 'light' || stored === 'dark') return stored;
+		} catch {}
+		return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+	}
+
+	apply(getPreferred());
+
+	document.querySelector('.theme-toggle')?.addEventListener('click', () => {
+		const next = root.dataset.theme === 'dark' ? 'light' : 'dark';
+		apply(next);
+	});
+</script>
+
+<style>
+	.theme-toggle {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
+		padding: 0.45rem 0.6rem;
+		border-radius: 999px;
+		border: 1px solid rgba(var(--black), 12%);
+		background: rgba(var(--black), 3%);
+		color: var(--text);
+		cursor: pointer;
+	}
+	:global(html[data-theme='dark']) .theme-toggle {
+		border-color: rgba(255, 255, 255, 14%);
+		background: rgba(255, 255, 255, 8%);
+	}
+	.sun,
+	.moon {
+		font-size: 0.95rem;
+		line-height: 1;
+	}
+	:global(html[data-theme='dark']) .sun {
+		display: none;
+	}
+	:global(html[data-theme='light']) .moon {
+		display: none;
+	}
+</style>

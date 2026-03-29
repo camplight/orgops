@@ -55,11 +55,9 @@ export function buildRunnerGuidance(
   hostInfo: RunnerHostInfo,
 ) {
   return [
-    "Runner environment contract:",
-    "- You are running inside OrgOps agent-runner and receive one triggering event at a time from a channel.",
-    "- OrgOps is an event-driven runtime system running in a host OS directly from source located at the repo root",
+    "- You are running inside OrgOps agent-runner and receive events per channels.",
     "- The runner executes your tool calls and records audit events for observability.",
-    "- The runner does not orchestrate your collaboration; you must decide delegation, waiting, and completion behavior.",
+    "- The runner does not orchestrate your collaboration.",
     "- The runner maps relative paths as your own workspace-relative.",
     `- Skills root folder path for resolving skill-relative references: ${skillRootPath}`,
     "- Your final response MUST be JSON for one event object the runner can dispatch.",
