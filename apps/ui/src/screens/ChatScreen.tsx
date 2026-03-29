@@ -147,8 +147,6 @@ type AgentMemory = {
   agentName: string;
   channelRecent: MemoryRecord | null;
   channelFull: MemoryRecord | null;
-  crossRecent: MemoryRecord | null;
-  crossFull: MemoryRecord | null;
   error?: string;
 };
 
@@ -365,6 +363,8 @@ export function ChatScreen({
   const [memoryDrawerOpen, setMemoryDrawerOpen] = useState(false);
   const [memoryLoading, setMemoryLoading] = useState(false);
   const [agentMemories, setAgentMemories] = useState<AgentMemory[]>([]);
+  const [memoryReloadToken, setMemoryReloadToken] = useState(0);
+  const memoryCacheRef = useRef<Map<string, AgentMemory[]>>(new Map());
   const lastChatLineId = chatLines[chatLines.length - 1]?.id ?? null;
   const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key !== "Enter") return;
@@ -384,9 +384,26 @@ export function ChatScreen({
     messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
   }, [activeTargetId, lastChatLineId, chatLines.length, typingIndicators.length]);
 
+  const memoryFetchKey = useMemo(() => {
+    if (!activeChannelId || activeAgentNames.length === 0) return "";
+    const names = [...activeAgentNames].sort((left, right) => left.localeCompare(right));
+    return `${activeChannelId}::${names.join(",")}`;
+  }, [activeAgentNames, activeChannelId]);
+  const stableAgentNames = useMemo(() => {
+    if (!memoryFetchKey.includes("::")) return [];
+    const namesPart = memoryFetchKey.split("::")[1] ?? "";
+    return namesPart.split(",").map((name) => name.trim()).filter(Boolean);
+  }, [memoryFetchKey]);
+
   useEffect(() => {
-    if (!memoryDrawerOpen || !activeChannelId || activeAgentNames.length === 0) {
+    if (!memoryDrawerOpen || !memoryFetchKey || !activeChannelId || stableAgentNames.length === 0) {
       setAgentMemories([]);
+      setMemoryLoading(false);
+      return;
+    }
+    const cached = memoryCacheRef.current.get(memoryFetchKey);
+    if (cached) {
+      setAgentMemories(cached);
       setMemoryLoading(false);
       return;
     }
@@ -394,52 +411,40 @@ export function ChatScreen({
     setMemoryLoading(true);
     const load = async () => {
       const bundles = await Promise.all(
-        activeAgentNames.map(async (agentName): Promise<AgentMemory> => {
+        stableAgentNames.map(async (agentName): Promise<AgentMemory> => {
           const channelParams = new URLSearchParams({
             agentName,
             channelId: activeChannelId
           });
-          const crossParams = new URLSearchParams({ agentName });
           try {
             const [
               channelRecent,
-              channelFull,
-              crossRecent,
-              crossFull
+              channelFull
             ] = await Promise.all([
               apiJson<{ record?: MemoryRecord | null }>(
                 `/api/memory/channel/recent?${channelParams.toString()}`
               ),
               apiJson<{ record?: MemoryRecord | null }>(
                 `/api/memory/channel/full?${channelParams.toString()}`
-              ),
-              apiJson<{ record?: MemoryRecord | null }>(
-                `/api/memory/cross/recent?${crossParams.toString()}`
-              ),
-              apiJson<{ record?: MemoryRecord | null }>(
-                `/api/memory/cross/full?${crossParams.toString()}`
               )
             ]);
             return {
               agentName,
               channelRecent: channelRecent.record ?? null,
-              channelFull: channelFull.record ?? null,
-              crossRecent: crossRecent.record ?? null,
-              crossFull: crossFull.record ?? null
+              channelFull: channelFull.record ?? null
             };
           } catch (error) {
             return {
               agentName,
               channelRecent: null,
               channelFull: null,
-              crossRecent: null,
-              crossFull: null,
               error: error instanceof Error ? error.message : "Unable to load memory"
             };
           }
         })
       );
       if (cancelled) return;
+      memoryCacheRef.current.set(memoryFetchKey, bundles);
       setAgentMemories(bundles);
       setMemoryLoading(false);
     };
@@ -447,7 +452,7 @@ export function ChatScreen({
     return () => {
       cancelled = true;
     };
-  }, [memoryDrawerOpen, activeAgentNames, activeChannelId]);
+  }, [memoryDrawerOpen, activeChannelId, memoryFetchKey, memoryReloadToken, stableAgentNames]);
 
   return (
     <div className="space-y-6 chat-print-root">
@@ -675,17 +680,33 @@ export function ChatScreen({
             <div>
               <h3 className="text-sm font-semibold text-slate-100">Agent Memory</h3>
               <p className="text-xs text-slate-500">
-                Recent and full memory for each agent in this chat.
+                Channel recent and channel full memory per agent.
               </p>
             </div>
-            <Button
-              type="button"
-              variant="secondary"
-              className="px-2 py-1 text-xs"
-              onClick={() => setMemoryDrawerOpen(false)}
-            >
-              Close
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                className="px-2 py-1 text-xs"
+                onClick={() => {
+                  if (memoryFetchKey) {
+                    memoryCacheRef.current.delete(memoryFetchKey);
+                  }
+                  setMemoryReloadToken((value) => value + 1);
+                }}
+                disabled={!memoryFetchKey}
+              >
+                Refresh
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                className="px-2 py-1 text-xs"
+                onClick={() => setMemoryDrawerOpen(false)}
+              >
+                Close
+              </Button>
+            </div>
           </div>
           <div className="min-h-0 flex-1 overflow-auto px-4 py-4">
             {memoryLoading ? (
@@ -730,28 +751,6 @@ export function ChatScreen({
                         </div>
                         <div className="mt-2 text-[11px] text-slate-500">
                           {getRecordMeta(memory.channelFull)}
-                        </div>
-                      </div>
-                      <div className="rounded border border-slate-800 bg-slate-950 p-3">
-                        <div className="mb-1 text-xs uppercase tracking-wide text-slate-500">
-                          Cross-Channel Recent
-                        </div>
-                        <div className="whitespace-pre-wrap text-sm text-slate-200">
-                          {summarizeMemoryTitle(memory.crossRecent, "No recent cross-channel memory yet.")}
-                        </div>
-                        <div className="mt-2 text-[11px] text-slate-500">
-                          {getRecordMeta(memory.crossRecent)}
-                        </div>
-                      </div>
-                      <div className="rounded border border-slate-800 bg-slate-950 p-3">
-                        <div className="mb-1 text-xs uppercase tracking-wide text-slate-500">
-                          Cross-Channel Full
-                        </div>
-                        <div className="whitespace-pre-wrap text-sm text-slate-200">
-                          {summarizeMemoryTitle(memory.crossFull, "No full cross-channel memory yet.")}
-                        </div>
-                        <div className="mt-2 text-[11px] text-slate-500">
-                          {getRecordMeta(memory.crossFull)}
                         </div>
                       </div>
                     </div>

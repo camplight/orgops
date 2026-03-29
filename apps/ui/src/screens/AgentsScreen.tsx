@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   Agent,
   AgentWorkspaceFileResponse,
@@ -57,6 +57,9 @@ type AgentsScreenProps = {
   onStartAgent: (name: string) => Promise<void>;
   onStopAgent: (name: string) => Promise<void>;
   onCleanupAgentWorkspace: (name: string) => Promise<void>;
+  loadAgentCrossMemory: (
+    name: string
+  ) => Promise<{ recent: string; full: string; updatedAtRecent?: number; updatedAtFull?: number }>;
   loadAgentEvents: (name: string) => Promise<EventRow[]>;
   loadAgentWorkspace: (
     name: string,
@@ -77,6 +80,7 @@ export function AgentsScreen({
   onStartAgent,
   onStopAgent,
   onCleanupAgentWorkspace,
+  loadAgentCrossMemory,
   loadAgentEvents,
   loadAgentWorkspace,
   loadAgentWorkspaceFile,
@@ -105,6 +109,18 @@ export function AgentsScreen({
   const [fileLoadingPath, setFileLoadingPath] = useState<string | null>(null);
   const [openFile, setOpenFile] = useState<AgentWorkspaceFileResponse | null>(null);
   const [panelError, setPanelError] = useState<string | null>(null);
+  const [crossMemoryDrawerOpen, setCrossMemoryDrawerOpen] = useState(false);
+  const [crossMemoryLoading, setCrossMemoryLoading] = useState(false);
+  const [crossMemoryError, setCrossMemoryError] = useState<string | null>(null);
+  const [crossMemory, setCrossMemory] = useState<{
+    recent: string;
+    full: string;
+    updatedAtRecent?: number;
+    updatedAtFull?: number;
+  } | null>(null);
+  const crossMemoryCacheRef = useRef<
+    Map<string, { recent: string; full: string; updatedAtRecent?: number; updatedAtFull?: number }>
+  >(new Map());
 
   const selectedAgent = useMemo(
     () => agents.find((agent) => agent.name === selectedAgentName) ?? null,
@@ -153,6 +169,10 @@ export function AgentsScreen({
       setSelectedEventId(null);
       setWorkspaceData(null);
       setOpenFile(null);
+      setCrossMemoryDrawerOpen(false);
+      setCrossMemory(null);
+      setCrossMemoryError(null);
+      setCrossMemoryLoading(false);
       return;
     }
     setPanelError(null);
@@ -168,6 +188,7 @@ export function AgentsScreen({
     setPanelError(null);
     setSelectedEventId(null);
     setOpenFile(null);
+    setCrossMemoryDrawerOpen(false);
   };
 
   const handleSelectAgent = (name: string) => {
@@ -179,6 +200,7 @@ export function AgentsScreen({
     setPanelError(null);
     setSelectedEventId(null);
     setOpenFile(null);
+    setCrossMemoryDrawerOpen(false);
   };
 
   const closeDrawer = () => {
@@ -188,9 +210,14 @@ export function AgentsScreen({
     setPanelError(null);
     setSelectedEventId(null);
     setOpenFile(null);
+    setCrossMemoryDrawerOpen(false);
   };
 
-  useEscapeKey(drawerOpen || eventDetailsDrawerOpen || Boolean(openFile), () => {
+  useEscapeKey(drawerOpen || eventDetailsDrawerOpen || crossMemoryDrawerOpen || Boolean(openFile), () => {
+    if (crossMemoryDrawerOpen) {
+      setCrossMemoryDrawerOpen(false);
+      return;
+    }
     if (openFile) {
       setOpenFile(null);
       return;
@@ -264,6 +291,35 @@ export function AgentsScreen({
     } finally {
       setFileLoadingPath(null);
     }
+  };
+
+  const refreshCrossMemory = async (agentName: string) => {
+    try {
+      setCrossMemoryLoading(true);
+      setCrossMemoryError(null);
+      const data = await loadAgentCrossMemory(agentName);
+      crossMemoryCacheRef.current.set(agentName, data);
+      setCrossMemory(data);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to load cross-channel memory.";
+      setCrossMemoryError(message);
+    } finally {
+      setCrossMemoryLoading(false);
+    }
+  };
+
+  const openCrossMemoryDrawer = async () => {
+    if (!selectedAgent) return;
+    setCrossMemoryDrawerOpen(true);
+    setCrossMemoryError(null);
+    const cached = crossMemoryCacheRef.current.get(selectedAgent.name);
+    if (cached) {
+      setCrossMemory(cached);
+      setCrossMemoryLoading(false);
+      return;
+    }
+    await refreshCrossMemory(selectedAgent.name);
   };
 
   const handleSubmit = async () => {
@@ -532,6 +588,23 @@ export function AgentsScreen({
                   </div>
                 ) : (
                   <>
+                    {!isCreating && selectedAgent && (
+                      <div className="rounded border border-slate-800 bg-slate-950 p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="text-sm text-slate-300">Cross-Channel Memory</div>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            className="px-2 py-1 text-xs"
+                            onClick={() => {
+                              void openCrossMemoryDrawer();
+                            }}
+                          >
+                            View memory
+                          </Button>
+                        </div>
+                      </div>
+                    )}
                     <div className="space-y-1">
                       <div className="text-sm text-slate-400">Name</div>
                       <Input
@@ -955,6 +1028,85 @@ export function AgentsScreen({
                   ) : null}
                 </div>
               ) : null}
+            </div>
+          </div>
+
+          <div
+            className={`absolute inset-0 z-20 flex justify-end bg-black/35 transition-opacity ${
+              crossMemoryDrawerOpen
+                ? "pointer-events-auto opacity-100"
+                : "pointer-events-none opacity-0"
+            }`}
+            onClick={() => setCrossMemoryDrawerOpen(false)}
+          >
+            <div
+              className={`pointer-events-auto flex h-full w-full max-w-3xl flex-col border-l border-slate-800 bg-slate-950 shadow-2xl transition-transform duration-300 ${
+                crossMemoryDrawerOpen ? "translate-x-0" : "translate-x-full"
+              }`}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+                <div>
+                  <h4 className="text-sm font-semibold text-slate-100">Cross-Channel Memory</h4>
+                  <p className="text-xs text-slate-500">
+                    {selectedAgent ? selectedAgent.name : "No agent selected"}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="px-2 py-1 text-xs"
+                    disabled={!selectedAgent || crossMemoryLoading}
+                    onClick={() => {
+                      if (!selectedAgent) return;
+                      void refreshCrossMemory(selectedAgent.name);
+                    }}
+                  >
+                    Refresh
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="px-2 py-1 text-xs"
+                    onClick={() => setCrossMemoryDrawerOpen(false)}
+                  >
+                    Close
+                  </Button>
+                </div>
+              </div>
+
+              <div className="min-h-0 flex-1 space-y-3 overflow-auto px-4 py-4">
+                {crossMemoryLoading ? (
+                  <div className="text-sm text-slate-500">Loading cross-channel memory...</div>
+                ) : (
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div className="rounded border border-slate-800 bg-slate-900 p-3">
+                      <div className="mb-1 text-xs uppercase tracking-wide text-slate-500">Recent</div>
+                      <div className="whitespace-pre-wrap text-sm text-slate-200">
+                        {crossMemory?.recent?.trim() || "No recent cross-channel memory yet."}
+                      </div>
+                      <div className="mt-2 text-[11px] text-slate-500">
+                        Updated: {formatTimestamp(crossMemory?.updatedAtRecent)}
+                      </div>
+                    </div>
+                    <div className="rounded border border-slate-800 bg-slate-900 p-3">
+                      <div className="mb-1 text-xs uppercase tracking-wide text-slate-500">Full</div>
+                      <div className="whitespace-pre-wrap text-sm text-slate-200">
+                        {crossMemory?.full?.trim() || "No full cross-channel memory yet."}
+                      </div>
+                      <div className="mt-2 text-[11px] text-slate-500">
+                        Updated: {formatTimestamp(crossMemory?.updatedAtFull)}
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {crossMemoryError ? (
+                  <div className="rounded border border-rose-900/60 bg-rose-950/30 px-3 py-2 text-sm text-rose-300">
+                    {crossMemoryError}
+                  </div>
+                ) : null}
+              </div>
             </div>
           </div>
         </div>

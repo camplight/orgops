@@ -486,6 +486,23 @@ export default function App() {
           onCleanupAgentWorkspace={async (name) => {
             await data.apiFetch(`/api/agents/${name}/cleanup-workspace`, { method: "POST" });
           }}
+          loadAgentCrossMemory={async (name) => {
+            const params = new URLSearchParams({ agentName: name });
+            const [recent, full] = await Promise.all([
+              data.apiJson<{ record?: { summaryText?: string; updatedAt?: number } | null }>(
+                `/api/memory/cross/recent?${params.toString()}`
+              ),
+              data.apiJson<{ record?: { summaryText?: string; updatedAt?: number } | null }>(
+                `/api/memory/cross/full?${params.toString()}`
+              )
+            ]);
+            return {
+              recent: recent.record?.summaryText ?? "",
+              full: full.record?.summaryText ?? "",
+              updatedAtRecent: recent.record?.updatedAt,
+              updatedAtFull: full.record?.updatedAt
+            };
+          }}
           loadAgentEvents={async (name) => {
             const params = new URLSearchParams();
             params.set("agentName", name);
