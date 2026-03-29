@@ -85,6 +85,7 @@ export function createMaintenanceLoop(deps: Dependencies) {
       if (!shouldRunChannelRecent && !shouldRunChannelFull) continue;
       try {
         if (shouldRunChannelRecent) {
+          const previousRecentRunAt = channelRecentLastRunAtByChannel.get(channelKey) ?? 0;
           const result = await refreshChannelRecentMemory({
             agent,
             channelId: channel.id,
@@ -92,10 +93,13 @@ export function createMaintenanceLoop(deps: Dependencies) {
             getEnv: () => ensureInjectionEnv(channel.id),
             emitEvent: deps.emitEvent,
           });
-          if (result) updatedAnyChannelRecent = true;
+          if (result && result.updatedAt > previousRecentRunAt) {
+            updatedAnyChannelRecent = true;
+          }
           channelRecentLastRunAtByChannel.set(channelKey, now);
         }
         if (shouldRunChannelFull) {
+          const previousFullRunAt = channelFullLastRunAtByChannel.get(channelKey) ?? 0;
           const result = await refreshChannelFullMemory({
             agent,
             channelId: channel.id,
@@ -103,7 +107,9 @@ export function createMaintenanceLoop(deps: Dependencies) {
             getEnv: () => ensureInjectionEnv(channel.id),
             emitEvent: deps.emitEvent,
           });
-          if (result) updatedAnyChannelFull = true;
+          if (result && result.updatedAt > previousFullRunAt) {
+            updatedAnyChannelFull = true;
+          }
           channelFullLastRunAtByChannel.set(channelKey, now);
         }
       } catch (error) {
@@ -125,7 +131,6 @@ export function createMaintenanceLoop(deps: Dependencies) {
     if (subscribedChannelIds.length === 0) return;
     if (shouldRunCrossRecent) {
       try {
-        const env = await ensureCrossMemoryEnv();
         await refreshCrossChannelRecentMemory({
           agent,
           channelIds: subscribedChannelIds,
@@ -141,7 +146,6 @@ export function createMaintenanceLoop(deps: Dependencies) {
     }
     if (shouldRunCrossFull) {
       try {
-        const env = await ensureCrossMemoryEnv();
         await refreshCrossChannelFullMemory({
           agent,
           channelIds: subscribedChannelIds,

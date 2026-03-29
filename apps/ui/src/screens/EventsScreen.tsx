@@ -11,6 +11,8 @@ type EventFilters = {
   source: string;
   status: string;
   auditOnly: boolean;
+  excludeAuditMemory: boolean;
+  excludeAuditSecret: boolean;
   scheduledOnly: boolean;
 };
 
@@ -42,6 +44,8 @@ const DEFAULT_FILTERS: EventFilters = {
   source: "",
   status: "",
   auditOnly: false,
+  excludeAuditMemory: false,
+  excludeAuditSecret: false,
   scheduledOnly: false,
 };
 
@@ -391,6 +395,22 @@ export function EventsScreen({
                 onChange={(e) => onFiltersChange({ ...filters, auditOnly: e.target.checked })}
               />
               Audit only
+            </label>
+            <label className="flex items-center gap-2 text-sm text-slate-300">
+              <input
+                type="checkbox"
+                checked={filters.excludeAuditMemory}
+                onChange={(e) => onFiltersChange({ ...filters, excludeAuditMemory: e.target.checked })}
+              />
+              Exclude audit.memory.*
+            </label>
+            <label className="flex items-center gap-2 text-sm text-slate-300">
+              <input
+                type="checkbox"
+                checked={filters.excludeAuditSecret}
+                onChange={(e) => onFiltersChange({ ...filters, excludeAuditSecret: e.target.checked })}
+              />
+              Exclude audit.secret*
             </label>
             <label className="flex items-center gap-2 text-sm text-slate-300">
               <input

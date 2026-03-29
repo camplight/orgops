@@ -64,6 +64,10 @@ async function cleanupRuntime() {
   await assertOk(eventsRes, "Clearing events");
   const eventsBody = await eventsRes.json();
 
+  const memoryRes = await apiFetch("/api/memory", { method: "DELETE" });
+  await assertOk(memoryRes, "Clearing memories");
+  const memoryBody = await memoryRes.json();
+
   const agentsRes = await apiFetch("/api/agents");
   await assertOk(agentsRes, "Loading agents");
   const agents = (await agentsRes.json()) as Agent[];
@@ -79,7 +83,7 @@ async function cleanupRuntime() {
   }
 
   console.log(
-    `[dev:all:clean] cleaned events=${eventsBody.deletedCount ?? 0}, processes=${processBody.clearedCount ?? 0}, workspaces=${cleanedWorkspaces}`,
+    `[dev:all:clean] cleaned events=${eventsBody.deletedCount ?? 0}, processes=${processBody.clearedCount ?? 0}, memories=${memoryBody.clearedCount ?? 0}, workspaces=${cleanedWorkspaces}`,
   );
 }
 

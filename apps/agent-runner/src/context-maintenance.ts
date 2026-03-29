@@ -205,8 +205,9 @@ export async function refreshChannelRecentMemory(input: {
     Math.max(0, windowStartAt - 1),
   );
   const meaningfulEvents = events.filter(isMeaningfulEvent);
+  const meaningfulLastProcessedAt = maxEventTimestamp(meaningfulEvents);
   const nextLastProcessedAt = Math.max(
-    maxEventTimestamp(events),
+    meaningfulLastProcessedAt,
     normalizeTimestamp(existing?.lastProcessedAt),
   );
   if (meaningfulEvents.length === 0) {

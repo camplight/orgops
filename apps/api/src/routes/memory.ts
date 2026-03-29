@@ -1,4 +1,5 @@
 import type { Hono } from "hono";
+import { sql } from "drizzle-orm";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { schema, type OrgOpsDrizzleDb } from "@orgops/db";
 
@@ -258,4 +259,44 @@ export function registerMemoryRoutes(app: Hono<any>, deps: MemoryDeps) {
   registerChannel("full");
   registerCross("recent");
   registerCross("full");
+
+  app.delete("/api/memory", (c) => {
+    const countRows = {
+      channelRecent:
+        (orm
+          .select({ count: sql<number>`count(*)` })
+          .from(schema.channelMemoryRecent)
+          .get() as { count: number } | undefined)?.count ?? 0,
+      channelFull:
+        (orm
+          .select({ count: sql<number>`count(*)` })
+          .from(schema.channelMemoryFull)
+          .get() as { count: number } | undefined)?.count ?? 0,
+      crossRecent:
+        (orm
+          .select({ count: sql<number>`count(*)` })
+          .from(schema.crossChannelMemoryRecent)
+          .get() as { count: number } | undefined)?.count ?? 0,
+      crossFull:
+        (orm
+          .select({ count: sql<number>`count(*)` })
+          .from(schema.crossChannelMemoryFull)
+          .get() as { count: number } | undefined)?.count ?? 0,
+    };
+
+    orm.delete(schema.channelMemoryRecent).run();
+    orm.delete(schema.channelMemoryFull).run();
+    orm.delete(schema.crossChannelMemoryRecent).run();
+    orm.delete(schema.crossChannelMemoryFull).run();
+
+    return jsonResponse(c, {
+      ok: true,
+      clearedCount:
+        countRows.channelRecent +
+        countRows.channelFull +
+        countRows.crossRecent +
+        countRows.crossFull,
+      tables: countRows,
+    });
+  });
 }

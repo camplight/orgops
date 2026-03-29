@@ -58,6 +58,8 @@ const DEFAULT_EVENT_FILTERS = {
   source: "",
   status: "",
   auditOnly: false,
+  excludeAuditMemory: false,
+  excludeAuditSecret: false,
   scheduledOnly: false,
 };
 type EventFilters = typeof DEFAULT_EVENT_FILTERS;
@@ -86,6 +88,8 @@ function matchesAppliedEventFilters(
   if (filters.source && event.source !== filters.source) return false;
   if (filters.status && (event.status ?? "") !== filters.status) return false;
   if (filters.auditOnly && !event.type.startsWith("audit.")) return false;
+  if (filters.excludeAuditMemory && event.type.startsWith("audit.memory.")) return false;
+  if (filters.excludeAuditSecret && event.type.startsWith("audit.secret")) return false;
 
   const deliverAt = typeof event.deliverAt === "number" ? event.deliverAt : null;
   if (filters.scheduledOnly) {
@@ -363,8 +367,13 @@ export default function App() {
     if (filtersToApply.auditOnly) params.set("typePrefix", "audit.");
     if (filtersToApply.scheduledOnly) params.set("scheduled", "1");
     const list = await fetchAllEvents(params);
-    data.setEvents(list);
-  }, [eventFilters, data.setEvents, fetchAllEvents]);
+    const now = Date.now();
+    data.setEvents(
+      list.filter((event) =>
+        matchesAppliedEventFilters(event, filtersToApply, data.channels, now)
+      )
+    );
+  }, [eventFilters, data.channels, data.setEvents, fetchAllEvents]);
 
   const handleEmitEvent = useCallback(
     async (rawJson: string) => {
@@ -634,7 +643,8 @@ export default function App() {
               .map((agent) => ({
                 id: `agent:${agent.name}`,
                 label: `DM Agent: ${agent.name}`,
-                meta: "Creates/uses a direct channel"
+                meta: "Creates/uses a direct channel",
+                agentNames: [agent.name]
               })),
             ...data.channels
               .filter(
@@ -647,6 +657,10 @@ export default function App() {
                 id: `channel:${channel.id}`,
                 label: `Channel: ${channel.name}`,
                 meta: channel.description ?? undefined,
+                agentNames: (channel.participants ?? [])
+                  .filter((participant) => participant.subscriberType === "AGENT")
+                  .map((participant) => participant.subscriberId)
+                  .filter(Boolean),
                 participantsText: (channel.participants ?? [])
                   .map((participant) =>
                     formatParticipantLabel(participant.subscriberType, participant.subscriberId)
@@ -655,6 +669,7 @@ export default function App() {
               }))
           ]}
           events={chatEvents}
+          activeChannelId={activeChatTarget?.id ?? null}
           activeTargetId={activeChatSelectionId}
           messageText={messageText}
           onSelectTarget={handleSelectChatTarget}

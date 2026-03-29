@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { EventRow } from "../types";
+import { apiJson } from "../api";
 import { Button, Card, SelectAutocomplete, Textarea } from "../components/ui";
 import { formatTimestamp } from "../utils/formatTimestamp";
 
@@ -11,7 +12,9 @@ type ChatScreenProps = {
     label: string;
     meta?: string;
     participantsText?: string;
+    agentNames?: string[];
   }[];
+  activeChannelId: string | null;
   activeTargetId: string | null;
   events: EventRow[];
   messageText: string;
@@ -133,6 +136,34 @@ type AgentContextUsage = {
   updatedAt: number;
 };
 
+type MemoryRecord = {
+  summaryText: string;
+  windowStartAt?: number;
+  lastProcessedAt: number;
+  updatedAt: number;
+};
+
+type AgentMemory = {
+  agentName: string;
+  channelRecent: MemoryRecord | null;
+  channelFull: MemoryRecord | null;
+  crossRecent: MemoryRecord | null;
+  crossFull: MemoryRecord | null;
+  error?: string;
+};
+
+function summarizeMemoryTitle(record: MemoryRecord | null, fallback: string): string {
+  if (!record || !record.summaryText.trim()) return fallback;
+  return record.summaryText;
+}
+
+function getRecordMeta(record: MemoryRecord | null): string {
+  if (!record) return "No record yet";
+  const updated = formatTimestamp(record.updatedAt);
+  const processed = formatTimestamp(record.lastProcessedAt);
+  return `Updated: ${updated} | Last processed: ${processed}`;
+}
+
 function parseAgentContextUsage(event: EventRow): AgentContextUsage | null {
   if (event.type !== "audit.context.window.updated") return null;
   const payload = asObject(event.payload);
@@ -218,6 +249,7 @@ function ContextRing({
 
 export function ChatScreen({
   targetOptions,
+  activeChannelId,
   activeTargetId,
   events,
   messageText,
@@ -251,6 +283,15 @@ export function ChatScreen({
     [events]
   );
   const activeTarget = targetOptions.find((target) => target.id === activeTargetId) ?? null;
+  const activeAgentNames = useMemo(() => {
+    if (!activeTargetId) return [];
+    if (activeTargetId.startsWith("agent:")) {
+      const agentName = activeTargetId.slice("agent:".length).trim();
+      return agentName ? [agentName] : [];
+    }
+    const fromTarget = activeTarget?.agentNames ?? [];
+    return [...new Set(fromTarget.filter((name) => Boolean(name?.trim())))];
+  }, [activeTarget, activeTargetId]);
   const activeChannelParticipants =
     activeTargetId?.startsWith("channel:") ? activeTarget?.participantsText : undefined;
   const latestHumanMessage = useMemo(() => {
@@ -321,6 +362,9 @@ export function ChatScreen({
     return [...latestByAgent.values()].sort((left, right) => right.updatedAt - left.updatedAt);
   }, [events]);
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
+  const [memoryDrawerOpen, setMemoryDrawerOpen] = useState(false);
+  const [memoryLoading, setMemoryLoading] = useState(false);
+  const [agentMemories, setAgentMemories] = useState<AgentMemory[]>([]);
   const lastChatLineId = chatLines[chatLines.length - 1]?.id ?? null;
   const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key !== "Enter") return;
@@ -339,6 +383,71 @@ export function ChatScreen({
 
     messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
   }, [activeTargetId, lastChatLineId, chatLines.length, typingIndicators.length]);
+
+  useEffect(() => {
+    if (!memoryDrawerOpen || !activeChannelId || activeAgentNames.length === 0) {
+      setAgentMemories([]);
+      setMemoryLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setMemoryLoading(true);
+    const load = async () => {
+      const bundles = await Promise.all(
+        activeAgentNames.map(async (agentName): Promise<AgentMemory> => {
+          const channelParams = new URLSearchParams({
+            agentName,
+            channelId: activeChannelId
+          });
+          const crossParams = new URLSearchParams({ agentName });
+          try {
+            const [
+              channelRecent,
+              channelFull,
+              crossRecent,
+              crossFull
+            ] = await Promise.all([
+              apiJson<{ record?: MemoryRecord | null }>(
+                `/api/memory/channel/recent?${channelParams.toString()}`
+              ),
+              apiJson<{ record?: MemoryRecord | null }>(
+                `/api/memory/channel/full?${channelParams.toString()}`
+              ),
+              apiJson<{ record?: MemoryRecord | null }>(
+                `/api/memory/cross/recent?${crossParams.toString()}`
+              ),
+              apiJson<{ record?: MemoryRecord | null }>(
+                `/api/memory/cross/full?${crossParams.toString()}`
+              )
+            ]);
+            return {
+              agentName,
+              channelRecent: channelRecent.record ?? null,
+              channelFull: channelFull.record ?? null,
+              crossRecent: crossRecent.record ?? null,
+              crossFull: crossFull.record ?? null
+            };
+          } catch (error) {
+            return {
+              agentName,
+              channelRecent: null,
+              channelFull: null,
+              crossRecent: null,
+              crossFull: null,
+              error: error instanceof Error ? error.message : "Unable to load memory"
+            };
+          }
+        })
+      );
+      if (cancelled) return;
+      setAgentMemories(bundles);
+      setMemoryLoading(false);
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [memoryDrawerOpen, activeAgentNames, activeChannelId]);
 
   return (
     <div className="space-y-6 chat-print-root">
@@ -527,6 +636,13 @@ export function ChatScreen({
                 </Button>
                 <Button
                   variant="secondary"
+                  onClick={() => setMemoryDrawerOpen(true)}
+                  disabled={!activeChannelId || activeAgentNames.length === 0}
+                >
+                  View memory
+                </Button>
+                <Button
+                  variant="secondary"
                   className="bg-rose-900 text-rose-100 hover:bg-rose-800"
                   onClick={async () => {
                     if (!confirm("Clear all messages in this channel? This cannot be undone.")) {
@@ -542,6 +658,110 @@ export function ChatScreen({
           </div>
         )}
       </Card>
+      <div
+        className={`fixed inset-0 z-40 bg-black/40 transition-opacity lg:left-56 ${
+          memoryDrawerOpen ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"
+        }`}
+        onClick={() => setMemoryDrawerOpen(false)}
+      />
+      <aside
+        className={`fixed bottom-0 right-0 top-0 z-50 w-full max-w-4xl border-l border-slate-800 bg-slate-950 shadow-2xl transition-transform duration-300 ${
+          memoryDrawerOpen ? "translate-x-0" : "translate-x-full"
+        }`}
+        aria-hidden={!memoryDrawerOpen}
+      >
+        <div className="flex h-full flex-col">
+          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-800 px-4 py-3">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-100">Agent Memory</h3>
+              <p className="text-xs text-slate-500">
+                Recent and full memory for each agent in this chat.
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="secondary"
+              className="px-2 py-1 text-xs"
+              onClick={() => setMemoryDrawerOpen(false)}
+            >
+              Close
+            </Button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-auto px-4 py-4">
+            {memoryLoading ? (
+              <div className="rounded border border-slate-800 bg-slate-900/50 p-4 text-sm text-slate-400">
+                Loading memory...
+              </div>
+            ) : activeAgentNames.length === 0 ? (
+              <div className="rounded border border-slate-800 bg-slate-900/50 p-4 text-sm text-slate-400">
+                No agent participants found for this chat.
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {agentMemories.map((memory) => (
+                  <div
+                    key={`memory-${memory.agentName}`}
+                    className="space-y-3 rounded border border-slate-800 bg-slate-900/50 p-3"
+                  >
+                    <div className="text-sm font-semibold text-slate-100">{memory.agentName}</div>
+                    {memory.error ? (
+                      <div className="rounded border border-rose-900/60 bg-rose-950/30 p-2 text-xs text-rose-200">
+                        {memory.error}
+                      </div>
+                    ) : null}
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <div className="rounded border border-slate-800 bg-slate-950 p-3">
+                        <div className="mb-1 text-xs uppercase tracking-wide text-slate-500">
+                          Channel Recent
+                        </div>
+                        <div className="whitespace-pre-wrap text-sm text-slate-200">
+                          {summarizeMemoryTitle(memory.channelRecent, "No recent channel memory yet.")}
+                        </div>
+                        <div className="mt-2 text-[11px] text-slate-500">
+                          {getRecordMeta(memory.channelRecent)}
+                        </div>
+                      </div>
+                      <div className="rounded border border-slate-800 bg-slate-950 p-3">
+                        <div className="mb-1 text-xs uppercase tracking-wide text-slate-500">
+                          Channel Full
+                        </div>
+                        <div className="whitespace-pre-wrap text-sm text-slate-200">
+                          {summarizeMemoryTitle(memory.channelFull, "No full channel memory yet.")}
+                        </div>
+                        <div className="mt-2 text-[11px] text-slate-500">
+                          {getRecordMeta(memory.channelFull)}
+                        </div>
+                      </div>
+                      <div className="rounded border border-slate-800 bg-slate-950 p-3">
+                        <div className="mb-1 text-xs uppercase tracking-wide text-slate-500">
+                          Cross-Channel Recent
+                        </div>
+                        <div className="whitespace-pre-wrap text-sm text-slate-200">
+                          {summarizeMemoryTitle(memory.crossRecent, "No recent cross-channel memory yet.")}
+                        </div>
+                        <div className="mt-2 text-[11px] text-slate-500">
+                          {getRecordMeta(memory.crossRecent)}
+                        </div>
+                      </div>
+                      <div className="rounded border border-slate-800 bg-slate-950 p-3">
+                        <div className="mb-1 text-xs uppercase tracking-wide text-slate-500">
+                          Cross-Channel Full
+                        </div>
+                        <div className="whitespace-pre-wrap text-sm text-slate-200">
+                          {summarizeMemoryTitle(memory.crossFull, "No full cross-channel memory yet.")}
+                        </div>
+                        <div className="mt-2 text-[11px] text-slate-500">
+                          {getRecordMeta(memory.crossFull)}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </aside>
     </div>
   );
 }
