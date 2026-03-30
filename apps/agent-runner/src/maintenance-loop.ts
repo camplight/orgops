@@ -22,7 +22,6 @@ type Dependencies = {
     agentName: string,
     channelId?: string,
   ) => Promise<Record<string, string>>;
-  emitEvent: (event: unknown) => Promise<void>;
   apiFetch: (path: string, init?: RequestInit) => Promise<Response>;
   channelRecentMemoryIntervalMs: number;
   channelFullMemoryIntervalMs: number;
@@ -97,7 +96,6 @@ export function createMaintenanceLoop(deps: Dependencies) {
             channelId: channel.id,
             apiFetch: deps.apiFetch,
             getEnv: () => ensureInjectionEnv(channel.id),
-            emitEvent: deps.emitEvent,
           });
           if (result && result.updatedAt > previousRecentRunAt) {
             updatedAnyChannelRecent = true;
@@ -111,7 +109,6 @@ export function createMaintenanceLoop(deps: Dependencies) {
             channelId: channel.id,
             apiFetch: deps.apiFetch,
             getEnv: () => ensureInjectionEnv(channel.id),
-            emitEvent: deps.emitEvent,
           });
           if (result && result.updatedAt > previousFullRunAt) {
             updatedAnyChannelFull = true;
@@ -142,7 +139,6 @@ export function createMaintenanceLoop(deps: Dependencies) {
           channelIds: subscribedChannelIds,
           apiFetch: deps.apiFetch,
           getEnv: ensureCrossMemoryEnv,
-          emitEvent: deps.emitEvent,
         });
       } catch (error) {
         console.warn(`runner cross recent memory failed for ${agent.name}`, error);
@@ -157,7 +153,6 @@ export function createMaintenanceLoop(deps: Dependencies) {
           channelIds: subscribedChannelIds,
           apiFetch: deps.apiFetch,
           getEnv: ensureCrossMemoryEnv,
-          emitEvent: deps.emitEvent,
         });
       } catch (error) {
         console.warn(`runner cross full memory failed for ${agent.name}`, error);

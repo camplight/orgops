@@ -82,6 +82,63 @@ async function ackEnvelope(ws: WebSocket, envelopeId: string) {
   ws.send(JSON.stringify({ envelope_id: envelopeId }));
 }
 
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function jitter(ms: number, pct = 0.2) {
+  const delta = ms * pct;
+  const min = Math.max(0, ms - delta);
+  const max = ms + delta;
+  return Math.round(min + Math.random() * (max - min));
+}
+
+function describeUnknownError(error: unknown) {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+    };
+  }
+  return {
+    value: String(error),
+  };
+}
+
+function describeSocketErrorEvent(event: Event) {
+  const maybeError = event as Event & {
+    error?: unknown;
+    message?: unknown;
+    code?: unknown;
+    reason?: unknown;
+  };
+  return {
+    type: event.type,
+    defaultPrevented: event.defaultPrevented,
+    message:
+      typeof maybeError.message === "string" ? maybeError.message : undefined,
+    code:
+      typeof maybeError.code === "string" || typeof maybeError.code === "number"
+        ? maybeError.code
+        : undefined,
+    reason:
+      typeof maybeError.reason === "string" ? maybeError.reason : undefined,
+    ...(maybeError.error !== undefined
+      ? { error: describeUnknownError(maybeError.error) }
+      : {}),
+  };
+}
+
+function describeSocketCloseEvent(event: CloseEvent) {
+  return {
+    code: event.code,
+    reason: event.reason,
+    wasClean: event.wasClean,
+    type: event.type,
+  };
+}
+
 function toOrgOpsChannelId(teamId: string, channelId: string) {
   return `slack:${teamId}:${channelId}`;
 }
@@ -551,56 +608,143 @@ Behavior:
   const botToken = getEnvForAgent(agent, "SLACK_BOT_TOKEN");
   const appToken = getEnvForAgent(agent, "SLACK_APP_TOKEN");
   const identity = await slackAuthTest(botToken);
-  const url = await slackOpenSocket(appToken);
+  const runSocketSession = async () => {
+    const url = await slackOpenSocket(appToken);
+    const ws = new WebSocket(url);
+    let outboundPollInFlight = false;
+    let didOpen = false;
+    let lastInboundAt = Date.now();
+    let lastOutboundPollAt = 0;
+    let pingFailures = 0;
 
-  console.log(
-    `Socket Mode connected for agent=${agent} as user=${identity.userId}`,
-  );
+    console.log(
+      `Socket Mode connected for agent=${agent} as user=${identity.userId}`,
+    );
 
-  const ws = new WebSocket(url);
-  let outboundPollInFlight = false;
+    return await new Promise<{
+      didOpen: boolean;
+      close?: ReturnType<typeof describeSocketCloseEvent>;
+    }>((resolve) => {
+      const pollTimer = setInterval(async () => {
+        if (outboundPollInFlight) return;
+        outboundPollInFlight = true;
+        try {
+          await pollOutboundMessages(agent, botToken);
+          lastOutboundPollAt = Date.now();
+        } catch (error) {
+          console.error(
+            "outbound message poll failed",
+            describeUnknownError(error),
+          );
+        } finally {
+          outboundPollInFlight = false;
+        }
+      }, 1000);
 
-  ws.addEventListener("open", () => {
-    console.log("ws open");
-  });
+      // Keepalive: Slack Socket Mode doesn't require ping/pong, but sending a ping
+      // helps keep intermediaries from idling out the connection.
+      const pingTimer = setInterval(() => {
+        try {
+          // undici WebSocket supports ping() in Node >= 22.
+          (ws as any).ping?.();
+          pingFailures = 0;
+        } catch (error) {
+          pingFailures += 1;
+          if (pingFailures <= 3) {
+            console.error("ws ping failed", describeUnknownError(error));
+          }
+        }
+      }, 25_000);
 
-  ws.addEventListener("message", async (msg) => {
+      // Health log: if we haven't seen inbound traffic for a while, emit a single
+      // periodic line to help correlate disconnects/missed events.
+      const healthTimer = setInterval(() => {
+        const now = Date.now();
+        const inboundAgeMs = now - lastInboundAt;
+        if (inboundAgeMs > 60_000) {
+          console.error("ws health", {
+            agent,
+            inboundAgeMs,
+            lastInboundAt,
+            lastOutboundPollAt,
+            readyState: (ws as any).readyState,
+          });
+        }
+      }, 30_000);
+
+      ws.addEventListener("open", () => {
+        didOpen = true;
+        console.log("ws open");
+      });
+
+      ws.addEventListener("message", async (msg) => {
+        try {
+          lastInboundAt = Date.now();
+          const data =
+            typeof msg.data === "string"
+              ? msg.data
+              : Buffer.from(msg.data as any).toString("utf-8");
+          const env = JSON.parse(data) as SocketEnvelope;
+          if (!env?.envelope_id) return;
+
+          // Always ack quickly
+          await ackEnvelope(ws, env.envelope_id);
+
+          if (env.type === "events_api") {
+            await handleSlackEventWithIdentity(agent, identity, env.payload);
+          }
+        } catch (err) {
+          console.error(
+            "socket message handling error",
+            describeUnknownError(err),
+          );
+        }
+      });
+
+      ws.addEventListener("close", (event) => {
+        clearInterval(pollTimer);
+        clearInterval(pingTimer);
+        clearInterval(healthTimer);
+        const close = describeSocketCloseEvent(event);
+        console.error("ws closed", close);
+        resolve({ didOpen, close });
+      });
+
+      ws.addEventListener("error", (event) => {
+        console.error("ws error", describeSocketErrorEvent(event));
+      });
+    });
+  };
+
+  let reconnectAttempt = 0;
+  while (true) {
     try {
-      const data = typeof msg.data === "string" ? msg.data : Buffer.from(msg.data as any).toString("utf-8");
-      const env = JSON.parse(data) as SocketEnvelope;
-      if (!env?.envelope_id) return;
-
-      // Always ack quickly
-      await ackEnvelope(ws, env.envelope_id);
-
-      if (env.type === "events_api") {
-        await handleSlackEventWithIdentity(agent, identity, env.payload);
-      }
-    } catch (err) {
-      console.error("socket message handling error", err);
-    }
-  });
-
-  ws.addEventListener("close", () => {
-    console.error("ws closed");
-    process.exit(2);
-  });
-
-  ws.addEventListener("error", (e) => {
-    console.error("ws error", e);
-  });
-
-  setInterval(async () => {
-    if (outboundPollInFlight) return;
-    outboundPollInFlight = true;
-    try {
-      await pollOutboundMessages(agent, botToken);
+      const closeInfo = await runSocketSession();
+      reconnectAttempt = closeInfo.didOpen ? 0 : reconnectAttempt + 1;
+      const baseDelayMs = Math.min(
+        30_000,
+        1_000 * 2 ** Math.min(reconnectAttempt, 5),
+      );
+      const delayMs = jitter(baseDelayMs, 0.25);
+      console.error(
+        `socket session ended; reconnecting in ${delayMs}ms`,
+        closeInfo.close ?? {},
+      );
+      await sleep(delayMs);
     } catch (error) {
-      console.error("outbound message poll failed", error);
-    } finally {
-      outboundPollInFlight = false;
+      reconnectAttempt += 1;
+      const baseDelayMs = Math.min(
+        30_000,
+        1_000 * 2 ** Math.min(reconnectAttempt, 5),
+      );
+      const delayMs = jitter(baseDelayMs, 0.25);
+      console.error(
+        `socket session setup failed; reconnecting in ${delayMs}ms`,
+        describeUnknownError(error),
+      );
+      await sleep(delayMs);
     }
-  }, 1000);
+  }
 
 }
 

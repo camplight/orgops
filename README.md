@@ -110,13 +110,13 @@ Installer behavior (Windows + Unix):
 - `ORGOPS_EVENT_MAX_FAILURES` (default: 25)
 - `OPENAI_API_KEY` (for OpenAI models)
 - `ORGOPS_GIT_BASH_PATH` (optional Windows path to `bash.exe`; defaults to `C:\Program Files\Git\bin\bash.exe`)
-- `ORGOPS_SHELL_PATH` / `ORGOPS_SHELL_ARGS` (optional shell override for `shell_run` and `proc_start`)
+- `ORGOPS_SHELL_PATH` / `ORGOPS_SHELL_ARGS` (optional shell override for all `shell_*` tools)
 
 ## Runner behavior notes
 
 - Pending events are coalesced per `(agent, channel)` before model handling, so a burst of same-channel events is processed in one handling sequence.
 - The runner executes model turns step-by-step and polls for new pending channel events between turns; newly arrived same-channel events are injected into the in-flight conversation.
-- `shell_run` enforces a timeout (default 45s, configurable per call via `timeoutMs`, bounds 1s..300s) and force-kills timed-out commands. Use `proc_start` for long-running jobs.
+- `shell_run` enforces a timeout (default 45s, configurable per call via `timeoutMs`, bounds 1s..45s) and force-kills timed-out commands. Use `shell_start` for long-running jobs.
 
 ## Tests
 

@@ -15,7 +15,7 @@ import {
   validateEventAgainstShapes,
 } from "@orgops/schemas";
 import { createRunnerTools, executeTool } from "./tools";
-import { stopAllRunningProcesses } from "./tools/proc";
+import { stopAllRunningProcesses } from "./tools/shell";
 import { createChannelLoopManager } from "./channel-loop";
 import { pullInjectedEventMessages } from "./channel-injection";
 import { shouldHandleEventForAgent } from "./event-routing";
@@ -742,7 +742,6 @@ const maintenanceLoop = createMaintenanceLoop({
   listChannels,
   getPackageSecretsEnv: (agentName: string, channelId?: string) =>
     getPackageSecretsEnv(agentName, channelId),
-  emitEvent,
   apiFetch,
   channelRecentMemoryIntervalMs: CHANNEL_RECENT_MEMORY_INTERVAL_MS,
   channelFullMemoryIntervalMs: CHANNEL_FULL_MEMORY_INTERVAL_MS,

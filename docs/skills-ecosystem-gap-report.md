@@ -42,7 +42,7 @@ Relevant files:
   - description
   - location
   - path to `SKILL.md`
-- Skills are instructions/assets; runtime tools remain fixed (`shell_*`, `fs_*`, `proc_*`, `events_*`).
+- Skills are instructions/assets; runtime tools remain fixed (`shell_*`, `fs_*`, `events_*`).
 
 Relevant files:
 

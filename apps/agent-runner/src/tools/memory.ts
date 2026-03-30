@@ -170,6 +170,22 @@ function dedupeChannelIds(channelIds: string[]): string[] {
   return [...new Set(channelIds.map((value) => value.trim()).filter(Boolean))];
 }
 
+async function emitMemoryAudit(
+  ctx: ExecuteContext,
+  type: string,
+  payload: Record<string, unknown>,
+  channelId?: string,
+) {
+  await ctx.emitAudit(type, payload, "system:runner:memory:tool");
+  await ctx.emitEvent({
+    type,
+    source: "system:runner:memory:tool",
+    status: "DELIVERED",
+    ...(channelId ? { channelId } : {}),
+    payload,
+  });
+}
+
 async function resolveCrossChannelIds(
   ctx: ExecuteContext,
   inputChannelIds?: string[],
@@ -187,22 +203,6 @@ async function resolveCrossChannelIds(
     error:
       "No channelIds provided and no subscribed channels were found for this agent. Provide channelIds explicitly.",
   };
-}
-
-async function emitMemoryAudit(
-  ctx: ExecuteContext,
-  type: string,
-  payload: Record<string, unknown>,
-  channelId?: string,
-) {
-  await ctx.emitAudit(type, payload, "system:runner:memory:tool");
-  await ctx.emitEvent({
-    type,
-    source: "system:runner:memory:tool",
-    status: "DELIVERED",
-    ...(channelId ? { channelId } : {}),
-    payload,
-  });
 }
 
 type ChannelMemoryMode = "recent" | "full";
@@ -279,7 +279,6 @@ export async function execute(
       channelId: resolved.channelId,
       apiFetch: ctx.apiFetch,
       getEnv: async () => ctx.injectionEnv,
-      emitEvent: ctx.emitEvent,
     });
     await emitMemoryAudit(
       ctx,
@@ -408,7 +407,6 @@ export async function execute(
       channelId: resolved.channelId,
       apiFetch: ctx.apiFetch,
       getEnv: async () => ctx.injectionEnv,
-      emitEvent: ctx.emitEvent,
     });
     await emitMemoryAudit(
       ctx,
@@ -443,7 +441,6 @@ export async function execute(
       channelIds: resolved.channelIds,
       apiFetch: ctx.apiFetch,
       getEnv: async () => ctx.injectionEnv,
-      emitEvent: ctx.emitEvent,
     });
     await emitMemoryAudit(ctx, "audit.memory.cross.recent.tool_refresh", {
       agentName: ctx.agent.name,
@@ -473,7 +470,6 @@ export async function execute(
       channelIds: resolved.channelIds,
       apiFetch: ctx.apiFetch,
       getEnv: async () => ctx.injectionEnv,
-      emitEvent: ctx.emitEvent,
     });
     await emitMemoryAudit(ctx, "audit.memory.cross.full.tool_refresh", {
       agentName: ctx.agent.name,

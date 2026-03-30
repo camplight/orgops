@@ -83,6 +83,9 @@ type AgentsScreenProps = {
     triggerEventId?: string | null;
   }>;
   onDownloadAgentWorkspaceFile: (name: string, path: string) => void;
+  focusAgentName?: string | null;
+  onFocusAgentApplied?: () => void;
+  drawerOnly?: boolean;
 };
 
 export function AgentsScreen({
@@ -98,7 +101,10 @@ export function AgentsScreen({
   loadAgentWorkspace,
   loadAgentWorkspaceFile,
   loadAgentSystemPrompt,
-  onDownloadAgentWorkspaceFile
+  onDownloadAgentWorkspaceFile,
+  focusAgentName,
+  onFocusAgentApplied,
+  drawerOnly = false
 }: AgentsScreenProps) {
   const [selectedAgentName, setSelectedAgentName] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
@@ -199,6 +205,26 @@ export function AgentsScreen({
       alwaysPreloadedSkills: selectedAgent.alwaysPreloadedSkills ?? []
     });
   }, [isCreating, selectedAgent, isFormDirty]);
+
+  useEffect(() => {
+    if (!focusAgentName) return;
+    if (!agents.some((agent) => agent.name === focusAgentName)) return;
+    setSelectedAgentName(focusAgentName);
+    setIsCreating(false);
+    setActiveTab("details");
+    setIsFormDirty(false);
+    setSaveStatus(null);
+    setPanelError(null);
+    setSelectedEventId(null);
+    setOpenFile(null);
+    setCrossMemoryDrawerOpen(false);
+    setSystemPromptDrawerOpen(false);
+    setSystemPromptLoading(false);
+    setSystemPromptError(null);
+    setSystemPromptText("");
+    setSystemPromptMeta(null);
+    onFocusAgentApplied?.();
+  }, [agents, focusAgentName, onFocusAgentApplied]);
 
   useEffect(() => {
     if (!selectedAgent || isCreating) {
@@ -573,6 +599,7 @@ export function AgentsScreen({
 
   return (
     <div className="space-y-4">
+      {!drawerOnly ? (
       <Card title={`Agents (${agents.length})`}>
         <div className="mb-3 flex items-center justify-between gap-3">
           <div className="text-xs text-slate-500">
@@ -630,6 +657,7 @@ export function AgentsScreen({
           )}
         </div>
       </Card>
+      ) : null}
 
       <div
         className={`fixed inset-0 z-40 bg-black/40 transition-opacity lg:left-56 ${

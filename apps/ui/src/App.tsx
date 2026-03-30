@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Screen } from "./types";
 import { apiFetch, apiJson, getApiHeaders } from "./api";
 import { AppLayout } from "./components/layout";
 import { LoginForm } from "./components/auth";
+import { DashboardDrawers } from "./components/drawers/DashboardDrawers";
 import {
   DashboardScreen,
   AgentsScreen,
@@ -112,6 +113,8 @@ function matchesAppliedEventFilters(
 export default function App() {
   const [activeScreen, setActiveScreen] = useState<Screen>("dashboard");
   const [activeProcessId, setActiveProcessId] = useState<string | null>(null);
+  const [focusAgentName, setFocusAgentName] = useState<string | null>(null);
+  const [focusEventId, setFocusEventId] = useState<string | null>(null);
   const [activeChannelId, setActiveChannelId] = useState<string | null>(null);
   const [activeChatTarget, setActiveChatTarget] = useState<ChatTarget | null>(null);
   const [activeChatSelectionId, setActiveChatSelectionId] = useState<string | null>(null);
@@ -119,6 +122,8 @@ export default function App() {
   const [messageText, setMessageText] = useState("");
   const [eventFilters, setEventFilters] = useState(DEFAULT_EVENT_FILTERS);
   const [appliedEventFilters, setAppliedEventFilters] = useState(DEFAULT_EVENT_FILTERS);
+  const processesRefreshTimerRef = useRef<number | null>(null);
+  const dashboardEventsRefreshTimerRef = useRef<number | null>(null);
 
   const { authChecked, authenticated, username, mustChangePassword, refreshAuth, logout } = useAuth();
   const data = useOrgOpsData(authenticated && !mustChangePassword);
@@ -153,6 +158,60 @@ export default function App() {
     );
   }, [data.setAgents]);
 
+  const scheduleProcessesRealtimeRefresh = useCallback(() => {
+    if (activeScreen !== "processes" && activeScreen !== "dashboard") return;
+    if (processesRefreshTimerRef.current !== null) return;
+    processesRefreshTimerRef.current = window.setTimeout(() => {
+      processesRefreshTimerRef.current = null;
+      void data.refreshProcesses();
+    }, 250);
+  }, [activeScreen, data.refreshProcesses]);
+
+  const scheduleDashboardEventsRealtimeRefresh = useCallback(() => {
+    if (activeScreen !== "dashboard") return;
+    if (dashboardEventsRefreshTimerRef.current !== null) return;
+    dashboardEventsRefreshTimerRef.current = window.setTimeout(() => {
+      dashboardEventsRefreshTimerRef.current = null;
+      void data.refreshDashboardEvents();
+    }, 250);
+  }, [activeScreen, data.refreshDashboardEvents]);
+
+  const handleDashboardSelectAgent = useCallback((agentName: string) => {
+    setFocusEventId(null);
+    setActiveProcessId(null);
+    setFocusAgentName(agentName);
+  }, []);
+
+  const handleDashboardSelectEvent = useCallback((eventId: string) => {
+    setFocusAgentName(null);
+    setActiveProcessId(null);
+    setFocusEventId(eventId);
+  }, []);
+
+  const handleDashboardSelectProcess = useCallback(
+    async (processId: string) => {
+      setFocusAgentName(null);
+      setFocusEventId(null);
+      setActiveProcessId(processId);
+      await data.loadProcessOutput(processId);
+    },
+    [data.loadProcessOutput]
+  );
+
+  useEffect(
+    () => () => {
+      if (processesRefreshTimerRef.current !== null) {
+        window.clearTimeout(processesRefreshTimerRef.current);
+        processesRefreshTimerRef.current = null;
+      }
+      if (dashboardEventsRefreshTimerRef.current !== null) {
+        window.clearTimeout(dashboardEventsRefreshTimerRef.current);
+        dashboardEventsRefreshTimerRef.current = null;
+      }
+    },
+    []
+  );
+
   const handleWsEvent = useCallback((event: EventRow) => {
     const now = Date.now();
     const matchesFilters = matchesAppliedEventFilters(
@@ -172,7 +231,23 @@ export default function App() {
     if (eventMatchesChatTarget(event)) {
       setChatEvents((prev) => upsertEvent(prev, event));
     }
-  }, [appliedEventFilters, data.channels, data.setEvents, eventMatchesChatTarget, upsertEvent]);
+    if (
+      event.type === "process.started" ||
+      event.type === "process.exited" ||
+      event.type === "processes.cleared"
+    ) {
+      scheduleProcessesRealtimeRefresh();
+    }
+    scheduleDashboardEventsRealtimeRefresh();
+  }, [
+    appliedEventFilters,
+    data.channels,
+    data.setEvents,
+    eventMatchesChatTarget,
+    scheduleDashboardEventsRealtimeRefresh,
+    scheduleProcessesRealtimeRefresh,
+    upsertEvent
+  ]);
 
   const handleProcessOutput = useCallback(
     (processId: string, msgData: ProcessOutputRow[]) => {
@@ -445,16 +520,166 @@ export default function App() {
       onLogout={logout}
     >
       {activeScreen === "dashboard" && (
-        <DashboardScreen
-          agents={data.agents}
-          events={data.events}
-          eventStats={data.dashboardEventStats}
-          skills={data.skills}
-          channels={data.channels}
-          processes={data.processes}
-          secrets={data.secrets}
-          teams={data.teams}
-        />
+        <>
+          <DashboardScreen
+            agents={data.agents}
+            events={data.events}
+            eventStats={data.dashboardEventStats}
+            channels={data.channels}
+            processes={data.processes}
+            secrets={data.secrets}
+            teams={data.teams}
+            onSelectAgent={handleDashboardSelectAgent}
+            onSelectEvent={handleDashboardSelectEvent}
+            onSelectProcess={(processId) => {
+              void handleDashboardSelectProcess(processId);
+            }}
+          />
+          <DashboardDrawers
+            agents={data.agents}
+            skills={data.skills}
+            events={data.events}
+            channels={data.channels}
+            eventTypes={data.eventTypes}
+            processes={data.processes}
+            processOutput={data.processOutput}
+            activeProcessId={activeProcessId}
+            focusAgentName={focusAgentName}
+            focusEventId={focusEventId}
+            eventFilters={eventFilters}
+            onFocusAgentApplied={() => setFocusAgentName(null)}
+            onFocusEventApplied={() => setFocusEventId(null)}
+            onSelectProcess={async (id) => {
+              setActiveProcessId(id);
+              if (id) {
+                await data.loadProcessOutput(id);
+              }
+            }}
+            onCreateAgent={async (agent) => {
+              await data.apiFetch("/api/agents", {
+                method: "POST",
+                headers: data.getApiHeaders(),
+                body: JSON.stringify(agent)
+              });
+              data.refreshDashboard();
+            }}
+            onUpdateAgent={async (name, agent) => {
+              await data.apiFetch(`/api/agents/${name}`, {
+                method: "PATCH",
+                headers: data.getApiHeaders(),
+                body: JSON.stringify(agent)
+              });
+              data.refreshDashboard();
+            }}
+            onStartAgent={async (name) => {
+              await data.apiFetch(`/api/agents/${name}/start`, { method: "POST" });
+            }}
+            onStopAgent={async (name) => {
+              await data.apiFetch(`/api/agents/${name}/stop`, { method: "POST" });
+            }}
+            onCleanupAgentWorkspace={async (name) => {
+              await data.apiFetch(`/api/agents/${name}/cleanup-workspace`, { method: "POST" });
+            }}
+            loadAgentCrossMemory={async (name) => {
+              const params = new URLSearchParams({ agentName: name });
+              const [recent, full] = await Promise.all([
+                data.apiJson<{ record?: { summaryText?: string; updatedAt?: number } | null }>(
+                  `/api/memory/cross/recent?${params.toString()}`
+                ),
+                data.apiJson<{ record?: { summaryText?: string; updatedAt?: number } | null }>(
+                  `/api/memory/cross/full?${params.toString()}`
+                )
+              ]);
+              return {
+                recent: recent.record?.summaryText ?? "",
+                full: full.record?.summaryText ?? "",
+                updatedAtRecent: recent.record?.updatedAt,
+                updatedAtFull: full.record?.updatedAt
+              };
+            }}
+            loadAgentEvents={async (name) => {
+              const params = new URLSearchParams();
+              params.set("agentName", name);
+              params.set("limit", "200");
+              params.set("order", "desc");
+              return data.apiJson<EventRow[]>(`/api/events?${params.toString()}`);
+            }}
+            loadAgentWorkspace={(name, path) => {
+              const params = new URLSearchParams();
+              if (path && path !== ".") {
+                params.set("path", path);
+              }
+              const query = params.toString();
+              const suffix = query ? `?${query}` : "";
+              return data.apiJson<AgentWorkspaceListResponse>(
+                `/api/agents/${encodeURIComponent(name)}/workspace${suffix}`
+              );
+            }}
+            loadAgentWorkspaceFile={(name, path) => {
+              const params = new URLSearchParams();
+              params.set("path", path);
+              return data.apiJson<AgentWorkspaceFileResponse>(
+                `/api/agents/${encodeURIComponent(name)}/workspace/file?${params.toString()}`
+              );
+            }}
+            loadAgentSystemPrompt={(name) =>
+              data.apiJson<{
+                found: boolean;
+                promptText?: string;
+                error?: string;
+                createdAt?: number;
+                channelId?: string | null;
+                modelId?: string | null;
+                triggerEventId?: string | null;
+              }>(`/api/agents/${encodeURIComponent(name)}/debug/system-prompt`)
+            }
+            onDownloadAgentWorkspaceFile={(name, path) => {
+              const params = new URLSearchParams();
+              params.set("path", path);
+              const href = `/api/agents/${encodeURIComponent(
+                name
+              )}/workspace/download?${params.toString()}`;
+              const link = document.createElement("a");
+              link.href = href;
+              link.rel = "noopener";
+              document.body.appendChild(link);
+              link.click();
+              link.remove();
+            }}
+            onApplyEventFilters={handleApplyEventFilters}
+            onClearEvents={handleClearEvents}
+            onEmitEvent={handleEmitEvent}
+            onRefreshEventTypes={data.refreshEventTypes}
+            onUpdateScheduledEvent={handleUpdateScheduledEvent}
+            onDeleteScheduledEvent={handleDeleteScheduledEvent}
+            onRefreshProcesses={data.refreshProcesses}
+            onClearExitedProcesses={async () => {
+              await data.apiFetch("/api/processes?scope=exited", {
+                method: "DELETE",
+                headers: data.getApiHeaders()
+              });
+              setActiveProcessId(null);
+              data.setProcessOutput({});
+              await data.refreshProcesses();
+            }}
+            onClearAllProcesses={async () => {
+              await data.apiFetch("/api/processes", {
+                method: "DELETE",
+                headers: data.getApiHeaders()
+              });
+              setActiveProcessId(null);
+              data.setProcessOutput({});
+              data.setProcesses([]);
+            }}
+            onExitProcess={async (id) => {
+              await data.apiFetch(`/api/processes/${id}`, {
+                method: "DELETE",
+                headers: data.getApiHeaders()
+              });
+              await data.refreshProcesses();
+            }}
+          />
+        </>
       )}
 
       {activeScreen === "agents" && (
@@ -539,6 +764,8 @@ export default function App() {
               triggerEventId?: string | null;
             }>(`/api/agents/${encodeURIComponent(name)}/debug/system-prompt`)
           }
+          focusAgentName={focusAgentName}
+          onFocusAgentApplied={() => setFocusAgentName(null)}
           onDownloadAgentWorkspaceFile={(name, path) => {
             const params = new URLSearchParams();
             params.set("path", path);
@@ -720,6 +947,8 @@ export default function App() {
           onRefreshEventTypes={data.refreshEventTypes}
           onUpdateScheduledEvent={handleUpdateScheduledEvent}
           onDeleteScheduledEvent={handleDeleteScheduledEvent}
+          focusEventId={focusEventId}
+          onFocusEventApplied={() => setFocusEventId(null)}
         />
       )}
 

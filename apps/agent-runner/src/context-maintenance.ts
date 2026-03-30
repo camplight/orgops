@@ -189,7 +189,6 @@ export async function refreshChannelRecentMemory(input: {
   channelId: string;
   apiFetch: ApiFetch;
   getEnv: () => Promise<Record<string, string>>;
-  emitEvent: (event: unknown) => Promise<void>;
 }): Promise<ChannelMemoryRecord | null> {
   const now = Date.now();
   const windowStartAt = now - RECENT_MEMORY_WINDOW_MS;
@@ -218,20 +217,6 @@ export async function refreshChannelRecentMemory(input: {
       summaryText: "",
       windowStartAt,
       lastProcessedAt: nextLastProcessedAt,
-    });
-    await input.emitEvent({
-      type: "audit.memory.channel.recent.updated",
-      source: "system:runner:memory",
-      status: "DELIVERED",
-      channelId: input.channelId,
-      payload: {
-        agentName: input.agent.name,
-        channelId: input.channelId,
-        summaryChars: 0,
-        eventCount: 0,
-        windowStartAt,
-        lastProcessedAt: nextLastProcessedAt,
-      },
     });
     return emptyRecord;
   }
@@ -273,20 +258,6 @@ export async function refreshChannelRecentMemory(input: {
     ...(getLastEventId(events) ? { lastProcessedEventId: getLastEventId(events) } : {}),
     ...(existing?.version !== undefined ? { expectedVersion: existing.version } : {}),
   });
-  await input.emitEvent({
-    type: "audit.memory.channel.recent.updated",
-    source: "system:runner:memory",
-    status: "DELIVERED",
-    channelId: input.channelId,
-    payload: {
-      agentName: input.agent.name,
-      channelId: input.channelId,
-      summaryChars: summaryText.length,
-      eventCount: meaningfulEvents.length,
-      windowStartAt,
-      lastProcessedAt: nextLastProcessedAt,
-    },
-  });
   return nextRecord;
 }
 
@@ -304,7 +275,6 @@ export async function refreshChannelFullMemory(input: {
   channelId: string;
   apiFetch: ApiFetch;
   getEnv: () => Promise<Record<string, string>>;
-  emitEvent: (event: unknown) => Promise<void>;
 }): Promise<ChannelMemoryRecord | null> {
   const existing = await getChannelMemoryRecord(
     input.apiFetch,
@@ -362,19 +332,6 @@ export async function refreshChannelFullMemory(input: {
     ...(getLastEventId(newEvents) ? { lastProcessedEventId: getLastEventId(newEvents) } : {}),
     ...(existing?.version !== undefined ? { expectedVersion: existing.version } : {}),
   });
-  await input.emitEvent({
-    type: "audit.memory.channel.full.updated",
-    source: "system:runner:memory",
-    status: "DELIVERED",
-    channelId: input.channelId,
-    payload: {
-      agentName: input.agent.name,
-      channelId: input.channelId,
-      summaryChars: summaryText.length,
-      eventCount: meaningfulNewEvents.length,
-      lastProcessedAt: nextLastProcessedAt,
-    },
-  });
   return nextRecord;
 }
 
@@ -393,7 +350,6 @@ async function refreshCrossChannelMemory(input: {
   channelIds: string[];
   apiFetch: ApiFetch;
   getEnv: () => Promise<Record<string, string>>;
-  emitEvent: (event: unknown) => Promise<void>;
 }): Promise<CrossChannelMemoryRecord | null> {
   const existing = await getCrossMemoryRecord(input.apiFetch, input.mode, input.agent.name);
   const channelMemories = await listChannelMemoryRecords(
@@ -423,20 +379,6 @@ async function refreshCrossChannelMemory(input: {
         ? { windowStartAt: Date.now() - RECENT_MEMORY_WINDOW_MS }
         : {}),
       lastProcessedAt: maxProcessedAt,
-    });
-    await input.emitEvent({
-      type:
-        input.mode === "recent"
-          ? "audit.memory.cross.recent.updated"
-          : "audit.memory.cross.full.updated",
-      source: "system:runner:memory",
-      status: "DELIVERED",
-      payload: {
-        agentName: input.agent.name,
-        summaryChars: 0,
-        channelsConsidered: 0,
-        lastProcessedAt: maxProcessedAt,
-      },
     });
     return emptyRecord;
   }
@@ -481,23 +423,6 @@ async function refreshCrossChannelMemory(input: {
       : {}),
     ...(existing?.version !== undefined ? { expectedVersion: existing.version } : {}),
   });
-  await input.emitEvent({
-    type:
-      input.mode === "recent"
-        ? "audit.memory.cross.recent.updated"
-        : "audit.memory.cross.full.updated",
-    source: "system:runner:memory",
-    status: "DELIVERED",
-    payload: {
-      agentName: input.agent.name,
-      summaryChars: finalSummary.length,
-      channelsConsidered: usable.length,
-      lastProcessedAt: maxProcessedAt,
-      ...(input.mode === "recent"
-        ? { windowStartAt: Date.now() - RECENT_MEMORY_WINDOW_MS }
-        : {}),
-    },
-  });
   return nextRecord;
 }
 
@@ -506,7 +431,6 @@ export async function refreshCrossChannelRecentMemory(input: {
   channelIds: string[];
   apiFetch: ApiFetch;
   getEnv: () => Promise<Record<string, string>>;
-  emitEvent: (event: unknown) => Promise<void>;
 }): Promise<CrossChannelMemoryRecord | null> {
   return refreshCrossChannelMemory({
     ...input,
@@ -519,7 +443,6 @@ export async function refreshCrossChannelFullMemory(input: {
   channelIds: string[];
   apiFetch: ApiFetch;
   getEnv: () => Promise<Record<string, string>>;
-  emitEvent: (event: unknown) => Promise<void>;
 }): Promise<CrossChannelMemoryRecord | null> {
   return refreshCrossChannelMemory({
     ...input,

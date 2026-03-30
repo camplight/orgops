@@ -175,6 +175,7 @@ export const processes = sqliteTable("processes", {
   cmd: text("cmd").notNull(),
   cwd: text("cwd").notNull(),
   pid: integer("pid"),
+  execution_mode: text("execution_mode").notNull().default("ASYNC"),
   state: text("state").notNull(),
   exit_code: integer("exit_code"),
   started_at: integer("started_at").notNull(),

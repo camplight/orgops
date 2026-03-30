@@ -135,6 +135,7 @@ export type ProcessRow = {
   cmd: string;
   cwd?: string;
   pid?: number;
+  execution_mode?: "SYNC" | "ASYNC" | string;
   state: string;
   exit_code?: number;
   started_at: number;

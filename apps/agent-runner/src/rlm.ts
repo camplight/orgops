@@ -414,7 +414,7 @@ async function bindSessionRuntime(
       };
     },
     help: () =>
-      "Use `prompt`, tool functions (events_*/fs_*/shell_run/proc_*), listTools(), toolHelp(name?), done(result), and spawnSubagent(promptText).",
+      "Use `prompt`, tool functions (events_*/fs_*/shell_*), listTools(), toolHelp(name?), done(result), and spawnSubagent(promptText).",
   });
   context.spawnSubagent = async (subPromptText: string) => {
     if (typeof subPromptText !== "string" || !subPromptText.trim()) {
@@ -490,8 +490,7 @@ async function bindSessionRuntime(
     if (
       key.startsWith("events_") ||
       key.startsWith("fs_") ||
-      key.startsWith("proc_") ||
-      key === "shell_run"
+      key.startsWith("shell_")
     ) {
       session.reservedKeys.add(key);
     }

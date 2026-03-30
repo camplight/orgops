@@ -168,6 +168,7 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
         cmd: body.cmd,
         cwd: body.cwd,
         pid: body.pid ?? null,
+        execution_mode: body.executionMode ?? "ASYNC",
         state: body.state ?? "STARTING",
         exit_code: body.exitCode ?? null,
         started_at: body.startedAt ?? Date.now(),

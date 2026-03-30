@@ -8,7 +8,7 @@ import {
   resolveAgentLlmCallTimeoutMs,
   shouldHandleEvent,
 } from "./runner";
-import { stopAllRunningProcesses } from "./tools/proc";
+import { stopAllRunningProcesses } from "./tools/shell";
 import type { Agent, Event } from "./types";
 
 describe("agent runner", () => {
@@ -310,7 +310,7 @@ describe("agent runner", () => {
     events[9] = {
       id: "evt-10",
       type: "audit.tool.started",
-      payload: { tool: "proc_start", args: { cmd: "bad" } },
+      payload: { tool: "shell_start", args: { cmd: "bad" } },
       source: "agent:tester",
       channelId: "chan-1",
       createdAt: 10,
@@ -318,7 +318,7 @@ describe("agent runner", () => {
     events[10] = {
       id: "evt-11",
       type: "audit.tool.failed",
-      payload: { tool: "proc_start", error: "boom" },
+      payload: { tool: "shell_start", error: "boom" },
       source: "agent:tester",
       channelId: "chan-1",
       createdAt: 11,
@@ -1682,7 +1682,7 @@ describe("agent runner", () => {
       emitAudit: async () => {},
     };
 
-    const started = (await executeTool(ctx, "proc_start", {
+    const started = (await executeTool(ctx, "shell_start", {
       cmd: "sleep 30",
     })) as { processId: string };
     expect(typeof started.processId).toBe("string");
@@ -1698,7 +1698,7 @@ describe("agent runner", () => {
     expect(exitRequest?.body.state).toBe("TERMINATED");
   });
 
-  it("reports proc_status as not running after process exits", async () => {
+  it("reports shell_status as not running after process exits", async () => {
     const ctx = {
       agent: {
         name: "tester",
@@ -1728,11 +1728,11 @@ describe("agent runner", () => {
       emitAudit: async () => {},
     };
 
-    const started = (await executeTool(ctx, "proc_start", {
+    const started = (await executeTool(ctx, "shell_start", {
       cmd: "sleep 0.1",
     })) as { processId: string };
     await new Promise((resolve) => setTimeout(resolve, 250));
-    const status = (await executeTool(ctx, "proc_status", {
+    const status = (await executeTool(ctx, "shell_status", {
       processId: started.processId,
     })) as { running: boolean };
     expect(status.running).toBe(false);

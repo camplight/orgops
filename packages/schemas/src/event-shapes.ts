@@ -390,30 +390,6 @@ const coreEventShapes: EventShapeDefinition[] = [
     }),
   },
   {
-    type: "audit.memory.channel.recent.updated",
-    description: "Runner updated recent channel memory summary record.",
-    source: "core",
-    payloadSchema: z.record(z.string(), z.unknown()),
-  },
-  {
-    type: "audit.memory.channel.full.updated",
-    description: "Runner updated full channel memory summary record.",
-    source: "core",
-    payloadSchema: z.record(z.string(), z.unknown()),
-  },
-  {
-    type: "audit.memory.cross.recent.updated",
-    description: "Runner updated recent cross-channel memory summary record.",
-    source: "core",
-    payloadSchema: z.record(z.string(), z.unknown()),
-  },
-  {
-    type: "audit.memory.cross.full.updated",
-    description: "Runner updated full cross-channel memory summary record.",
-    source: "core",
-    payloadSchema: z.record(z.string(), z.unknown()),
-  },
-  {
     type: "audit.events.cleared",
     description: "Audit record for event clear operation.",
     source: "core",

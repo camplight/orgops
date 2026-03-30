@@ -242,7 +242,7 @@ Current tool families exposed to models:
 
 - `shell_run` (timeout enforced; default 45s; accepts `timeoutMs`; force-kills on timeout)
 - `fs_read`, `fs_write`, `fs_list`, `fs_stat`, `fs_mkdir`, `fs_rm`, `fs_move`
-- `proc_start`, `proc_stop`, `proc_status`, `proc_tail`
+- `shell_start`, `shell_stop`, `shell_status`, `shell_tail`
 - event/navigation helpers:
   - `events_emit`
   - `events_channel_messages`, `events_search`, `events_agents_search`

@@ -28,6 +28,9 @@ type EventsScreenProps = {
   onRefreshEventTypes: () => Promise<void> | void;
   onUpdateScheduledEvent: (eventId: string, input: { deliverAt: number; payload?: unknown }) => Promise<void>;
   onDeleteScheduledEvent: (eventId: string) => Promise<void>;
+  focusEventId?: string | null;
+  onFocusEventApplied?: () => void;
+  drawerOnly?: boolean;
 };
 
 type SortKey =
@@ -58,7 +61,10 @@ export function EventsScreen({
   onApplyFilters,
   onClearEvents,
   onUpdateScheduledEvent,
-  onDeleteScheduledEvent
+  onDeleteScheduledEvent,
+  focusEventId,
+  onFocusEventApplied,
+  drawerOnly = false
 }: EventsScreenProps) {
   const [sortKey, setSortKey] = useState<SortKey>("createdAt");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
@@ -267,6 +273,13 @@ export function EventsScreen({
     setScheduledTextInput(payloadText);
   }, [selectedEvent]);
 
+  useEffect(() => {
+    if (!focusEventId) return;
+    if (!events.some((event) => event.id === focusEventId)) return;
+    setSelectedEventId(focusEventId);
+    onFocusEventApplied?.();
+  }, [events, focusEventId, onFocusEventApplied]);
+
   const handleResetFilters = () => {
     const resetFilters = { ...DEFAULT_FILTERS };
     onFiltersChange(resetFilters);
@@ -321,6 +334,8 @@ export function EventsScreen({
 
   return (
     <div className="space-y-4">
+      {!drawerOnly ? (
+        <>
       <Card title="Event Filters">
         <form
           onSubmit={(event) => {
@@ -554,6 +569,8 @@ export function EventsScreen({
           </Button>
         </div>
       </Card>
+        </>
+      ) : null}
 
       <div
         className={`fixed inset-0 z-40 bg-black/40 transition-opacity lg:left-56 ${

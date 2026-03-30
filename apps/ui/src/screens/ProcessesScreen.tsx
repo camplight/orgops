@@ -13,6 +13,7 @@ type ProcessesScreenProps = {
   onClearAll: () => Promise<void>;
   onClearExited: () => Promise<void>;
   onExitProcess: (id: string) => Promise<void>;
+  drawerOnly?: boolean;
 };
 
 function formatDurationMs(startedAt?: number, endedAt?: number) {
@@ -36,7 +37,8 @@ export function ProcessesScreen({
   onRefresh,
   onClearAll,
   onClearExited,
-  onExitProcess
+  onExitProcess,
+  drawerOnly = false
 }: ProcessesScreenProps) {
   const [expandedCommands, setExpandedCommands] = useState<Record<string, boolean>>({});
   const [exitingProcessIds, setExitingProcessIds] = useState<Record<string, boolean>>({});
@@ -66,6 +68,7 @@ export function ProcessesScreen({
 
   return (
     <div className="grid gap-4 lg:grid-cols-1">
+      {!drawerOnly ? (
       <Card title={`Processes (${processes.length})`}>
         <div className="mb-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -116,6 +119,7 @@ export function ProcessesScreen({
               <tr className="border-b border-slate-800 text-left text-slate-300">
                 <th className="px-2 py-2">Started</th>
                 <th className="px-2 py-2">Agent</th>
+                <th className="px-2 py-2">Mode</th>
                 <th className="px-2 py-2">State</th>
                 <th className="px-2 py-2">Output</th>
                 <th className="px-2 py-2">PID</th>
@@ -139,6 +143,9 @@ export function ProcessesScreen({
                       {formatTimestamp(proc.started_at)}
                     </td>
                     <td className="px-2 py-2 text-slate-200">{proc.agent_name}</td>
+                    <td className="whitespace-nowrap px-2 py-2 text-slate-300">
+                      {proc.execution_mode ?? "ASYNC"}
+                    </td>
                     <td className="px-2 py-2">
                       <div className="text-slate-200">{proc.state}</div>
                       <div className="text-xs text-slate-500">
@@ -184,6 +191,7 @@ export function ProcessesScreen({
           )}
         </div>
       </Card>
+      ) : null}
       {selectedProcess && (
         <div
           className="fixed inset-0 z-40 bg-black/40 lg:left-56"
@@ -231,7 +239,8 @@ export function ProcessesScreen({
               <div className="shrink-0 border-b border-slate-800 px-4 py-3 text-xs text-slate-400">
                 <div className="text-slate-200">{selectedProcess.cmd}</div>
                 <div className="mt-1">
-                  {selectedProcess.agent_name} | {selectedProcess.state} | started{" "}
+                  {selectedProcess.agent_name} | {selectedProcess.execution_mode ?? "ASYNC"} |{" "}
+                  {selectedProcess.state} | started{" "}
                   {formatTimestamp(selectedProcess.started_at)}
                 </div>
                 <div className="mt-1">
