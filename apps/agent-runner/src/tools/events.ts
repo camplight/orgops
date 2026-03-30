@@ -460,6 +460,22 @@ async function ensureAgentParticipantInChannel(
   return { ok: true };
 }
 
+async function ensurePostingAgentParticipantInChannel(
+  ctx: ExecuteContext,
+  channelId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const membership = await ensureAgentParticipantInChannel(
+    ctx,
+    channelId,
+    ctx.agent.name,
+  );
+  if (membership.ok) return membership;
+  return {
+    ok: false,
+    error: `Event validation failed: agent "${ctx.agent.name}" is not an AGENT participant in channel "${channelId}".`,
+  };
+}
+
 async function waitForEventDeliveryState(
   ctx: ExecuteContext,
   eventId: string,
@@ -870,6 +886,13 @@ export async function execute(
         error:
           "No target destination. Provide channelId or call from an event with channel context.",
       };
+    }
+    const postingMembership = await ensurePostingAgentParticipantInChannel(
+      ctx,
+      targetChannelId,
+    );
+    if (!postingMembership.ok) {
+      return { error: postingMembership.error };
     }
     const eventDraft = {
       type: parsed.type.trim(),

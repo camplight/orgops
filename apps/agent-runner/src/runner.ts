@@ -170,6 +170,16 @@ function getErrorSummary(error: unknown) {
   };
 }
 
+function isRetryableToolArgumentValidationError(error: unknown): boolean {
+  const errorText =
+    error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  return (
+    errorText.includes("AI_InvalidToolArgumentsError") ||
+    (errorText.includes("Invalid arguments for tool") &&
+      errorText.includes("Type validation failed"))
+  );
+}
+
 async function apiFetch(path: string, init?: RequestInit) {
   const runnerToken = process.env.ORGOPS_RUNNER_TOKEN ?? "dev-runner-token";
   const headers = new Headers(init?.headers);
@@ -286,6 +296,22 @@ function isAgentSubscribed(channel: ChannelRecord, agentName: string): boolean {
       String(participant.subscriberType ?? "").toUpperCase() === "AGENT" &&
       participant.subscriberId === agentName,
   );
+}
+
+async function getChannelParticipationValidationError(
+  agentName: string,
+  channelId?: string,
+): Promise<string | null> {
+  const targetChannelId = channelId?.trim();
+  if (!targetChannelId) return null;
+  const channel = await getChannelRecord(targetChannelId);
+  if (!channel) {
+    return `Unknown channelId "${targetChannelId}".`;
+  }
+  if (!isAgentSubscribed(channel, agentName)) {
+    return `Agent "${agentName}" is not an AGENT participant in channel "${targetChannelId}".`;
+  }
+  return null;
 }
 
 async function ensureLifecycleChannel(agentName: string): Promise<string> {
@@ -602,10 +628,9 @@ function normalizeEventDraft(
   if (reservedTypeError) {
     throw new Error(reservedTypeError);
   }
-  const source =
-    typeof event.source === "string" && event.source.trim()
-      ? event.source.trim()
-      : `agent:${agentName}`;
+  // Final model-emitted events must always be authored by the active agent.
+  // Ignore any model-provided source to prevent impersonation/misattribution.
+  const source = `agent:${agentName}`;
   const resolvedChannelId =
     typeof event.channelId === "string" && event.channelId.trim()
       ? event.channelId.trim()
@@ -1039,29 +1064,47 @@ async function handleEvent(agent: Agent, events: Event[]) {
   }
   const seenEventIds = new Set(events.map((event) => event.id));
   const retryMessages: Array<{ role: "user"; content: string }> = [];
+  const channelPostingValidationCache = new Map<string, string | null>();
   const llmCallTimeoutMs = resolveAgentLlmCallTimeoutMs(agent);
   const classicMaxModelSteps = resolveAgentClassicMaxModelSteps(agent);
   let lastResponseText = "";
   for (let attempt = 1; attempt <= MAX_EVENT_DISPATCH_ATTEMPTS; attempt += 1) {
-    const result = (await withTimeout(
-      generate(agent.modelId, [...invokeMessages, ...retryMessages], {
-        tools,
-        maxSteps: classicMaxModelSteps,
-        env: injectionEnv,
-        pullMessages: async () => {
-          const injected = await pullInjectedEventMessages({
-            apiFetch,
-            agent,
-            channelId,
-            seenEventIds,
-            shouldInclude: shouldHandleEventForAgent,
-          });
-          return injected?.messages ?? [];
-        },
-      }),
-      llmCallTimeoutMs,
-      `LLM generate (attempt ${attempt})`,
-    )) as { text?: string };
+    let result: { text?: string };
+    try {
+      result = (await withTimeout(
+        generate(agent.modelId, [...invokeMessages, ...retryMessages], {
+          tools,
+          maxSteps: classicMaxModelSteps,
+          env: injectionEnv,
+          pullMessages: async () => {
+            const injected = await pullInjectedEventMessages({
+              apiFetch,
+              agent,
+              channelId,
+              seenEventIds,
+              shouldInclude: shouldHandleEventForAgent,
+            });
+            return injected?.messages ?? [];
+          },
+        }),
+        llmCallTimeoutMs,
+        `LLM generate (attempt ${attempt})`,
+      )) as { text?: string };
+    } catch (error) {
+      if (!isRetryableToolArgumentValidationError(error)) {
+        throw error;
+      }
+      retryMessages.push({
+        role: "user",
+        content: [
+          `Your tool call arguments were invalid on attempt ${attempt}/${MAX_EVENT_DISPATCH_ATTEMPTS}.`,
+          `Error: ${String(error)}`,
+          "Retry with corrected tool arguments. For optional string filters, omit the field instead of sending an empty string.",
+          "Return only a corrected JSON event object.",
+        ].join("\n"),
+      });
+      continue;
+    }
     const responseText = result.text ?? "";
     lastResponseText = responseText;
 
@@ -1096,22 +1139,47 @@ async function handleEvent(agent: Agent, events: Event[]) {
     }
 
     const validation = validateEventAgainstShapes(eventDraft, eventShapes);
-    if (validation.ok) {
-      await emitEvent(eventDraft);
-      await emitTurnEvent("agent.turn.completed", {});
-      return;
+    if (!validation.ok) {
+      const details = formatValidationErrors(validation);
+      retryMessages.push({
+        role: "user",
+        content: [
+          `Event validation failed on attempt ${attempt}/${MAX_EVENT_DISPATCH_ATTEMPTS}.`,
+          `Type: ${eventDraft.type}`,
+          details || "- Unknown validation error.",
+          "Return only a corrected JSON event object that validates.",
+        ].join("\n"),
+      });
+      continue;
     }
 
-    const details = formatValidationErrors(validation);
-    retryMessages.push({
-      role: "user",
-      content: [
-        `Event validation failed on attempt ${attempt}/${MAX_EVENT_DISPATCH_ATTEMPTS}.`,
-        `Type: ${eventDraft.type}`,
-        details || "- Unknown validation error.",
-        "Return only a corrected JSON event object that validates.",
-      ].join("\n"),
-    });
+    const targetChannelId = eventDraft.channelId?.trim();
+    let participationError: string | null = null;
+    if (targetChannelId) {
+      if (!channelPostingValidationCache.has(targetChannelId)) {
+        channelPostingValidationCache.set(
+          targetChannelId,
+          await getChannelParticipationValidationError(agent.name, targetChannelId),
+        );
+      }
+      participationError = channelPostingValidationCache.get(targetChannelId) ?? null;
+    }
+    if (participationError) {
+      retryMessages.push({
+        role: "user",
+        content: [
+          `Event validation failed on attempt ${attempt}/${MAX_EVENT_DISPATCH_ATTEMPTS}.`,
+          `Type: ${eventDraft.type}`,
+          `- [runner] ${participationError}`,
+          "Return only a corrected JSON event object that validates.",
+        ].join("\n"),
+      });
+      continue;
+    }
+
+    await emitEvent(eventDraft);
+    await emitTurnEvent("agent.turn.completed", {});
+    return;
   }
 
   await emitEvent(

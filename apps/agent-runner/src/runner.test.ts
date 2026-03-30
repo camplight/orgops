@@ -1090,6 +1090,20 @@ describe("agent runner", () => {
       channelId: "chan-1",
       injectionEnv: {},
       apiFetch: async (path: string, init?: RequestInit) => {
+        if (path === "/api/channels") {
+          return new Response(
+            JSON.stringify([
+              {
+                id: "chan-1",
+                participants: [{ subscriberType: "AGENT", subscriberId: "tester" }],
+              },
+            ]),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
         requests.push({
           path,
           body: JSON.parse(String(init?.body ?? "{}")),
@@ -1116,6 +1130,65 @@ describe("agent runner", () => {
     expect(requests[0]?.body.payload).toEqual({ step: "diff-ready" });
   });
 
+  it("rejects events_emit when agent is not a channel participant", async () => {
+    const requests: string[] = [];
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        soulContents: "role prompt",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async (path: string) => {
+        requests.push(path);
+        if (path === "/api/channels") {
+          return new Response(
+            JSON.stringify([
+              {
+                id: "chan-1",
+                participants: [{ subscriberType: "AGENT", subscriberId: "worker-a" }],
+              },
+            ]),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
+        return new Response(JSON.stringify({ id: "evt-custom" }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        });
+      },
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+    };
+
+    const result = (await executeTool(ctx, "events_emit", {
+      type: "custom.workflow.progressed",
+      payload: { step: "should-fail" },
+      channelId: "chan-1",
+    })) as { error?: string };
+
+    expect(typeof result.error).toBe("string");
+    expect(result.error).toContain("Event validation failed");
+    expect(result.error).toContain("not an AGENT participant");
+    expect(requests).toEqual(["/api/channels"]);
+  });
+
   it("rejects reserved runtime event types via events_emit", async () => {
     const requests: Array<{ path: string; body: any }> = [];
     const ctx = {
@@ -1139,6 +1212,20 @@ describe("agent runner", () => {
       channelId: "chan-1",
       injectionEnv: {},
       apiFetch: async (path: string, init?: RequestInit) => {
+        if (path === "/api/channels") {
+          return new Response(
+            JSON.stringify([
+              {
+                id: "chan-1",
+                participants: [{ subscriberType: "AGENT", subscriberId: "tester" }],
+              },
+            ]),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
         requests.push({
           path,
           body: JSON.parse(String(init?.body ?? "{}")),
@@ -1185,6 +1272,20 @@ describe("agent runner", () => {
       channelId: "chan-1",
       injectionEnv: {},
       apiFetch: async (path: string, init?: RequestInit) => {
+        if (path === "/api/channels") {
+          return new Response(
+            JSON.stringify([
+              {
+                id: "chan-1",
+                participants: [{ subscriberType: "AGENT", subscriberId: "tester" }],
+              },
+            ]),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
         requests.push({
           path,
           body: init?.body ? JSON.parse(String(init.body)) : {},
@@ -1243,10 +1344,18 @@ describe("agent runner", () => {
       channelId: "chan-1",
       injectionEnv: {},
       apiFetch: async () =>
-        new Response(JSON.stringify({ id: "evt-custom" }), {
-          status: 201,
-          headers: { "content-type": "application/json" },
-        }),
+        new Response(
+          JSON.stringify([
+            {
+              id: "chan-1",
+              participants: [{ subscriberType: "AGENT", subscriberId: "tester" }],
+            },
+          ]),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
       emitEvent: async () => {},
       emitAudit: async () => {},
       validateEvent: () => ({
@@ -1257,13 +1366,39 @@ describe("agent runner", () => {
       }),
     };
 
-    const result = (await executeTool(ctx, "events_emit", {
+    const result = (await executeTool(
+      {
+        ...ctx,
+        apiFetch: async (path: string) => {
+          if (path === "/api/channels") {
+            return new Response(
+              JSON.stringify([
+                {
+                  id: "chan-1",
+                  participants: [{ subscriberType: "AGENT", subscriberId: "tester" }],
+                },
+              ]),
+              {
+                status: 200,
+                headers: { "content-type": "application/json" },
+              },
+            );
+          }
+          return new Response(JSON.stringify({ id: "evt-custom" }), {
+            status: 201,
+            headers: { "content-type": "application/json" },
+          });
+        },
+      },
+      "events_emit",
+      {
       type: "channel.command.requested",
       payload: {
         channel: { provider: "slack" },
         command: { action: "chat.postMessage", payload: {} },
       },
-    })) as { error?: string };
+    },
+    )) as { error?: string };
     expect(result.error).toContain("Event validation failed");
   });
 
