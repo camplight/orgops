@@ -1,4 +1,5 @@
 import type { Agent, Event } from "./types";
+import { buildPromptEventRecord } from "./prompt-event-compact";
 
 type PullInjectedEventsInput = {
   apiFetch: (path: string, init?: RequestInit) => Promise<Response>;
@@ -35,18 +36,7 @@ export async function pullInjectedEventMessages(
     events: fresh,
     messages: fresh.map((event) => ({
       role: "user" as const,
-      content: JSON.stringify(
-        {
-          eventId: event.id,
-          channelId: event.channelId,
-          parentEventId: event.parentEventId,
-          type: event.type,
-          source: event.source,
-          payload: event.payload ?? {},
-        },
-        null,
-        2,
-      ),
+      content: JSON.stringify(buildPromptEventRecord(event), null, 2),
     })),
   };
 }

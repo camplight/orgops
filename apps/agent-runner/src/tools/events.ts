@@ -123,6 +123,7 @@ const channelsListSchema = z.object({
 const eventTypesSchema = z.object({
   source: z.string().min(1).optional(),
   typePrefix: z.string().min(1).optional(),
+  includeSchema: z.boolean().optional(),
   includeExamples: z.boolean().optional(),
 });
 
@@ -260,7 +261,7 @@ export const eventsToolDefs: ToolDef[] = [
   ],
   [
     "events_event_types",
-    "List known event types from core and loaded skills. Use source/typePrefix filters to discover additional non-core types.",
+    "List known event types from core and loaded skills. Compact by default (type/description/source). Set includeSchema/includeExamples when you need full payload shape details.",
     eventTypesSchema,
   ],
   [
@@ -562,6 +563,7 @@ export async function execute(
       return { error: String(error) };
     }
     let payload: unknown = parsed.payload;
+    let existingEventForValidation: Record<string, unknown> | null = null;
     if (parsed.text !== undefined) {
       if (payload !== undefined) {
         if (!isRecord(payload)) {
@@ -572,11 +574,60 @@ export async function execute(
         const existingResponse = await ctx.apiFetch(
           `/api/events/${encodeURIComponent(parsed.eventId)}`,
         );
-        const existingEvent = (await existingResponse.json()) as { payload?: unknown };
-        const existingPayload = isRecord(existingEvent.payload)
-          ? existingEvent.payload
+        existingEventForValidation = (await existingResponse.json()) as Record<
+          string,
+          unknown
+        >;
+        const existingPayload = isRecord(existingEventForValidation.payload)
+          ? existingEventForValidation.payload
           : {};
         payload = { ...existingPayload, text: parsed.text };
+      }
+    }
+
+    if (payload !== undefined) {
+      if (!existingEventForValidation) {
+        const existingResponse = await ctx.apiFetch(
+          `/api/events/${encodeURIComponent(parsed.eventId)}`,
+        );
+        existingEventForValidation = (await existingResponse.json()) as Record<
+          string,
+          unknown
+        >;
+      }
+      const existingType = existingEventForValidation.type;
+      if (typeof existingType !== "string" || existingType.trim().length === 0) {
+        return {
+          error: `Unable to validate event ${parsed.eventId}: missing event type on existing record.`,
+        };
+      }
+      const existingSource = existingEventForValidation.source;
+      const existingChannelId = existingEventForValidation.channelId;
+      const existingParentEventId = existingEventForValidation.parentEventId;
+      const existingIdempotencyKey = existingEventForValidation.idempotencyKey;
+      try {
+        validateEventOrThrow(ctx, {
+          type: existingType.trim(),
+          payload,
+          source:
+            typeof existingSource === "string" && existingSource.trim().length > 0
+              ? existingSource.trim()
+              : `agent:${ctx.agent.name}`,
+          ...(typeof existingChannelId === "string" && existingChannelId.trim().length > 0
+            ? { channelId: existingChannelId.trim() }
+            : {}),
+          ...(typeof existingParentEventId === "string" &&
+          existingParentEventId.trim().length > 0
+            ? { parentEventId: existingParentEventId.trim() }
+            : {}),
+          ...(deliverAt !== undefined ? { deliverAt } : {}),
+          ...(typeof existingIdempotencyKey === "string" &&
+          existingIdempotencyKey.trim().length > 0
+            ? { idempotencyKey: existingIdempotencyKey.trim() }
+            : {}),
+        });
+      } catch (error) {
+        return { error: String(error) };
       }
     }
 
@@ -783,9 +834,18 @@ export async function execute(
         note: "Event type registry unavailable in this runtime context.",
       };
     }
-    const eventTypes = parsed.includeExamples
-      ? knownEventTypes
-      : knownEventTypes.map(({ payloadExample: _payloadExample, ...rest }) => rest);
+    const eventTypes = knownEventTypes.map((eventType) => ({
+      type: eventType.type,
+      description: eventType.description,
+      source: eventType.source,
+      ...(parsed.includeSchema
+        ? {
+            schemaKind: eventType.schemaKind,
+            schema: eventType.schema,
+          }
+        : {}),
+      ...(parsed.includeExamples ? { payloadExample: eventType.payloadExample } : {}),
+    }));
     return {
       eventTypes,
       totalMatched: eventTypes.length,

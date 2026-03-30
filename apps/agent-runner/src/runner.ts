@@ -23,6 +23,7 @@ import { getReservedEventTypeError } from "./event-type-guard";
 import { createMaintenanceLoop } from "./maintenance-loop";
 import type { Agent, Event } from "./types";
 import { buildRunnerGuidance } from "./prompt";
+import { buildPromptEventRecord } from "./prompt-event-compact";
 import { runRlmEventInChild, stopAllRlmChildren } from "./rlm-process";
 import {
   buildChannelRecentDeltaSystemMessage,
@@ -359,14 +360,7 @@ export function toHistoryMessage(agent: Agent, event: Event) {
     event.source === `agent:${agent.name}`
       ? ("assistant" as const)
       : ("user" as const);
-  const baseRecord = {
-    eventId: event.id,
-    channelId: event.channelId,
-    parentEventId: event.parentEventId,
-    type: event.type,
-    source: event.source,
-    payload: event.payload ?? {},
-  };
+  const baseRecord = buildPromptEventRecord(event);
   const content = JSON.stringify(baseRecord, null, 2);
   return {
     role,
@@ -695,18 +689,26 @@ function buildBatchedTriggerMessage(events: Event[]) {
         type: "system.pending.events.merged",
         mergedCount: events.length,
         newestEventId: events[events.length - 1]?.id,
-        events: events.map((event) => ({
-          id: event.id,
-          type: event.type,
-          source: event.source,
-          parentEventId: event.parentEventId,
-          payload: event.payload ?? {},
-        })),
+        events: events.map(buildPromptEventRecord),
       },
       null,
       2,
     ),
   };
+}
+
+export function selectRecentDeltaEventsForPrompt(agent: Agent, events: Event[]): Event[] {
+  const ownSource = `agent:${agent.name}`;
+  let latestUserLikeEventId: string | undefined;
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event?.source !== ownSource) {
+      latestUserLikeEventId = event?.id;
+      break;
+    }
+  }
+  if (!latestUserLikeEventId) return events;
+  return events.filter((event) => event.id !== latestUserLikeEventId);
 }
 
 const channelLoopManager = createChannelLoopManager({
@@ -843,6 +845,10 @@ async function handleEvent(agent: Agent, events: Event[]) {
         : undefined,
     );
     eventHistory = getMeaningfulEvents(rawDeltaEvents);
+    const recentDeltaForSystemContext = selectRecentDeltaEventsForPrompt(
+      agent,
+      eventHistory,
+    );
     systemContextMessages = [
       channelRecentMemory?.summaryText
         ? buildSystemMemoryMessage(
@@ -850,8 +856,11 @@ async function handleEvent(agent: Agent, events: Event[]) {
             channelRecentMemory.summaryText,
           )
         : "",
-      eventHistory.length > 0
-        ? buildChannelRecentDeltaSystemMessage({ channelId, events: eventHistory })
+      recentDeltaForSystemContext.length > 0
+        ? buildChannelRecentDeltaSystemMessage({
+            channelId,
+            events: recentDeltaForSystemContext,
+          })
         : "",
       channelFullMemory?.summaryText
         ? buildSystemMemoryMessage(

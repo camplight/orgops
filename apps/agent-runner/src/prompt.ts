@@ -9,29 +9,18 @@ export type RunnerHostInfo = {
   nodeVersion: string;
 };
 
-function stringifySchema(schema: unknown) {
-  try {
-    return JSON.stringify(schema);
-  } catch {
-    return '"<unserializable-schema>"';
-  }
-}
-
 function formatCoreEventTypesSection(coreEventTypes: EventTypeSummary[]) {
   if (coreEventTypes.length === 0) {
     return "- Core event types: none registered.";
   }
   const lines = coreEventTypes.map((eventType) =>
-    [
-      `  - ${eventType.type}${eventType.description ? `: ${eventType.description}` : ""}`,
-      `    schemaKind: ${eventType.schemaKind ?? "none"}`,
-      `    schema: ${stringifySchema(eventType.schema)}`,
-    ].join("\n"),
+    `  - ${eventType.type}${eventType.description ? `: ${eventType.description}` : ""}`,
   );
   return [
-    "- Core event types available by default (not exhaustive):",
+    "- Core event types available by default (compact list):",
     ...lines,
-    "- You are not limited to core types; use `events_event_types` to discover additional skill or runtime-specific types.",
+    "- To inspect full schemas for core/skill types, call `events_event_types`.",
+    "- Use `events_event_types` with source/typePrefix filters for discovery and includeSchema/includeExamples when you need full shape details.",
   ].join("\n");
 }
 
@@ -63,6 +52,7 @@ export function buildRunnerGuidance(
     "- Your final response MUST be JSON for one event object the runner can dispatch.",
     "- Expected shape: { type, payload, source?, channelId?, parentEventId?, deliverAt?, idempotencyKey? }.",
     "- Use event types that validate against available schemas (core + enabled skills).",
+    "- Do not guess payload shapes; discover types first with `events_event_types`, then emit with `events_emit`.",
     "- Do not include markdown or prose outside of JSON.",
     `- Current UTC time is ${nowIso} (${nowMs} unix ms).`,
     formatRunnerHostInfoSection(hostInfo),

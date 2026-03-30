@@ -6,6 +6,7 @@ import {
   resolveAgentClassicMaxModelSteps,
   resolveAgentMemoryContextMode,
   resolveAgentLlmCallTimeoutMs,
+  selectRecentDeltaEventsForPrompt,
   shouldHandleEvent,
 } from "./runner";
 import { stopAllRunningProcesses } from "./tools/shell";
@@ -204,6 +205,44 @@ describe("agent runner", () => {
       .map((message) => JSON.parse(message.content as string).eventId);
     expect(eventIds[0]).toBe("evt-11");
     expect(eventIds[eventIds.length - 1]).toBe("evt-130");
+  });
+
+  it("omits latest user-like event from recent delta system context", () => {
+    const agent: Agent = {
+      name: "tester",
+      systemInstructions: "",
+      soulPath: "",
+      workspacePath: "/tmp",
+      modelId: "openai:gpt-4o-mini",
+      desiredState: "RUNNING",
+      runtimeState: "RUNNING",
+    };
+    const events: Event[] = [
+      {
+        id: "evt-1",
+        type: "message.created",
+        payload: { text: "first user" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      {
+        id: "evt-2",
+        type: "message.created",
+        payload: { text: "self response" },
+        source: "agent:tester",
+        channelId: "chan-1",
+      },
+      {
+        id: "evt-3",
+        type: "process.output",
+        payload: { text: "latest user-like external update" },
+        source: "system:process-runner",
+        channelId: "chan-1",
+      },
+    ];
+
+    const filtered = selectRecentDeltaEventsForPrompt(agent, events);
+    expect(filtered.map((event) => event.id)).toEqual(["evt-1", "evt-2"]);
   });
 
   it("injects memory summaries as system messages", () => {
@@ -1359,7 +1398,13 @@ describe("agent runner", () => {
         });
         if (method === "GET") {
           return new Response(
-            JSON.stringify({ id: "evt-scheduled", payload: { text: "old text" } }),
+            JSON.stringify({
+              id: "evt-scheduled",
+              type: "message.created",
+              source: "agent:tester",
+              channelId: "chan-1",
+              payload: { text: "old text" },
+            }),
             {
               status: 200,
               headers: { "content-type": "application/json" },
@@ -1390,6 +1435,77 @@ describe("agent runner", () => {
     expect(patchRequest?.body.deliverAt).toBeGreaterThanOrEqual(before + 60_000);
     expect(result.eventId).toBe("evt-scheduled");
     expect(result.event.id).toBe("evt-scheduled");
+  });
+
+  it("rejects events_scheduled_update payload that fails shape validation", async () => {
+    const requests: Array<{ path: string; method: string; body: any }> = [];
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        soulContents: "role prompt",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async (path: string, init?: RequestInit) => {
+        const method = init?.method ?? "GET";
+        const bodyText = init?.body ? String(init.body) : "";
+        requests.push({
+          path,
+          method,
+          body: bodyText ? JSON.parse(bodyText) : {},
+        });
+        if (method === "GET") {
+          return new Response(
+            JSON.stringify({
+              id: "evt-scheduled",
+              type: "channel.command.requested",
+              source: "agent:tester",
+              channelId: "chan-1",
+              payload: { channel: { provider: "slack" }, command: { action: "chat.postMessage" } },
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
+        return new Response(
+          JSON.stringify({ id: "evt-scheduled", payload: { text: "bad payload" } }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      },
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+      validateEvent: () => ({
+        ok: false as const,
+        type: "channel.command.requested",
+        matchedDefinitions: 1,
+        issues: [{ source: "core", message: "payload.command.payload.text: Required" }],
+      }),
+    };
+
+    const result = (await executeTool(ctx, "events_scheduled_update", {
+      eventId: "evt-scheduled",
+      payload: { text: "bad payload" },
+    })) as { error?: string };
+    expect(result.error).toContain("Event validation failed");
+    expect(requests.some((request) => request.method === "PATCH")).toBe(false);
   });
 
   it("deletes scheduled events via events_scheduled_delete", async () => {
@@ -1473,6 +1589,109 @@ describe("agent runner", () => {
 
     expect(typeof result.error).toBe("string");
     expect(result.error).toContain("Unknown event typePrefix");
+  });
+
+  it("returns compact event type listings by default", async () => {
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        soulContents: "role prompt",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async () =>
+        new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+      listEventTypes: () => [
+        {
+          type: "message.created",
+          description: "message",
+          source: "core",
+          schemaKind: "event" as const,
+          schema: { type: "object" },
+          payloadExample: { text: "hi" },
+        },
+      ],
+    };
+
+    const result = (await executeTool(ctx, "events_event_types", {})) as {
+      eventTypes?: Array<Record<string, unknown>>;
+    };
+    const first = result.eventTypes?.[0] ?? {};
+    expect(first.type).toBe("message.created");
+    expect(first.description).toBe("message");
+    expect(first.source).toBe("core");
+    expect("schema" in first).toBe(false);
+    expect("payloadExample" in first).toBe(false);
+  });
+
+  it("includes schema and examples when requested in events_event_types", async () => {
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        soulContents: "role prompt",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async () =>
+        new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+      listEventTypes: () => [
+        {
+          type: "message.created",
+          description: "message",
+          source: "core",
+          schemaKind: "event" as const,
+          schema: { type: "object" },
+          payloadExample: { text: "hi" },
+        },
+      ],
+    };
+
+    const result = (await executeTool(ctx, "events_event_types", {
+      includeSchema: true,
+      includeExamples: true,
+    })) as {
+      eventTypes?: Array<Record<string, unknown>>;
+    };
+    const first = result.eventTypes?.[0] ?? {};
+    expect(first.type).toBe("message.created");
+    expect(first.schema).toEqual({ type: "object" });
+    expect(first.payloadExample).toEqual({ text: "hi" });
   });
 
   it("lists/filter agents via events_agents_search", async () => {
