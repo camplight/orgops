@@ -102,13 +102,13 @@ describe("RLM mode", () => {
       generateFn: async () => ({ text: "done({ ok: true })" }),
     });
 
-    expect(emitted.some((entry) => entry.type === "audit.rlm.repl_input")).toBe(
+    expect(emitted.some((entry) => entry.type === "telemetry.rlm.repl_input")).toBe(
       true,
     );
     expect(
-      emitted.some((entry) => entry.type === "audit.rlm.repl_output"),
+      emitted.some((entry) => entry.type === "telemetry.rlm.repl_output"),
     ).toBe(true);
-    expect(emitted.some((entry) => entry.type === "audit.rlm.done")).toBe(true);
+    expect(emitted.some((entry) => entry.type === "telemetry.rlm.done")).toBe(true);
   });
 
   it("supports recursive subagent flow with done()", async () => {
@@ -143,9 +143,9 @@ describe("RLM mode", () => {
       },
     });
 
-    expect(emittedTypes).toContain("audit.rlm.subagent.started");
-    expect(emittedTypes).toContain("audit.rlm.subagent.finished");
-    expect(emittedTypes).toContain("audit.rlm.done");
+    expect(emittedTypes).toContain("telemetry.rlm.subagent.started");
+    expect(emittedTypes).toContain("telemetry.rlm.subagent.finished");
+    expect(emittedTypes).toContain("telemetry.rlm.done");
   });
 
   it("persists root REPL context across events for same agent", async () => {
@@ -167,7 +167,7 @@ describe("RLM mode", () => {
           headers: { "content-type": "application/json" },
         }),
       emitEvent: async (draft) => {
-        if ((draft as { type: string }).type === "audit.rlm.done") {
+        if ((draft as { type: string }).type === "telemetry.rlm.done") {
           donePayloads.push(
             (draft as { payload: { doneValue: string } }).payload.doneValue,
           );
@@ -191,7 +191,7 @@ describe("RLM mode", () => {
           headers: { "content-type": "application/json" },
         }),
       emitEvent: async (draft) => {
-        if ((draft as { type: string }).type === "audit.rlm.done") {
+        if ((draft as { type: string }).type === "telemetry.rlm.done") {
           donePayloads.push(
             (draft as { payload: { doneValue: string } }).payload.doneValue,
           );

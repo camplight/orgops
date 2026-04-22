@@ -242,7 +242,17 @@ async function emitEvent(event: any) {
   });
 }
 
-async function emitAudit(type: string, payload: unknown, source = "system") {
+function shouldEmitAuditEvents(agent: Agent): boolean {
+  return agent.emitAuditEvents !== false;
+}
+
+async function emitAudit(
+  agent: Agent,
+  type: string,
+  payload: unknown,
+  source = "system",
+) {
+  if (!shouldEmitAuditEvents(agent)) return;
   const payloadRecord =
     payload && typeof payload === "object"
       ? (payload as { channelId?: unknown })
@@ -436,15 +446,15 @@ function buildToolResultToStartIndexMap(channelEvents: Event[]) {
     const toolName = getToolEventName(event);
     if (!toolName) continue;
     const key = `${event.source}::${toolName}`;
-    if (event.type === "audit.tool.started") {
+    if (event.type === "tool.started") {
       const stack = startsByKey.get(key) ?? [];
       stack.push(index);
       startsByKey.set(key, stack);
       continue;
     }
     if (
-      event.type !== "audit.tool.executed" &&
-      event.type !== "audit.tool.failed"
+      event.type !== "tool.executed" &&
+      event.type !== "tool.failed"
     ) {
       continue;
     }
@@ -939,24 +949,26 @@ async function handleEvent(agent: Agent, events: Event[]) {
     ? [...baseMessages, mergedTriggerMessage]
     : baseMessages;
   try {
-    await emitEvent({
-      type: "audit.prompt.composed",
-      source: "system:runner:prompt",
-      status: "DELIVERED",
-      channelId,
-      payload: {
-        agentName: agent.name,
-        modelId: agent.modelId,
-        memoryContextMode,
-        triggerEventId: triggerEvent.id,
-        systemPrompt: system,
-        systemContextMessages,
-        messages: invokeMessages.map((message) => ({
-          role: message.role,
-          content: String(message.content ?? ""),
-        })),
-      },
-    });
+    if (shouldEmitAuditEvents(agent)) {
+      await emitEvent({
+        type: "telemetry.prompt.composed",
+        source: "system:runner:prompt",
+        status: "DELIVERED",
+        channelId,
+        payload: {
+          agentName: agent.name,
+          modelId: agent.modelId,
+          memoryContextMode,
+          triggerEventId: triggerEvent.id,
+          systemPrompt: system,
+          systemContextMessages,
+          messages: invokeMessages.map((message) => ({
+            role: message.role,
+            content: String(message.content ?? ""),
+          })),
+        },
+      });
+    }
   } catch {
     // Prompt telemetry should never block turn execution.
   }
@@ -985,26 +997,28 @@ async function handleEvent(agent: Agent, events: Event[]) {
       ? Math.min(100, (estimatedUsedTokens / contextWindowTokens) * 100)
       : 0;
   try {
-    await emitEvent({
-      type: "audit.context.window.updated",
-      source: "system:runner:context",
-      status: "DELIVERED",
-      channelId,
-      payload: {
-        agentName: agent.name,
-        modelId: agent.modelId,
-        contextWindowTokens,
-        estimatedUsedTokens,
-        estimatedAvailableTokens,
-        utilizationPct: Math.round(utilizationPct * 100) / 100,
-        memoryContextMode,
-        messageCount: invokeMessages.length,
-        systemChars,
-        systemContextChars,
-        historyChars: Math.max(0, totalPromptChars - systemChars - systemContextChars),
-        triggerEventId: triggerEvent.id,
-      },
-    });
+    if (shouldEmitAuditEvents(agent)) {
+      await emitEvent({
+        type: "telemetry.context.window.updated",
+        source: "system:runner:context",
+        status: "DELIVERED",
+        channelId,
+        payload: {
+          agentName: agent.name,
+          modelId: agent.modelId,
+          contextWindowTokens,
+          estimatedUsedTokens,
+          estimatedAvailableTokens,
+          utilizationPct: Math.round(utilizationPct * 100) / 100,
+          memoryContextMode,
+          messageCount: invokeMessages.length,
+          systemChars,
+          systemContextChars,
+          historyChars: Math.max(0, totalPromptChars - systemChars - systemContextChars),
+          triggerEventId: triggerEvent.id,
+        },
+      });
+    }
   } catch {
     // Context telemetry should never block turn execution.
   }
@@ -1021,7 +1035,7 @@ async function handleEvent(agent: Agent, events: Event[]) {
       type: string,
       payload: unknown,
       source = `agent:${agent.name}`,
-    ) => emitAudit(type, payload, source),
+    ) => emitAudit(agent, type, payload, source),
     listEventTypes: (input?: { source?: string; typePrefix?: string }) =>
       queryEventTypes(serializedEventTypes, input),
     validateEvent: (eventDraft: {

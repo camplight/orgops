@@ -10,6 +10,7 @@ export type Agent = {
   llmCallTimeoutMs?: number | null;
   classicMaxModelSteps?: number | null;
   contextSessionGapMs?: number | null;
+  emitAuditEvents?: boolean;
   memoryContextMode?:
     | "PER_CHANNEL_CROSS_CHANNEL"
     | "FULL_CHANNEL_EVENTS"

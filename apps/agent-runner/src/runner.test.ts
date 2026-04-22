@@ -63,7 +63,7 @@ describe("agent runner", () => {
       },
       {
         id: "evt-2",
-        type: "audit.tool.executed",
+        type: "tool.executed",
         payload: { tool: "shell_run" },
         source: "agent:tester",
         channelId: "chan-1",
@@ -304,7 +304,7 @@ describe("agent runner", () => {
     }));
     events[9] = {
       id: "evt-10",
-      type: "audit.tool.started",
+      type: "tool.started",
       payload: { tool: "shell_run", args: { cmd: "echo hi" } },
       source: "agent:tester",
       channelId: "chan-1",
@@ -312,7 +312,7 @@ describe("agent runner", () => {
     };
     events[10] = {
       id: "evt-11",
-      type: "audit.tool.executed",
+      type: "tool.executed",
       payload: { tool: "shell_run", output: { ok: true } },
       source: "agent:tester",
       channelId: "chan-1",
@@ -348,7 +348,7 @@ describe("agent runner", () => {
     }));
     events[9] = {
       id: "evt-10",
-      type: "audit.tool.started",
+      type: "tool.started",
       payload: { tool: "shell_start", args: { cmd: "bad" } },
       source: "agent:tester",
       channelId: "chan-1",
@@ -356,7 +356,7 @@ describe("agent runner", () => {
     };
     events[10] = {
       id: "evt-11",
-      type: "audit.tool.failed",
+      type: "tool.failed",
       payload: { tool: "shell_start", error: "boom" },
       source: "agent:tester",
       channelId: "chan-1",
@@ -391,7 +391,7 @@ describe("agent runner", () => {
     };
     const auditEvent: Event = {
       id: "evt-audit",
-      type: "audit.response.skipped",
+      type: "telemetry.response.skipped",
       payload: { reason: "agent_requested_no_reply" },
       source: "agent:coordinator",
       channelId: "chan-1",
@@ -1239,12 +1239,12 @@ describe("agent runner", () => {
       emitAudit: async () => {},
     };
 
-    for (const reservedType of ["agent.turn.completed", "audit.tool.executed"]) {
+    for (const reservedType of ["agent.turn.completed", "tool.executed"]) {
       const result = (await executeTool(ctx, "events_emit", {
         type: reservedType,
         payload: {},
       })) as { error?: string };
-      expect(result.error).toContain("reserved for runtime bookkeeping/audit");
+      expect(result.error).toContain("reserved for runtime bookkeeping/telemetry");
     }
     expect(requests).toHaveLength(0);
   });

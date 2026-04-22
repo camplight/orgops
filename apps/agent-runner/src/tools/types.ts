@@ -57,7 +57,7 @@ export function createWrapExecute(deps: RunnerToolDeps): CreateExecuteFn {
       | "mark_trigger_failed_in_catch" = "emit_started";
     try {
       await emitEvent({
-        type: "audit.tool.started",
+        type: "tool.started",
         payload: { tool: toolName, args },
         source: `agent:${agent.name}`,
         ...(channelId ? { channelId } : {}),
@@ -76,7 +76,7 @@ export function createWrapExecute(deps: RunnerToolDeps): CreateExecuteFn {
       }
       phase = "emit_executed";
       await emitEvent({
-        type: "audit.tool.executed",
+        type: "tool.executed",
         payload: { tool: toolName, args, output },
         source: `agent:${agent.name}`,
         ...(channelId ? { channelId } : {}),
@@ -87,7 +87,7 @@ export function createWrapExecute(deps: RunnerToolDeps): CreateExecuteFn {
       phase = "emit_failed_audit";
       try {
         await emitEvent({
-          type: "audit.tool.failed",
+          type: "tool.failed",
           payload: {
             tool: toolName,
             args,

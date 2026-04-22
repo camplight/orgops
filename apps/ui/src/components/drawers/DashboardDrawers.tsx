@@ -28,6 +28,7 @@ type AgentForm = {
   modelId: string;
   mode: "CLASSIC" | "RLM_REPL";
   memoryContextMode: "PER_CHANNEL_CROSS_CHANNEL" | "FULL_CHANNEL_EVENTS" | "OFF";
+  emitAuditEvents: boolean;
   llmCallTimeoutMs: string;
   contextSessionGapMs: string;
   workspacePath: string;

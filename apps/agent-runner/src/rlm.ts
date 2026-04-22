@@ -113,6 +113,10 @@ type RlmGenerateFn = (
 const rootSessions = new Map<string, RlmSession>();
 const requireFromRunner = createRequire(import.meta.url);
 
+function shouldEmitAgentAuditEvents(agent: Agent): boolean {
+  return agent.emitAuditEvents !== false;
+}
+
 function newSessionId(agentName: string, depth: number) {
   return `${agentName}:${depth}:${Date.now()}:${Math.floor(Math.random() * 1_000_000)}`;
 }
@@ -432,16 +436,18 @@ async function bindSessionRuntime(
     }
     runState.spawnedSubagents += 1;
     const childSession = await createSession({ agent, depth: depth + 1 });
-    await emitEvent({
-      type: "audit.rlm.subagent.started",
-      source: `agent:${agent.name}`,
-      channelId,
-      payload: {
-        parentSessionId: session.id,
-        sessionId: childSession.id,
-        depth: childSession.depth,
-      },
-    });
+    if (shouldEmitAgentAuditEvents(agent)) {
+      await emitEvent({
+        type: "telemetry.rlm.subagent.started",
+        source: `agent:${agent.name}`,
+        channelId,
+        payload: {
+          parentSessionId: session.id,
+          sessionId: childSession.id,
+          depth: childSession.depth,
+        },
+      });
+    }
     const childToolDocs = await bindSessionRuntime({
       agent,
       event,
@@ -471,17 +477,19 @@ async function bindSessionRuntime(
       generateFn: input.generateFn,
       enableChannelInjection: false,
     });
-    await emitEvent({
-      type: "audit.rlm.subagent.finished",
-      source: `agent:${agent.name}`,
-      channelId,
-      payload: {
-        parentSessionId: session.id,
-        sessionId: childSession.id,
-        depth: childSession.depth,
-        done: childResult.done,
-      },
-    });
+    if (shouldEmitAgentAuditEvents(agent)) {
+      await emitEvent({
+        type: "telemetry.rlm.subagent.finished",
+        source: `agent:${agent.name}`,
+        channelId,
+        payload: {
+          parentSessionId: session.id,
+          sessionId: childSession.id,
+          depth: childSession.depth,
+          done: childResult.done,
+        },
+      });
+    }
     childSession.replServer.close();
     return childResult.doneValue;
   };
@@ -600,18 +608,20 @@ async function runReplLoop(
     const rawCode = response.text ?? "";
     const extractedCode = extractCode(rawCode);
     const inputText = truncateText(extractedCode, RLM_MAX_INPUT_CHARS);
-    await emitEvent({
-      type: "audit.rlm.repl_input",
-      source: `agent:${agent.name}`,
-      channelId,
-      payload: {
-        sessionId: session.id,
-        depth,
-        step,
-        text: inputText.text,
-        truncated: inputText.truncated,
-      },
-    });
+    if (shouldEmitAgentAuditEvents(agent)) {
+      await emitEvent({
+        type: "telemetry.rlm.repl_input",
+        source: `agent:${agent.name}`,
+        channelId,
+        payload: {
+          sessionId: session.id,
+          depth,
+          step,
+          text: inputText.text,
+          truncated: inputText.truncated,
+        },
+      });
+    }
     localMessages.push({
       role: "assistant",
       content: extractedCode,
@@ -642,22 +652,24 @@ async function runReplLoop(
             error: record.error ?? "Unknown tool error",
           }),
     }));
-    await emitEvent({
-      type: executionError
-        ? "audit.rlm.repl_output.error"
-        : "audit.rlm.repl_output",
-      source: `agent:${agent.name}`,
-      channelId,
-      payload: {
-        sessionId: session.id,
-        depth,
-        step,
-        text: outputText,
-        truncated: outputTruncated,
-        toolCalls: toolCallsForStep,
-        ...(executionError ? { error: executionError } : {}),
-      },
-    });
+    if (shouldEmitAgentAuditEvents(agent)) {
+      await emitEvent({
+        type: executionError
+          ? "telemetry.rlm.repl_output.error"
+          : "telemetry.rlm.repl_output",
+        source: `agent:${agent.name}`,
+        channelId,
+        payload: {
+          sessionId: session.id,
+          depth,
+          step,
+          text: outputText,
+          truncated: outputTruncated,
+          toolCalls: toolCallsForStep,
+          ...(executionError ? { error: executionError } : {}),
+        },
+      });
+    }
     localMessages.push({
       role: "user",
       content: JSON.stringify(
@@ -673,20 +685,22 @@ async function runReplLoop(
       ),
     });
     if (session.done) {
-      await emitEvent({
-        type: "audit.rlm.done",
-        source: `agent:${agent.name}`,
-        channelId,
-        payload: {
-          sessionId: session.id,
-          depth,
-          step,
-          doneValue: truncateText(
-            formatValue(session.doneValue),
-            RLM_MAX_OUTPUT_CHARS,
-          ).text,
-        },
-      });
+      if (shouldEmitAgentAuditEvents(agent)) {
+        await emitEvent({
+          type: "telemetry.rlm.done",
+          source: `agent:${agent.name}`,
+          channelId,
+          payload: {
+            sessionId: session.id,
+            depth,
+            step,
+            doneValue: truncateText(
+              formatValue(session.doneValue),
+              RLM_MAX_OUTPUT_CHARS,
+            ).text,
+          },
+        });
+      }
       return { done: true, doneValue: session.doneValue };
     }
     if (enableChannelInjection && seenEventIds) {
@@ -702,16 +716,18 @@ async function runReplLoop(
       }
     }
   }
-  await emitEvent({
-    type: "audit.rlm.max_steps_reached",
-    source: `agent:${agent.name}`,
-    channelId,
-    payload: {
-      sessionId: session.id,
-      depth,
-      maxSteps,
-    },
-  });
+  if (shouldEmitAgentAuditEvents(agent)) {
+    await emitEvent({
+      type: "telemetry.rlm.max_steps_reached",
+      source: `agent:${agent.name}`,
+      channelId,
+      payload: {
+        sessionId: session.id,
+        depth,
+        maxSteps,
+      },
+    });
+  }
   return { done: false, doneValue: undefined };
 }
 

@@ -211,6 +211,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         llmCallTimeoutMs: row.llm_call_timeout_ms ?? null,
         classicMaxModelSteps: row.classic_max_model_steps ?? null,
         contextSessionGapMs: row.context_session_gap_ms ?? null,
+        emitAuditEvents: Boolean(row.emit_audit_events ?? 1),
         memoryContextMode: row.memory_context_mode ?? "PER_CHANNEL_CROSS_CHANNEL",
         mode: row.mode ?? "CLASSIC",
         desiredState: row.desired_state,
@@ -275,6 +276,8 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     if (!memoryContextModeParsed.ok) {
       return jsonResponse(c, { error: memoryContextModeParsed.error }, 400);
     }
+    const emitAuditEvents =
+      body.emitAuditEvents === undefined ? true : Boolean(body.emitAuditEvents);
     orm
       .insert(schema.agents)
       .values({
@@ -291,6 +294,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         llm_call_timeout_ms: llmCallTimeoutParsed.value,
         classic_max_model_steps: classicMaxModelStepsParsed.value,
         context_session_gap_ms: contextSessionGapParsed.value,
+        emit_audit_events: emitAuditEvents ? 1 : 0,
         memory_context_mode: memoryContextModeParsed.value,
         mode:
           typeof body.mode === "string" && body.mode.trim()
@@ -327,6 +331,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       llmCallTimeoutMs: row.llm_call_timeout_ms ?? null,
       classicMaxModelSteps: row.classic_max_model_steps ?? null,
       contextSessionGapMs: row.context_session_gap_ms ?? null,
+      emitAuditEvents: Boolean(row.emit_audit_events ?? 1),
       memoryContextMode: row.memory_context_mode ?? "PER_CHANNEL_CROSS_CHANNEL",
       mode: row.mode ?? "CLASSIC",
       desiredState: row.desired_state,
@@ -411,6 +416,8 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     if (memoryContextModeParsed && !memoryContextModeParsed.ok) {
       return jsonResponse(c, { error: memoryContextModeParsed.error }, 400);
     }
+    const emitAuditEvents =
+      body.emitAuditEvents !== undefined ? (body.emitAuditEvents ? 1 : 0) : null;
     orm
       .update(schema.agents)
       .set({
@@ -436,6 +443,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
           contextSessionGapParsed
             ? contextSessionGapParsed.value
             : existing.context_session_gap_ms,
+        emit_audit_events: emitAuditEvents ?? existing.emit_audit_events,
         memory_context_mode:
           memoryContextModeParsed
             ? memoryContextModeParsed.value
@@ -532,7 +540,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         payloadJson: schema.events.payload_json
       })
       .from(schema.events)
-      .where(eq(schema.events.type, "audit.prompt.composed"))
+      .where(eq(schema.events.type, "telemetry.prompt.composed"))
       .orderBy(desc(schema.events.created_at))
       .limit(5000)
       .all() as Array<{

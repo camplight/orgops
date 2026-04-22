@@ -30,6 +30,7 @@ export const agents = sqliteTable("agents", {
   llm_call_timeout_ms: integer("llm_call_timeout_ms"),
   classic_max_model_steps: integer("classic_max_model_steps"),
   context_session_gap_ms: integer("context_session_gap_ms"),
+  emit_audit_events: integer("emit_audit_events").notNull().default(1),
   memory_context_mode: text("memory_context_mode")
     .notNull()
     .default("PER_CHANNEL_CROSS_CHANNEL"),

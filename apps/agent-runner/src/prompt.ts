@@ -13,8 +13,9 @@ function formatCoreEventTypesSection(coreEventTypes: EventTypeSummary[]) {
   if (coreEventTypes.length === 0) {
     return "- Core event types: none registered.";
   }
-  const lines = coreEventTypes.map((eventType) =>
-    `  - ${eventType.type}${eventType.description ? `: ${eventType.description}` : ""}`,
+  const lines = coreEventTypes.map(
+    (eventType) =>
+      `  - ${eventType.type}${eventType.description ? `: ${eventType.description}` : ""}`,
   );
   return [
     "- Core event types available by default (compact list):",
@@ -44,15 +45,17 @@ export function buildRunnerGuidance(
   hostInfo: RunnerHostInfo,
 ) {
   return [
-    "- You are running inside OrgOps agent-runner and receive events per channels.",
-    "- The runner executes your tool calls and records audit events for observability.",
+    "- You are running inside OrgOps' agent-runner and receive events per channels.",
+    "- The runner executes your tool calls on the agent-runner's host machine.",
     "- The runner does not orchestrate your collaboration.",
     "- The runner maps relative paths as your own workspace-relative.",
     `- Skills root folder path for resolving skill-relative references: ${skillRootPath}`,
     "- Your final response MUST be JSON for one event object the runner can dispatch.",
     "- Expected shape: { type, payload, source?, channelId?, parentEventId?, deliverAt?, idempotencyKey? }.",
     "- Use event types that validate against available schemas (core + enabled skills).",
-    "- Do not guess payload shapes; discover types first with `events_event_types`, then emit with `events_emit`.",
+    "- Do not guess payload shapes; discover types first with `events_event_types`.",
+    "- Return your final event only as JSON output; do not call `events_emit` for the same final event.",
+    "- Use `events_emit` only for intentional extra side effects (for example intermediate updates, other agents, etc) that are different from your final returned event.",
     "- Do not include markdown or prose outside of JSON.",
     `- Current UTC time is ${nowIso} (${nowMs} unix ms).`,
     formatRunnerHostInfoSection(hostInfo),

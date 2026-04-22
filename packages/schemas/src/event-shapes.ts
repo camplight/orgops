@@ -287,7 +287,7 @@ const coreEventShapes: EventShapeDefinition[] = [
     }),
   },
   {
-    type: "audit.response.skipped",
+    type: "telemetry.response.skipped",
     description: "Runner skipped final text response by agent directive.",
     source: "core",
     eventSchema: z.object({
@@ -320,7 +320,7 @@ const coreEventShapes: EventShapeDefinition[] = [
     }),
   },
   {
-    type: "audit.local-memory.recorded",
+    type: "telemetry.local-memory.recorded",
     description: "Runner recorded local memory updates for an agent.",
     source: "core",
     eventSchema: z.object({
@@ -337,7 +337,7 @@ const coreEventShapes: EventShapeDefinition[] = [
     }),
   },
   {
-    type: "audit.context.window.updated",
+    type: "telemetry.context.window.updated",
     description: "Runner estimated context window usage for an agent turn.",
     source: "core",
     eventSchema: z.object({
@@ -361,7 +361,7 @@ const coreEventShapes: EventShapeDefinition[] = [
     }),
   },
   {
-    type: "audit.prompt.composed",
+    type: "telemetry.prompt.composed",
     description: "Runner captured the composed prompt/messages for an agent turn.",
     source: "core",
     eventSchema: z.object({
@@ -414,25 +414,7 @@ const coreEventShapes: EventShapeDefinition[] = [
     payloadSchema: z.record(z.string(), z.unknown()),
   },
   {
-    type: "audit.process.started",
-    description: "Audit record for process start.",
-    source: "core",
-    payloadSchema: z.record(z.string(), z.unknown()),
-  },
-  {
-    type: "audit.process.output",
-    description: "Audit record for process output chunk.",
-    source: "core",
-    payloadSchema: z.record(z.string(), z.unknown()),
-  },
-  {
-    type: "audit.process.exited",
-    description: "Audit record for process exit.",
-    source: "core",
-    payloadSchema: z.record(z.string(), z.unknown()),
-  },
-  {
-    type: "audit.tool.started",
+    type: "tool.started",
     description: "Audit record for tool invocation start.",
     source: "core",
     eventSchema: z.object({
@@ -441,7 +423,7 @@ const coreEventShapes: EventShapeDefinition[] = [
     }),
   },
   {
-    type: "audit.tool.executed",
+    type: "tool.executed",
     description: "Audit record for successful tool invocation.",
     source: "core",
     eventSchema: z.object({
@@ -450,7 +432,7 @@ const coreEventShapes: EventShapeDefinition[] = [
     }),
   },
   {
-    type: "audit.tool.failed",
+    type: "tool.failed",
     description: "Audit record for failed tool invocation.",
     source: "core",
     eventSchema: z.object({
@@ -459,43 +441,43 @@ const coreEventShapes: EventShapeDefinition[] = [
     }),
   },
   {
-    type: "audit.rlm.repl_input",
+    type: "telemetry.rlm.repl_input",
     description: "Audit record for RLM REPL input.",
     source: "core",
     payloadSchema: z.record(z.string(), z.unknown()),
   },
   {
-    type: "audit.rlm.repl_output",
+    type: "telemetry.rlm.repl_output",
     description: "Audit record for RLM REPL output.",
     source: "core",
     payloadSchema: z.record(z.string(), z.unknown()),
   },
   {
-    type: "audit.rlm.repl_output.error",
+    type: "telemetry.rlm.repl_output.error",
     description: "Audit record for RLM REPL execution errors.",
     source: "core",
     payloadSchema: z.record(z.string(), z.unknown()),
   },
   {
-    type: "audit.rlm.subagent.started",
+    type: "telemetry.rlm.subagent.started",
     description: "Audit record for RLM subagent start.",
     source: "core",
     payloadSchema: z.record(z.string(), z.unknown()),
   },
   {
-    type: "audit.rlm.subagent.finished",
+    type: "telemetry.rlm.subagent.finished",
     description: "Audit record for RLM subagent completion.",
     source: "core",
     payloadSchema: z.record(z.string(), z.unknown()),
   },
   {
-    type: "audit.rlm.done",
+    type: "telemetry.rlm.done",
     description: "Audit record for RLM done() completion.",
     source: "core",
     payloadSchema: z.record(z.string(), z.unknown()),
   },
   {
-    type: "audit.rlm.max_steps_reached",
+    type: "telemetry.rlm.max_steps_reached",
     description: "Audit record for RLM reaching step budget.",
     source: "core",
     payloadSchema: z.record(z.string(), z.unknown()),

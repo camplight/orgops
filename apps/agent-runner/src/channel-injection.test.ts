@@ -28,7 +28,7 @@ describe("channel injection", () => {
           },
           {
             id: "evt-audit",
-            type: "audit.tool.started",
+            type: "tool.started",
             source: "agent:browser",
             channelId: "chan-1",
             payload: {},

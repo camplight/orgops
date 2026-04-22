@@ -20,6 +20,8 @@ export function shouldHandleEventForAgent(agent: Agent, event: Event): boolean {
   }
   // Skip bookkeeping events that should never trigger model replies.
   if (event.type?.startsWith("audit.")) return false;
+  if (event.type?.startsWith("telemetry.")) return false;
+  if (event.type?.startsWith("tool.")) return false;
   if (event.source === `agent:${agent.name}`) return false;
   if (!event.channelId) return false;
   return true;

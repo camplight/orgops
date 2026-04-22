@@ -233,6 +233,7 @@ export default function App() {
     }
     if (
       event.type === "process.started" ||
+      event.type === "process.output" ||
       event.type === "process.exited" ||
       event.type === "processes.cleared"
     ) {

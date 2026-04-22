@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ProcessOutputRow, ProcessRow } from "../types";
-import { Button, Card } from "../components/ui";
+import { Button, Card, Input } from "../components/ui";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 import { formatTimestamp } from "../utils/formatTimestamp";
 
@@ -42,10 +42,59 @@ export function ProcessesScreen({
 }: ProcessesScreenProps) {
   const [expandedCommands, setExpandedCommands] = useState<Record<string, boolean>>({});
   const [exitingProcessIds, setExitingProcessIds] = useState<Record<string, boolean>>({});
+  const [runningOnly, setRunningOnly] = useState(false);
+  const [agentFilter, setAgentFilter] = useState("");
+  const [processIdFilter, setProcessIdFilter] = useState("");
+  const [channelFilter, setChannelFilter] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
   const selectedProcess = useMemo(
     () => processes.find((process) => process.id === activeProcessId) ?? null,
     [activeProcessId, processes]
   );
+  const agentOptions = useMemo(
+    () =>
+      [...new Set(processes.map((process) => process.agent_name))]
+        .filter((name) => Boolean(name.trim()))
+        .sort((a, b) => a.localeCompare(b)),
+    [processes]
+  );
+  const channelOptions = useMemo(
+    () =>
+      [...new Set(processes.map((process) => process.channel_id ?? ""))]
+        .filter((channelId) => Boolean(channelId.trim()))
+        .sort((a, b) => a.localeCompare(b)),
+    [processes]
+  );
+  const filteredProcesses = useMemo(() => {
+    const normalizedAgent = agentFilter.trim().toLowerCase();
+    const normalizedProcessId = processIdFilter.trim().toLowerCase();
+    const normalizedChannel = channelFilter.trim().toLowerCase();
+    const filtered = processes.filter((process) => {
+      if (runningOnly && process.state !== "RUNNING" && process.state !== "STARTING") {
+        return false;
+      }
+      if (
+        normalizedAgent &&
+        !process.agent_name.toLowerCase().includes(normalizedAgent)
+      ) {
+        return false;
+      }
+      if (normalizedProcessId && !process.id.toLowerCase().includes(normalizedProcessId)) {
+        return false;
+      }
+      const processChannelId = (process.channel_id ?? "").toLowerCase();
+      if (normalizedChannel && !processChannelId.includes(normalizedChannel)) {
+        return false;
+      }
+      return true;
+    });
+    return [...filtered].sort((a, b) => (b.started_at ?? 0) - (a.started_at ?? 0));
+  }, [agentFilter, channelFilter, processIdFilter, processes, runningOnly]);
+  const totalPages = Math.max(1, Math.ceil(filteredProcesses.length / pageSize));
+  const startIndex = (currentPage - 1) * pageSize;
+  const endIndex = startIndex + pageSize;
+  const pagedProcesses = filteredProcesses.slice(startIndex, endIndex);
   useEscapeKey(Boolean(selectedProcess), () => {
     onSelectProcess(null);
   });
@@ -55,6 +104,11 @@ export function ProcessesScreen({
   const hasExitedProcesses = processes.some(
     (process) => process.state !== "RUNNING" && process.state !== "STARTING"
   );
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
   const exitProcess = async (process: ProcessRow) => {
     if (!canExitProcess(process)) return;
     if (!confirm(`Exit process "${process.cmd}"?`)) return;
@@ -69,7 +123,7 @@ export function ProcessesScreen({
   return (
     <div className="grid gap-4 lg:grid-cols-1">
       {!drawerOnly ? (
-      <Card title={`Processes (${processes.length})`}>
+      <Card title={`Processes (${filteredProcesses.length})`}>
         <div className="mb-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Button
@@ -109,9 +163,82 @@ export function ProcessesScreen({
               Clear all
             </Button>
           </div>
-          <div className="text-xs text-slate-500">
-            Click a row to inspect output in the right pane.
+          <div className="text-xs text-slate-500 text-right">
+            <div>Click a row to inspect output in the right pane.</div>
+            <div>Realtime updates are applied automatically.</div>
           </div>
+        </div>
+        <div className="mb-3 grid gap-3 md:grid-cols-5">
+          <Input
+            list="process-agent-filter-options"
+            placeholder="Filter by agent"
+            value={agentFilter}
+            onChange={(event) => {
+              setAgentFilter(event.target.value);
+              setCurrentPage(1);
+            }}
+          />
+          <datalist id="process-agent-filter-options">
+            {agentOptions.map((agentName) => (
+              <option key={agentName} value={agentName} />
+            ))}
+          </datalist>
+          <Input
+            placeholder="Filter by process ID"
+            value={processIdFilter}
+            onChange={(event) => {
+              setProcessIdFilter(event.target.value);
+              setCurrentPage(1);
+            }}
+          />
+          <Input
+            list="process-channel-filter-options"
+            placeholder="Filter by channel"
+            value={channelFilter}
+            onChange={(event) => {
+              setChannelFilter(event.target.value);
+              setCurrentPage(1);
+            }}
+          />
+          <datalist id="process-channel-filter-options">
+            {channelOptions.map((channelId) => (
+              <option key={channelId} value={channelId} />
+            ))}
+          </datalist>
+          <label className="flex items-center gap-2 text-sm text-slate-300">
+            <input
+              type="checkbox"
+              checked={runningOnly}
+              onChange={(event) => {
+                setRunningOnly(event.target.checked);
+                setCurrentPage(1);
+              }}
+            />
+            Running only
+          </label>
+          <div className="flex items-center gap-2 text-sm">
+            <label className="text-slate-400" htmlFor="processes-page-size">
+              Rows
+            </label>
+            <select
+              id="processes-page-size"
+              className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-slate-200"
+              value={String(pageSize)}
+              onChange={(event) => {
+                setPageSize(Number(event.target.value));
+                setCurrentPage(1);
+              }}
+            >
+              <option value="10">10</option>
+              <option value="25">25</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+            </select>
+          </div>
+        </div>
+        <div className="mb-3 text-sm text-slate-400">
+          Showing {filteredProcesses.length === 0 ? 0 : startIndex + 1}-
+          {Math.min(endIndex, filteredProcesses.length)} of {filteredProcesses.length}
         </div>
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
@@ -122,13 +249,13 @@ export function ProcessesScreen({
                 <th className="px-2 py-2">Mode</th>
                 <th className="px-2 py-2">State</th>
                 <th className="px-2 py-2">Output</th>
-                <th className="px-2 py-2">PID</th>
+                <th className="px-2 py-2">OS PID</th>
                 <th className="px-2 py-2">Channel</th>
                 <th className="px-2 py-2">Command</th>
               </tr>
             </thead>
             <tbody>
-              {processes.map((proc) => {
+              {pagedProcesses.map((proc) => {
                 const expanded = expandedCommands[proc.id] ?? false;
                 const isLongCommand = proc.cmd.length > 88;
                 return (
@@ -186,9 +313,28 @@ export function ProcessesScreen({
               })}
             </tbody>
           </table>
-          {processes.length === 0 && (
+          {pagedProcesses.length === 0 && (
             <div className="py-8 text-center text-slate-500">No processes found.</div>
           )}
+        </div>
+        <div className="mt-3 flex items-center justify-end gap-2">
+          <Button
+            variant="secondary"
+            disabled={currentPage <= 1}
+            onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+          >
+            Previous
+          </Button>
+          <div className="text-sm text-slate-400">
+            Page {currentPage} of {totalPages}
+          </div>
+          <Button
+            variant="secondary"
+            disabled={currentPage >= totalPages}
+            onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+          >
+            Next
+          </Button>
         </div>
       </Card>
       ) : null}

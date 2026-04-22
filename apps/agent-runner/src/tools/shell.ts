@@ -10,6 +10,7 @@ const MIN_TIMEOUT_MS = 1_000;
 const MAX_TIMEOUT_MS = 45_000;
 const DEFAULT_TIMEOUT_MS = 45_000;
 const DEFAULT_MAX_BUFFER = 10 * 1024 * 1024;
+const DEFAULT_TIMEOUT_KILL_GRACE_MS = 5_000;
 const shellRunSchema = z.object({
   cmd: z.string().min(1),
   cwd: z.string().optional(),
@@ -178,13 +179,6 @@ async function spawnTrackedProcess(
         executionMode: input.executionMode,
       }),
     });
-    await ctx.emitAudit("audit.process.started", {
-      agentName: ctx.agent.name,
-      channelId: ctx.channelId,
-      processId,
-      cmd: input.cmd,
-      executionMode: input.executionMode,
-    });
     await ctx.emitEvent({
       type: "process.started",
       payload: { processId, cmd: input.cmd, executionMode: input.executionMode },
@@ -209,13 +203,6 @@ async function spawnTrackedProcess(
         source: PROCESS_EVENT_SOURCE,
       }),
     });
-    await ctx.emitAudit("audit.process.output", {
-      agentName: ctx.agent.name,
-      channelId: ctx.channelId,
-      processId,
-      seq: entry.seq,
-      stream,
-    });
   };
 
   child.stdout?.on("data", (chunk) => void handleChunk("STDOUT", chunk));
@@ -233,14 +220,6 @@ async function spawnTrackedProcess(
           endedAt: Date.now(),
           source: PROCESS_EVENT_SOURCE,
         }),
-      });
-      await ctx.emitAudit("audit.process.exited", {
-        agentName: ctx.agent.name,
-        channelId: ctx.channelId,
-        processId,
-        exitCode: code ?? null,
-        signal: signal ?? null,
-        state: exitState,
       });
     } finally {
       processes.delete(processId);
@@ -358,6 +337,22 @@ export async function execute(
   let stderrBytes = 0;
   let timedOut = false;
   let bufferExceeded = false;
+  let timeoutKillFailed = false;
+  let timeoutKillError: string | null = null;
+  let killGraceTimer: NodeJS.Timeout | undefined;
+  let resolveKillGraceResult:
+    | ((value: {
+        code: number | null;
+        signal: NodeJS.Signals | null;
+        error?: Error;
+        forcedTimeout?: boolean;
+      }) => void)
+    | undefined;
+  const timeoutKillGraceMs = Number.isFinite(
+    Number(process.env.ORGOPS_SHELL_TIMEOUT_KILL_GRACE_MS),
+  )
+    ? Math.max(0, Math.floor(Number(process.env.ORGOPS_SHELL_TIMEOUT_KILL_GRACE_MS)))
+    : DEFAULT_TIMEOUT_KILL_GRACE_MS;
   const onData = (
     chunk: Buffer | string,
     targetChunks: Buffer[],
@@ -382,15 +377,47 @@ export async function execute(
     stderrBytes = onData(chunk, stderrChunks, stderrBytes);
   });
 
-  const timer = setTimeout(() => {
-    timedOut = true;
-    child.kill("SIGKILL");
-  }, timeoutMs);
-  const result = await new Promise<{
+  type ShellRunOutcome = {
     code: number | null;
     signal: NodeJS.Signals | null;
     error?: Error;
-  }>((resolve) => {
+    forcedTimeout?: boolean;
+  };
+
+  const killGracePromise = new Promise<ShellRunOutcome>((resolve) => {
+    resolveKillGraceResult = resolve;
+  });
+
+  const timer = setTimeout(() => {
+    timedOut = true;
+    try {
+      const killSent = child.kill("SIGKILL");
+      timeoutKillFailed = !killSent;
+      if (!killSent) {
+        timeoutKillError =
+          "SIGKILL delivery returned false; process may already be gone or not killable.";
+      }
+    } catch (error) {
+      timeoutKillFailed = true;
+      timeoutKillError = String(error);
+    }
+    if (timeoutKillGraceMs <= 0) {
+      resolveKillGraceResult?.({
+        code: null,
+        signal: null,
+        forcedTimeout: true,
+      });
+      return;
+    }
+    killGraceTimer = setTimeout(() => {
+      resolveKillGraceResult?.({
+        code: null,
+        signal: null,
+        forcedTimeout: true,
+      });
+    }, timeoutKillGraceMs);
+  }, timeoutMs);
+  const closePromise = new Promise<ShellRunOutcome>((resolve) => {
     let settled = false;
     const settle = (value: {
       code: number | null;
@@ -404,7 +431,9 @@ export async function execute(
     child.once("error", (error) => settle({ code: null, signal: null, error }));
     child.once("close", (code, signal) => settle({ code, signal }));
   });
+  const result = await Promise.race([closePromise, killGracePromise]);
   clearTimeout(timer);
+  if (killGraceTimer) clearTimeout(killGraceTimer);
   const stdout = Buffer.concat(stdoutChunks).toString("utf-8");
   const stderr = Buffer.concat(stderrChunks).toString("utf-8");
   if (result.error) {
@@ -414,12 +443,24 @@ export async function execute(
       exitCode: 1,
     };
   }
-  if (timedOut) {
+  if (timedOut || result.forcedTimeout) {
+    const timeoutDetails =
+      timeoutKillFailed && timeoutKillError
+        ? `\nTimeout kill details: ${timeoutKillError}`
+        : timeoutKillFailed
+          ? "\nTimeout kill details: SIGKILL delivery failed."
+          : "";
+    const graceDetails =
+      result.forcedTimeout && timeoutKillGraceMs > 0
+        ? `\nProcess did not close within ${timeoutKillGraceMs}ms kill grace window.`
+        : "";
     return {
       stdout,
       stderr:
         stderr +
-        `\nCommand timed out after ${timeoutMs}ms. If this is expected to run long, use shell_start.`,
+        `\nCommand timed out after ${timeoutMs}ms. If this is expected to run long, use shell_start.` +
+        timeoutDetails +
+        graceDetails,
       exitCode: 124,
     };
   }

@@ -15,6 +15,7 @@ type AgentForm = {
   modelId: string;
   mode: "CLASSIC" | "RLM_REPL";
   memoryContextMode: "PER_CHANNEL_CROSS_CHANNEL" | "FULL_CHANNEL_EVENTS" | "OFF";
+  emitAuditEvents: boolean;
   llmCallTimeoutMs: string;
   contextSessionGapMs: string;
   workspacePath: string;
@@ -29,6 +30,7 @@ const DEFAULT_AGENT_FORM: AgentForm = {
   modelId: "openai:gpt-4o-mini",
   mode: "CLASSIC",
   memoryContextMode: "PER_CHANNEL_CROSS_CHANNEL",
+  emitAuditEvents: true,
   llmCallTimeoutMs: "",
   contextSessionGapMs: "",
   workspacePath: ".orgops-data/workspaces/default",
@@ -188,6 +190,7 @@ export function AgentsScreen({
       modelId: selectedAgent.modelId ?? "openai:gpt-4o-mini",
       mode: selectedAgent.mode ?? "CLASSIC",
       memoryContextMode: selectedAgent.memoryContextMode ?? "PER_CHANNEL_CROSS_CHANNEL",
+      emitAuditEvents: selectedAgent.emitAuditEvents !== false,
       llmCallTimeoutMs:
         selectedAgent.llmCallTimeoutMs && selectedAgent.llmCallTimeoutMs > 0
           ? String(selectedAgent.llmCallTimeoutMs)
@@ -486,6 +489,7 @@ export function AgentsScreen({
           modelId: form.modelId.trim(),
           mode: form.mode,
           memoryContextMode: form.memoryContextMode,
+          emitAuditEvents: form.emitAuditEvents,
           llmCallTimeoutMs: llmCallTimeoutMs === null ? "" : String(llmCallTimeoutMs),
           contextSessionGapMs:
             contextSessionGapMs === null ? "" : String(contextSessionGapMs),
@@ -510,6 +514,7 @@ export function AgentsScreen({
         modelId: form.modelId.trim(),
         mode: form.mode,
         memoryContextMode: form.memoryContextMode,
+        emitAuditEvents: form.emitAuditEvents,
         llmCallTimeoutMs: llmCallTimeoutMs === null ? "" : String(llmCallTimeoutMs),
         contextSessionGapMs:
           contextSessionGapMs === null ? "" : String(contextSessionGapMs),
@@ -840,6 +845,21 @@ export function AgentsScreen({
                         <option value="OFF">OFF</option>
                       </select>
                     </div>
+                    <label className="flex items-center gap-2 rounded border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-300">
+                      <input
+                        type="checkbox"
+                        checked={form.emitAuditEvents}
+                        onChange={(e) => {
+                          setIsFormDirty(true);
+                          setSaveStatus(null);
+                          setForm((prev) => ({
+                            ...prev,
+                            emitAuditEvents: e.target.checked
+                          }));
+                        }}
+                      />
+                      <span>Emit observability/debug audit events for this agent</span>
+                    </label>
                     <div className="space-y-1">
                       <div className="text-sm text-slate-400">LLM call timeout (ms)</div>
                       <Input

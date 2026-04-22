@@ -91,15 +91,15 @@ function toInlineAgentStatus(event: EventRow): string {
     const phase = getPayloadString(payload, "phase");
     if (phase) return phase.toLowerCase();
   }
-  if (event.type === "audit.tool.started") {
+  if (event.type === "tool.started") {
     const toolName = getPayloadString(payload, "tool");
     return toolName ? `using ${toolName.replace(/[_-]+/g, " ")}` : "using a tool";
   }
-  if (event.type === "audit.tool.executed") {
+  if (event.type === "tool.executed") {
     const toolName = getPayloadString(payload, "tool");
     return toolName ? `finished ${toolName.replace(/[_-]+/g, " ")}` : "finished a tool";
   }
-  if (event.type === "audit.tool.failed") {
+  if (event.type === "tool.failed") {
     const toolName = getPayloadString(payload, "tool");
     return toolName ? `${toolName.replace(/[_-]+/g, " ")} failed` : "tool failed";
   }
@@ -163,7 +163,7 @@ function getRecordMeta(record: MemoryRecord | null): string {
 }
 
 function parseAgentContextUsage(event: EventRow): AgentContextUsage | null {
-  if (event.type !== "audit.context.window.updated") return null;
+  if (event.type !== "telemetry.context.window.updated") return null;
   const payload = asObject(event.payload);
   const agentNameRaw = payload.agentName;
   const agentName =

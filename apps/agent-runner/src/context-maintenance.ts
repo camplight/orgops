@@ -14,6 +14,8 @@ function normalizeTimestamp(value: unknown): number {
 
 function isMeaningfulEvent(event: Event): boolean {
   if (event.type.startsWith("audit.")) return false;
+  if (event.type.startsWith("telemetry.")) return false;
+  if (event.type.startsWith("tool.")) return false;
   if (event.type.startsWith("agent.turn.")) return false;
   if (event.type.startsWith("memory.")) return false;
   if (event.type === "event.deadlettered") return false;

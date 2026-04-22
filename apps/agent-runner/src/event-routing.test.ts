@@ -41,7 +41,7 @@ describe("event routing", () => {
     expect(
       shouldHandleEventForAgent(
         agent,
-        makeEvent({ type: "audit.tool.executed", source: "agent:worker-a" }),
+        makeEvent({ type: "tool.executed", source: "agent:worker-a" }),
       ),
     ).toBe(false);
     expect(
