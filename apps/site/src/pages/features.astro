@@ -1,113 +1,72 @@
 ---
-import BaseHead from '../components/BaseHead.astro';
-import Footer from '../components/Footer.astro';
-import Header from '../components/Header.astro';
-import { SITE_DESCRIPTION, SITE_TITLE } from '../consts';
-
-const features = [
-	{
-		title: 'Event-driven core',
-		description:
-			'Everything is an event: messages, tool calls, schedules, and outcomes. Build workflows that are easy to replay and reason about.',
-	},
-	{
-		title: 'Channels for coordination',
-		description:
-			'Keep work organized by channel. Delegate to agents with @mentions and keep humans in the loop with structured updates.',
-	},
-	{
-		title: 'Skills + tools',
-		description:
-			'Add capabilities as skills. Each skill can expose tools, schemas, and conventions—without bloating the core runtime.',
-	},
-	{
-		title: 'Scheduling + idempotency',
-		description:
-			'Schedule triggers, retry safely, and avoid duplicate side effects with idempotency keys and explicit command events.',
-	},
-	{
-		title: 'Auditability',
-		description:
-			'Observe what happened and why. Tool invocations and outputs are recorded for traceability and debugging.',
-	},
-	{
-		title: 'Secrets management',
-		description:
-			'Store tokens encrypted. Agents can set/list/delete keys but cannot read secret values back.',
-	},
-];
+import SiteLayout from '../layouts/SiteLayout.astro';
 ---
 
-<!doctype html>
-<html lang="en">
-	<head>
-		<BaseHead title={`${SITE_TITLE} — Features`} description={SITE_DESCRIPTION} />
-	</head>
-	<body>
-		<Header />
-		<main>
-			<header class="page-hero">
-				<h1>Features</h1>
-				<p class="lede">A pragmatic toolkit for building reliable agent workflows.</p>
-			</header>
+<SiteLayout
+	title="Features"
+	description="A quick tour of OrgOps: typed events, observable execution, composable skills, and safer automation."
+>
+	<header class="hero">
+		<h1>Features</h1>
+		<p class="lede">
+			A quick tour of what OrgOps optimizes for.
+		</p>
+	</header>
 
-			<section class="cards">
-				{features.map((f) => (
-					<article class="card">
-						<h2>{f.title}</h2>
-						<p>{f.description}</p>
-					</article>
-				))}
-			</section>
-
-			<section class="section">
-				<h2>What’s next</h2>
-				<p class="muted">
-					This page is intentionally lightweight. Add screenshots, architecture diagrams, and real-world examples as the
-					product story solidifies.
-				</p>
-			</section>
-		</main>
-		<Footer />
-	</body>
-</html>
+	<section class="grid">
+		<div class="card">
+			<h2>Typed events</h2>
+			<p>Model work as structured events for traceability, validation, and automation.</p>
+		</div>
+		<div class="card">
+			<h2>Channels + memory</h2>
+			<p>Keep work scoped and legible. Agents collaborate with humans in shared channels.</p>
+		</div>
+		<div class="card">
+			<h2>Processes + observability</h2>
+			<p>Long-running commands are tracked with lifecycle events and captured output.</p>
+		</div>
+		<div class="card">
+			<h2>Skills</h2>
+			<p>Extend capabilities with skills: scripts, schemas, and conventions — without bloating the core.</p>
+		</div>
+		<div class="card">
+			<h2>Secrets</h2>
+			<p>Encrypted storage; injected at runtime. Agents can manage keys but don’t read values back.</p>
+		</div>
+		<div class="card">
+			<h2>Audit trails</h2>
+			<p>Understand what happened, when, and why — and build safer automation on top.</p>
+		</div>
+	</section>
+</SiteLayout>
 
 <style>
-	.page-hero {
-		padding-top: 1rem;
+	.hero {
+		padding: 1.5rem 0 1rem;
 	}
 	.lede {
+		max-width: 70ch;
 		color: rgb(var(--muted));
-		max-width: 60ch;
 	}
-	.cards {
+	.grid {
 		margin-top: 1.5rem;
 		display: grid;
-		grid-template-columns: repeat(2, minmax(0, 1fr));
+		grid-template-columns: repeat(3, minmax(0, 1fr));
 		gap: 1rem;
 	}
 	.card {
-		background: rgb(var(--surface));
-		border: 1px solid rgba(var(--border), 0.9);
-		border-radius: 14px;
-		padding: 1.25rem;
+		padding: 1rem;
+		border-radius: 1rem;
+		border: 1px solid rgba(var(--black), 10%);
+		background: rgba(var(--black), 2%);
 	}
-	.card h2 {
-		font-size: 1.25rem;
-		margin-bottom: 0.5rem;
-	}
-	.card p {
-		margin: 0;
-		color: rgb(var(--muted));
-	}
-	.section {
-		margin-top: 2.5rem;
-	}
-	.muted {
-		color: rgb(var(--muted));
+	:global(html[data-theme='dark']) .card {
+		border-color: rgba(255, 255, 255, 14%);
+		background: rgba(255, 255, 255, 6%);
 	}
 	@media (max-width: 900px) {
-		.cards {
+		.grid {
 			grid-template-columns: 1fr;
 		}
 	}

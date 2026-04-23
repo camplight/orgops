@@ -1,0 +1,113 @@
+---
+import SiteLayout from '../layouts/SiteLayout.astro';
+---
+
+<SiteLayout
+	title="System"
+	description="How OrgOps works: a small runtime where typed events drive agents and explicit commands, with auditability and control."
+>
+	<header class="hero">
+		<h1>System</h1>
+		<p class="lede">
+			OrgOps is a small, explicit runtime for agent-driven operations: events in, actions out — with auditability and
+			control.
+		</p>
+	</header>
+
+	<section class="grid">
+		<div class="card">
+			<h2>Events as the backbone</h2>
+			<p>
+				Work is represented as typed events. That makes workflows inspectable, replayable, and easier to integrate.
+			</p>
+		</div>
+		<div class="card">
+			<h2>Agents with guardrails</h2>
+			<p>
+				Agents operate inside channels, follow coordination rules, and emit structured outputs instead of hidden side
+				effects.
+			</p>
+		</div>
+		<div class="card">
+			<h2>Skills, not plugins</h2>
+			<p>
+				Capabilities are packaged as skills: scripts + event schemas + conventions. Keep the core small; extend at the
+				edges.
+			</p>
+		</div>
+	</section>
+
+	<section class="section">
+		<h2>What you get</h2>
+		<ul>
+			<li><strong>Traceability:</strong> see what happened, when, and why.</li>
+			<li><strong>Safety:</strong> scoped secrets, explicit commands, and auditable actions.</li>
+			<li><strong>Velocity:</strong> automate the boring parts without losing accountability.</li>
+		</ul>
+	</section>
+
+	<section class="section">
+		<h2>A tiny example</h2>
+		<p>
+			A human asks for a deploy in a channel. An agent responds with a structured command request instead of running
+			shell commands silently.
+		</p>
+		<pre class="code"><code>{`{
+  "type": "channel.command.requested",
+  "payload": {
+    "command": "deploy.preview",
+    "args": { "service": "api", "ref": "main" }
+  }
+}`}</code></pre>
+		<p>
+			That command is visible in the event log, can be approved/denied, and produces a success/failure event.
+		</p>
+	</section>
+</SiteLayout>
+
+<style>
+	.hero {
+		padding: 1.5rem 0 1rem;
+	}
+	.lede {
+		max-width: 70ch;
+		color: rgb(var(--muted));
+	}
+	.section {
+		margin-top: 2.5rem;
+	}
+	.code {
+		margin-top: 0.75rem;
+		padding: 0.9rem 1rem;
+		border-radius: 1rem;
+		border: 1px solid rgba(var(--black), 10%);
+		background: rgba(var(--black), 2%);
+		overflow-x: auto;
+		font-size: 0.9rem;
+	}
+	:global(html[data-theme='dark']) .code {
+		border-color: rgba(255, 255, 255, 14%);
+		background: rgba(255, 255, 255, 6%);
+	}
+	.grid {
+		margin-top: 1.5rem;
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 1rem;
+	}
+	.card {
+		padding: 1rem;
+		border-radius: 1rem;
+		border: 1px solid rgba(var(--black), 10%);
+		background: rgba(var(--black), 2%);
+	}
+	:global(html[data-theme='dark']) .card {
+		border-color: rgba(255, 255, 255, 14%);
+		background: rgba(255, 255, 255, 6%);
+	}
+	@media (max-width: 900px) {
+		.grid {
+			grid-template-columns: 1fr;
+		}
+	}
+</style>

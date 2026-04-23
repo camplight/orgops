@@ -267,4 +267,159 @@ describe("RLM mode", () => {
 
     expect(pendingPolled).toBeGreaterThanOrEqual(1);
   });
+
+  it("auto-emits done(eventDraft) when validation passes", async () => {
+    const agent = makeAgent("rlm-done-emit");
+    const event = makeEvent("evt-done-emit");
+    const emitted: Array<{ type: string; source?: string; channelId?: string }> = [];
+    const apiFetch = async (path: string) => {
+      if (path === "/api/channels") {
+        return new Response(
+          JSON.stringify([
+            {
+              id: "chan-1",
+              participants: [{ subscriberType: "AGENT", subscriberId: agent.name }],
+            },
+          ]),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    const executeCtx = {
+      ...makeExecuteContext(agent, event),
+      apiFetch,
+    };
+
+    await runRlmEvent({
+      agent,
+      event,
+      channelId: "chan-1",
+      systemPrompt: "system",
+      baseMessages: [],
+      executeCtx,
+      apiFetch,
+      emitEvent: async (draft) => {
+        const eventDraft = draft as {
+          type: string;
+          source?: string;
+          channelId?: string;
+        };
+        emitted.push(eventDraft);
+      },
+      generateFn: async () => ({
+        text: 'done({ type: "message.created", payload: { text: "hello from done" } })',
+      }),
+    });
+
+    expect(
+      emitted.some(
+        (entry) =>
+          entry.type === "message.created" &&
+          entry.source === `agent:${agent.name}` &&
+          entry.channelId === "chan-1",
+      ),
+    ).toBe(true);
+  });
+
+  it("returns descriptive validation error when done(eventDraft) is invalid", async () => {
+    const agent = makeAgent("rlm-done-validation");
+    const event = makeEvent("evt-done-validation");
+    const emittedTypes: string[] = [];
+    const doneErrorMessages: string[] = [];
+    let messageCreatedValidationAttempts = 0;
+    const apiFetch = async (path: string) => {
+      if (path === "/api/channels") {
+        return new Response(
+          JSON.stringify([
+            {
+              id: "chan-1",
+              participants: [{ subscriberType: "AGENT", subscriberId: agent.name }],
+            },
+          ]),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    const executeCtx = {
+      ...makeExecuteContext(agent, event),
+      apiFetch,
+      validateEvent: (draft: {
+        type: string;
+        payload: unknown;
+        source: string;
+        channelId?: string;
+        parentEventId?: string;
+        deliverAt?: number;
+        idempotencyKey?: string;
+      }) => {
+        if (draft.type === "message.created") {
+          messageCreatedValidationAttempts += 1;
+          if (messageCreatedValidationAttempts > 1) {
+            return { ok: true as const, matchedDefinitions: 1 };
+          }
+          return {
+            ok: false as const,
+            type: draft.type,
+            matchedDefinitions: 1,
+            issues: [{ source: "core", message: "payload.text is required" }],
+          };
+        }
+        return { ok: true as const, matchedDefinitions: 1 };
+      },
+    };
+
+    await runRlmEvent({
+      agent,
+      event,
+      channelId: "chan-1",
+      systemPrompt: "system",
+      baseMessages: [],
+      executeCtx,
+      apiFetch,
+      emitEvent: async (draft) => {
+        const eventDraft = draft as {
+          type: string;
+          payload?: { error?: string };
+        };
+        emittedTypes.push(eventDraft.type);
+        if (
+          eventDraft.type === "telemetry.rlm.done_validation_error" &&
+          typeof eventDraft.payload?.error === "string"
+        ) {
+          doneErrorMessages.push(eventDraft.payload.error);
+        }
+      },
+      generateFn: async (_modelId, messages) => {
+        const hasDoneValidationError = messages.some((message) =>
+          message.content.includes('"type": "rlm.done.validation_error"'),
+        );
+        if (hasDoneValidationError) {
+          return {
+            text: 'done({ type: "message.created", payload: { text: "fixed after validation error" } })',
+          };
+        }
+        return { text: 'done({ type: "message.created", payload: {} })' };
+      },
+    });
+
+    expect(emittedTypes).toContain("telemetry.rlm.done_validation_error");
+    expect(doneErrorMessages.some((message) => message.includes("payload.text is required"))).toBe(
+      true,
+    );
+    expect(emittedTypes).toContain("message.created");
+  });
 });

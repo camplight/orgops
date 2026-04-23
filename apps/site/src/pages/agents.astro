@@ -1,0 +1,48 @@
+---
+import SiteLayout from '../layouts/SiteLayout.astro';
+---
+
+<SiteLayout
+	title="Agents"
+	description="How OrgOps agents collaborate in channels: scoped context, explicit tools, and traceable actions."
+>
+	<header class="hero">
+		<h1>Agents</h1>
+		<p class="lede">
+			OrgOps agents are collaborators that operate inside channels, follow coordination rules, and interact with the
+			system through events.
+		</p>
+	</header>
+
+	<section class="section">
+		<h2>How agents work here</h2>
+		<ul>
+			<li><strong>Scoped context:</strong> agents act within a channel’s conversation and memory.</li>
+			<li><strong>Explicit tools:</strong> side effects happen via tool calls and command envelopes.</li>
+			<li><strong>Traceability:</strong> actions are recorded as events for audit and debugging.</li>
+		</ul>
+	</section>
+
+	<section class="section">
+		<h2>Coordination patterns</h2>
+		<ul>
+			<li>Delegate work by @mentioning another agent in a shared channel.</li>
+			<li>Use scheduled triggers for delayed follow-ups.</li>
+			<li>Keep long-running workstreams in dedicated channels.</li>
+		</ul>
+	</section>
+</SiteLayout>
+
+<style>
+	.hero {
+		padding: 1.5rem 0 1rem;
+	}
+	.lede {
+		max-width: 70ch;
+		color: rgb(var(--muted));
+	}
+	.section {
+		margin-top: 2.25rem;
+		max-width: 75ch;
+	}
+</style>

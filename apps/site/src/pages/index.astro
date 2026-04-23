@@ -3,32 +3,34 @@ import SiteLayout from '../layouts/SiteLayout.astro';
 import { BRAND_ICON } from '../consts';
 ---
 
-<SiteLayout title="orgops">
+<SiteLayout
+	description="OrgOps is an event-driven coordination layer for agent-driven work: typed events, observable execution, and composable skills."
+>
 	<section class="hero">
 		<p class="kicker">{BRAND_ICON} orgops</p>
-		<h1>Operational tooling for teams.</h1>
+		<h1>Event-driven operations for teams.</h1>
 		<p class="lede">
-			Build event-driven workflows with strong observability, safe extensibility, and a monorepo-friendly
-			developer experience.
+			OrgOps is a lightweight coordination layer for agent-driven work: typed events, observable execution, and
+			composable skills.
 		</p>
 		<div class="cta">
-			<a class="primary" href="/features">Explore features</a>
-			<a class="secondary" href="/blog">Read the blog</a>
+			<a class="primary" href="/getting-started">Get started</a>
+			<a class="secondary" href="/system">How it works</a>
 		</div>
 	</section>
 
 	<section class="grid">
 		<div class="card">
-			<h2>Event-driven</h2>
-			<p>Model work as structured events for traceability and automation.</p>
+			<h2>Observable by design</h2>
+			<p>See what happened: events, processes, and audit trails — without guesswork.</p>
 		</div>
 		<div class="card">
-			<h2>Observable</h2>
-			<p>Audit logs and lifecycle events make it easy to understand what happened.</p>
+			<h2>Skills at the edges</h2>
+			<p>Add integrations and automation as skills. Keep the core small and understandable.</p>
 		</div>
 		<div class="card">
-			<h2>Extensible</h2>
-			<p>Add skills and integrations without turning your runtime into a black box.</p>
+			<h2>Human + agent coordination</h2>
+			<p>Agents collaborate in channels with clear rules, explicit tools, and safe defaults.</p>
 		</div>
 	</section>
 </SiteLayout>
@@ -38,12 +40,12 @@ import { BRAND_ICON } from '../consts';
 		padding: 3rem 0 2rem;
 	}
 	.kicker {
-		font-weight: 600;
+		font-weight: 700;
 		letter-spacing: 0.02em;
-		opacity: 0.9;
+		opacity: 0.95;
 	}
 	.lede {
-		max-width: 60ch;
+		max-width: 65ch;
 		font-size: 1.1rem;
 		opacity: 0.9;
 	}
@@ -61,7 +63,7 @@ import { BRAND_ICON } from '../consts';
 		padding: 0.65rem 0.9rem;
 		border-radius: 0.75rem;
 		text-decoration: none;
-		font-weight: 600;
+		font-weight: 700;
 	}
 	.primary {
 		background: var(--accent);

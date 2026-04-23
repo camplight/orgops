@@ -1,0 +1,61 @@
+---
+import SiteLayout from '../layouts/SiteLayout.astro';
+---
+
+<SiteLayout
+	title="Security"
+	description="Security principles in OrgOps: least privilege, auditable actions, explicit side effects, and safe secret handling."
+>
+	<header class="hero">
+		<h1>Security</h1>
+		<p class="lede">
+			OrgOps is built around the idea that automation should be inspectable and controllable. Security is a product
+			feature, not an afterthought.
+		</p>
+	</header>
+
+	<section class="section">
+		<h2>Principles</h2>
+		<ul>
+			<li><strong>Least privilege:</strong> scope secrets and capabilities to what’s needed.</li>
+			<li><strong>Auditability:</strong> actions are represented as events you can review.</li>
+			<li><strong>Explicit side effects:</strong> prefer command envelopes over hidden network calls.</li>
+		</ul>
+	</section>
+
+	<section class="section">
+		<h2>Secrets</h2>
+		<p>
+			Secrets are stored encrypted and injected as environment variables when needed. Agents can set/list/delete keys, but do not read secret values back.
+		</p>
+		<p>
+			This keeps workflows automatable without turning the event log into a credential leak.
+		</p>
+	</section>
+
+	<section class="section">
+		<h2>Operational hygiene</h2>
+		<p>
+			A few defaults that keep automation safe and debuggable:
+		</p>
+		<ul>
+			<li>Avoid printing environment variables or tokens into logs.</li>
+			<li>Rotate keys if exposure is suspected.</li>
+			<li>Prefer redaction/tombstoning over hard deletes for audit trails.</li>
+		</ul>
+	</section>
+</SiteLayout>
+
+<style>
+	.hero {
+		padding: 1.5rem 0 1rem;
+	}
+	.lede {
+		max-width: 70ch;
+		color: rgb(var(--muted));
+	}
+	.section {
+		margin-top: 2.25rem;
+		max-width: 75ch;
+	}
+</style>

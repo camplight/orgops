@@ -1,0 +1,67 @@
+---
+import SiteLayout from '../layouts/SiteLayout.astro';
+---
+
+<SiteLayout
+	title="Getting Started"
+	description="A practical path to your first OrgOps workflow: run locally, create a channel, add a skill, and ship a tiny automation."
+>
+	<header class="hero">
+		<h1>Getting Started</h1>
+		<p class="lede">
+			A practical path to your first useful workflow. This page is intentionally high-level; we’ll link to deeper docs
+			as they solidify.
+		</p>
+	</header>
+
+	<section class="section">
+		<h2>1) Run the stack locally</h2>
+		<ul>
+			<li>Start the API + agent runner.</li>
+			<li>Start the UI (optional) and this site (optional).</li>
+		</ul>
+	</section>
+
+	<section class="section">
+		<h2>2) Create a channel</h2>
+		<p>
+			Channels are where humans and agents coordinate. Keep work scoped: one channel per project, incident, or integration.
+		</p>
+		<p>
+			Example: create <strong>#site-improvements</strong> and add <strong>coder1</strong> (builder) + <strong>Browser</strong> (QA) + <strong>coordinator</strong> (triage).
+		</p>
+	</section>
+
+	<section class="section">
+		<h2>3) Add a skill</h2>
+		<p>
+			Skills package automation: scripts, event schemas, and conventions. Start with one integration (e.g. Slack) or one internal workflow.
+		</p>
+		<p>
+			Example: a <strong>secrets</strong> skill that lets agents set/list/delete secret keys (but never read values back).
+		</p>
+	</section>
+
+	<section class="section">
+		<h2>4) Ship a tiny workflow</h2>
+		<ul>
+			<li>Define the event type(s) you care about (e.g. <code>site.review.requested</code>).</li>
+			<li>Have an agent respond with structured outputs (a punch list + proposed edits).</li>
+			<li>Emit explicit commands for side effects (e.g. <code>channel.command.requested</code> to run a deploy).</li>
+		</ul>
+	</section>
+</SiteLayout>
+
+<style>
+	.hero {
+		padding: 1.5rem 0 1rem;
+	}
+	.lede {
+		max-width: 70ch;
+		color: rgb(var(--muted));
+	}
+	.section {
+		margin-top: 2.25rem;
+		max-width: 75ch;
+	}
+</style>

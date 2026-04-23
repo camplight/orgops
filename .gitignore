@@ -6,3 +6,5 @@ files/
 .env
 memory/
 .venv-playwright/
+# Playwright artifacts
+apps/site/playwright-artifacts/

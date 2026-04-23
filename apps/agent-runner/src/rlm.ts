@@ -7,6 +7,7 @@ import { createRunnerTools, executeTool, type ExecuteContext } from "./tools";
 import type { Agent, Event } from "./types";
 import { pullInjectedEventMessages } from "./channel-injection";
 import { shouldHandleEventForAgent } from "./event-routing";
+import { getReservedEventTypeError } from "./event-type-guard";
 
 const DEFAULT_MAX_STEPS = 24;
 const DEFAULT_MAX_OUTPUT_CHARS = 16_000;
@@ -157,6 +158,178 @@ function formatValue(value: unknown): string {
       return "<unprintable>";
     }
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+type DoneEventNormalizationResult =
+  | {
+      ok: true;
+      eventDraft: {
+        type: string;
+        payload: unknown;
+        source: string;
+        channelId?: string;
+        parentEventId?: string;
+        deliverAt?: number;
+        idempotencyKey?: string;
+      };
+    }
+  | { ok: false; error: string };
+
+function normalizeDoneEventDraft(
+  doneValue: unknown,
+  agent: Agent,
+  channelId: string,
+): DoneEventNormalizationResult | null {
+  if (!isRecord(doneValue) || typeof doneValue.type !== "string") return null;
+  const type = doneValue.type.trim();
+  if (!type) {
+    return {
+      ok: false,
+      error: 'done(result) event draft is invalid: `type` must be a non-empty string.',
+    };
+  }
+  const reservedTypeError = getReservedEventTypeError(type);
+  if (reservedTypeError) return { ok: false, error: reservedTypeError };
+  const resolvedChannelId =
+    typeof doneValue.channelId === "string" && doneValue.channelId.trim().length > 0
+      ? doneValue.channelId.trim()
+      : channelId;
+  if (!resolvedChannelId) {
+    return {
+      ok: false,
+      error:
+        "done(result) event draft is invalid: unable to resolve `channelId`; include a non-empty channelId.",
+    };
+  }
+  const parentEventId =
+    doneValue.parentEventId === undefined
+      ? undefined
+      : typeof doneValue.parentEventId === "string" && doneValue.parentEventId.trim().length > 0
+        ? doneValue.parentEventId.trim()
+        : null;
+  if (parentEventId === null) {
+    return {
+      ok: false,
+      error:
+        "done(result) event draft is invalid: `parentEventId` must be a non-empty string when provided.",
+    };
+  }
+  const idempotencyKey =
+    doneValue.idempotencyKey === undefined
+      ? undefined
+      : typeof doneValue.idempotencyKey === "string" && doneValue.idempotencyKey.trim().length > 0
+        ? doneValue.idempotencyKey.trim()
+        : null;
+  if (idempotencyKey === null) {
+    return {
+      ok: false,
+      error:
+        "done(result) event draft is invalid: `idempotencyKey` must be a non-empty string when provided.",
+    };
+  }
+  const deliverAt =
+    doneValue.deliverAt === undefined
+      ? undefined
+      : typeof doneValue.deliverAt === "number" && Number.isFinite(doneValue.deliverAt)
+        ? Math.floor(doneValue.deliverAt)
+        : null;
+  if (deliverAt === null) {
+    return {
+      ok: false,
+      error:
+        "done(result) event draft is invalid: `deliverAt` must be a finite number (unix ms) when provided.",
+    };
+  }
+  return {
+    ok: true,
+    eventDraft: {
+      type,
+      payload: doneValue.payload ?? {},
+      source: `agent:${agent.name}`,
+      channelId: resolvedChannelId,
+      ...(parentEventId ? { parentEventId } : {}),
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+      ...(deliverAt !== undefined ? { deliverAt } : {}),
+    },
+  };
+}
+
+function formatEventValidationIssues(
+  validation:
+    | { ok: true; matchedDefinitions: number }
+    | {
+        ok: false;
+        type: string;
+        matchedDefinitions: number;
+        issues: Array<{ source: string; message: string }>;
+      },
+): string {
+  if (validation.ok) return "";
+  return validation.issues
+    .slice(0, 8)
+    .map((issue) => `- [${issue.source}] ${issue.message}`)
+    .join("\n");
+}
+
+async function ensurePostingAgentParticipantInChannel(
+  executeCtx: ExecuteContext,
+  channelId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const response = await executeCtx.apiFetch("/api/channels");
+  const channels = (await response.json()) as Array<{
+    id: string;
+    participants?: Array<{ subscriberType?: string; subscriberId?: string }>;
+  }>;
+  const channel = channels.find((entry) => entry.id === channelId);
+  if (!channel) return { ok: false, error: `Unknown channelId "${channelId}".` };
+  const isParticipant = (channel.participants ?? []).some(
+    (participant) =>
+      String(participant.subscriberType ?? "").toUpperCase() === "AGENT" &&
+      participant.subscriberId === executeCtx.agent.name,
+  );
+  if (!isParticipant) {
+    return {
+      ok: false,
+      error: `Event validation failed: agent "${executeCtx.agent.name}" is not an AGENT participant in channel "${channelId}".`,
+    };
+  }
+  return { ok: true };
+}
+
+async function tryEmitDoneValueAsEvent(input: {
+  doneValue: unknown;
+  agent: Agent;
+  channelId: string;
+  executeCtx: ExecuteContext;
+  emitEvent: (event: unknown) => Promise<void>;
+}): Promise<{ emitted: boolean; error?: string; eventType?: string }> {
+  const normalized = normalizeDoneEventDraft(input.doneValue, input.agent, input.channelId);
+  if (!normalized) return { emitted: false };
+  if (!normalized.ok) return { emitted: false, error: normalized.error };
+  const targetChannelId = normalized.eventDraft.channelId ?? input.channelId;
+  const postingMembership = await ensurePostingAgentParticipantInChannel(
+    input.executeCtx,
+    targetChannelId,
+  );
+  if (!postingMembership.ok) return { emitted: false, error: postingMembership.error };
+  const validation = input.executeCtx.validateEvent?.(normalized.eventDraft);
+  if (validation && !validation.ok) {
+    const details = formatEventValidationIssues(validation);
+    return {
+      emitted: false,
+      error: [
+        `Event validation failed for type "${normalized.eventDraft.type}".`,
+        "Adjust the payload/schema and retry.",
+        details || "- Unknown validation issue.",
+      ].join("\n"),
+    };
+  }
+  await input.emitEvent(normalized.eventDraft);
+  return { emitted: true, eventType: normalized.eventDraft.type };
 }
 
 function withTimeout<T>(value: Promise<T>, timeoutMs: number): Promise<T> {
@@ -685,6 +858,46 @@ async function runReplLoop(
       ),
     });
     if (session.done) {
+      const doneEmission = await tryEmitDoneValueAsEvent({
+        doneValue: session.doneValue,
+        agent,
+        channelId,
+        executeCtx,
+        emitEvent,
+      });
+      if (doneEmission.error) {
+        if (shouldEmitAgentAuditEvents(agent)) {
+          await emitEvent({
+            type: "telemetry.rlm.done_validation_error",
+            source: `agent:${agent.name}`,
+            channelId,
+            payload: {
+              sessionId: session.id,
+              depth,
+              step,
+              error: doneEmission.error,
+            },
+          });
+        }
+        localMessages.push({
+          role: "user",
+          content: JSON.stringify(
+            {
+              type: "rlm.done.validation_error",
+              depth,
+              step,
+              error: doneEmission.error,
+              guidance:
+                "When using done(result) as an event, pass a valid event draft object. You can also call events_emit(...) directly and then done(\"ok\").",
+            },
+            null,
+            2,
+          ),
+        });
+        session.done = false;
+        session.doneValue = undefined;
+        continue;
+      }
       if (shouldEmitAgentAuditEvents(agent)) {
         await emitEvent({
           type: "telemetry.rlm.done",
@@ -694,6 +907,12 @@ async function runReplLoop(
             sessionId: session.id,
             depth,
             step,
+            ...(doneEmission.emitted
+              ? {
+                  emittedEventType: doneEmission.eventType,
+                  doneValueEmittedAsEvent: true,
+                }
+              : {}),
             doneValue: truncateText(
               formatValue(session.doneValue),
               RLM_MAX_OUTPUT_CHARS,

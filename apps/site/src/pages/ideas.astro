@@ -1,0 +1,80 @@
+---
+import SiteLayout from '../layouts/SiteLayout.astro';
+---
+
+<SiteLayout
+	title="Ideas"
+	description="Guiding ideas behind OrgOps: legible operations, explicit interfaces, composable skills, and human-in-the-loop automation."
+>
+	<header class="hero">
+		<h1>Ideas</h1>
+		<p class="lede">
+			A few guiding ideas behind OrgOps. This is intentionally lightweight: enough to understand the shape of the
+			system without reading the whole codebase.
+		</p>
+	</header>
+
+	<section class="section">
+		<h2>Make operations legible</h2>
+		<p>
+			If an agent can do it, you should be able to see it: inputs, outputs, and the chain of decisions.
+		</p>
+		<p>
+			In practice: every tool call and side effect shows up as an event (and often a process log), so you can answer
+			“what ran?” without guessing.
+		</p>
+	</section>
+
+	<section class="section">
+		<h2>Prefer explicit interfaces</h2>
+		<p>
+			Typed events and command envelopes beat ad-hoc strings. They’re easier to validate, test, and evolve.
+		</p>
+		<p>
+			Example: prefer
+			<code>{`{"type":"channel.command.requested","payload":{...}}`}</code>
+			over “run deploy now”.
+		</p>
+	</section>
+
+	<section class="section">
+		<h2>Small core, composable edges</h2>
+		<p>
+			Keep the runtime minimal. Add integrations and automation as skills so teams can move fast without turning the
+			system into a black box.
+		</p>
+		<p>
+			A skill is just code + schemas + conventions — versioned alongside your repo.
+		</p>
+	</section>
+
+	<section class="section">
+		<h2>Human-in-the-loop by default</h2>
+		<p>
+			Agents should collaborate with humans. OrgOps is designed for coordination, not silent autonomy.
+		</p>
+		<p>
+			If something matters (money, prod, customer impact), route it through an explicit approval step.
+		</p>
+	</section>
+</SiteLayout>
+
+<style>
+	.hero {
+		padding: 1.5rem 0 1rem;
+	}
+	.lede {
+		max-width: 70ch;
+		color: rgb(var(--muted));
+	}
+	.section {
+		margin-top: 2.25rem;
+		max-width: 75ch;
+	}
+	code {
+		white-space: normal;
+		overflow-wrap: anywhere;
+		word-break: break-word;
+		max-width: 100%;
+	}
+</style>

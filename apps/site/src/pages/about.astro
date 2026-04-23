@@ -8,7 +8,10 @@ import { SITE_DESCRIPTION, SITE_TITLE } from '../consts';
 <!doctype html>
 <html lang="en">
 	<head>
-		<BaseHead title={`${SITE_TITLE} — About`} description={SITE_DESCRIPTION} />
+		<BaseHead
+		title="About"
+		description="What OrgOps is and why it exists: a small runtime for understandable, observable, and safe agent-driven operations."
+	/>
 	</head>
 	<body>
 		<Header />
@@ -16,15 +19,14 @@ import { SITE_DESCRIPTION, SITE_TITLE } from '../consts';
 			<header class="page-hero">
 				<h1>About</h1>
 				<p class="lede">
-					Camplight is a small idea with a big goal: make agent-driven operations understandable, observable, and safe.
+					OrgOps is a small idea with a big goal: make agent-driven operations understandable, observable, and safe.
 				</p>
 			</header>
 
 			<section class="section">
-				<h2>Mission</h2>
+				<h2>What this site is</h2>
 				<p>
-					Build an event-driven coordination layer that helps teams ship faster without losing control of what happened,
-					when, and why.
+					A lightweight introduction for newcomers: what OrgOps is, how it works, and how to get started.
 				</p>
 			</section>
 
@@ -51,11 +53,11 @@ import { SITE_DESCRIPTION, SITE_TITLE } from '../consts';
 			</section>
 
 			<section class="section cta">
-				<h2>Want to collaborate?</h2>
-				<p class="muted">This is placeholder copy. Add contact links, docs, and community channels when ready.</p>
+				<h2>Next</h2>
+				<p class="muted">Start with the system overview, then follow the getting started path.</p>
 				<div class="cta-row">
-					<a class="button primary" href="/features">See features</a>
-					<a class="button" href="/blog">Read the blog</a>
+					<a class="button primary" href="/system">System</a>
+					<a class="button" href="/getting-started">Getting Started</a>
 				</div>
 			</section>
 		</main>
@@ -114,7 +116,7 @@ import { SITE_DESCRIPTION, SITE_TITLE } from '../consts';
 		background: rgb(var(--surface));
 		color: rgb(var(--text));
 		text-decoration: none;
-		font-weight: 600;
+		font-weight: 700;
 	}
 	.button.primary {
 		background: rgba(var(--accent-rgb), 0.95);
