@@ -95,7 +95,16 @@ Each binary bundles:
 
 On host launch, `opscli` can prompt for missing `OPENAI_API_KEY`, persist it to a local
 `.env`, and then use REPL helpers (`extractOrgOps`, `setupOrgOps`) to unpack and prepare
-selected components.
+selected components. By default, extraction is done to `./orgops`, and OpsCLI stores
+the extracted path in `.env` via `ORGOPS_EXTRACTED_ROOT` for reuse in later sessions.
+
+On macOS, downloaded binaries may be quarantined by Gatekeeper. After download:
+
+```bash
+xattr -d com.apple.quarantine ./opscli-macos
+chmod +x ./opscli-macos
+./opscli-macos
+```
 
 ## Environment variables
 

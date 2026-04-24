@@ -4,7 +4,7 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { hostname } from "node:os";
 import { PassThrough } from "node:stream";
@@ -43,7 +43,7 @@ type SessionMemory = {
   history: LlmMessage[];
 };
 
-const MODEL_ID = process.env.ORGOPS_OPSCLI_MODEL ?? "openai:gpt-4o-mini";
+const MODEL_ID = process.env.ORGOPS_OPSCLI_MODEL ?? "openai:gpt-5.3-codex";
 const MAX_STEPS = Number(process.env.ORGOPS_OPSCLI_MAX_STEPS ?? 20);
 const COMMAND_TIMEOUT_MS = Number(process.env.ORGOPS_OPSCLI_COMMAND_TIMEOUT_MS ?? 120_000);
 const EVAL_TIMEOUT_MS = Number(process.env.ORGOPS_OPSCLI_EVAL_TIMEOUT_MS ?? 30_000);
@@ -58,6 +58,7 @@ const MAX_SYSTEM_DOC_CHARS = Number(
 );
 const BUNDLED_ROOT_DIR_NAME = "orgops";
 const ROOT_ENV_FILE = ".env";
+const EXTRACTED_ROOT_ENV_KEY = "ORGOPS_EXTRACTED_ROOT";
 const DEFAULT_API_URL = "http://localhost:8787";
 const DEFAULT_RUNNER_TOKEN = "dev-runner-token";
 const RUNTIME_DIR = (() => {
@@ -107,6 +108,24 @@ function writeMergedEnvFile(envPath: string, patch: Record<string, string>) {
   writeFileSync(envPath, `${lines.join("\n")}\n`, "utf-8");
 }
 
+function getOpsCliEnvPath() {
+  return join(process.cwd(), ROOT_ENV_FILE);
+}
+
+function resolveDefaultExtractedRootPath() {
+  const configured = process.env[EXTRACTED_ROOT_ENV_KEY]?.trim();
+  if (configured) return resolve(configured);
+  return resolve(process.cwd(), BUNDLED_ROOT_DIR_NAME);
+}
+
+function rememberExtractedRoot(extractedRoot: string) {
+  const normalized = resolve(extractedRoot);
+  process.env[EXTRACTED_ROOT_ENV_KEY] = normalized;
+  writeMergedEnvFile(getOpsCliEnvPath(), {
+    [EXTRACTED_ROOT_ENV_KEY]: normalized,
+  });
+}
+
 function getRuntimeAssetPath(fileName: string) {
   const candidates = [
     join(RUNTIME_DIR, "assets", fileName),
@@ -137,13 +156,15 @@ async function extractBundledOrgOps(options?: {
       "Bundled OrgOps archive not found. Use a release-built opscli binary."
     );
   }
-  const targetDir = resolve(options?.targetDir ?? process.cwd());
+  const defaultExtractedRoot = resolveDefaultExtractedRootPath();
+  const targetDir = resolve(options?.targetDir ?? dirname(defaultExtractedRoot));
   mkdirSync(targetDir, { recursive: true });
   const extractedRoot = join(targetDir, BUNDLED_ROOT_DIR_NAME);
   const shouldExtract = options?.force || !existsSync(extractedRoot);
   if (shouldExtract) {
     await tar.x({ file: archivePath, cwd: targetDir });
   }
+  rememberExtractedRoot(extractedRoot);
   return extractedRoot;
 }
 
@@ -397,12 +418,17 @@ function buildSystemPrompt() {
     "Return exactly ONE JavaScript REPL snippet each turn.",
     "Do NOT return JSON and do NOT wrap in markdown fences.",
     "Use shell(command) to execute host commands.",
+    "shell(command) accepts exactly one string argument. Do NOT pass callbacks or extra args.",
+    "shell(command) is blocking for long-running commands and returns only when command exits, times out, or errors.",
     "Use print(...args) to write output to stdout.",
     "Use input(question) to ask the user for stdin input.",
     "Use exit(code) to finish and request process termination.",
     "Use extractOrgOps(options?) to extract bundled OrgOps source to disk.",
     "Use setupOrgOps(options?) to extract + install deps + configure selected components.",
     "Use getBundledDocs() when you need OrgOps architecture/deployment details.",
+    "Default extraction location is `./orgops` in current working directory.",
+    "Remember and reuse extracted path from `.env` key `ORGOPS_EXTRACTED_ROOT` on next sessions.",
+    "Do not choose custom extraction paths unless the user explicitly requests another location.",
     "Before setup/start actions, verify prerequisites with shell: check `node -v` and `npm -v`.",
     "If Node.js or npm is missing, install them automatically using shell and continue.",
     "Use platform-appropriate installers: macOS (Homebrew), Linux (apt/yum/dnf), Windows (winget/choco if available).",
@@ -410,6 +436,9 @@ function buildSystemPrompt() {
     "If PM2 is missing, install it automatically (`npm install -g pm2`) before managing services.",
     "PM2 works on macOS, Linux, and Windows; use it consistently across platforms.",
     "Always run OrgOps workspace commands from extracted root (e.g. `cd \"<extractedRoot>\" && npm run ...`).",
+    "For long-running services (api/ui/runner), do NOT start with plain `npm run ...` via shell because it blocks the REPL loop.",
+    "Use PM2 start/stop/restart/logs/status commands for service lifecycle instead of foreground npm starts.",
+    "After PM2 starts services, verify with `pm2 status` and print URLs/health checks.",
     "For keep-running-after-restart, use PM2 persistence commands (`pm2 save` + `pm2 startup`) and report any manual step output.",
     "Use stable PM2 names: `orgops-api`, `orgops-runner`, `orgops-ui` for start/stop/restart/log/status operations.",
     "State can be persisted across turns using global variables.",
@@ -676,7 +705,7 @@ async function runAutonomousTask(
 }
 
 async function main() {
-  const rootEnvPath = join(process.cwd(), ROOT_ENV_FILE);
+  const rootEnvPath = getOpsCliEnvPath();
   loadDotEnvIntoProcess(rootEnvPath);
   console.log(`OrgOps OpsCLI ready.`);
   const rl = createInterface({ input: stdin, output: stdout });
