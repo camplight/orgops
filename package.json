@@ -16,7 +16,7 @@
     "prod:all": "npm run build && dotenv -e .env -- concurrently -k \"npm run --workspace @orgops/api start\" \"npm run --workspace @orgops/ui preview\" \"npm run prod:runner:after-api\"",
     "test": "vitest run",
     "lint": "npm run lint:all",
-    "lint:all": "npm run --workspace @orgops/api lint && npm run --workspace @orgops/agent-runner lint && npm run --workspace @orgops/ui lint && npm run --workspace @orgops/db lint && npm run --workspace @orgops/schemas lint && npm run --workspace @orgops/event-bus lint && npm run --workspace @orgops/llm lint && npm run --workspace @orgops/crypto lint && npm run --workspace @orgops/skills lint && npm run --workspace @orgops/events-scenario-tests lint",
+    "lint:all": "npm run --workspace @orgops/api lint && npm run --workspace @orgops/agent-runner lint && npm run --workspace @orgops/opscli lint && npm run --workspace @orgops/ui lint && npm run --workspace @orgops/db lint && npm run --workspace @orgops/schemas lint && npm run --workspace @orgops/event-bus lint && npm run --workspace @orgops/llm lint && npm run --workspace @orgops/crypto lint && npm run --workspace @orgops/skills lint && npm run --workspace @orgops/events-scenario-tests lint",
     "scenario:test": "npm run --workspace @orgops/events-scenario-tests run",
     "scenario:test:countdown": "npm run --workspace @orgops/events-scenario-tests run:countdown"
   },

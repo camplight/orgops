@@ -7,6 +7,7 @@ import type {
   EventTypeInfo,
   ProcessOutputRow,
   ProcessRow,
+  RunnerNode,
   SkillMeta
 } from "../../types";
 import { AgentsScreen, EventsScreen, ProcessesScreen } from "../../screens";
@@ -33,6 +34,7 @@ type AgentForm = {
   contextSessionGapMs: string;
   workspacePath: string;
   allowOutsideWorkspace: boolean;
+  assignedRunnerId: string;
   soulContents: string;
   enabledSkills: string[];
   alwaysPreloadedSkills: string[];
@@ -40,6 +42,7 @@ type AgentForm = {
 
 type DashboardDrawersProps = {
   agents: Agent[];
+  runners: RunnerNode[];
   skills: SkillMeta[];
   events: EventRow[];
   channels: Channel[];
@@ -99,6 +102,7 @@ type DashboardDrawersProps = {
 
 export function DashboardDrawers({
   agents,
+  runners,
   skills,
   events,
   channels,
@@ -139,6 +143,7 @@ export function DashboardDrawers({
       <AgentsScreen
         drawerOnly
         agents={agents}
+        runners={runners}
         skills={skills}
         onCreateAgent={onCreateAgent}
         onUpdateAgent={onUpdateAgent}

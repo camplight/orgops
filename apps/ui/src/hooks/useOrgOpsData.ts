@@ -11,6 +11,7 @@ import type {
   ProcessOutputRow,
   SecretRow,
   SkillMeta,
+  RunnerNode,
   Team,
   Thread,
   Conversation
@@ -48,6 +49,7 @@ export function useOrgOpsData(authenticated: boolean) {
   const [teams, setTeams] = useState<Team[]>([]);
   const [humans, setHumans] = useState<Human[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
+  const [runners, setRunners] = useState<RunnerNode[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [threads, setThreads] = useState<Thread[]>([]);
   const [processes, setProcesses] = useState<ProcessRow[]>([]);
@@ -66,6 +68,7 @@ export function useOrgOpsData(authenticated: boolean) {
   const refreshDashboard = useCallback(() => {
     apiJson<Agent[]>("/api/agents").then(setAgents);
     apiJson<SkillMeta[]>("/api/skills").then(setSkills);
+    apiJson<RunnerNode[]>("/api/runners").then(setRunners);
   }, []);
   const refreshEvents = useCallback(
     (query = "/api/events?limit=50&order=desc") => apiJson<EventRow[]>(query).then(setEvents),
@@ -93,6 +96,10 @@ export function useOrgOpsData(authenticated: boolean) {
     () => apiJson<Channel[]>("/api/channels").then(setChannels),
     []
   );
+  const refreshRunners = useCallback(
+    () => apiJson<RunnerNode[]>("/api/runners").then(setRunners),
+    []
+  );
   const refreshConversations = useCallback(
     () => apiJson<Conversation[]>("/api/conversations").then(setConversations),
     []
@@ -112,6 +119,7 @@ export function useOrgOpsData(authenticated: boolean) {
     refreshDashboardEvents();
     refreshEventTypes();
     refreshChannels();
+    refreshRunners();
     refreshProcesses();
     refreshSecrets();
     refreshTeams();
@@ -124,6 +132,7 @@ export function useOrgOpsData(authenticated: boolean) {
     refreshDashboardEvents,
     refreshEventTypes,
     refreshChannels,
+    refreshRunners,
     refreshProcesses,
     refreshSecrets,
     refreshTeams,
@@ -179,6 +188,7 @@ export function useOrgOpsData(authenticated: boolean) {
     humans,
     setHumans,
     channels,
+    runners,
     setChannels,
     conversations,
     setConversations,
@@ -197,6 +207,7 @@ export function useOrgOpsData(authenticated: boolean) {
     refreshHumans,
     refreshEventTypes,
     refreshChannels,
+    refreshRunners,
     refreshConversations,
     refreshProcesses,
     refreshSecrets,

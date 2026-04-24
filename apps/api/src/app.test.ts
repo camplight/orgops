@@ -15,6 +15,78 @@ import { openDb } from "@orgops/db";
 import { createApp } from "./app";
 
 describe("api app", () => {
+  it("registers runners and filters agents by assigned runner", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const registerRes = await app.request("http://localhost/api/runners/register", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orgops-runner-token": "test-token",
+      },
+      body: JSON.stringify({
+        displayName: "runner-main",
+      }),
+    });
+    expect(registerRes.status).toBe(201);
+    const registerBody = (await registerRes.json()) as {
+      runner?: { id?: string };
+    };
+    const runnerId = registerBody.runner?.id ?? "";
+    expect(runnerId.length).toBeGreaterThan(0);
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const createAssignedRes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "assigned-agent",
+        modelId: "openai:gpt-4o-mini",
+        workspacePath: ".orgops-data/workspaces/assigned-agent",
+        assignedRunnerId: runnerId,
+      }),
+    });
+    expect(createAssignedRes.status).toBe(201);
+
+    const createUnassignedRes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "unassigned-agent",
+        modelId: "openai:gpt-4o-mini",
+        workspacePath: ".orgops-data/workspaces/unassigned-agent",
+      }),
+    });
+    expect(createUnassignedRes.status).toBe(201);
+
+    const listAssignedRes = await app.request(
+      `http://localhost/api/agents?assignedRunnerId=${encodeURIComponent(runnerId)}`,
+      {
+        headers: { "x-orgops-runner-token": "test-token" },
+      },
+    );
+    expect(listAssignedRes.status).toBe(200);
+    const assignedList = (await listAssignedRes.json()) as Array<{ name: string }>;
+    expect(assignedList.map((agent) => agent.name)).toEqual(["assigned-agent"]);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("stores and updates agent soul contents in database", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");

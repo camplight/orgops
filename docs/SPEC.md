@@ -2,7 +2,7 @@
 
 ## Goal
 
-OrgOps is a single-company, single-node system where humans and agents collaborate through an event bus persisted in SQLite. Agents can execute shell/filesystem/process tools, emit typed events, and stream process output to API/WebSocket clients.
+OrgOps is a Node.js multi-host system where humans and agents collaborate through an event bus persisted in SQLite. Agents can execute shell/filesystem/process tools, emit typed events, and stream process output to API/WebSocket clients.
 
 This document describes the current implementation in this repository.
 
@@ -22,6 +22,7 @@ This document describes the current implementation in this repository.
 apps/
   api/            Hono HTTP + WS server
   agent-runner/   Agent polling loop + tool/runtime execution
+  opscli/         Host bootstrap/maintenance CLI (RLM REPL loop)
   ui/             React UI
 packages/
   crypto/         Secret encryption/decryption helpers
@@ -45,7 +46,18 @@ Stored in `agents`:
 - prompting/runtime config: `system_instructions`, `soul_path`, `soul_contents`
 - workspace/safety: `workspace_path`, `allow_outside_workspace`
 - mode/state: `mode` (`CLASSIC` | `RLM_REPL`), `desired_state`, `runtime_state`, `last_heartbeat_at`
+- host assignment: `assigned_runner_id` (nullable; when set, only matching runner executes the agent)
 - skills: `enabled_skills_json`, `always_preloaded_skills_json`
+
+### Runner Nodes
+
+Stored in `runner_nodes`:
+
+- identity: `id`, `display_name`
+- host metadata: `hostname`, `platform`, `arch`, `version`, `metadata_json`
+- lifecycle: `created_at`, `updated_at`, `last_seen_at`
+
+Runner IDs are stable across restarts by persisting local `.agent-runner-id`.
 
 ### Collaboration
 
@@ -158,6 +170,8 @@ Published topics include:
 - `POST /api/agents`
 - `GET /api/agents/:name`
 - `PATCH /api/agents/:name`
+- supports `assignedRunnerId` on create/update/read
+- supports `GET /api/agents?assignedRunnerId=<runnerId>` filtering
 - `POST /api/agents/:name/:action` where action is one of:
   - `start`, `stop`, `restart`, `reload-skills`, `cleanup-workspace`
 - workspace browser endpoints:
@@ -212,24 +226,32 @@ Published topics include:
 - skills:
   - `GET /api/skills`
 
+### Runners
+
+- `GET /api/runners` (UI visibility)
+- `POST /api/runners/register` (runner auth; register/re-register)
+- `POST /api/runners/:id/heartbeat` (runner auth)
+
 ## Agent Runner Behavior
 
 Runner loop:
 
 1. Poll agents from API.
-2. For each `desired_state=RUNNING` agent:
+2. Register runner identity at API on startup and persist stable runner ID locally.
+3. Select only agents assigned to this runner ID.
+4. For each `desired_state=RUNNING` agent:
    - ensure workspace exists
    - heartbeat runtime state to API
    - emit one-time lifecycle bootstrap event (`agent.lifecycle.started`)
-3. Pull pending events with per-agent receipt semantics.
-4. Filter control/audit/self-authored/agent-authored events.
-5. Group remaining pending events by channel and process each channel as a single handling batch.
-6. Build context from system prompt + bounded channel history + skills + soul, plus a synthetic merged-trigger message when a batch contains multiple events.
-7. Run model generation in step mode (single-step calls) and poll pending events for the same `(agent, channel)` between steps; inject newly arrived events into the ongoing conversation context.
-8. Execute one of two modes:
+5. Pull pending events with per-agent receipt semantics.
+6. Filter control/audit/self-authored/agent-authored events.
+7. Group remaining pending events by channel and process each channel as a single handling batch.
+8. Build context from system prompt + bounded channel history + skills + soul, plus a synthetic merged-trigger message when a batch contains multiple events.
+9. Run model generation in step mode (single-step calls) and poll pending events for the same `(agent, channel)` between steps; inject newly arrived events into the ongoing conversation context.
+10. Execute one of two modes:
    - `CLASSIC`: call LLM, enforce JSON event output with retries, validate and emit.
    - `RLM_REPL`: run recursive REPL loop in child process with explicit `done(result)`.
-9. On handler failure, call `/api/events/:id/fail` for each event in the failed channel batch.
+11. On handler failure, call `/api/events/:id/fail` for each event in the failed channel batch.
 
 Shutdown behavior:
 
@@ -252,6 +274,20 @@ Current tool families exposed to models:
 
 Audit events are emitted around tool/process operations and RLM execution.
 
+## OpsCLI Behavior
+
+`apps/opscli` is a lightweight standalone RLM REPL runtime for bootstrap/maintenance.
+
+- persistent Node REPL session
+- LLM emits one JS snippet per step
+- built-in REPL methods:
+  - `shell(command)`
+  - `print(...args)`
+  - `input(question)`
+  - `exit(code)`
+- supports empty initial goal and interactive goal gathering via `input(...)`
+- maintains rolling summarization and context-capped recent messages
+
 ## Delivery and Failure Semantics
 
 - at-least-once delivery model
@@ -264,6 +300,8 @@ Audit events are emitted around tool/process operations and RLM execution.
 
 - `ORGOPS_API_URL`
 - `ORGOPS_RUNNER_TOKEN`
+- `ORGOPS_RUNNER_ID_FILE`
+- `ORGOPS_RUNNER_NAME`
 - `ORGOPS_ADMIN_USER`, `ORGOPS_ADMIN_PASS`
 - `ORGOPS_MASTER_KEY`
 - `ORGOPS_EVENT_MAX_FAILURES`
@@ -277,3 +315,12 @@ Audit events are emitted around tool/process operations and RLM execution.
   - `ORGOPS_RLM_EVAL_TIMEOUT_MS`
   - `ORGOPS_RLM_MAX_SUBAGENT_DEPTH`
   - `ORGOPS_RLM_MAX_SUBAGENTS_PER_EVENT`
+- OpsCLI controls:
+  - `ORGOPS_OPSCLI_MODEL`
+  - `ORGOPS_OPSCLI_MAX_STEPS`
+  - `ORGOPS_OPSCLI_COMMAND_TIMEOUT_MS`
+  - `ORGOPS_OPSCLI_EVAL_TIMEOUT_MS`
+  - `ORGOPS_OPSCLI_MAX_CONTEXT_CHARS`
+  - `ORGOPS_OPSCLI_MAX_SUMMARY_CHARS`
+  - `ORGOPS_OPSCLI_SUMMARY_CHUNK_MESSAGES`
+  - `ORGOPS_OPSCLI_MIN_RECENT_MESSAGES`

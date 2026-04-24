@@ -37,6 +37,7 @@ export const agents = sqliteTable("agents", {
   mode: text("mode").notNull().default("CLASSIC"),
   desired_state: text("desired_state").notNull().default("RUNNING"),
   runtime_state: text("runtime_state").notNull().default("STOPPED"),
+  assigned_runner_id: text("assigned_runner_id"),
   last_heartbeat_at: integer("last_heartbeat_at"),
   created_at: integer("created_at").notNull(),
   updated_at: integer("updated_at").notNull(),
@@ -44,6 +45,19 @@ export const agents = sqliteTable("agents", {
   always_preloaded_skills_json: text("always_preloaded_skills_json")
     .notNull()
     .default("[]")
+});
+
+export const runnerNodes = sqliteTable("runner_nodes", {
+  id: text("id").primaryKey(),
+  display_name: text("display_name").notNull(),
+  hostname: text("hostname"),
+  platform: text("platform"),
+  arch: text("arch"),
+  version: text("version"),
+  metadata_json: text("metadata_json").notNull().default("{}"),
+  created_at: integer("created_at").notNull(),
+  updated_at: integer("updated_at").notNull(),
+  last_seen_at: integer("last_seen_at").notNull()
 });
 
 export const teams = sqliteTable("teams", {
@@ -321,6 +335,7 @@ export const crossChannelMemoryFull = sqliteTable(
 export const schema = {
   migrations,
   agents,
+  runnerNodes,
   teams,
   humans,
   teamMemberships,

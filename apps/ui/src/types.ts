@@ -20,6 +20,21 @@ export type Agent = {
     | "FULL_CHANNEL_EVENTS"
     | "OFF";
   mode?: "CLASSIC" | "RLM_REPL";
+  assignedRunnerId?: string | null;
+};
+
+export type RunnerNode = {
+  id: string;
+  displayName: string;
+  hostname?: string;
+  platform?: string;
+  arch?: string;
+  version?: string;
+  metadata?: Record<string, unknown>;
+  createdAt: number;
+  updatedAt: number;
+  lastSeenAt: number;
+  online: boolean;
 };
 
 export type AgentWorkspaceEntry = {

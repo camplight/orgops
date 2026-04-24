@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { arch, hostname, release } from "node:os";
 import { join, resolve } from "node:path";
 import { generate } from "@orgops/llm";
@@ -45,6 +45,9 @@ const PROJECT_ROOT = (() => {
   return existsSync(join(candidate, "package.json")) ? candidate : cwd;
 })();
 const SKILL_ROOT = resolveSkillRoot(PROJECT_ROOT);
+const RUNNER_ID_FILE = process.env.ORGOPS_RUNNER_ID_FILE
+  ? resolve(PROJECT_ROOT, process.env.ORGOPS_RUNNER_ID_FILE)
+  : resolve(PROJECT_ROOT, ".agent-runner-id");
 
 const heartbeats = new Map<string, number>();
 const bootstrappedAgents = new Set<string>();
@@ -57,6 +60,8 @@ const DEFAULT_CROSS_FULL_MEMORY_INTERVAL_MS = 120_000;
 const DEFAULT_MAX_HISTORY_EVENTS = 120;
 const DEFAULT_MAX_HISTORY_CHARS = 120_000;
 let apiFetchRequestCounter = 0;
+let registeredRunnerId: string | null = null;
+let lastRunnerHeartbeatAt = 0;
 
 function readPositiveIntEnv(
   value: string | undefined,
@@ -218,8 +223,69 @@ async function apiFetch(path: string, init?: RequestInit) {
   }
 }
 
+function readRunnerIdFromDisk(): string | null {
+  try {
+    const value = readFileSync(RUNNER_ID_FILE, "utf-8").trim();
+    return value || null;
+  } catch {
+    return null;
+  }
+}
+
+function writeRunnerIdToDisk(runnerId: string) {
+  try {
+    writeFileSync(RUNNER_ID_FILE, `${runnerId}\n`, "utf-8");
+  } catch (error) {
+    console.error("runner.id.persist_failed", {
+      path: RUNNER_ID_FILE,
+      error: getErrorSummary(error),
+    });
+  }
+}
+
+async function registerRunnerIdentity(): Promise<string> {
+  const existingRunnerId = readRunnerIdFromDisk();
+  const displayName =
+    process.env.ORGOPS_RUNNER_NAME?.trim() ||
+    `${hostname()}-${process.platform}-${arch()}`;
+  const response = await apiFetch("/api/runners/register", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      existingRunnerId,
+      displayName,
+      hostname: hostname(),
+      platform: process.platform,
+      arch: process.arch,
+      version: process.version,
+      metadata: {
+        release: release(),
+      },
+    }),
+  });
+  const payload = (await response.json()) as { runner?: { id?: string } };
+  const runnerId = payload.runner?.id?.trim();
+  if (!runnerId) {
+    throw new Error("Runner registration did not return a runner ID.");
+  }
+  writeRunnerIdToDisk(runnerId);
+  return runnerId;
+}
+
+async function sendRunnerHeartbeat(force = false) {
+  if (!registeredRunnerId) return;
+  const now = Date.now();
+  if (!force && now - lastRunnerHeartbeatAt < HEARTBEAT_INTERVAL_MS) return;
+  await apiFetch(`/api/runners/${encodeURIComponent(registeredRunnerId)}/heartbeat`, {
+    method: "POST",
+  });
+  lastRunnerHeartbeatAt = now;
+}
+
 async function listAgents(): Promise<Agent[]> {
-  const res = await apiFetch("/api/agents");
+  if (!registeredRunnerId) return [];
+  const query = `assignedRunnerId=${encodeURIComponent(registeredRunnerId)}`;
+  const res = await apiFetch(`/api/agents?${query}`);
   return res.json();
 }
 
@@ -1218,6 +1284,13 @@ async function ensureWorkspace(agent: Agent) {
 }
 
 async function pollAgent(agent: Agent) {
+  if (
+    registeredRunnerId &&
+    agent.assignedRunnerId &&
+    agent.assignedRunnerId !== registeredRunnerId
+  ) {
+    return;
+  }
   if (agent.desiredState !== "RUNNING") {
     heartbeats.delete(agent.name);
     bootstrappedAgents.delete(agent.name);
@@ -1285,8 +1358,19 @@ export async function loop() {
   const onSigterm = () => onShutdownSignal("SIGTERM");
   process.once("SIGINT", onSigint);
   process.once("SIGTERM", onSigterm);
+  while (!shuttingDown && !registeredRunnerId) {
+    try {
+      registeredRunnerId = await registerRunnerIdentity();
+      await sendRunnerHeartbeat(true);
+      console.log(`runner registered as ${registeredRunnerId}`);
+    } catch (error) {
+      console.error("runner.registration_failed", getErrorSummary(error));
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  }
   while (!shuttingDown) {
     try {
+      await sendRunnerHeartbeat();
       const agents = await listAgents();
       const results = await Promise.allSettled(
         agents.map(async (agent) => {

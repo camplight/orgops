@@ -1,4 +1,5 @@
 export type Agent = {
+  id?: string;
   name: string;
   systemInstructions: string;
   soulPath: string;
@@ -19,6 +20,7 @@ export type Agent = {
   modelId: string;
   desiredState: string;
   runtimeState: string;
+  assignedRunnerId?: string | null;
 };
 
 export type Event = {

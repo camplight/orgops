@@ -4,6 +4,7 @@ import type {
   AgentWorkspaceFileResponse,
   AgentWorkspaceListResponse,
   EventRow,
+  RunnerNode,
   SkillMeta
 } from "../types";
 import { Button, Card, Input, Textarea } from "../components/ui";
@@ -20,6 +21,7 @@ type AgentForm = {
   contextSessionGapMs: string;
   workspacePath: string;
   allowOutsideWorkspace: boolean;
+  assignedRunnerId: string;
   soulContents: string;
   enabledSkills: string[];
   alwaysPreloadedSkills: string[];
@@ -35,6 +37,7 @@ const DEFAULT_AGENT_FORM: AgentForm = {
   contextSessionGapMs: "",
   workspacePath: ".orgops-data/workspaces/default",
   allowOutsideWorkspace: false,
+  assignedRunnerId: "",
   soulContents: "",
   enabledSkills: [],
   alwaysPreloadedSkills: []
@@ -55,6 +58,7 @@ function parseOptionalPositiveIntInput(
 
 type AgentsScreenProps = {
   agents: Agent[];
+  runners: RunnerNode[];
   skills: SkillMeta[];
   onCreateAgent: (agent: AgentForm) => Promise<void>;
   onUpdateAgent: (name: string, agent: Omit<AgentForm, "name">) => Promise<void>;
@@ -92,6 +96,7 @@ type AgentsScreenProps = {
 
 export function AgentsScreen({
   agents,
+  runners,
   skills,
   onCreateAgent,
   onUpdateAgent,
@@ -203,6 +208,7 @@ export function AgentsScreen({
         selectedAgent.workspacePath ??
         `.orgops-data/workspaces/${selectedAgent.name}`,
       allowOutsideWorkspace: Boolean(selectedAgent.allowOutsideWorkspace),
+      assignedRunnerId: selectedAgent.assignedRunnerId ?? "",
       soulContents: selectedAgent.soulContents ?? "",
       enabledSkills: selectedAgent.enabledSkills ?? [],
       alwaysPreloadedSkills: selectedAgent.alwaysPreloadedSkills ?? []
@@ -495,6 +501,7 @@ export function AgentsScreen({
             contextSessionGapMs === null ? "" : String(contextSessionGapMs),
           workspacePath: form.workspacePath.trim(),
           allowOutsideWorkspace: form.allowOutsideWorkspace,
+          assignedRunnerId: form.assignedRunnerId.trim(),
           soulContents: form.soulContents,
           enabledSkills: form.enabledSkills,
           alwaysPreloadedSkills: form.alwaysPreloadedSkills
@@ -520,6 +527,7 @@ export function AgentsScreen({
           contextSessionGapMs === null ? "" : String(contextSessionGapMs),
         workspacePath: form.workspacePath.trim(),
         allowOutsideWorkspace: form.allowOutsideWorkspace,
+        assignedRunnerId: form.assignedRunnerId.trim(),
         soulContents: form.soulContents,
         enabledSkills: form.enabledSkills,
         alwaysPreloadedSkills: form.alwaysPreloadedSkills
@@ -622,6 +630,7 @@ export function AgentsScreen({
                 <th className="px-2 py-2">Model</th>
                 <th className="px-2 py-2">Mode</th>
                 <th className="px-2 py-2">Memory Context</th>
+                <th className="px-2 py-2">Runner</th>
                 <th className="px-2 py-2">Workspace</th>
               </tr>
             </thead>
@@ -649,6 +658,9 @@ export function AgentsScreen({
                   </td>
                   <td className="whitespace-nowrap px-2 py-2 text-slate-400">
                     {agent.memoryContextMode ?? "PER_CHANNEL_CROSS_CHANNEL"}
+                  </td>
+                  <td className="whitespace-nowrap px-2 py-2 text-slate-400">
+                    {agent.assignedRunnerId ?? "-"}
                   </td>
                   <td className="max-w-[420px] truncate px-2 py-2 text-slate-500">
                     {agent.workspacePath ?? "-"}
@@ -860,6 +872,28 @@ export function AgentsScreen({
                       />
                       <span>Emit observability/debug audit events for this agent</span>
                     </label>
+                    <div className="space-y-1">
+                      <div className="text-sm text-slate-400">Assigned runner</div>
+                      <select
+                        value={form.assignedRunnerId}
+                        onChange={(e) => {
+                          setIsFormDirty(true);
+                          setSaveStatus(null);
+                          setForm((prev) => ({
+                            ...prev,
+                            assignedRunnerId: e.target.value
+                          }));
+                        }}
+                        className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+                      >
+                        <option value="">Unassigned</option>
+                        {runners.map((runner) => (
+                          <option key={runner.id} value={runner.id}>
+                            {runner.displayName} ({runner.online ? "online" : "offline"})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                     <div className="space-y-1">
                       <div className="text-sm text-slate-400">LLM call timeout (ms)</div>
                       <Input

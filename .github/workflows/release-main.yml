@@ -1,0 +1,74 @@
+name: Build OpsCLI Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-opscli:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            pkg_target: node18-linux-x64
+            artifact_name: opscli-linux
+          - os: macos-latest
+            pkg_target: node18-macos-x64
+            artifact_name: opscli-macos
+          - os: windows-latest
+            pkg_target: node18-win-x64
+            artifact_name: opscli-windows
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build self-contained OpsCLI executable
+        env:
+          ORGOPS_OPSCLI_PKG_TARGET: ${{ matrix.pkg_target }}
+        run: npm run --workspace @orgops/opscli build:release
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/opscli-*
+
+  publish-release:
+    runs-on: ubuntu-latest
+    needs: build-opscli
+    steps:
+      - name: Download workflow artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Publish rolling main release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -R dist
+          gh release view main-latest --repo "${{ github.repository }}" >/dev/null 2>&1 || \
+          gh release create main-latest \
+            --repo "${{ github.repository }}" \
+            --title "OrgOps Main Latest" \
+            --notes "Self-contained OrgOps OpsCLI binaries for latest main."
+
+          gh release upload main-latest dist/**/opscli-* \
+            --repo "${{ github.repository }}" \
+            --clobber

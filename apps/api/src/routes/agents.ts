@@ -10,7 +10,7 @@ import { basename, extname, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 
 import { schema, type OrgOpsDrizzleDb } from "@orgops/db";
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, isNull, or } from "drizzle-orm";
 import type { EventBus } from "@orgops/event-bus";
 
 type AgentsDeps = {
@@ -192,7 +192,23 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
   }
 
   app.get("/api/agents", (c) => {
-    const rows = orm.select().from(schema.agents).all() as any[];
+    const url = new URL(c.req.url);
+    const assignedRunnerId = (url.searchParams.get("assignedRunnerId") ?? "").trim();
+    const includeUnassigned = url.searchParams.get("includeUnassigned") === "1";
+    const rows = assignedRunnerId
+      ? (orm
+          .select()
+          .from(schema.agents)
+          .where(
+            includeUnassigned
+              ? or(
+                  eq(schema.agents.assigned_runner_id, assignedRunnerId),
+                  isNull(schema.agents.assigned_runner_id),
+                )
+              : eq(schema.agents.assigned_runner_id, assignedRunnerId),
+          )
+          .all() as any[])
+      : (orm.select().from(schema.agents).all() as any[]);
     return jsonResponse(
       c,
       rows.map((row) => ({
@@ -214,6 +230,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         emitAuditEvents: Boolean(row.emit_audit_events ?? 1),
         memoryContextMode: row.memory_context_mode ?? "PER_CHANNEL_CROSS_CHANNEL",
         mode: row.mode ?? "CLASSIC",
+        assignedRunnerId: row.assigned_runner_id ?? null,
         desiredState: row.desired_state,
         runtimeState: row.runtime_state,
         lastHeartbeatAt: row.last_heartbeat_at,
@@ -225,6 +242,10 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
 
   app.post("/api/agents", async (c) => {
     const body = await c.req.json();
+    const assignedRunnerId =
+      typeof body.assignedRunnerId === "string" && body.assignedRunnerId.trim()
+        ? body.assignedRunnerId.trim()
+        : null;
     const id = randomUUID();
     const now = Date.now();
     const soulPath =
@@ -300,6 +321,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
           typeof body.mode === "string" && body.mode.trim()
             ? body.mode.trim()
             : "CLASSIC",
+        assigned_runner_id: assignedRunnerId,
         enabled_skills_json: JSON.stringify(enabledSkills),
         always_preloaded_skills_json: JSON.stringify(sanitizedAlwaysPreloadedSkills),
         desired_state: body.desiredState ?? "RUNNING",
@@ -334,6 +356,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       emitAuditEvents: Boolean(row.emit_audit_events ?? 1),
       memoryContextMode: row.memory_context_mode ?? "PER_CHANNEL_CROSS_CHANNEL",
       mode: row.mode ?? "CLASSIC",
+      assignedRunnerId: row.assigned_runner_id ?? null,
       desiredState: row.desired_state,
       runtimeState: row.runtime_state,
       lastHeartbeatAt: row.last_heartbeat_at,
@@ -418,6 +441,12 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     }
     const emitAuditEvents =
       body.emitAuditEvents !== undefined ? (body.emitAuditEvents ? 1 : 0) : null;
+    const assignedRunnerId =
+      body.assignedRunnerId !== undefined
+        ? typeof body.assignedRunnerId === "string" && body.assignedRunnerId.trim()
+          ? body.assignedRunnerId.trim()
+          : null
+        : undefined;
     orm
       .update(schema.agents)
       .set({
@@ -452,6 +481,10 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
           typeof body.mode === "string" && body.mode.trim()
             ? body.mode.trim()
             : existing.mode,
+        assigned_runner_id:
+          assignedRunnerId !== undefined
+            ? assignedRunnerId
+            : existing.assigned_runner_id,
         enabled_skills_json: enabledSkillsJson ?? existing.enabled_skills_json,
         always_preloaded_skills_json: sanitizedAlwaysPreloadedSkillsJson,
         desired_state: body.desiredState ?? existing.desired_state,

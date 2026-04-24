@@ -359,7 +359,9 @@ export default function App() {
         data.refreshProcesses();
         data.refreshSecrets();
         data.refreshTeams();
+        data.refreshRunners();
       }
+      if (screen === "agents") data.refreshRunners();
       if (screen === "channels") data.refreshChannels();
       if (screen === "teams") {
         data.refreshTeams();
@@ -538,6 +540,7 @@ export default function App() {
           />
           <DashboardDrawers
             agents={data.agents}
+            runners={data.runners}
             skills={data.skills}
             events={data.events}
             channels={data.channels}
@@ -686,6 +689,7 @@ export default function App() {
       {activeScreen === "agents" && (
         <AgentsScreen
           agents={data.agents}
+          runners={data.runners}
           skills={data.skills}
           onCreateAgent={async (agent) => {
             await data.apiFetch("/api/agents", {

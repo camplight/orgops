@@ -42,6 +42,7 @@ import { registerSkillsRoutes } from "./routes/skills";
 import { registerSecretsRoutes } from "./routes/secrets";
 import { registerWsRoutes, type WsServerMessage } from "./routes/ws";
 import { registerHumansRoutes } from "./routes/humans";
+import { registerRunnersRoutes } from "./routes/runners";
 
 export type AppConfig = {
   db?: OrgOpsDb;
@@ -434,6 +435,12 @@ export function createApp(config: AppConfig = {}) {
   });
 
   registerWsRoutes(app as any, { bus, upgradeWebSocket });
+
+  registerRunnersRoutes(app as any, {
+    orm,
+    jsonResponse,
+    requireRunnerAuth,
+  });
 
   return { app, db, bus, injectWebSocket };
 }

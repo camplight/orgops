@@ -1,6 +1,6 @@
 # OrgOps
 
-OrgOps is a single-company, single-VPS system where humans and autonomous agents collaborate via an event bus. Agents can run host-wide shell and filesystem operations, manage long-running processes, and stream outputs back to humans/models. The MVP emphasizes verified ingress and mandatory audit logging.
+OrgOps is a Node.js multi-host agent system where humans and autonomous agents collaborate via an event bus. Agents can run host shell/filesystem/process operations, manage long-running jobs, and stream outputs back to humans/models. The current deployment model emphasizes deterministic host assignment and a local autonomous bootstrap/maintenance CLI (`opscli`).
 
 ## Repo layout
 
@@ -8,6 +8,7 @@ OrgOps is a single-company, single-VPS system where humans and autonomous agents
 apps/
   api/            Hono HTTP + WebSocket API
   agent-runner/   Agent supervisor and tool executor
+  opscli/         Host bootstrap + maintenance CLI agent
   ui/             React + Tailwind UI
 packages/
   crypto/         Envelope encryption helpers
@@ -38,6 +39,23 @@ npm run dev:all
 
 Open `http://localhost:5173` for UI, API on `http://localhost:8787`.
 
+## Deployment approach
+
+OrgOps is split into three runtime components plus one bootstrap/maintenance CLI:
+
+- `api`: central API/event system
+- `ui`: human control surface
+- `agent-runner`: host-local execution runtime
+- `opscli`: host bootstrap + maintenance RLM REPL agent
+
+Multi-host execution is kept intentionally simple:
+
+- each runner registers at API and gets/persists a stable runner ID in `.agent-runner-id`
+- each agent can be assigned to one `assignedRunnerId`
+- runners only pick up agents assigned to their own runner ID
+
+This guarantees "same agent, same host" behavior without a complex scheduler.
+
 ## Production
 
 ```bash
@@ -46,60 +64,38 @@ npm run prod:all
 
 This builds the UI and runs the API, runner, and UI preview.
 
-## Bundle builds
+## OpsCLI
 
-- Windows bundle script: `scripts/bundle-windows.ps1`
-- Linux/macOS bundle script: `scripts/bundle-unix.sh`
-- Windows installer script: `scripts/install-windows-bundle.ps1`
-- Linux VM installer script: `scripts/install-linux-bundle.sh`
-- Linux latest-release installer helper: `scripts/install-linux-latest.sh`
-- GitHub Actions workflows:
-  - `.github/workflows/windows-bundle.yml`
-  - `.github/workflows/unix-bundle.yml`
-  - `.github/workflows/publish-linux-latest-bundle.yml` (publishes Linux + Windows assets to `bundles-latest`)
-
-### Quick Linux VM install (paste into shell)
+`apps/opscli` is the autonomous bootstrap and maintenance CLI for OrgOps hosts.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/<branch>/scripts/install-linux-bundle.sh | bash -s -- "<linux-bundle-url>"
+npm run --workspace @orgops/opscli start
 ```
 
-### Quick Linux VM install from stable latest release URL
+It scaffolds `.orgops-data` locally and runs a persistent Node REPL-based RLM loop.
+The REPL exposes:
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/<branch>/scripts/install-linux-latest.sh | bash -s -- "<org>/<repo>" /opt/orgops
-```
+- `shell(command)` for host command execution
+- `print(...args)` for stdout output
+- `input(question)` for interactive stdin requests
+- `exit(code)` for agent-driven process termination
 
-For systemd setup:
+OpsCLI keeps a rolling session summary and capped recent history to stay within model context limits.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/<branch>/scripts/install-linux-latest.sh | sudo ORGOPS_SYSTEMD_SERVICE=1 bash -s -- "<org>/<repo>" /opt/orgops
-```
+## Release automation
 
-For offline or transferred Unix bundle installs on a bare host:
+Pushes to `main` produce/update a rolling GitHub release tag named `main-latest`
+through `.github/workflows/release-main.yml`.
 
-1. Extract `orgops-<platform>-<arch>-bundle.tar.gz`
-2. Run `./install-orgops.sh /opt/orgops` from the extracted bundle root (runs prereqs + idempotent install, does not start)
-3. Start manually with `/opt/orgops/start-orgops.sh`
+The workflow builds self-contained `opscli` binaries for Linux/macOS/Windows.
+Each binary bundles:
 
-### Quick Windows VM install (paste into PowerShell)
+- OrgOps source snapshot for `api`, `agent-runner`, `ui`, and shared packages
+- OrgOps docs (README + SPEC + runner README) injected into OpsCLI system prompt
 
-```powershell
-iwr -useb https://raw.githubusercontent.com/<org>/<repo>/<branch>/scripts/install-windows-bundle.ps1 | iex; Install-OrgOpsBundle -BundleSource "<windows-bundle-url>" -InstallDir "C:\orgops"
-```
-
-For offline or transferred zip installs on a bare Windows host:
-
-1. Extract `orgops-windows-bundle.zip`
-2. Run `install-orgops.cmd` from the extracted bundle root (runs prereqs + idempotent install to `C:\orgops`, does not start)
-   - Optional custom install directory: `install-orgops.cmd D:\orgops`
-3. Start manually with `C:\orgops\start-orgops.cmd` (or your custom dir)
-
-Installer behavior (Windows + Unix):
-
-- Idempotent update: replaces code/runtime files while preserving `.orgops-data`, `files`, and `.env`
-- Safe for repeated upgrades in-place
-- DB migrations run automatically on next API start
+On host launch, `opscli` can prompt for missing `OPENAI_API_KEY`, persist it to a local
+`.env`, and then use REPL helpers (`extractOrgOps`, `setupOrgOps`) to unpack and prepare
+selected components.
 
 ## Environment variables
 
@@ -107,16 +103,28 @@ Installer behavior (Windows + Unix):
 - `ORGOPS_RUNNER_TOKEN` (shared token for agent-runner -> API, default: `dev-runner-token`)
 - `ORGOPS_MASTER_KEY` (32-byte base64, required for secrets encryption)
 - `ORGOPS_API_URL` (agent-runner API base URL)
+- `ORGOPS_RUNNER_ID_FILE` (optional path for persisted runner identity; default: `.agent-runner-id`)
+- `ORGOPS_RUNNER_NAME` (optional runner display name used on registration)
 - `ORGOPS_EVENT_MAX_FAILURES` (default: 25)
 - `OPENAI_API_KEY` (for OpenAI models)
 - `ORGOPS_GIT_BASH_PATH` (optional Windows path to `bash.exe`; defaults to `C:\Program Files\Git\bin\bash.exe`)
 - `ORGOPS_SHELL_PATH` / `ORGOPS_SHELL_ARGS` (optional shell override for all `shell_*` tools)
+- OpsCLI:
+  - `ORGOPS_OPSCLI_MODEL`
+  - `ORGOPS_OPSCLI_MAX_STEPS`
+  - `ORGOPS_OPSCLI_COMMAND_TIMEOUT_MS`
+  - `ORGOPS_OPSCLI_EVAL_TIMEOUT_MS`
+  - `ORGOPS_OPSCLI_MAX_CONTEXT_CHARS`
+  - `ORGOPS_OPSCLI_MAX_SUMMARY_CHARS`
+  - `ORGOPS_OPSCLI_SUMMARY_CHUNK_MESSAGES`
+  - `ORGOPS_OPSCLI_MIN_RECENT_MESSAGES`
 
 ## Runner behavior notes
 
 - Pending events are coalesced per `(agent, channel)` before model handling, so a burst of same-channel events is processed in one handling sequence.
 - The runner executes model turns step-by-step and polls for new pending channel events between turns; newly arrived same-channel events are injected into the in-flight conversation.
 - `shell_run` enforces a timeout (default 45s, configurable per call via `timeoutMs`, bounds 1s..45s) and force-kills timed-out commands. Use `shell_start` for long-running jobs.
+- Runner registration/heartbeats are handled via `/api/runners/register` and `/api/runners/:id/heartbeat`.
 
 ## Tests
 

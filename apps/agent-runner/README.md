@@ -1,6 +1,8 @@
 # OrgOps Agent Runner
 
 Agent supervisor that polls events, calls the LLM, executes tools, and emits audit events.
+Each runner registers itself with the API and persists identity to `.agent-runner-id`
+so agents can be pinned to a stable runner host.
 
 ## Agent Modes
 
@@ -23,6 +25,7 @@ npm run dev
 
 - `ORGOPS_API_URL` (default: `http://localhost:8787`)
 - `ORGOPS_RUNNER_TOKEN` (shared with API)
+- `ORGOPS_RUNNER_ID_FILE` (default: `.agent-runner-id`)
 - `ORGOPS_SKILLS_DIRS` (comma-separated override for skill roots)
 - `ORGOPS_LLM_STUB=1` to stub LLM calls
 - `OPENAI_API_KEY` for OpenAI models
