@@ -68,12 +68,6 @@ const RUNTIME_DIR = (() => {
   }
 })();
 
-function ensureScaffoldedDataDir() {
-  const dataDir = join(process.cwd(), ".orgops-data");
-  mkdirSync(dataDir, { recursive: true });
-  return dataDir;
-}
-
 function parseSimpleEnv(raw: string): Record<string, string> {
   const result: Record<string, string> = {};
   for (const line of raw.split(/\r?\n/)) {
@@ -409,6 +403,15 @@ function buildSystemPrompt() {
     "Use extractOrgOps(options?) to extract bundled OrgOps source to disk.",
     "Use setupOrgOps(options?) to extract + install deps + configure selected components.",
     "Use getBundledDocs() when you need OrgOps architecture/deployment details.",
+    "Before setup/start actions, verify prerequisites with shell: check `node -v` and `npm -v`.",
+    "If Node.js or npm is missing, install them automatically using shell and continue.",
+    "Use platform-appropriate installers: macOS (Homebrew), Linux (apt/yum/dnf), Windows (winget/choco if available).",
+    "When user asks to start/stop OrgOps components, prefer PM2 under the hood for process management.",
+    "If PM2 is missing, install it automatically (`npm install -g pm2`) before managing services.",
+    "PM2 works on macOS, Linux, and Windows; use it consistently across platforms.",
+    "Always run OrgOps workspace commands from extracted root (e.g. `cd \"<extractedRoot>\" && npm run ...`).",
+    "For keep-running-after-restart, use PM2 persistence commands (`pm2 save` + `pm2 startup`) and report any manual step output.",
+    "Use stable PM2 names: `orgops-api`, `orgops-runner`, `orgops-ui` for start/stop/restart/log/status operations.",
     "State can be persisted across turns using global variables.",
     "If prompt is empty, ask for goal using input(question).",
   ];
@@ -673,11 +676,9 @@ async function runAutonomousTask(
 }
 
 async function main() {
-  const dataDir = ensureScaffoldedDataDir();
   const rootEnvPath = join(process.cwd(), ROOT_ENV_FILE);
   loadDotEnvIntoProcess(rootEnvPath);
   console.log(`OrgOps OpsCLI ready.`);
-  console.log(`Scaffolded data dir: ${dataDir}`);
   const rl = createInterface({ input: stdin, output: stdout });
   if (!process.env.OPENAI_API_KEY?.trim()) {
     const answer = (await rl.question("OPENAI_API_KEY not found. Enter key: ")).trim();
