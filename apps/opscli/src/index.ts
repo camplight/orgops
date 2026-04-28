@@ -1,11 +1,12 @@
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { hostname } from "node:os";
 import { PassThrough } from "node:stream";
 import * as repl from "node:repl";
@@ -35,6 +36,7 @@ type RlmSession = {
   reservedKeys: Set<string>;
   exited: boolean;
   exitCode: number;
+  turnDone: boolean;
   runHooks: SessionRunHooks | null;
 };
 
@@ -43,7 +45,15 @@ type SessionMemory = {
   history: LlmMessage[];
 };
 
-const MODEL_ID = process.env.ORGOPS_OPSCLI_MODEL ?? "openai:gpt-5.3-codex";
+class TaskInterruptedError extends Error {
+  constructor(message = "Task interrupted by user.") {
+    super(message);
+    this.name = "TaskInterruptedError";
+  }
+}
+
+const DEFAULT_OPENAI_MODEL_ID = "openai:gpt-5.2";
+const DEFAULT_ANTHROPIC_MODEL_ID = "anthropic:claude-3-5-sonnet-latest";
 const MAX_STEPS = Number(process.env.ORGOPS_OPSCLI_MAX_STEPS ?? 20);
 const COMMAND_TIMEOUT_MS = Number(process.env.ORGOPS_OPSCLI_COMMAND_TIMEOUT_MS ?? 120_000);
 const EVAL_TIMEOUT_MS = Number(process.env.ORGOPS_OPSCLI_EVAL_TIMEOUT_MS ?? 30_000);
@@ -56,6 +66,88 @@ const MIN_RECENT_MESSAGES = Number(process.env.ORGOPS_OPSCLI_MIN_RECENT_MESSAGES
 const MAX_SYSTEM_DOC_CHARS = Number(
   process.env.ORGOPS_OPSCLI_MAX_SYSTEM_DOC_CHARS ?? 40_000
 );
+const DEBUG_REPL_TRACE =
+  process.env.ORGOPS_OPSCLI_DEBUG === "1" ||
+  process.env.ORGOPS_OPSCLI_DEBUG?.toLowerCase() === "true";
+const SPINNER_ENABLED = (() => {
+  const raw = process.env.ORGOPS_OPSCLI_SPINNER?.trim().toLowerCase();
+  if (!raw) return true;
+  return !["0", "false", "off", "no"].includes(raw);
+})();
+const SESSION_LOG_PATH = resolve(
+  process.cwd(),
+  process.env.ORGOPS_OPSCLI_LOG_PATH ?? ".opscli-output.log"
+);
+const ANSI_ENABLED = stdout.isTTY && process.env.NO_COLOR !== "1";
+
+const ANSI = {
+  reset: "\x1b[0m",
+  bold: "\x1b[1m",
+  cyan: "\x1b[36m",
+  magenta: "\x1b[35m",
+  yellow: "\x1b[33m",
+  red: "\x1b[31m",
+  gray: "\x1b[90m",
+};
+
+type UiRole = "user" | "agent" | "opscli" | "error" | "muted";
+
+function stylize(text: string, color: keyof typeof ANSI, bold = false) {
+  if (!ANSI_ENABLED) return text;
+  const weight = bold ? ANSI.bold : "";
+  return `${weight}${ANSI[color]}${text}${ANSI.reset}`;
+}
+
+function rolePrefix(role: UiRole) {
+  if (role === "user") return stylize("You>", "cyan", true);
+  if (role === "agent") return stylize("Agent>", "magenta", true);
+  if (role === "error") return stylize("Error>", "red", true);
+  if (role === "muted") return stylize("OpsCLI>", "gray", true);
+  return stylize("OpsCLI>", "yellow", true);
+}
+
+function writeRoleMessage(
+  role: UiRole,
+  text: string,
+  options?: { leadingNewline?: boolean; toStderr?: boolean }
+) {
+  const prefix = rolePrefix(role);
+  const normalized = text.replace(/\r\n/g, "\n");
+  const lines = normalized.split("\n");
+  const [firstLine = "", ...rest] = lines;
+  const rendered = [`${prefix} ${firstLine}`, ...rest].join("\n");
+  const output = `${options?.leadingNewline ? "\n" : ""}${rendered}\n`;
+  if (options?.toStderr) {
+    process.stderr.write(output);
+    return;
+  }
+  stdout.write(output);
+}
+
+function getModelId() {
+  const configured = process.env.ORGOPS_OPSCLI_MODEL?.trim();
+  return configured || DEFAULT_OPENAI_MODEL_ID;
+}
+
+function appendSessionLog(message: string) {
+  const timestamp = new Date().toISOString();
+  try {
+    appendFileSync(SESSION_LOG_PATH, `[${timestamp}] ${message}\n`, "utf-8");
+  } catch {
+    // Keep OpsCLI resilient even if log writes fail.
+  }
+}
+
+function resetSessionLog() {
+  const header = [
+    `[${new Date().toISOString()}] OrgOps OpsCLI session started`,
+    `cwd=${process.cwd()}`,
+    `model=${getModelId()}`,
+    `debug=${DEBUG_REPL_TRACE ? "1" : "0"}`,
+    "",
+  ].join("\n");
+  writeFileSync(SESSION_LOG_PATH, header, "utf-8");
+}
 const BUNDLED_ROOT_DIR_NAME = "orgops";
 const ROOT_ENV_FILE = ".env";
 const EXTRACTED_ROOT_ENV_KEY = "ORGOPS_EXTRACTED_ROOT";
@@ -110,6 +202,67 @@ function writeMergedEnvFile(envPath: string, patch: Record<string, string>) {
 
 function getOpsCliEnvPath() {
   return join(process.cwd(), ROOT_ENV_FILE);
+}
+
+type ModelProvider = "openai" | "anthropic";
+
+function normalizeProvider(provider: string): ModelProvider | null {
+  const normalized = provider.trim().toLowerCase();
+  if (normalized === "openai") return "openai";
+  if (normalized === "anthropic" || normalized === "claude") return "anthropic";
+  return null;
+}
+
+function getModelProvider(modelId: string): ModelProvider {
+  const [provider] = modelId.split(":");
+  return normalizeProvider(provider ?? "") ?? "openai";
+}
+
+function getProviderLabel(provider: ModelProvider) {
+  return provider === "openai" ? "OpenAI" : "Claude (Anthropic)";
+}
+
+function getProviderApiKeyEnvKey(provider: ModelProvider) {
+  return provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+}
+
+function getDefaultModelIdForProvider(provider: ModelProvider) {
+  return provider === "openai" ? DEFAULT_OPENAI_MODEL_ID : DEFAULT_ANTHROPIC_MODEL_ID;
+}
+
+function getAlternateProvider(provider: ModelProvider): ModelProvider {
+  return provider === "openai" ? "anthropic" : "openai";
+}
+
+function throwIfInterrupted(signal?: AbortSignal) {
+  if (signal?.aborted) {
+    throw new TaskInterruptedError();
+  }
+}
+
+function createInterruptPromise(signal?: AbortSignal) {
+  if (!signal) return null;
+  return new Promise<never>((_, reject) => {
+    if (signal.aborted) {
+      reject(new TaskInterruptedError());
+      return;
+    }
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      reject(new TaskInterruptedError());
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function isAbortError(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { name?: string; message?: string };
+  return (
+    candidate.name === "AbortError" ||
+    candidate.name === "TaskInterruptedError" ||
+    candidate.message?.toLowerCase().includes("aborted") === true
+  );
 }
 
 function resolveDefaultExtractedRootPath() {
@@ -222,8 +375,10 @@ async function setupBundledOrgOps(options?: {
     ? parseSimpleEnv(readFileSync(envPath, "utf-8"))
     : {};
   const openAiApiKey = process.env.OPENAI_API_KEY?.trim();
+  const anthropicApiKey = process.env.ANTHROPIC_API_KEY?.trim();
   writeMergedEnvFile(envPath, {
     OPENAI_API_KEY: openAiApiKey || existingEnv.OPENAI_API_KEY || "",
+    ANTHROPIC_API_KEY: anthropicApiKey || existingEnv.ANTHROPIC_API_KEY || "",
     ORGOPS_MASTER_KEY:
       existingEnv.ORGOPS_MASTER_KEY || randomBytes(32).toString("base64"),
     ORGOPS_RUNNER_TOKEN:
@@ -318,6 +473,51 @@ function truncateText(value: string, maxChars: number) {
   };
 }
 
+type SpinnerControls = {
+  stop: (doneLabel?: string) => void;
+};
+
+function startSpinner(label: string): SpinnerControls {
+  if (DEBUG_REPL_TRACE || !stdout.isTTY || !SPINNER_ENABLED) {
+    return { stop: () => {} };
+  }
+  const frames = ["-", "\\", "|", "/"];
+  let frameIndex = 0;
+  let interval: NodeJS.Timeout | null = null;
+  let hasRendered = false;
+  const render = () => {
+    const frame = frames[frameIndex % frames.length];
+    frameIndex += 1;
+    hasRendered = true;
+    stdout.write(`\r${rolePrefix("muted")} ${label} ${frame}`);
+  };
+  const delay = setTimeout(() => {
+    render();
+    interval = setInterval(render, 100);
+  }, 200);
+  return {
+    stop: (doneLabel?: string) => {
+      clearTimeout(delay);
+      if (interval) clearInterval(interval);
+      if (!hasRendered) return;
+      const finalLabel = doneLabel ? `${doneLabel}   ` : `${label} done.   `;
+      stdout.write(`\r${rolePrefix("muted")} ${finalLabel}\n`);
+    },
+  };
+}
+
+function createPromptValue(goal: string) {
+  const text = goal;
+  return {
+    text,
+    trim: () => text.trim(),
+    toLowerCase: () => text.toLowerCase(),
+    toString: () => text,
+    valueOf: () => text,
+    [Symbol.toPrimitive]: () => text,
+  };
+}
+
 function formatValue(value: unknown): string {
   try {
     return inspect(value, {
@@ -330,6 +530,11 @@ function formatValue(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function formatPrintArg(value: unknown): string {
+  if (typeof value === "string") return value;
+  return formatValue(value);
 }
 
 function estimateMessageChars(messages: LlmMessage[]) {
@@ -409,19 +614,44 @@ async function runShell(command: string, timeoutMs: number): Promise<ShellResult
   });
 }
 
+function runShellSync(command: string, timeoutMs: number): ShellResult {
+  const startedAt = Date.now();
+  const result = spawnSync(command, {
+    cwd: process.cwd(),
+    env: process.env,
+    shell: true,
+    timeout: timeoutMs,
+    killSignal: "SIGTERM",
+    encoding: "utf-8",
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  const error = result.error as NodeJS.ErrnoException | undefined;
+  return {
+    exitCode: typeof result.status === "number" ? result.status : null,
+    timedOut: error?.code === "ETIMEDOUT",
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? (error?.message ?? ""),
+    durationMs: Date.now() - startedAt,
+  };
+}
+
 function buildSystemPrompt() {
   const docsText = loadBundledDocsText();
   const sections = [
     "You are OrgOps OpsCLI, a recursive maintenance REPL agent for this host.",
     "You are controlling a self-contained OrgOps release bundle.",
     "Read and use global `prompt` before acting.",
+    "global `prompt` is string-like and also supports `prompt.text`.",
     "Return exactly ONE JavaScript REPL snippet each turn.",
     "Do NOT return JSON and do NOT wrap in markdown fences.",
     "Use shell(command) to execute host commands.",
     "shell(command) accepts exactly one string argument. Do NOT pass callbacks or extra args.",
-    "shell(command) is blocking for long-running commands and returns only when command exits, times out, or errors.",
+    "shell(command) is blocking and returns stdout as a string.",
+    "shell(command) throws on timeout or non-zero exit; use try/catch when needed.",
     "Use print(...args) to write output to stdout.",
     "Use input(question) to ask the user for stdin input.",
+    "input(question) is async. Always use `await input(...)`.",
+    "Use finish() to end the current turn and return control to the next `You>` prompt.",
     "Use exit(code) to finish and request process termination.",
     "Use extractOrgOps(options?) to extract bundled OrgOps source to disk.",
     "Use setupOrgOps(options?) to extract + install deps + configure selected components.",
@@ -442,6 +672,10 @@ function buildSystemPrompt() {
     "For keep-running-after-restart, use PM2 persistence commands (`pm2 save` + `pm2 startup`) and report any manual step output.",
     "Use stable PM2 names: `orgops-api`, `orgops-runner`, `orgops-ui` for start/stop/restart/log/status operations.",
     "State can be persisted across turns using global variables.",
+    "For conversational/chat responses, print your reply and call finish().",
+    "Do NOT force a goal-execution workflow when the user is just chatting.",
+    "Prefer asking follow-up questions via print(...) + finish() rather than input(...), unless immediate same-turn input is truly required.",
+    "When global `prompt` is non-empty, it already contains the user's goal. Do NOT call input(question) just to ask what the goal is.",
     "If prompt is empty, ask for goal using input(question).",
   ];
   if (docsText) {
@@ -479,16 +713,54 @@ function createSession(): RlmSession {
     reservedKeys: new Set(Object.keys(context)),
     exited: false,
     exitCode: 0,
+    turnDone: false,
     runHooks: null,
   };
   const appendObservation = (type: string, payload: Record<string, unknown>) => {
     session.runHooks?.appendObservation(type, payload);
   };
   Object.assign(context, {
-    shell: async (command: string) => runShell(command, COMMAND_TIMEOUT_MS),
+    shell: (command: string) => {
+      const result = runShellSync(command, COMMAND_TIMEOUT_MS);
+      appendSessionLog(
+        `shell command=${JSON.stringify(command)} exit=${result.exitCode} timeout=${result.timedOut} durationMs=${result.durationMs}`
+      );
+      if (result.stdout.trim()) {
+        appendSessionLog(`shell stdout=${JSON.stringify(truncateText(result.stdout, 4000).text)}`);
+      }
+      if (result.stderr.trim()) {
+        appendSessionLog(`shell stderr=${JSON.stringify(truncateText(result.stderr, 4000).text)}`);
+      }
+      appendObservation("opscli.repl.shell", {
+        command,
+        exitCode: result.exitCode,
+        timedOut: result.timedOut,
+        stdout: truncateText(result.stdout, 4_000).text,
+        stderr: truncateText(result.stderr, 4_000).text,
+        durationMs: result.durationMs,
+      });
+      if (result.timedOut) {
+        throw new Error(
+          `Command timed out after ${COMMAND_TIMEOUT_MS}ms: ${command}\n${truncateText(
+            result.stderr || result.stdout,
+            2_000
+          ).text}`
+        );
+      }
+      if (result.exitCode !== 0) {
+        throw new Error(
+          `Command failed (exit ${result.exitCode}): ${command}\n${truncateText(
+            result.stderr || result.stdout,
+            2_000
+          ).text}`
+        );
+      }
+      return result.stdout;
+    },
     print: (...args: unknown[]) => {
-      const text = args.map((arg) => formatValue(arg)).join(" ");
-      console.log(`\nopscli> ${text}`);
+      const text = args.map((arg) => formatPrintArg(arg)).join(" ");
+      writeRoleMessage("agent", text, { leadingNewline: true });
+      appendSessionLog(`print ${JSON.stringify(text)}`);
       appendObservation("opscli.repl.print", { text });
       return text;
     },
@@ -499,6 +771,9 @@ function createSession(): RlmSession {
           : "Please provide input";
       const answer = await session.runHooks?.requestUserInput(promptText);
       const value = answer ?? "";
+      appendSessionLog(
+        `input question=${JSON.stringify(promptText)} answer=${JSON.stringify(value)}`
+      );
       appendObservation("opscli.stdin.input", {
         question: promptText,
         answer: value,
@@ -513,6 +788,11 @@ function createSession(): RlmSession {
       appendObservation("opscli.repl.exit", { code: normalizedCode });
       return normalizedCode;
     },
+    finish: () => {
+      session.turnDone = true;
+      appendObservation("opscli.repl.finish", {});
+      return "Turn finished.";
+    },
     clear: () => {
       const ctx = session.context;
       for (const key of Object.keys(ctx)) {
@@ -522,7 +802,7 @@ function createSession(): RlmSession {
       return "Context cleared.";
     },
     help: () =>
-      "Use prompt, shell(command), print(...args), input(question), exit(code), clear(), extractOrgOps(options?), setupOrgOps(options?), getBundledDocs(), and global state.",
+      "Use prompt, shell(command), print(...args), input(question), finish(), exit(code), clear(), extractOrgOps(options?), setupOrgOps(options?), getBundledDocs(), and global state.",
     getBundledDocs: () => loadBundledDocsText(),
     extractOrgOps: async (options?: { targetDir?: string; force?: boolean }) =>
       extractBundledOrgOps(options),
@@ -538,6 +818,7 @@ function createSession(): RlmSession {
   session.reservedKeys.add("shell");
   session.reservedKeys.add("print");
   session.reservedKeys.add("input");
+  session.reservedKeys.add("finish");
   session.reservedKeys.add("exit");
   session.reservedKeys.add("clear");
   session.reservedKeys.add("help");
@@ -565,7 +846,12 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   });
 }
 
-async function evaluateInput(session: RlmSession, code: string): Promise<string> {
+async function evaluateInput(
+  session: RlmSession,
+  code: string,
+  abortSignal?: AbortSignal
+): Promise<string> {
+  throwIfInterrupted(abortSignal);
   const scriptValue = await new Promise<unknown>((resolve, reject) => {
     session.replServer.eval(code, session.context as any, "opscli-repl", (error, result) => {
       if (error) {
@@ -577,7 +863,12 @@ async function evaluateInput(session: RlmSession, code: string): Promise<string>
   });
   const value =
     scriptValue && typeof (scriptValue as Promise<unknown>).then === "function"
-      ? await withTimeout(scriptValue as Promise<unknown>, EVAL_TIMEOUT_MS)
+      ? await (async () => {
+          const evaluation = withTimeout(scriptValue as Promise<unknown>, EVAL_TIMEOUT_MS);
+          const interrupted = createInterruptPromise(abortSignal);
+          if (!interrupted) return evaluation;
+          return Promise.race([evaluation, interrupted]);
+        })()
       : scriptValue;
   return truncateText(formatValue(value), MAX_OUTPUT_CHARS).text;
 }
@@ -585,11 +876,13 @@ async function evaluateInput(session: RlmSession, code: string): Promise<string>
 async function runAutonomousTask(
   goal: string,
   session: RlmSession,
-  requestUserInput: (promptText: string) => Promise<string>
+  requestUserInput: (promptText: string) => Promise<string>,
+  abortSignal?: AbortSignal
 ): Promise<{ requestedExit: boolean; exitCode: number }> {
   session.exited = false;
   session.exitCode = 0;
-  session.context.prompt = goal;
+  session.turnDone = false;
+  session.context.prompt = createPromptValue(goal);
   const memory: SessionMemory = { summary: "", history: [] };
   appendHistoryMessage(memory, {
     role: "user",
@@ -621,7 +914,9 @@ async function runAutonomousTask(
     requestUserInput,
   };
 
+  const modelId = getModelId();
   for (let step = 1; step <= MAX_STEPS; step += 1) {
+    throwIfInterrupted(abortSignal);
     const modelMessages: LlmMessage[] = [{ role: "system", content: buildSystemPrompt() }];
     if (memory.summary.trim()) {
       modelMessages.push({
@@ -644,9 +939,29 @@ async function runAutonomousTask(
       ),
     });
 
-    const result = await generate(MODEL_ID, modelMessages, { maxSteps: 1 });
+    let result: Awaited<ReturnType<typeof generate>>;
+    try {
+      const thinkingSpinner = startSpinner("Thinking");
+      result = await generate(modelId, modelMessages, {
+        maxSteps: 1,
+        abortSignal,
+      }).finally(() => thinkingSpinner.stop("Thought ready."));
+    } catch (error) {
+      if (error instanceof TaskInterruptedError || isAbortError(error)) {
+        appendSessionLog(`step=${step} interrupted during thinking`);
+        writeRoleMessage("opscli", "Interrupted current run. You can now ask follow-ups or retry.", {
+          leadingNewline: true,
+        });
+        session.runHooks = null;
+        return { requestedExit: false, exitCode: 0 };
+      }
+      throw error;
+    }
     const modelText = result.text ?? "";
     const code = extractCode(modelText);
+    appendSessionLog(
+      `step=${step} modelRaw=${JSON.stringify(truncateText(modelText, 4000).text)}`
+    );
     if (!code.trim()) {
       appendHistoryMessage(memory, { role: "assistant", content: modelText });
       appendHistoryMessage(memory, {
@@ -657,12 +972,21 @@ async function runAutonomousTask(
     }
 
     const truncatedInput = truncateText(code, MAX_INPUT_CHARS);
-    console.log(`\nopscli[js:${step}] ${truncatedInput.text}`);
+    appendSessionLog(`step=${step} code=${JSON.stringify(truncatedInput.text)}`);
+    if (DEBUG_REPL_TRACE) {
+      console.log(`\nopscli[js:${step}] ${truncatedInput.text}`);
+    }
     appendHistoryMessage(memory, { role: "assistant", content: code });
 
     try {
-      const outputText = await evaluateInput(session, code);
-      console.log(`result:\n${outputText}`);
+      const executeSpinner = startSpinner("Running plan");
+      const outputText = await evaluateInput(session, code, abortSignal).finally(() =>
+        executeSpinner.stop("Plan run complete.")
+      );
+      appendSessionLog(`step=${step} result=${JSON.stringify(outputText)}`);
+      if (DEBUG_REPL_TRACE) {
+        console.log(`result:\n${outputText}`);
+      }
       appendHistoryMessage(memory, {
         role: "user",
         content: JSON.stringify(
@@ -676,8 +1000,24 @@ async function runAutonomousTask(
         ),
       });
     } catch (error) {
+      if (error instanceof TaskInterruptedError || isAbortError(error)) {
+        appendSessionLog(`step=${step} interrupted`);
+        writeRoleMessage("opscli", "Interrupted current run. You can now ask follow-ups or retry.", {
+          leadingNewline: true,
+        });
+        session.runHooks = null;
+        return { requestedExit: false, exitCode: 0 };
+      }
       const outputText = truncateText(String(error), MAX_OUTPUT_CHARS).text;
-      console.log(`error:\n${outputText}`);
+      appendSessionLog(`step=${step} error=${JSON.stringify(outputText)}`);
+      if (DEBUG_REPL_TRACE) {
+        console.log(`error:\n${outputText}`);
+      } else {
+        writeRoleMessage("error", `Step failed: ${truncateText(outputText, 500).text}`, {
+          leadingNewline: true,
+          toStderr: true,
+        });
+      }
       appendHistoryMessage(memory, {
         role: "user",
         content: JSON.stringify(
@@ -693,54 +1033,200 @@ async function runAutonomousTask(
     }
 
     if (session.exited) {
-      console.log(`\nopscli> agent requested exit(${session.exitCode}).\n`);
+      writeRoleMessage("opscli", `agent requested exit(${session.exitCode}).`, {
+        leadingNewline: true,
+      });
       session.runHooks = null;
       return { requestedExit: true, exitCode: session.exitCode };
+    }
+
+    if (session.turnDone) {
+      session.runHooks = null;
+      return { requestedExit: false, exitCode: 0 };
     }
   }
 
   session.runHooks = null;
-  console.log(`\nopscli> Stopped after ${MAX_STEPS} steps without exit(code).\n`);
+  writeRoleMessage("opscli", `Stopped after ${MAX_STEPS} steps without exit(code).`, {
+    leadingNewline: true,
+  });
   return { requestedExit: false, exitCode: 0 };
+}
+
+async function askProviderChoice(
+  rl: ReturnType<typeof createInterface>
+): Promise<ModelProvider> {
+  while (true) {
+    const answer = (
+      await rl.question(
+        "No model API key found. Choose provider: [1] OpenAI, [2] Claude (Anthropic): "
+      )
+    )
+      .trim()
+      .toLowerCase();
+    if (answer === "1" || answer === "openai") return "openai";
+    if (
+      answer === "2" ||
+      answer === "claude" ||
+      answer === "anthropic" ||
+      answer === "claude (anthropic)"
+    ) {
+      return "anthropic";
+    }
+    console.log("Please choose 1 (OpenAI) or 2 (Claude/Anthropic).");
+  }
+}
+
+async function ensureModelCredentials(
+  rl: ReturnType<typeof createInterface>,
+  rootEnvPath: string
+) {
+  let modelId = getModelId();
+  let provider = getModelProvider(modelId);
+  const hasOpenAiKey = Boolean(process.env.OPENAI_API_KEY?.trim());
+  const hasAnthropicKey = Boolean(process.env.ANTHROPIC_API_KEY?.trim());
+  const hasAnyKey = hasOpenAiKey || hasAnthropicKey;
+
+  if (!hasAnyKey) {
+    provider = await askProviderChoice(rl);
+    modelId = getDefaultModelIdForProvider(provider);
+    process.env.ORGOPS_OPSCLI_MODEL = modelId;
+    writeMergedEnvFile(rootEnvPath, { ORGOPS_OPSCLI_MODEL: modelId });
+    console.log(`Using model: ${modelId}`);
+  }
+
+  let requiredApiKeyEnv = getProviderApiKeyEnvKey(provider);
+  if (!process.env[requiredApiKeyEnv]?.trim()) {
+    const alternateProvider = getAlternateProvider(provider);
+    const alternateApiKeyEnv = getProviderApiKeyEnvKey(alternateProvider);
+    if (process.env[alternateApiKeyEnv]?.trim()) {
+      const switchAnswer = (
+        await rl.question(
+          `Current model uses ${getProviderLabel(provider)} but ${requiredApiKeyEnv} is missing.\nSwitch model to ${getProviderLabel(alternateProvider)} to use existing ${alternateApiKeyEnv}? [Y/n]: `
+        )
+      )
+        .trim()
+        .toLowerCase();
+      if (!switchAnswer || switchAnswer === "y" || switchAnswer === "yes") {
+        provider = alternateProvider;
+        modelId = getDefaultModelIdForProvider(provider);
+        process.env.ORGOPS_OPSCLI_MODEL = modelId;
+        writeMergedEnvFile(rootEnvPath, { ORGOPS_OPSCLI_MODEL: modelId });
+        console.log(`Using model: ${modelId}`);
+        requiredApiKeyEnv = getProviderApiKeyEnvKey(provider);
+      }
+    }
+  }
+
+  if (!process.env[requiredApiKeyEnv]?.trim()) {
+    const label = getProviderLabel(provider);
+    const answer = (
+      await rl.question(`${requiredApiKeyEnv} not found for ${label}. Enter key: `)
+    ).trim();
+    if (!answer) {
+      console.error(`${requiredApiKeyEnv} is required for ${label}.`);
+      return false;
+    }
+    process.env[requiredApiKeyEnv] = answer;
+    writeMergedEnvFile(rootEnvPath, { [requiredApiKeyEnv]: answer });
+    console.log(`Saved ${requiredApiKeyEnv} to ${rootEnvPath}`);
+  }
+  return true;
 }
 
 async function main() {
   const rootEnvPath = getOpsCliEnvPath();
   loadDotEnvIntoProcess(rootEnvPath);
-  console.log(`OrgOps OpsCLI ready.`);
-  const rl = createInterface({ input: stdin, output: stdout });
-  if (!process.env.OPENAI_API_KEY?.trim()) {
-    const answer = (await rl.question("OPENAI_API_KEY not found. Enter key: ")).trim();
-    if (!answer) {
-      console.error("OPENAI_API_KEY is required.");
-      rl.close();
-      process.exitCode = 1;
-      return;
-    }
-    process.env.OPENAI_API_KEY = answer;
-    writeMergedEnvFile(rootEnvPath, { OPENAI_API_KEY: answer });
-    console.log(`Saved OPENAI_API_KEY to ${rootEnvPath}`);
+  resetSessionLog();
+  appendSessionLog("main initialized");
+  writeRoleMessage("opscli", "OrgOps OpsCLI ready.");
+  writeRoleMessage("opscli", `OpsCLI session log: ${SESSION_LOG_PATH}`);
+  let rl = createInterface({ input: stdin, output: stdout });
+  const hasCredentials = await ensureModelCredentials(rl, rootEnvPath);
+  if (!hasCredentials) {
+    rl.close();
+    process.exitCode = 1;
+    return;
   }
   const session = createSession();
-  console.log("Type a maintenance goal (can be empty), or 'exit' to quit.");
+  writeRoleMessage("opscli", "Type a maintenance goal (can be empty), or 'exit' to quit.");
+  let activeTaskAbortController: AbortController | null = null;
+  const onSigint = () => {
+    if (activeTaskAbortController && !activeTaskAbortController.signal.aborted) {
+      appendSessionLog("sigint received: interrupting active run");
+      activeTaskAbortController.abort();
+      writeRoleMessage("opscli", "Interrupt requested. Stopping current run...", {
+        leadingNewline: true,
+      });
+      return;
+    }
+    writeRoleMessage("opscli", "No active run to interrupt. Type 'exit' to quit.", {
+      leadingNewline: true,
+    });
+  };
+  rl.on("SIGINT", onSigint);
   try {
     while (true) {
-      const input = await rl.question("\nYou> ");
+      let input = "";
+      try {
+        input = await rl.question(`\n${rolePrefix("user")} `);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException | undefined)?.code;
+        if (code === "ERR_USE_AFTER_CLOSE") {
+          appendSessionLog("readline closed unexpectedly; recreating prompt");
+          rl.close();
+          rl = createInterface({ input: stdin, output: stdout });
+          rl.on("SIGINT", onSigint);
+          writeRoleMessage("opscli", "Prompt recovered after interrupt.", {
+            leadingNewline: true,
+          });
+          continue;
+        }
+        throw error;
+      }
       const normalized = input.trim().toLowerCase();
       if (normalized === "exit" || normalized === "quit") break;
-      const result = await runAutonomousTask(input, session, async (promptText) => {
-        return rl.question(`\nAgent asks> ${promptText}\nYou> `);
-      });
-      if (result.requestedExit) {
-        process.exitCode = result.exitCode;
-        break;
+      try {
+        activeTaskAbortController = new AbortController();
+        const result = await runAutonomousTask(input, session, async (promptText) => {
+          writeRoleMessage("agent", `${promptText}`, { leadingNewline: true });
+          return rl.question(`${rolePrefix("user")} `);
+        }, activeTaskAbortController.signal);
+        activeTaskAbortController = null;
+        if (result.requestedExit) {
+          process.exitCode = result.exitCode;
+          break;
+        }
+      } catch (error) {
+        activeTaskAbortController = null;
+        if (error instanceof TaskInterruptedError || isAbortError(error)) {
+          writeRoleMessage("opscli", "Interrupted current run. You can now ask follow-ups or retry.", {
+            leadingNewline: true,
+          });
+          continue;
+        }
+        const text = truncateText(String(error), MAX_OUTPUT_CHARS).text;
+        writeRoleMessage("error", `Task failed: ${text}`, {
+          leadingNewline: true,
+          toStderr: true,
+        });
+        writeRoleMessage(
+          "muted",
+          "You can switch models with ORGOPS_OPSCLI_MODEL, e.g. `openai:gpt-4o-mini` or `anthropic:claude-3-5-sonnet-latest`.",
+          { toStderr: true }
+        );
       }
     }
   } finally {
+    rl.off("SIGINT", onSigint);
     session.runHooks = null;
     session.replServer.close();
     rl.close();
   }
 }
 
-void main();
+void main().catch((error) => {
+  const text = truncateText(String(error), MAX_OUTPUT_CHARS).text;
+  writeRoleMessage("error", `Fatal startup error: ${text}`, { toStderr: true });
+  process.exitCode = 1;
+});

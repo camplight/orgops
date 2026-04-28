@@ -10,3 +10,4 @@ memory/
 apps/site/playwright-artifacts/
 .release-tmp
 .agent-runner-id
+.opscli-output.log

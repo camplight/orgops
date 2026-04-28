@@ -46,8 +46,9 @@ OpsCLI persists the extracted root in local `.env` as `ORGOPS_EXTRACTED_ROOT` an
 
 ## Environment
 
-- `OPENAI_API_KEY` (prompted on startup if missing; saved to local `.env`)
-- `ORGOPS_OPSCLI_MODEL` (default: `openai:gpt-5.3-codex`)
+- `OPENAI_API_KEY` (used when model provider is `openai`; prompted on startup if missing; saved to local `.env`)
+- `ANTHROPIC_API_KEY` (used when model provider is `anthropic`; prompted on startup if missing; saved to local `.env`)
+- `ORGOPS_OPSCLI_MODEL` (default: `openai:gpt-5.2`; supports `openai:<model>` and `anthropic:<model>`)
 - `ORGOPS_OPSCLI_MAX_STEPS` (default: `20`)
 - `ORGOPS_OPSCLI_COMMAND_TIMEOUT_MS` (default: `120000`)
 - `ORGOPS_OPSCLI_EVAL_TIMEOUT_MS` (default: `30000`)
@@ -56,4 +57,11 @@ OpsCLI persists the extracted root in local `.env` as `ORGOPS_EXTRACTED_ROOT` an
 - `ORGOPS_OPSCLI_SUMMARY_CHUNK_MESSAGES` (default: `8`)
 - `ORGOPS_OPSCLI_MIN_RECENT_MESSAGES` (default: `12`)
 - `ORGOPS_OPSCLI_MAX_SYSTEM_DOC_CHARS` (default: `40000`)
+- `ORGOPS_OPSCLI_DEBUG` (default: unset/`0`; set to `1` to show internal REPL step code/results)
+- `ORGOPS_OPSCLI_SPINNER` (default: enabled; set to `0`, `false`, `off`, or `no` to disable thinking/execution spinner)
+- `ORGOPS_OPSCLI_LOG_PATH` (default: `.opscli-output.log` in current working directory; reset on each new session start)
 - `ORGOPS_EXTRACTED_ROOT` (auto-managed by OpsCLI; persisted extracted OrgOps path)
+
+If no API keys are configured, OpsCLI prompts on startup to choose OpenAI or Claude and saves the selected key to local `.env`.
+
+During an active autonomous run, press `Ctrl+C` to interrupt the current run and return to the `You>` prompt without exiting OpsCLI.

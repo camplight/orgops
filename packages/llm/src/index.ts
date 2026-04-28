@@ -1,5 +1,6 @@
 import { generateText } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
+import { createAnthropic } from "@ai-sdk/anthropic";
 
 export type LlmMessage = {
   role: "system" | "user" | "assistant";
@@ -11,6 +12,7 @@ export type GenerateOptions = {
   maxTokens?: number;
   maxSteps?: number;
   tools?: Record<string, LlmTool>;
+  abortSignal?: AbortSignal;
   /** Env vars for API keys etc.; overrides process.env when set. Used by runner to inject package secrets. */
   env?: Record<string, string | undefined>;
   /** Optional hook called between model steps to append fresh messages. */
@@ -30,6 +32,16 @@ export type LlmTool = {
   execute?: (args: any) => Promise<unknown> | unknown;
 };
 
+export function isOpenAICompletionModel(modelName: string) {
+  return /(codex|instruct)/i.test(modelName);
+}
+
+function normalizeProvider(provider: string) {
+  const normalized = provider.trim().toLowerCase();
+  if (normalized === "claude") return "anthropic";
+  return normalized;
+}
+
 export async function generate(
   modelId: string,
   messages: LlmMessage[],
@@ -43,19 +55,41 @@ export async function generate(
     return { text: "LLM stub response.", toolCalls: [], toolResults: [] };
   }
 
-  const [provider, modelName] = modelId.split(":");
-  if (provider !== "openai") {
-    throw new Error(`Unsupported provider: ${provider}`);
+  const [rawProvider, modelName] = modelId.split(":");
+  if (!rawProvider || !modelName) {
+    throw new Error(`Invalid modelId format: ${modelId}. Expected "provider:model".`);
+  }
+  const provider = normalizeProvider(rawProvider);
+
+  let model: any;
+  if (provider === "openai") {
+    const openai = createOpenAI({ apiKey: env.OPENAI_API_KEY });
+    const useCompletionModel = isOpenAICompletionModel(modelName);
+    if (
+      useCompletionModel &&
+      options.tools &&
+      Object.keys(options.tools).length > 0
+    ) {
+      throw new Error(
+        `OpenAI completion model "${modelName}" does not support tools in this runtime. Use a chat model (e.g. gpt-4o-mini) when passing tools.`,
+      );
+    }
+    model = useCompletionModel ? openai.completion(modelName) : openai.chat(modelName);
+  } else if (provider === "anthropic") {
+    const anthropic = createAnthropic({ apiKey: env.ANTHROPIC_API_KEY });
+    model = anthropic(modelName);
+  } else {
+    throw new Error(`Unsupported provider: ${rawProvider}`);
   }
 
-  const openai = createOpenAI({ apiKey: env.OPENAI_API_KEY });
   const result = await generateText({
-    model: openai(modelName),
+    model,
     messages,
     temperature: options.temperature,
     maxTokens: options.maxTokens,
     maxSteps: options.maxSteps,
     tools: options.tools as Record<string, any> | undefined,
+    abortSignal: options.abortSignal,
   });
   return {
     text: result.text,
