@@ -6,7 +6,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { hostname } from "node:os";
 import { PassThrough } from "node:stream";
 import * as repl from "node:repl";
@@ -20,6 +20,7 @@ import { generate, type LlmMessage } from "@orgops/llm";
 type ShellResult = {
   exitCode: number | null;
   timedOut: boolean;
+  aborted: boolean;
   stdout: string;
   stderr: string;
   durationMs: number;
@@ -28,6 +29,8 @@ type ShellResult = {
 type SessionRunHooks = {
   appendObservation: (type: string, payload: Record<string, unknown>) => void;
   requestUserInput: (promptText: string) => Promise<string>;
+  reportProgress?: (type: string, payload: Record<string, unknown>) => void;
+  getAbortSignal?: () => AbortSignal | undefined;
 };
 
 type RlmSession = {
@@ -69,6 +72,11 @@ const MAX_SYSTEM_DOC_CHARS = Number(
 const DEBUG_REPL_TRACE =
   process.env.ORGOPS_OPSCLI_DEBUG === "1" ||
   process.env.ORGOPS_OPSCLI_DEBUG?.toLowerCase() === "true";
+const PROGRESS_ENABLED = (() => {
+  const raw = process.env.ORGOPS_OPSCLI_PROGRESS?.trim().toLowerCase();
+  if (!raw) return true;
+  return !["0", "false", "off", "no"].includes(raw);
+})();
 const SPINNER_ENABLED = (() => {
   const raw = process.env.ORGOPS_OPSCLI_SPINNER?.trim().toLowerCase();
   if (!raw) return true;
@@ -78,6 +86,7 @@ const SESSION_LOG_PATH = resolve(
   process.cwd(),
   process.env.ORGOPS_OPSCLI_LOG_PATH ?? ".opscli-output.log"
 );
+const DOUBLE_SIGINT_WINDOW_MS = Number(process.env.ORGOPS_OPSCLI_DOUBLE_SIGINT_MS ?? 1200);
 const ANSI_ENABLED = stdout.isTTY && process.env.NO_COLOR !== "1";
 
 const ANSI = {
@@ -122,6 +131,55 @@ function writeRoleMessage(
     return;
   }
   stdout.write(output);
+}
+
+function reportProgress(message: string, options?: { leadingNewline?: boolean }) {
+  if (!PROGRESS_ENABLED) return;
+  writeRoleMessage("muted", `progress: ${message}`, options);
+}
+
+function renderObservationProgress(type: string, payload: Record<string, unknown>) {
+  if (!PROGRESS_ENABLED) return;
+  if (type === "opscli.repl.shell.start") {
+    const command = typeof payload.command === "string" ? payload.command : "";
+    const short = truncateText(command.replace(/\s+/g, " ").trim(), 180).text;
+    reportProgress(`shell start: ${short}`);
+    return;
+  }
+  if (type === "opscli.repl.shell.done") {
+    const command = typeof payload.command === "string" ? payload.command : "";
+    const short = truncateText(command.replace(/\s+/g, " ").trim(), 120).text;
+    const exitCode =
+      typeof payload.exitCode === "number" && Number.isFinite(payload.exitCode)
+        ? payload.exitCode
+        : "unknown";
+    const aborted = payload.aborted === true;
+    const durationMs =
+      typeof payload.durationMs === "number" && Number.isFinite(payload.durationMs)
+        ? payload.durationMs
+        : 0;
+    reportProgress(
+      `shell done: exit=${exitCode} aborted=${aborted ? "yes" : "no"} duration=${durationMs}ms command=${short}`
+    );
+    return;
+  }
+  if (type === "opscli.stdin.input") {
+    const question =
+      typeof payload.question === "string" ? payload.question : "Awaiting user input";
+    reportProgress(`agent requested input: ${question}`);
+    return;
+  }
+  if (type === "opscli.repl.finish") {
+    reportProgress("agent called finish()");
+    return;
+  }
+  if (type === "opscli.repl.exit") {
+    const code =
+      typeof payload.code === "number" && Number.isFinite(payload.code)
+        ? payload.code
+        : 0;
+    reportProgress(`agent called exit(${code})`);
+  }
 }
 
 function getModelId() {
@@ -293,6 +351,20 @@ function loadBundledDocsText() {
   const docs = readFileSync(docsPath, "utf-8").trim();
   if (!docs) return "";
   return truncateText(docs, MAX_SYSTEM_DOC_CHARS).text;
+}
+
+function loadBuildTimestamp() {
+  const buildInfoPath = getRuntimeAssetPath("opscli-build-info.json");
+  if (!existsSync(buildInfoPath)) return null;
+  try {
+    const raw = readFileSync(buildInfoPath, "utf-8");
+    const parsed = JSON.parse(raw) as { builtAt?: string };
+    return typeof parsed.builtAt === "string" && parsed.builtAt.trim()
+      ? parsed.builtAt
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function getBundledArchivePath() {
@@ -477,6 +549,13 @@ type SpinnerControls = {
   stop: (doneLabel?: string) => void;
 };
 
+let stopActiveSpinner: (() => void) | null = null;
+
+function forceStopSpinner() {
+  stopActiveSpinner?.();
+  stopActiveSpinner = null;
+}
+
 function startSpinner(label: string): SpinnerControls {
   if (DEBUG_REPL_TRACE || !stdout.isTTY || !SPINNER_ENABLED) {
     return { stop: () => {} };
@@ -495,13 +574,18 @@ function startSpinner(label: string): SpinnerControls {
     render();
     interval = setInterval(render, 100);
   }, 200);
+  const stop = (doneLabel?: string) => {
+    clearTimeout(delay);
+    if (interval) clearInterval(interval);
+    if (!hasRendered) return;
+    const finalLabel = doneLabel ? `${doneLabel}   ` : `${label} done.   `;
+    stdout.write(`\r${rolePrefix("muted")} ${finalLabel}\n`);
+  };
+  stopActiveSpinner = () => stop();
   return {
     stop: (doneLabel?: string) => {
-      clearTimeout(delay);
-      if (interval) clearInterval(interval);
-      if (!hasRendered) return;
-      const finalLabel = doneLabel ? `${doneLabel}   ` : `${label} done.   `;
-      stdout.write(`\r${rolePrefix("muted")} ${finalLabel}\n`);
+      stop(doneLabel);
+      if (stopActiveSpinner) stopActiveSpinner = null;
     },
   };
 }
@@ -577,7 +661,11 @@ function appendHistoryMessage(memory: SessionMemory, message: LlmMessage) {
   enforceMemoryBudget(memory);
 }
 
-async function runShell(command: string, timeoutMs: number): Promise<ShellResult> {
+async function runShell(
+  command: string,
+  timeoutMs: number,
+  abortSignal?: AbortSignal
+): Promise<ShellResult> {
   const startedAt = Date.now();
   return new Promise((resolve) => {
     const child = spawn(command, {
@@ -588,11 +676,41 @@ async function runShell(command: string, timeoutMs: number): Promise<ShellResult
     let out = "";
     let err = "";
     let timedOut = false;
+    let aborted = false;
+    let settled = false;
+    const finish = (exitCode: number | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (abortSignal && abortHandler) {
+        abortSignal.removeEventListener("abort", abortHandler);
+      }
+      resolve({
+        exitCode,
+        timedOut,
+        aborted,
+        stdout: out,
+        stderr: err,
+        durationMs: Date.now() - startedAt,
+      });
+    };
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill("SIGTERM");
       setTimeout(() => child.kill("SIGKILL"), 500).unref();
     }, timeoutMs);
+    const abortHandler = () => {
+      aborted = true;
+      child.kill("SIGTERM");
+      setTimeout(() => child.kill("SIGKILL"), 500).unref();
+    };
+    if (abortSignal) {
+      if (abortSignal.aborted) {
+        abortHandler();
+      } else {
+        abortSignal.addEventListener("abort", abortHandler, { once: true });
+      }
+    }
     child.stdout.on("data", (chunk) => {
       out += String(chunk);
       if (out.length > MAX_OUTPUT_CHARS) out = out.slice(-MAX_OUTPUT_CHARS);
@@ -601,38 +719,8 @@ async function runShell(command: string, timeoutMs: number): Promise<ShellResult
       err += String(chunk);
       if (err.length > MAX_OUTPUT_CHARS) err = err.slice(-MAX_OUTPUT_CHARS);
     });
-    child.on("close", (exitCode) => {
-      clearTimeout(timer);
-      resolve({
-        exitCode,
-        timedOut,
-        stdout: out,
-        stderr: err,
-        durationMs: Date.now() - startedAt,
-      });
-    });
+    child.on("close", (exitCode) => finish(exitCode));
   });
-}
-
-function runShellSync(command: string, timeoutMs: number): ShellResult {
-  const startedAt = Date.now();
-  const result = spawnSync(command, {
-    cwd: process.cwd(),
-    env: process.env,
-    shell: true,
-    timeout: timeoutMs,
-    killSignal: "SIGTERM",
-    encoding: "utf-8",
-    maxBuffer: 16 * 1024 * 1024,
-  });
-  const error = result.error as NodeJS.ErrnoException | undefined;
-  return {
-    exitCode: typeof result.status === "number" ? result.status : null,
-    timedOut: error?.code === "ETIMEDOUT",
-    stdout: result.stdout ?? "",
-    stderr: result.stderr ?? (error?.message ?? ""),
-    durationMs: Date.now() - startedAt,
-  };
 }
 
 function buildSystemPrompt() {
@@ -646,7 +734,8 @@ function buildSystemPrompt() {
     "Do NOT return JSON and do NOT wrap in markdown fences.",
     "Use shell(command) to execute host commands.",
     "shell(command) accepts exactly one string argument. Do NOT pass callbacks or extra args.",
-    "shell(command) is blocking and returns stdout as a string.",
+    "shell(command) is async and returns stdout as a string.",
+    "Always use `await shell(...)`.",
     "shell(command) throws on timeout or non-zero exit; use try/catch when needed.",
     "Use print(...args) to write output to stdout.",
     "Use input(question) to ask the user for stdin input.",
@@ -655,6 +744,9 @@ function buildSystemPrompt() {
     "Use exit(code) to finish and request process termination.",
     "Use extractOrgOps(options?) to extract bundled OrgOps source to disk.",
     "Use setupOrgOps(options?) to extract + install deps + configure selected components.",
+    "extractOrgOps(...) and setupOrgOps(...) are async. Always call them with `await`.",
+    "When extracting, always store the awaited path: `const extractedRoot = await extractOrgOps();` and reuse that path for later commands.",
+    "If user asks to refresh/re-extract/update bundle contents, call `await extractOrgOps({ force: true })`.",
     "Use getBundledDocs() when you need OrgOps architecture/deployment details.",
     "Default extraction location is `./orgops` in current working directory.",
     "Remember and reuse extracted path from `.env` key `ORGOPS_EXTRACTED_ROOT` on next sessions.",
@@ -668,6 +760,8 @@ function buildSystemPrompt() {
     "Always run OrgOps workspace commands from extracted root (e.g. `cd \"<extractedRoot>\" && npm run ...`).",
     "For long-running services (api/ui/runner), do NOT start with plain `npm run ...` via shell because it blocks the REPL loop.",
     "Use PM2 start/stop/restart/logs/status commands for service lifecycle instead of foreground npm starts.",
+    "When starting npm-based services with PM2, wrap the full command string: `pm2 start \"npm run --workspace @orgops/api dev\" --name orgops-api`.",
+    "Example PM2 starts: `pm2 start \"npm run --workspace @orgops/agent-runner dev\" --name orgops-runner` and `pm2 start \"npm run --workspace @orgops/ui dev -- --host 0.0.0.0 --port 5173\" --name orgops-ui`.",
     "After PM2 starts services, verify with `pm2 status` and print URLs/health checks.",
     "For keep-running-after-restart, use PM2 persistence commands (`pm2 save` + `pm2 startup`) and report any manual step output.",
     "Use stable PM2 names: `orgops-api`, `orgops-runner`, `orgops-ui` for start/stop/restart/log/status operations.",
@@ -705,7 +799,6 @@ function createSession(): RlmSession {
     clearTimeout,
     setInterval,
     clearInterval,
-    fetch,
   });
   const session: RlmSession = {
     replServer,
@@ -718,44 +811,61 @@ function createSession(): RlmSession {
   };
   const appendObservation = (type: string, payload: Record<string, unknown>) => {
     session.runHooks?.appendObservation(type, payload);
+    session.runHooks?.reportProgress?.(type, payload);
   };
   Object.assign(context, {
     shell: (command: string) => {
-      const result = runShellSync(command, COMMAND_TIMEOUT_MS);
-      appendSessionLog(
-        `shell command=${JSON.stringify(command)} exit=${result.exitCode} timeout=${result.timedOut} durationMs=${result.durationMs}`
-      );
-      if (result.stdout.trim()) {
-        appendSessionLog(`shell stdout=${JSON.stringify(truncateText(result.stdout, 4000).text)}`);
-      }
-      if (result.stderr.trim()) {
-        appendSessionLog(`shell stderr=${JSON.stringify(truncateText(result.stderr, 4000).text)}`);
-      }
-      appendObservation("opscli.repl.shell", {
-        command,
-        exitCode: result.exitCode,
-        timedOut: result.timedOut,
-        stdout: truncateText(result.stdout, 4_000).text,
-        stderr: truncateText(result.stderr, 4_000).text,
-        durationMs: result.durationMs,
-      });
-      if (result.timedOut) {
-        throw new Error(
-          `Command timed out after ${COMMAND_TIMEOUT_MS}ms: ${command}\n${truncateText(
-            result.stderr || result.stdout,
-            2_000
-          ).text}`
+      return (async () => {
+        const signal = session.runHooks?.getAbortSignal?.();
+        throwIfInterrupted(signal);
+        appendObservation("opscli.repl.shell.start", { command });
+        const result = await runShell(command, COMMAND_TIMEOUT_MS, signal);
+        appendSessionLog(
+          `shell command=${JSON.stringify(command)} exit=${result.exitCode} timeout=${result.timedOut} aborted=${result.aborted} durationMs=${result.durationMs}`
         );
-      }
-      if (result.exitCode !== 0) {
-        throw new Error(
-          `Command failed (exit ${result.exitCode}): ${command}\n${truncateText(
-            result.stderr || result.stdout,
-            2_000
-          ).text}`
-        );
-      }
-      return result.stdout;
+        if (result.stdout.trim()) {
+          appendSessionLog(`shell stdout=${JSON.stringify(truncateText(result.stdout, 4000).text)}`);
+        }
+        if (result.stderr.trim()) {
+          appendSessionLog(`shell stderr=${JSON.stringify(truncateText(result.stderr, 4000).text)}`);
+        }
+        appendObservation("opscli.repl.shell", {
+          command,
+          exitCode: result.exitCode,
+          timedOut: result.timedOut,
+          aborted: result.aborted,
+          stdout: truncateText(result.stdout, 4_000).text,
+          stderr: truncateText(result.stderr, 4_000).text,
+          durationMs: result.durationMs,
+        });
+        appendObservation("opscli.repl.shell.done", {
+          command,
+          exitCode: result.exitCode,
+          timedOut: result.timedOut,
+          aborted: result.aborted,
+          durationMs: result.durationMs,
+        });
+        if (result.aborted || signal?.aborted) {
+          throw new TaskInterruptedError();
+        }
+        if (result.timedOut) {
+          throw new Error(
+            `Command timed out after ${COMMAND_TIMEOUT_MS}ms: ${command}\n${truncateText(
+              result.stderr || result.stdout,
+              2_000
+            ).text}`
+          );
+        }
+        if (result.exitCode !== 0) {
+          throw new Error(
+            `Command failed (exit ${result.exitCode}): ${command}\n${truncateText(
+              result.stderr || result.stdout,
+              2_000
+            ).text}`
+          );
+        }
+        return result.stdout;
+      })();
     },
     print: (...args: unknown[]) => {
       const text = args.map((arg) => formatPrintArg(arg)).join(" ");
@@ -912,11 +1022,16 @@ async function runAutonomousTask(
       });
     },
     requestUserInput,
+    reportProgress: (type, payload) => renderObservationProgress(type, payload),
+    getAbortSignal: () => abortSignal,
   };
 
   const modelId = getModelId();
   for (let step = 1; step <= MAX_STEPS; step += 1) {
     throwIfInterrupted(abortSignal);
+    reportProgress(`step ${step}/${MAX_STEPS}: preparing model input`, {
+      leadingNewline: step === 1,
+    });
     const modelMessages: LlmMessage[] = [{ role: "system", content: buildSystemPrompt() }];
     if (memory.summary.trim()) {
       modelMessages.push({
@@ -941,14 +1056,17 @@ async function runAutonomousTask(
 
     let result: Awaited<ReturnType<typeof generate>>;
     try {
+      reportProgress(`step ${step}/${MAX_STEPS}: waiting for model reply`);
       const thinkingSpinner = startSpinner("Thinking");
       result = await generate(modelId, modelMessages, {
         maxSteps: 1,
         abortSignal,
       }).finally(() => thinkingSpinner.stop("Thought ready."));
+      reportProgress(`step ${step}/${MAX_STEPS}: model reply received`);
     } catch (error) {
       if (error instanceof TaskInterruptedError || isAbortError(error)) {
         appendSessionLog(`step=${step} interrupted during thinking`);
+        forceStopSpinner();
         writeRoleMessage("opscli", "Interrupted current run. You can now ask follow-ups or retry.", {
           leadingNewline: true,
         });
@@ -979,10 +1097,12 @@ async function runAutonomousTask(
     appendHistoryMessage(memory, { role: "assistant", content: code });
 
     try {
+      reportProgress(`step ${step}/${MAX_STEPS}: running REPL plan`);
       const executeSpinner = startSpinner("Running plan");
       const outputText = await evaluateInput(session, code, abortSignal).finally(() =>
         executeSpinner.stop("Plan run complete.")
       );
+      reportProgress(`step ${step}/${MAX_STEPS}: REPL plan finished`);
       appendSessionLog(`step=${step} result=${JSON.stringify(outputText)}`);
       if (DEBUG_REPL_TRACE) {
         console.log(`result:\n${outputText}`);
@@ -1002,6 +1122,7 @@ async function runAutonomousTask(
     } catch (error) {
       if (error instanceof TaskInterruptedError || isAbortError(error)) {
         appendSessionLog(`step=${step} interrupted`);
+        forceStopSpinner();
         writeRoleMessage("opscli", "Interrupted current run. You can now ask follow-ups or retry.", {
           leadingNewline: true,
         });
@@ -1033,6 +1154,7 @@ async function runAutonomousTask(
     }
 
     if (session.exited) {
+      forceStopSpinner();
       writeRoleMessage("opscli", `agent requested exit(${session.exitCode}).`, {
         leadingNewline: true,
       });
@@ -1041,12 +1163,14 @@ async function runAutonomousTask(
     }
 
     if (session.turnDone) {
+      forceStopSpinner();
       session.runHooks = null;
       return { requestedExit: false, exitCode: 0 };
     }
   }
 
   session.runHooks = null;
+  forceStopSpinner();
   writeRoleMessage("opscli", `Stopped after ${MAX_STEPS} steps without exit(code).`, {
     leadingNewline: true,
   });
@@ -1140,6 +1264,10 @@ async function main() {
   resetSessionLog();
   appendSessionLog("main initialized");
   writeRoleMessage("opscli", "OrgOps OpsCLI ready.");
+  const buildTimestamp = loadBuildTimestamp();
+  if (buildTimestamp) {
+    writeRoleMessage("opscli", `Build timestamp (UTC): ${buildTimestamp}`);
+  }
   writeRoleMessage("opscli", `OpsCLI session log: ${SESSION_LOG_PATH}`);
   let rl = createInterface({ input: stdin, output: stdout });
   const hasCredentials = await ensureModelCredentials(rl, rootEnvPath);
@@ -1151,18 +1279,43 @@ async function main() {
   const session = createSession();
   writeRoleMessage("opscli", "Type a maintenance goal (can be empty), or 'exit' to quit.");
   let activeTaskAbortController: AbortController | null = null;
+  let lastSigintAt = 0;
   const onSigint = () => {
+    const now = Date.now();
+    const isDoubleSigint = now - lastSigintAt <= DOUBLE_SIGINT_WINDOW_MS;
+    lastSigintAt = now;
+    if (isDoubleSigint) {
+      appendSessionLog("sigint received twice: exiting process");
+      if (activeTaskAbortController && !activeTaskAbortController.signal.aborted) {
+        activeTaskAbortController.abort();
+      }
+      forceStopSpinner();
+      writeRoleMessage("opscli", "Second Ctrl+C detected. Exiting OpsCLI.", {
+        leadingNewline: true,
+      });
+      process.exit(130);
+    }
     if (activeTaskAbortController && !activeTaskAbortController.signal.aborted) {
       appendSessionLog("sigint received: interrupting active run");
       activeTaskAbortController.abort();
-      writeRoleMessage("opscli", "Interrupt requested. Stopping current run...", {
-        leadingNewline: true,
-      });
+      forceStopSpinner();
+      writeRoleMessage(
+        "opscli",
+        "Interrupt requested. Stopping current run... (press Ctrl+C again quickly to exit)",
+        {
+          leadingNewline: true,
+        }
+      );
       return;
     }
-    writeRoleMessage("opscli", "No active run to interrupt. Type 'exit' to quit.", {
-      leadingNewline: true,
-    });
+    forceStopSpinner();
+    writeRoleMessage(
+      "opscli",
+      "No active run to interrupt. Press Ctrl+C again quickly to exit (or type 'exit').",
+      {
+        leadingNewline: true,
+      }
+    );
   };
   rl.on("SIGINT", onSigint);
   try {

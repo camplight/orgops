@@ -1,4 +1,3 @@
-# tavily
 ---
 name: tavily
 description: "Install and use Tavily CLI (tvly) for web search/extract/crawl. Uses secret/env TAVILY_API_KEY."

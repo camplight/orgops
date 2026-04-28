@@ -14,6 +14,7 @@ const SNAPSHOT_DIR = resolve(TMP_ROOT, "snapshot");
 const ASSET_DIR = resolve(SNAPSHOT_DIR, "assets");
 const ORGOPS_BUNDLE_NAME = "orgops-bundle.tar.gz";
 const DOCS_BUNDLE_NAME = "orgops-system-docs.md";
+const BUILD_INFO_NAME = "opscli-build-info.json";
 
 function runCommand(command: string, args: string[]) {
   const result = spawnSync(command, args, {
@@ -50,6 +51,7 @@ function stageOrgOpsSource() {
     "apps/ui",
     "packages",
     "docs",
+    "skills",
     "README.md",
     "package.json",
     "package-lock.json",
@@ -101,6 +103,18 @@ async function buildReleaseExecutable() {
     ["orgops"]
   );
   writeFileSync(resolve(ASSET_DIR, DOCS_BUNDLE_NAME), buildDocsBundle(), "utf-8");
+  writeFileSync(
+    resolve(ASSET_DIR, BUILD_INFO_NAME),
+    JSON.stringify(
+      {
+        builtAt: new Date().toISOString(),
+        target: process.env.ORGOPS_OPSCLI_PKG_TARGET || targetForCurrentPlatform(),
+      },
+      null,
+      2
+    ),
+    "utf-8"
+  );
 
   const entryFile = resolve(OPSCLI_ROOT, "src/index.ts");
   const bundledEntryFile = resolve(SNAPSHOT_DIR, "opscli.cjs");

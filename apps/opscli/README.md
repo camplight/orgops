@@ -7,7 +7,7 @@
 - LLM emits one JS snippet per step; runtime evaluates it in REPL context
 - REPL helpers include `shell(command)`, `print(...args)`, `input(question)`, and `exit(code)`
 - Session history is context-capped with rolling summarization
-- Bundled release executable can extract/setup `api`, `agent-runner`, and `ui`
+- Bundled release executable can extract/setup `api`, `agent-runner`, and `ui` (including bundled `docs/` and `skills/`)
 
 ## Run
 
@@ -22,6 +22,7 @@ npm run --workspace @orgops/opscli build:release
 ```
 
 This creates `dist/opscli-*` for the current platform. Release workflow builds all 3 platforms.
+The built binary embeds its build timestamp and prints it on startup.
 
 ## macOS downloaded binary notes
 
@@ -59,9 +60,11 @@ OpsCLI persists the extracted root in local `.env` as `ORGOPS_EXTRACTED_ROOT` an
 - `ORGOPS_OPSCLI_MAX_SYSTEM_DOC_CHARS` (default: `40000`)
 - `ORGOPS_OPSCLI_DEBUG` (default: unset/`0`; set to `1` to show internal REPL step code/results)
 - `ORGOPS_OPSCLI_SPINNER` (default: enabled; set to `0`, `false`, `off`, or `no` to disable thinking/execution spinner)
+- `ORGOPS_OPSCLI_PROGRESS` (default: enabled; set to `0`, `false`, `off`, or `no` to disable live step/repl progress events)
 - `ORGOPS_OPSCLI_LOG_PATH` (default: `.opscli-output.log` in current working directory; reset on each new session start)
 - `ORGOPS_EXTRACTED_ROOT` (auto-managed by OpsCLI; persisted extracted OrgOps path)
 
 If no API keys are configured, OpsCLI prompts on startup to choose OpenAI or Claude and saves the selected key to local `.env`.
 
 During an active autonomous run, press `Ctrl+C` to interrupt the current run and return to the `You>` prompt without exiting OpsCLI.
+Press `Ctrl+C` twice quickly to exit OpsCLI immediately.

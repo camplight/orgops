@@ -19,5 +19,8 @@ describe("buildRunnerGuidance", () => {
     expect(guidance).toContain("- hostname: my-macbook");
     expect(guidance).toContain("- shell: /bin/zsh");
     expect(guidance).toContain("- nodeVersion: v22.15.0");
+    expect(guidance).toContain(
+      "SKILL.md` must start with YAML frontmatter at the very first line (`---` as the first bytes in the file).",
+    );
   });
 });
