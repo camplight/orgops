@@ -9,6 +9,7 @@ type SidebarProps = {
 const NAV_ITEMS: { screen: Screen; label: string }[] = [
   { screen: "dashboard", label: "Dashboard" },
   { screen: "agents", label: "Agents" },
+  { screen: "runners", label: "Runners" },
   { screen: "teams", label: "Teams" },
   { screen: "channels", label: "Channels" },
   { screen: "chat", label: "Chat" },

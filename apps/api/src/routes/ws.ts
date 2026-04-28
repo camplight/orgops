@@ -12,6 +12,7 @@ export type WsServerMessage =
   | { type: "event"; topic: string; data: unknown }
   | { type: "process_output"; topic: string; data: unknown }
   | { type: "agent_status"; topic: string; data: unknown }
+  | { type: "dashboard_refresh"; topic: string; data: unknown }
   | { type: "error"; message: string };
 
 type WsDeps = {

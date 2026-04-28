@@ -2,6 +2,7 @@ import type { Hono } from "hono";
 import { asc, eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { schema, type OrgOpsDrizzleDb } from "@orgops/db";
+import type { EventBus } from "@orgops/event-bus";
 
 type RunnerRecord = {
   id: string;
@@ -18,8 +19,10 @@ type RunnerRecord = {
 
 type RunnersDeps = {
   orm: OrgOpsDrizzleDb;
+  bus: EventBus<any>;
   jsonResponse: (c: any, data: unknown, status?: number) => Response;
   requireRunnerAuth: (c: any, next: any) => Response | Promise<Response>;
+  runnerToken: string;
 };
 
 function parseMetadataSafe(input: string | null | undefined): Record<string, unknown> {
@@ -54,10 +57,20 @@ function toApiRunner(row: RunnerRecord, onlineThresholdMs: number) {
 }
 
 export function registerRunnersRoutes(app: Hono<any>, deps: RunnersDeps) {
-  const { orm, jsonResponse, requireRunnerAuth } = deps;
+  const { orm, bus, jsonResponse, requireRunnerAuth, runnerToken } = deps;
   const ONLINE_THRESHOLD_MS = Number(
     process.env.ORGOPS_RUNNER_ONLINE_THRESHOLD_MS ?? 15_000
   );
+  const publishDashboardRefresh = (reason: string, meta?: Record<string, unknown>) => {
+    bus.publish("org:dashboard", {
+      type: "dashboard_refresh",
+      topic: "org:dashboard",
+      data: {
+        reason,
+        ...(meta ?? {})
+      }
+    });
+  };
 
   app.get("/api/runners", (c) => {
     const rows = orm
@@ -69,6 +82,14 @@ export function registerRunnersRoutes(app: Hono<any>, deps: RunnersDeps) {
       c,
       rows.map((row) => toApiRunner(row, ONLINE_THRESHOLD_MS))
     );
+  });
+
+  app.get("/api/runners/setup-config", (c) => {
+    const user = (c as any).get("user") as { username?: string } | undefined;
+    if (!user?.username || user.username === "runner") {
+      return jsonResponse(c, { error: "Authenticated human user required" }, 401);
+    }
+    return jsonResponse(c, { runnerToken });
   });
 
   app.post("/api/runners/register", requireRunnerAuth, async (c) => {
@@ -146,6 +167,7 @@ export function registerRunnersRoutes(app: Hono<any>, deps: RunnersDeps) {
     if (!row) {
       return jsonResponse(c, { error: "Failed to register runner" }, 500);
     }
+    publishDashboardRefresh("runner.registered", { runnerId });
     return jsonResponse(c, { runner: toApiRunner(row, ONLINE_THRESHOLD_MS) }, 201);
   });
 
@@ -168,6 +190,42 @@ export function registerRunnersRoutes(app: Hono<any>, deps: RunnersDeps) {
       })
       .where(eq(schema.runnerNodes.id, runnerId))
       .run();
+    publishDashboardRefresh("runner.heartbeat", { runnerId });
     return jsonResponse(c, { ok: true });
+  });
+
+  app.delete("/api/runners/:id", (c) => {
+    const runnerId = c.req.param("id");
+    const row = orm
+      .select()
+      .from(schema.runnerNodes)
+      .where(eq(schema.runnerNodes.id, runnerId))
+      .get() as RunnerRecord | undefined;
+    if (!row) {
+      return jsonResponse(c, { error: "Runner not found" }, 404);
+    }
+
+    const assignedAgents = orm
+      .select({ name: schema.agents.name })
+      .from(schema.agents)
+      .where(eq(schema.agents.assigned_runner_id, runnerId))
+      .all() as Array<{ name: string }>;
+
+    orm
+      .update(schema.agents)
+      .set({
+        assigned_runner_id: null,
+        updated_at: Date.now()
+      })
+      .where(eq(schema.agents.assigned_runner_id, runnerId))
+      .run();
+
+    orm.delete(schema.runnerNodes).where(eq(schema.runnerNodes.id, runnerId)).run();
+    publishDashboardRefresh("runner.deregistered", { runnerId });
+
+    return jsonResponse(c, {
+      ok: true,
+      unassignedAgents: assignedAgents.map((agent) => agent.name)
+    });
   });
 }

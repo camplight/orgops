@@ -1,4 +1,14 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import {
+  memo,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type AnchorHTMLAttributes,
+  type HTMLAttributes,
+  type KeyboardEvent,
+  type ReactNode
+} from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { EventRow } from "../types";
@@ -22,6 +32,48 @@ type ChatScreenProps = {
   onMessageTextChange: (value: string) => void;
   onSendMessage: () => Promise<void>;
   onClearMessages: () => Promise<void>;
+};
+
+const CHAT_WINDOW_SIZE = 250;
+
+const MARKDOWN_COMPONENTS = {
+  p: ({ children }: { children?: ReactNode }) => (
+    <p className="mb-2 leading-relaxed last:mb-0">{children}</p>
+  ),
+  a: ({ children, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) => (
+    <a
+      {...props}
+      className="text-sky-400 underline hover:text-sky-300"
+      target="_blank"
+      rel="noreferrer"
+    >
+      {children}
+    </a>
+  ),
+  pre: ({ children }: { children?: ReactNode }) => (
+    <pre className="mb-2 overflow-x-auto rounded-lg border border-slate-700 bg-slate-950 p-2 text-slate-100 last:mb-0">
+      {children}
+    </pre>
+  ),
+  code: ({ children, ...props }: HTMLAttributes<HTMLElement>) => (
+    <code
+      {...props}
+      className="rounded bg-slate-800/90 px-1 py-0.5 text-slate-100"
+    >
+      {children}
+    </code>
+  ),
+  ul: ({ children }: { children?: ReactNode }) => (
+    <ul className="mb-2 list-disc space-y-1 pl-5 last:mb-0">{children}</ul>
+  ),
+  ol: ({ children }: { children?: ReactNode }) => (
+    <ol className="mb-2 list-decimal space-y-1 pl-5 last:mb-0">{children}</ol>
+  ),
+  blockquote: ({ children }: { children?: ReactNode }) => (
+    <blockquote className="mb-2 border-l-2 border-slate-600 pl-3 text-slate-400 last:mb-0">
+      {children}
+    </blockquote>
+  )
 };
 
 function getAgentNameFromSource(source: string | undefined) {
@@ -251,6 +303,28 @@ function ContextRing({
   );
 }
 
+function hasSelectionInside(container: HTMLElement | null) {
+  if (!container) return false;
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return false;
+  const anchorNode = selection.anchorNode;
+  const focusNode = selection.focusNode;
+  return Boolean(
+    (anchorNode && container.contains(anchorNode)) || (focusNode && container.contains(focusNode))
+  );
+}
+
+const MessageMarkdown = memo(function MessageMarkdown({ text }: { text: string }) {
+  return (
+    <Markdown
+      remarkPlugins={[remarkGfm]}
+      components={MARKDOWN_COMPONENTS}
+    >
+      {text}
+    </Markdown>
+  );
+});
+
 export function ChatScreen({
   targetOptions,
   activeChannelId,
@@ -366,12 +440,19 @@ export function ChatScreen({
     return [...latestByAgent.values()].sort((left, right) => right.updatedAt - left.updatedAt);
   }, [events]);
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
+  const isPinnedToBottomRef = useRef(true);
   const [memoryDrawerOpen, setMemoryDrawerOpen] = useState(false);
   const [memoryLoading, setMemoryLoading] = useState(false);
   const [agentMemories, setAgentMemories] = useState<AgentMemory[]>([]);
   const [memoryReloadToken, setMemoryReloadToken] = useState(0);
+  const [visibleChatLineCount, setVisibleChatLineCount] = useState(CHAT_WINDOW_SIZE);
   const memoryCacheRef = useRef<Map<string, AgentMemory[]>>(new Map());
-  const lastChatLineId = chatLines[chatLines.length - 1]?.id ?? null;
+  const visibleChatLines = useMemo(() => {
+    if (chatLines.length <= visibleChatLineCount) return chatLines;
+    return chatLines.slice(chatLines.length - visibleChatLineCount);
+  }, [chatLines, visibleChatLineCount]);
+  const hiddenChatLineCount = chatLines.length - visibleChatLines.length;
+  const lastVisibleChatLineId = visibleChatLines[visibleChatLines.length - 1]?.id ?? null;
   const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key !== "Enter") return;
     if (!event.metaKey && !event.ctrlKey) return;
@@ -383,12 +464,18 @@ export function ChatScreen({
   };
 
   useEffect(() => {
+    setVisibleChatLineCount(CHAT_WINDOW_SIZE);
+    isPinnedToBottomRef.current = true;
+  }, [activeTargetId]);
+
+  useEffect(() => {
     if (!activeTargetId || !messagesContainerRef.current) {
       return;
     }
-
+    if (!isPinnedToBottomRef.current) return;
+    if (hasSelectionInside(messagesContainerRef.current)) return;
     messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
-  }, [activeTargetId, lastChatLineId, chatLines.length, typingIndicators.length]);
+  }, [activeTargetId, lastVisibleChatLineId, typingIndicators.length, visibleChatLines.length]);
 
   const memoryFetchKey = useMemo(() => {
     if (!activeChannelId || activeAgentNames.length === 0) return "";
@@ -496,8 +583,27 @@ export function ChatScreen({
             <div
               ref={messagesContainerRef}
               className="max-h-[34rem] space-y-3 overflow-auto rounded-xl border border-slate-800 bg-slate-950/70 p-3 text-sm chat-print-messages"
+              onScroll={(event) => {
+                const container = event.currentTarget;
+                const distanceFromBottom =
+                  container.scrollHeight - container.scrollTop - container.clientHeight;
+                isPinnedToBottomRef.current = distanceFromBottom < 48;
+              }}
             >
-              {chatLines.map((event) => {
+              {hiddenChatLineCount > 0 && (
+                <div className="sticky top-0 z-10 flex justify-center bg-slate-950/85 py-1 backdrop-blur">
+                  <Button
+                    variant="secondary"
+                    className="px-2 py-1 text-xs"
+                    onClick={() =>
+                      setVisibleChatLineCount((count) => Math.min(chatLines.length, count + CHAT_WINDOW_SIZE))
+                    }
+                  >
+                    Load older messages ({hiddenChatLineCount} hidden)
+                  </Button>
+                </div>
+              )}
+              {visibleChatLines.map((event) => {
                 if (event.type === "agent.turn.failed") {
                   return (
                     <div key={event.id} className="rounded-lg border border-rose-900/60 bg-rose-950/30 px-3 py-2">
@@ -515,7 +621,7 @@ export function ChatScreen({
                 return (
                   <div
                     key={event.id}
-                    className={`space-y-1 ${getMessageRole(event) === "human" ? "text-right" : "text-left"}`}
+                    className="space-y-1"
                   >
                     <div
                       className={`flex items-center gap-2 text-xs text-slate-400 ${
@@ -539,51 +645,8 @@ export function ChatScreen({
                               : "border-amber-700/50 bg-amber-950/30"
                         }`}
                       >
-                        <div className="text-slate-200">
-                          <Markdown
-                            remarkPlugins={[remarkGfm]}
-                            components={{
-                              p: ({ children }) => (
-                                <p className="mb-2 leading-relaxed last:mb-0">{children}</p>
-                              ),
-                              a: ({ children, ...props }) => (
-                                <a
-                                  {...props}
-                                  className="text-sky-400 underline hover:text-sky-300"
-                                  target="_blank"
-                                  rel="noreferrer"
-                                >
-                                  {children}
-                                </a>
-                              ),
-                              pre: ({ children }) => (
-                                <pre className="mb-2 overflow-x-auto rounded-lg border border-slate-700 bg-slate-950 p-2 text-slate-100 last:mb-0">
-                                  {children}
-                                </pre>
-                              ),
-                              code: ({ children, ...props }) => (
-                                <code
-                                  {...props}
-                                  className="rounded bg-slate-800/90 px-1 py-0.5 text-slate-100"
-                                >
-                                  {children}
-                                </code>
-                              ),
-                              ul: ({ children }) => (
-                                <ul className="mb-2 list-disc space-y-1 pl-5 last:mb-0">{children}</ul>
-                              ),
-                              ol: ({ children }) => (
-                                <ol className="mb-2 list-decimal space-y-1 pl-5 last:mb-0">{children}</ol>
-                              ),
-                              blockquote: ({ children }) => (
-                                <blockquote className="mb-2 border-l-2 border-slate-600 pl-3 text-slate-400 last:mb-0">
-                                  {children}
-                                </blockquote>
-                              )
-                            }}
-                          >
-                            {(event.payload as { text?: string })?.text ?? ""}
-                          </Markdown>
+                        <div className="text-left text-slate-200">
+                          <MessageMarkdown text={(event.payload as { text?: string })?.text ?? ""} />
                         </div>
                       </div>
                     </div>
@@ -599,7 +662,7 @@ export function ChatScreen({
                   is {toSentenceCase(indicator.status)}...
                 </div>
               ))}
-              {chatLines.length === 0 && (
+              {visibleChatLines.length === 0 && (
                 <div className="rounded-lg border border-dashed border-slate-700 bg-slate-900/40 px-4 py-8 text-center text-slate-500">
                   No messages yet. Send the first message to start the conversation.
                 </div>

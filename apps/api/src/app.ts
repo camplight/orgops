@@ -438,8 +438,10 @@ export function createApp(config: AppConfig = {}) {
 
   registerRunnersRoutes(app as any, {
     orm,
+    bus,
     jsonResponse,
     requireRunnerAuth,
+    runnerToken: RUNNER_TOKEN,
   });
 
   return { app, db, bus, injectWebSocket };

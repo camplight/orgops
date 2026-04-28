@@ -12,6 +12,7 @@ import {
   ChatScreen,
   EventsScreen,
   ProcessesScreen,
+  RunnersScreen,
   SkillsScreen,
   SecretsScreen,
   HumansScreen,
@@ -24,6 +25,7 @@ import type {
   Channel,
   EventRow,
   ProcessOutputRow,
+  RunnerSetupConfig,
   TeamMember
 } from "./types";
 
@@ -124,6 +126,7 @@ export default function App() {
   const [appliedEventFilters, setAppliedEventFilters] = useState(DEFAULT_EVENT_FILTERS);
   const processesRefreshTimerRef = useRef<number | null>(null);
   const dashboardEventsRefreshTimerRef = useRef<number | null>(null);
+  const dashboardDataRefreshTimerRef = useRef<number | null>(null);
 
   const { authChecked, authenticated, username, mustChangePassword, refreshAuth, logout } = useAuth();
   const data = useOrgOpsData(authenticated && !mustChangePassword);
@@ -176,6 +179,21 @@ export default function App() {
     }, 250);
   }, [activeScreen, data.refreshDashboardEvents]);
 
+  const scheduleDashboardDataRealtimeRefresh = useCallback(() => {
+    if (
+      activeScreen !== "dashboard" &&
+      activeScreen !== "agents" &&
+      activeScreen !== "runners"
+    ) {
+      return;
+    }
+    if (dashboardDataRefreshTimerRef.current !== null) return;
+    dashboardDataRefreshTimerRef.current = window.setTimeout(() => {
+      dashboardDataRefreshTimerRef.current = null;
+      void data.refreshDashboard();
+    }, 250);
+  }, [activeScreen, data.refreshDashboard]);
+
   const handleDashboardSelectAgent = useCallback((agentName: string) => {
     setFocusEventId(null);
     setActiveProcessId(null);
@@ -207,6 +225,10 @@ export default function App() {
       if (dashboardEventsRefreshTimerRef.current !== null) {
         window.clearTimeout(dashboardEventsRefreshTimerRef.current);
         dashboardEventsRefreshTimerRef.current = null;
+      }
+      if (dashboardDataRefreshTimerRef.current !== null) {
+        window.clearTimeout(dashboardDataRefreshTimerRef.current);
+        dashboardDataRefreshTimerRef.current = null;
       }
     },
     []
@@ -286,6 +308,7 @@ export default function App() {
     onEvent: handleWsEvent,
     onProcessOutput: (processId, d) =>
       handleProcessOutput(processId, [d as ProcessOutputRow]),
+    onDashboardChanged: scheduleDashboardDataRealtimeRefresh,
     activeChannelId,
     activeProcessId
   });
@@ -362,6 +385,7 @@ export default function App() {
         data.refreshRunners();
       }
       if (screen === "agents") data.refreshRunners();
+      if (screen === "runners") data.refreshDashboard();
       if (screen === "channels") data.refreshChannels();
       if (screen === "teams") {
         data.refreshTeams();
@@ -376,6 +400,7 @@ export default function App() {
       if (screen === "processes") data.refreshProcesses();
       if (screen === "secrets") data.refreshSecrets();
       if (screen === "humans") data.refreshHumans();
+      if (screen === "skills") data.refreshSkills();
       if (screen === "events") {
         fetchAllEvents(new URLSearchParams()).then(data.setEvents);
         data.refreshChannels();
@@ -783,6 +808,24 @@ export default function App() {
             document.body.appendChild(link);
             link.click();
             link.remove();
+          }}
+        />
+      )}
+
+      {activeScreen === "runners" && (
+        <RunnersScreen
+          runners={data.runners}
+          agents={data.agents}
+          onRefresh={data.refreshDashboard}
+          loadRunnerSetupConfig={() =>
+            data.apiJson<RunnerSetupConfig>("/api/runners/setup-config")
+          }
+          onDeregisterRunner={async (runnerId) => {
+            await data.apiFetch(`/api/runners/${encodeURIComponent(runnerId)}`, {
+              method: "DELETE",
+              headers: data.getApiHeaders()
+            });
+            await data.refreshDashboard();
           }}
         />
       )}

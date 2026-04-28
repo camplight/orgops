@@ -68,6 +68,8 @@ export function EventsScreen({
 }: EventsScreenProps) {
   const [sortKey, setSortKey] = useState<SortKey>("createdAt");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+  const [isPaused, setIsPaused] = useState(false);
+  const [pausedEventsSnapshot, setPausedEventsSnapshot] = useState<EventRow[] | null>(null);
   const [payloadFilter, setPayloadFilter] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
@@ -75,27 +77,37 @@ export function EventsScreen({
   const [scheduledDeliverAtInput, setScheduledDeliverAtInput] = useState("");
   const [scheduledTextInput, setScheduledTextInput] = useState("");
   const [scheduledActionPending, setScheduledActionPending] = useState(false);
+  const eventsForView = isPaused && pausedEventsSnapshot ? pausedEventsSnapshot : events;
   const channelById = useMemo(
     () => new Map(channels.map((channel) => [channel.id, channel])),
     [channels]
   );
+  const queuedWhilePausedCount = useMemo(() => {
+    if (!isPaused || !pausedEventsSnapshot) return 0;
+    const snapshotIds = new Set(pausedEventsSnapshot.map((event) => event.id));
+    let count = 0;
+    for (const event of events) {
+      if (!snapshotIds.has(event.id)) count += 1;
+    }
+    return count;
+  }, [events, isPaused, pausedEventsSnapshot]);
   const sourceOptions = useMemo(
     () =>
-      [...new Set(events.map((event) => event.source).filter((source) => Boolean(source?.trim())))]
+      [...new Set(eventsForView.map((event) => event.source).filter((source) => Boolean(source?.trim())))]
         .sort((a, b) => a.localeCompare(b)),
-    [events]
+    [eventsForView]
   );
   const typeOptions = useMemo(
     () =>
       [
         ...new Set([
           ...eventTypes.map((eventType) => eventType.type),
-          ...events.map((event) => event.type)
+          ...eventsForView.map((event) => event.type)
         ])
       ]
         .filter((type) => Boolean(type?.trim()))
         .sort((a, b) => a.localeCompare(b)),
-    [eventTypes, events]
+    [eventTypes, eventsForView]
   );
 
   const parseSourceParticipant = (source?: string) => {
@@ -150,14 +162,14 @@ export function EventsScreen({
   const agentNameOptions = useMemo(
     () =>
       [...new Set(
-        events
+        eventsForView
           .map((event) => parseSourceParticipant(event.source))
           .filter((participant) => participant?.subscriberType === "AGENT")
           .map((participant) => participant?.subscriberId ?? "")
       )]
         .filter((name) => Boolean(name.trim()))
         .sort((a, b) => a.localeCompare(b)),
-    [events]
+    [eventsForView]
   );
 
   const getDestinationLabel = (event: EventRow) => {
@@ -179,11 +191,11 @@ export function EventsScreen({
   const filteredAndSortedEvents = useMemo(() => {
     const payloadQuery = payloadFilter.trim().toLowerCase();
     const filtered = payloadQuery
-      ? events.filter((event) => {
+      ? eventsForView.filter((event) => {
           const payloadText = JSON.stringify(event.payload ?? {}).toLowerCase();
           return payloadText.includes(payloadQuery);
         })
-      : events;
+      : eventsForView;
 
     return [...filtered].sort((a, b) => {
       const read = (event: EventRow) => {
@@ -210,7 +222,7 @@ export function EventsScreen({
           : String(left).localeCompare(String(right));
       return sortDirection === "asc" ? cmp : -cmp;
     });
-  }, [events, payloadFilter, sortDirection, sortKey, channelById]);
+  }, [eventsForView, payloadFilter, sortDirection, sortKey, channelById]);
 
   const sortLabel = (key: SortKey, label: string) =>
     `${label}${sortKey === key ? (sortDirection === "asc" ? " ↑" : " ↓") : ""}`;
@@ -275,15 +287,24 @@ export function EventsScreen({
 
   useEffect(() => {
     if (!focusEventId) return;
-    if (!events.some((event) => event.id === focusEventId)) return;
+    if (!eventsForView.some((event) => event.id === focusEventId)) return;
     setSelectedEventId(focusEventId);
     onFocusEventApplied?.();
-  }, [events, focusEventId, onFocusEventApplied]);
+  }, [eventsForView, focusEventId, onFocusEventApplied]);
 
   const handleResetFilters = () => {
     const resetFilters = { ...DEFAULT_FILTERS };
     onFiltersChange(resetFilters);
     onApplyFilters(resetFilters);
+  };
+  const handleTogglePause = () => {
+    if (isPaused) {
+      setIsPaused(false);
+      setPausedEventsSnapshot(null);
+      return;
+    }
+    setPausedEventsSnapshot(events);
+    setIsPaused(true);
   };
 
   const handleSaveScheduledEvent = async () => {
@@ -463,6 +484,12 @@ export function EventsScreen({
             {Math.min(endIndex, filteredAndSortedEvents.length)} of {filteredAndSortedEvents.length}
           </div>
           <div className="flex items-center gap-2">
+            <Button type="button" variant="secondary" onClick={handleTogglePause}>
+              {isPaused ? "Resume live updates" : "Pause live updates"}
+            </Button>
+            {isPaused && queuedWhilePausedCount > 0 ? (
+              <span className="text-amber-300">{queuedWhilePausedCount} queued</span>
+            ) : null}
             <label className="text-slate-400" htmlFor="events-page-size">
               Rows
             </label>

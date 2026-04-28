@@ -11,6 +11,7 @@ type UseWebSocketOptions = {
   onAgentStatus: (agentName: string, runtimeState: string) => void;
   onEvent: (event: EventRow) => void;
   onProcessOutput: (processId: string, data: ProcessOutputMessage["data"]) => void;
+  onDashboardChanged: () => void;
   activeChannelId: string | null;
   activeProcessId: string | null;
 };
@@ -20,6 +21,7 @@ export function useWebSocket({
   onAgentStatus,
   onEvent,
   onProcessOutput,
+  onDashboardChanged,
   activeChannelId,
   activeProcessId
 }: UseWebSocketOptions) {
@@ -33,6 +35,7 @@ export function useWebSocket({
   const onAgentStatusRef = useRef(onAgentStatus);
   const onEventRef = useRef(onEvent);
   const onProcessOutputRef = useRef(onProcessOutput);
+  const onDashboardChangedRef = useRef(onDashboardChanged);
 
   useEffect(() => {
     onAgentStatusRef.current = onAgentStatus;
@@ -45,6 +48,10 @@ export function useWebSocket({
   useEffect(() => {
     onProcessOutputRef.current = onProcessOutput;
   }, [onProcessOutput]);
+
+  useEffect(() => {
+    onDashboardChangedRef.current = onDashboardChanged;
+  }, [onDashboardChanged]);
 
   const subscribeTopic = (topic: string) => {
     const ws = wsRef.current;
@@ -90,6 +97,7 @@ export function useWebSocket({
         reconnectAttemptRef.current = 0;
         subscribedTopics.current.add("org:agentStatus");
         subscribedTopics.current.add("org:events");
+        subscribedTopics.current.add("org:dashboard");
         for (const topic of subscribedTopics.current) {
           ws.send(JSON.stringify({ type: "subscribe", topic }));
         }
@@ -107,6 +115,9 @@ export function useWebSocket({
           if (msg.type === "process_output") {
             const processId = msg.topic.split(":")[1];
             if (processId) onProcessOutputRef.current(processId, msg.data);
+          }
+          if (msg.type === "dashboard_refresh") {
+            onDashboardChangedRef.current();
           }
         } catch {
           // ignore parse errors

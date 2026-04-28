@@ -87,6 +87,120 @@ describe("api app", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("de-registers runner and clears assigned agents", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const registerRes = await app.request("http://localhost/api/runners/register", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orgops-runner-token": "test-token",
+      },
+      body: JSON.stringify({
+        displayName: "runner-to-delete",
+      }),
+    });
+    expect(registerRes.status).toBe(201);
+    const registerBody = (await registerRes.json()) as {
+      runner?: { id?: string };
+    };
+    const runnerId = registerBody.runner?.id ?? "";
+    expect(runnerId.length).toBeGreaterThan(0);
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const createAssignedRes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "runner-bound-agent",
+        modelId: "openai:gpt-4o-mini",
+        workspacePath: ".orgops-data/workspaces/runner-bound-agent",
+        assignedRunnerId: runnerId,
+      }),
+    });
+    expect(createAssignedRes.status).toBe(201);
+
+    const deregisterRes = await app.request(
+      `http://localhost/api/runners/${encodeURIComponent(runnerId)}`,
+      {
+        method: "DELETE",
+        headers: { cookie },
+      },
+    );
+    expect(deregisterRes.status).toBe(200);
+    const deregisterBody = (await deregisterRes.json()) as {
+      ok?: boolean;
+      unassignedAgents?: string[];
+    };
+    expect(deregisterBody.ok).toBe(true);
+    expect(deregisterBody.unassignedAgents ?? []).toContain("runner-bound-agent");
+
+    const runnersListRes = await app.request("http://localhost/api/runners", {
+      headers: { cookie },
+    });
+    expect(runnersListRes.status).toBe(200);
+    const runnersList = (await runnersListRes.json()) as Array<{ id: string }>;
+    expect(runnersList.map((runner) => runner.id)).not.toContain(runnerId);
+
+    const agentRes = await app.request("http://localhost/api/agents/runner-bound-agent", {
+      headers: { cookie },
+    });
+    expect(agentRes.status).toBe(200);
+    const agentBody = (await agentRes.json()) as { assignedRunnerId?: string | null };
+    expect(agentBody.assignedRunnerId ?? null).toBeNull();
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("returns runner setup token only for authenticated humans", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const runnerAccessRes = await app.request("http://localhost/api/runners/setup-config", {
+      headers: { "x-orgops-runner-token": "test-token" },
+    });
+    expect(runnerAccessRes.status).toBe(401);
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const humanAccessRes = await app.request("http://localhost/api/runners/setup-config", {
+      headers: { cookie },
+    });
+    expect(humanAccessRes.status).toBe(200);
+    const body = (await humanAccessRes.json()) as { runnerToken?: string };
+    expect(body.runnerToken).toBe("test-token");
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("stores and updates agent soul contents in database", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");

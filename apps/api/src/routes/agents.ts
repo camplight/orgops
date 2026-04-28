@@ -41,6 +41,16 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     resolveWorkspacePath,
     insertEvent
   } = deps;
+  const publishDashboardRefresh = (reason: string, meta?: Record<string, unknown>) => {
+    bus.publish("org:dashboard", {
+      type: "dashboard_refresh",
+      topic: "org:dashboard",
+      data: {
+        reason,
+        ...(meta ?? {})
+      }
+    });
+  };
   const TEXT_EXTENSIONS = new Set([
     ".txt",
     ".md",
@@ -330,6 +340,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         updated_at: now
       })
       .run();
+    publishDashboardRefresh("agent.created", { agentName: body.name });
     return jsonResponse(c, { id }, 201);
   });
 
@@ -494,6 +505,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       })
       .where(eq(schema.agents.name, name))
       .run();
+    publishDashboardRefresh("agent.updated", { agentName: name });
     if (body.runtimeState) {
       bus.publish("org:agentStatus", {
         type: "agent_status",
@@ -548,6 +560,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       })
       .where(eq(schema.agents.name, name))
       .run();
+    publishDashboardRefresh(`agent.control.${action}`, { agentName: name });
     if (runtimeState) {
       bus.publish("org:agentStatus", {
         type: "agent_status",

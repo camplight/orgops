@@ -67,9 +67,12 @@ export function useOrgOpsData(authenticated: boolean) {
 
   const refreshDashboard = useCallback(() => {
     apiJson<Agent[]>("/api/agents").then(setAgents);
-    apiJson<SkillMeta[]>("/api/skills").then(setSkills);
     apiJson<RunnerNode[]>("/api/runners").then(setRunners);
   }, []);
+  const refreshSkills = useCallback(
+    () => apiJson<SkillMeta[]>("/api/skills").then(setSkills),
+    []
+  );
   const refreshEvents = useCallback(
     (query = "/api/events?limit=50&order=desc") => apiJson<EventRow[]>(query).then(setEvents),
     []
@@ -116,6 +119,7 @@ export function useOrgOpsData(authenticated: boolean) {
   useEffect(() => {
     if (!authenticated) return;
     refreshDashboard();
+    refreshSkills();
     refreshDashboardEvents();
     refreshEventTypes();
     refreshChannels();
@@ -124,11 +128,10 @@ export function useOrgOpsData(authenticated: boolean) {
     refreshSecrets();
     refreshTeams();
     refreshHumans();
-    const id = setInterval(refreshDashboard, 5000);
-    return () => clearInterval(id);
   }, [
     authenticated,
     refreshDashboard,
+    refreshSkills,
     refreshDashboardEvents,
     refreshEventTypes,
     refreshChannels,
@@ -201,6 +204,7 @@ export function useOrgOpsData(authenticated: boolean) {
     secrets,
     setSecrets,
     refreshDashboard,
+    refreshSkills,
     refreshEvents,
     refreshDashboardEvents,
     refreshTeams,

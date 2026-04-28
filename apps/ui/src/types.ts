@@ -37,6 +37,10 @@ export type RunnerNode = {
   online: boolean;
 };
 
+export type RunnerSetupConfig = {
+  runnerToken: string;
+};
+
 export type AgentWorkspaceEntry = {
   name: string;
   path: string;
@@ -180,6 +184,7 @@ export type SecretRow = {
 export type Screen =
   | "dashboard"
   | "agents"
+  | "runners"
   | "teams"
   | "channels"
   | "chat"

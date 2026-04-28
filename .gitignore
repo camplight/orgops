@@ -9,3 +9,4 @@ memory/
 # Playwright artifacts
 apps/site/playwright-artifacts/
 .release-tmp
+.agent-runner-id
