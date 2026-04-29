@@ -16,13 +16,10 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            pkg_target: node18-linux-x64
             artifact_name: opscli-linux
           - os: macos-latest
-            pkg_target: node18-macos-x64
             artifact_name: opscli-macos
           - os: windows-latest
-            pkg_target: node18-win-x64
             artifact_name: opscli-windows
     runs-on: ${{ matrix.os }}
     steps:
@@ -39,8 +36,6 @@ jobs:
         run: npm ci
 
       - name: Build self-contained OpsCLI executable
-        env:
-          ORGOPS_OPSCLI_PKG_TARGET: ${{ matrix.pkg_target }}
         run: npm run --workspace @orgops/opscli build:release
 
       - name: Upload workflow artifact

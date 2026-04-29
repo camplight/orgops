@@ -23,6 +23,7 @@ npm run --workspace @orgops/opscli build:release
 
 This creates `dist/opscli-*` for the current platform. Release workflow builds all 3 platforms.
 The built binary embeds its build timestamp and prints it on startup.
+Builds use Node.js SEA (single executable applications) with embedded assets/docs.
 
 ## macOS downloaded binary notes
 

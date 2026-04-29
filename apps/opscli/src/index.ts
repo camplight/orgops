@@ -7,13 +7,14 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
-import { hostname } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { PassThrough } from "node:stream";
 import * as repl from "node:repl";
 import { inspect } from "node:util";
 import { randomBytes } from "node:crypto";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
+import { createRequire } from "node:module";
 import * as tar from "tar";
 import { generate, type LlmMessage } from "@orgops/llm";
 
@@ -218,6 +219,15 @@ const RUNTIME_DIR = (() => {
     return process.cwd();
   }
 })();
+const SEA_ASSET_CACHE_DIR = resolve(tmpdir(), "orgops-opscli-sea-assets");
+const seaAssetFileCache = new Map<string, string>();
+const runtimeRequire = (() => {
+  try {
+    return createRequire(resolve(process.cwd(), "__orgops_opscli_require__.cjs"));
+  } catch {
+    return null;
+  }
+})();
 
 function parseSimpleEnv(raw: string): Record<string, string> {
   const result: Record<string, string> = {};
@@ -345,19 +355,67 @@ function getRuntimeAssetPath(fileName: string) {
   return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0]!;
 }
 
+type SeaModule = {
+  isSea: () => boolean;
+  getAsset: (key: string, encoding?: string) => ArrayBuffer | string;
+};
+
+function getSeaModule(): SeaModule | null {
+  try {
+    if (!runtimeRequire) return null;
+    const sea = runtimeRequire("node:sea") as SeaModule;
+    return typeof sea.isSea === "function" && typeof sea.getAsset === "function" ? sea : null;
+  } catch {
+    return null;
+  }
+}
+
+function loadBundledAssetText(fileName: string) {
+  const sea = getSeaModule();
+  if (sea?.isSea()) {
+    try {
+      const value = sea.getAsset(fileName, "utf8");
+      if (typeof value === "string") return value;
+    } catch {
+      // Fall back to file-system lookup when running unpackaged.
+    }
+  }
+  const assetPath = getRuntimeAssetPath(fileName);
+  if (!existsSync(assetPath)) return "";
+  return readFileSync(assetPath, "utf-8");
+}
+
+function ensureBundledAssetFile(fileName: string) {
+  const fileAssetPath = getRuntimeAssetPath(fileName);
+  if (existsSync(fileAssetPath)) return fileAssetPath;
+
+  const cached = seaAssetFileCache.get(fileName);
+  if (cached && existsSync(cached)) return cached;
+
+  const sea = getSeaModule();
+  if (!sea?.isSea()) return fileAssetPath;
+
+  const raw = sea.getAsset(fileName);
+  if (!(raw instanceof ArrayBuffer)) {
+    throw new Error(`Bundled SEA asset ${fileName} has unexpected type.`);
+  }
+  mkdirSync(SEA_ASSET_CACHE_DIR, { recursive: true });
+  const outPath = join(SEA_ASSET_CACHE_DIR, fileName);
+  writeFileSync(outPath, Buffer.from(raw));
+  seaAssetFileCache.set(fileName, outPath);
+  return outPath;
+}
+
 function loadBundledDocsText() {
-  const docsPath = getRuntimeAssetPath("orgops-system-docs.md");
-  if (!existsSync(docsPath)) return "";
-  const docs = readFileSync(docsPath, "utf-8").trim();
+  const docs = loadBundledAssetText("orgops-system-docs.md").trim();
   if (!docs) return "";
   return truncateText(docs, MAX_SYSTEM_DOC_CHARS).text;
 }
 
 function loadBuildTimestamp() {
-  const buildInfoPath = getRuntimeAssetPath("opscli-build-info.json");
-  if (!existsSync(buildInfoPath)) return null;
   try {
-    const raw = readFileSync(buildInfoPath, "utf-8");
+    const raw = loadBundledAssetText("opscli-build-info.json");
+    if (!raw.trim()) return null;
     const parsed = JSON.parse(raw) as { builtAt?: string };
     return typeof parsed.builtAt === "string" && parsed.builtAt.trim()
       ? parsed.builtAt
@@ -368,7 +426,7 @@ function loadBuildTimestamp() {
 }
 
 function getBundledArchivePath() {
-  return getRuntimeAssetPath("orgops-bundle.tar.gz");
+  return ensureBundledAssetFile("orgops-bundle.tar.gz");
 }
 
 async function extractBundledOrgOps(options?: {

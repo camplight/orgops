@@ -1,5 +1,13 @@
-import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import {
+  chmodSync,
+  copyFileSync,
+  cpSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import * as tar from "tar";
@@ -15,6 +23,9 @@ const ASSET_DIR = resolve(SNAPSHOT_DIR, "assets");
 const ORGOPS_BUNDLE_NAME = "orgops-bundle.tar.gz";
 const DOCS_BUNDLE_NAME = "orgops-system-docs.md";
 const BUILD_INFO_NAME = "opscli-build-info.json";
+const SEA_CONFIG_NAME = "sea-config.json";
+const SEA_BLOB_NAME = "opscli-sea-prep.blob";
+const SEA_FUSE = "NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2";
 
 function runCommand(command: string, args: string[]) {
   const result = spawnSync(command, args, {
@@ -27,18 +38,10 @@ function runCommand(command: string, args: string[]) {
   }
 }
 
-function targetForCurrentPlatform() {
-  if (process.platform === "darwin") return "node18-macos-x64";
-  if (process.platform === "win32") return "node18-win-x64";
-  return "node18-linux-x64";
-}
-
-function outputNameForTarget(target: string) {
-  const suffix = target
-    .replace(/^node\d+-/, "")
-    .replace("-x64", "")
-    .replace("-arm64", "-arm64");
-  return process.platform === "win32" ? `opscli-${suffix}.exe` : `opscli-${suffix}`;
+function outputNameForCurrentPlatform() {
+  if (process.platform === "darwin") return "opscli-macos";
+  if (process.platform === "win32") return "opscli-windows.exe";
+  return "opscli-linux";
 }
 
 function stageOrgOpsSource() {
@@ -93,7 +96,7 @@ async function buildReleaseExecutable() {
   mkdirSync(ASSET_DIR, { recursive: true });
   mkdirSync(OUTPUT_DIR, { recursive: true });
 
-  const stagedRoot = stageOrgOpsSource();
+  stageOrgOpsSource();
   await tar.c(
     {
       gzip: true,
@@ -108,7 +111,8 @@ async function buildReleaseExecutable() {
     JSON.stringify(
       {
         builtAt: new Date().toISOString(),
-        target: process.env.ORGOPS_OPSCLI_PKG_TARGET || targetForCurrentPlatform(),
+        target: `${process.platform}-${process.arch}`,
+        runtime: process.version,
       },
       null,
       2
@@ -121,7 +125,7 @@ async function buildReleaseExecutable() {
   await build({
     entryPoints: [entryFile],
     platform: "node",
-    target: "node18",
+    target: "node22",
     format: "cjs",
     bundle: true,
     outfile: bundledEntryFile,
@@ -130,17 +134,21 @@ async function buildReleaseExecutable() {
     },
   });
 
-  const pkgManifestPath = resolve(SNAPSHOT_DIR, "package.json");
+  const seaBlobPath = resolve(TMP_ROOT, SEA_BLOB_NAME);
+  const seaConfigPath = resolve(TMP_ROOT, SEA_CONFIG_NAME);
   writeFileSync(
-    pkgManifestPath,
+    seaConfigPath,
     JSON.stringify(
       {
-        name: "orgops-opscli-bundle",
-        private: true,
-        version: "0.0.1",
-        bin: "opscli.cjs",
-        pkg: {
-          assets: ["assets/**/*"],
+        main: bundledEntryFile,
+        output: seaBlobPath,
+        disableExperimentalSEAWarning: true,
+        useSnapshot: false,
+        useCodeCache: false,
+        assets: {
+          [ORGOPS_BUNDLE_NAME]: resolve(ASSET_DIR, ORGOPS_BUNDLE_NAME),
+          [DOCS_BUNDLE_NAME]: resolve(ASSET_DIR, DOCS_BUNDLE_NAME),
+          [BUILD_INFO_NAME]: resolve(ASSET_DIR, BUILD_INFO_NAME),
         },
       },
       null,
@@ -149,19 +157,40 @@ async function buildReleaseExecutable() {
     "utf-8"
   );
 
-  const requestedTarget = process.env.ORGOPS_OPSCLI_PKG_TARGET || targetForCurrentPlatform();
-  const outputPath = resolve(OUTPUT_DIR, outputNameForTarget(requestedTarget));
-  runCommand("npx", [
-    "pkg",
-    "--compress",
-    "Brotli",
-    "--target",
-    requestedTarget,
-    "--output",
+  runCommand("node", ["--experimental-sea-config", seaConfigPath]);
+
+  const outputPath = resolve(OUTPUT_DIR, outputNameForCurrentPlatform());
+  copyFileSync(process.execPath, outputPath);
+
+  if (process.platform !== "win32") {
+    chmodSync(outputPath, 0o755);
+  }
+
+  if (process.platform === "darwin") {
+    runCommand("codesign", ["--remove-signature", outputPath]);
+  }
+
+  const postjectArgs = [
     outputPath,
-    pkgManifestPath,
-  ]);
-  console.log(`Built: ${outputPath}`);
+    "NODE_SEA_BLOB",
+    seaBlobPath,
+    "--sentinel-fuse",
+    SEA_FUSE,
+  ];
+  if (process.platform === "darwin") {
+    postjectArgs.push("--macho-segment-name", "NODE_SEA");
+  }
+  runCommand("npx", ["postject", ...postjectArgs]);
+
+  if (process.platform === "darwin") {
+    runCommand("codesign", ["--sign", "-", outputPath]);
+  }
+
+  if (process.platform !== "win32") {
+    chmodSync(outputPath, 0o755);
+  }
+
+  console.log(`Built SEA executable: ${outputPath}`);
 }
 
 void buildReleaseExecutable();
