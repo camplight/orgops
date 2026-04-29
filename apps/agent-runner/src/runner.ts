@@ -289,6 +289,20 @@ async function listAgents(): Promise<Agent[]> {
   return res.json();
 }
 
+async function listPendingEventsForAgentChannel(
+  agentName: string,
+  channelId: string,
+): Promise<Event[]> {
+  const query =
+    `agentName=${encodeURIComponent(agentName)}` +
+    `&status=PENDING` +
+    `&channelId=${encodeURIComponent(channelId)}` +
+    `&limit=50`;
+  const res = await apiFetch(`/api/events?${query}`);
+  const payload = await res.json();
+  return Array.isArray(payload) ? (payload as Event[]) : [];
+}
+
 async function patchAgentState(
   agentName: string,
   patch: { runtimeState?: string; lastHeartbeatAt?: number },
@@ -1322,9 +1336,20 @@ async function pollAgent(agent: Agent) {
   if (resolveAgentMemoryContextMode(agent) === "PER_CHANNEL_CROSS_CHANNEL") {
     maintenanceLoop.schedule(agent);
   }
-  const query = `agentName=${encodeURIComponent(agent.name)}&status=PENDING&limit=50`;
-  const res = await apiFetch(`/api/events?${query}`);
-  const events = (await res.json()) as Event[];
+  const channels = await listChannels();
+  const subscribedChannelIds = channels
+    .filter((channel) => isAgentSubscribed(channel, agent.name))
+    .map((channel) => channel.id)
+    .filter((channelId): channelId is string => Boolean(channelId));
+  const pendingBuckets = await Promise.all(
+    subscribedChannelIds.map(async (channelId) => {
+      if (channelLoopManager.isChannelBusy(agent.name, channelId)) {
+        return [] as Event[];
+      }
+      return listPendingEventsForAgentChannel(agent.name, channelId);
+    }),
+  );
+  const events = pendingBuckets.flat();
   const pendingByChannel = new Map<string, Event[]>();
   for (const event of events) {
     if (!shouldHandleEventForAgent(agent, event)) {

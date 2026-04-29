@@ -44,10 +44,11 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
     orm
       .select({
         channelId: schema.processes.channel_id,
+        agentName: schema.processes.agent_name,
       })
       .from(schema.processes)
       .where(eq(schema.processes.id, processId))
-      .get() as { channelId: string | null } | undefined;
+      .get() as { channelId: string | null; agentName: string | null } | undefined;
 
   app.post("/api/files", async (c) => {
     const body = await c.req.parseBody();
@@ -310,7 +311,18 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
     publishProcessOutput(processId, { seq: body.seq, stream: body.stream, text: body.text });
     insertEvent({
       type: "process.output",
-      payload: { processId, seq: body.seq, stream: body.stream, text: body.text },
+      payload: {
+        processId,
+        seq: body.seq,
+        stream: body.stream,
+        text: body.text,
+        ...(processContext?.agentName
+          ? {
+              ownerAgentName: processContext.agentName,
+              targetAgentName: processContext.agentName,
+            }
+          : {}),
+      },
       source: body.source ?? PROCESS_EVENT_SOURCE,
       channelId: processContext?.channelId ?? undefined,
     });
@@ -332,7 +344,16 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
       .run();
     insertEvent({
       type: "process.exited",
-      payload: { processId, exitCode: body.exitCode ?? null },
+      payload: {
+        processId,
+        exitCode: body.exitCode ?? null,
+        ...(processContext?.agentName
+          ? {
+              ownerAgentName: processContext.agentName,
+              targetAgentName: processContext.agentName,
+            }
+          : {}),
+      },
       source: body.source ?? PROCESS_EVENT_SOURCE,
       channelId: processContext?.channelId ?? undefined,
     });

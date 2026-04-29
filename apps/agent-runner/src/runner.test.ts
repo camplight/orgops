@@ -426,7 +426,22 @@ describe("agent runner", () => {
     const processStartedEvent: Event = {
       id: "evt-process-started",
       type: "process.started",
-      payload: { processId: "proc-1", cmd: "sleep 1" },
+      payload: {
+        processId: "proc-1",
+        cmd: "sleep 1",
+        targetAgentName: "tester",
+      },
+      source: "system:process-runner",
+      channelId: "chan-1",
+    };
+    const processStartedEventTargetedElsewhere: Event = {
+      id: "evt-process-started-other",
+      type: "process.started",
+      payload: {
+        processId: "proc-1",
+        cmd: "sleep 1",
+        targetAgentName: "worker1",
+      },
       source: "system:process-runner",
       channelId: "chan-1",
     };
@@ -494,6 +509,20 @@ describe("agent runner", () => {
       source: "system:scheduler",
       channelId: "chan-1",
     };
+    const genericTargetedToOtherAgent: Event = {
+      id: "evt-generic-target-other",
+      type: "message.created",
+      payload: { text: "private work", targetAgentName: "worker1" },
+      source: "agent:coordinator",
+      channelId: "chan-1",
+    };
+    const genericTargetedToThisAgent: Event = {
+      id: "evt-generic-target-this",
+      type: "message.created",
+      payload: { text: "private work", targetAgentName: "tester" },
+      source: "agent:coordinator",
+      channelId: "chan-1",
+    };
 
     expect(await shouldHandleEvent(agent, controlEvent)).toBe(false);
     expect(await shouldHandleEvent(agent, auditEvent)).toBe(false);
@@ -501,6 +530,9 @@ describe("agent runner", () => {
     expect(await shouldHandleEvent(agent, channelCommandRequestedEvent)).toBe(false);
     expect(await shouldHandleEvent(agent, ownEvent)).toBe(false);
     expect(await shouldHandleEvent(agent, processStartedEvent)).toBe(true);
+    expect(await shouldHandleEvent(agent, processStartedEventTargetedElsewhere)).toBe(
+      false,
+    );
     expect(await shouldHandleEvent(agent, processOutputEvent)).toBe(true);
     expect(await shouldHandleEvent(agent, processExitedEvent)).toBe(true);
     expect(await shouldHandleEvent(agent, noopEvent)).toBe(false);
@@ -510,6 +542,8 @@ describe("agent runner", () => {
     expect(await shouldHandleEvent(agent, highHopCount)).toBe(true);
     expect(await shouldHandleEvent(agent, targetedToOtherAgent)).toBe(false);
     expect(await shouldHandleEvent(agent, targetedToThisAgent)).toBe(true);
+    expect(await shouldHandleEvent(agent, genericTargetedToOtherAgent)).toBe(false);
+    expect(await shouldHandleEvent(agent, genericTargetedToThisAgent)).toBe(true);
     expect(await shouldHandleEvent(agent, userEvent)).toBe(true);
   });
 

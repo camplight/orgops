@@ -181,7 +181,13 @@ async function spawnTrackedProcess(
     });
     await ctx.emitEvent({
       type: "process.started",
-      payload: { processId, cmd: input.cmd, executionMode: input.executionMode },
+      payload: {
+        processId,
+        cmd: input.cmd,
+        executionMode: input.executionMode,
+        ownerAgentName: ctx.agent.name,
+        targetAgentName: ctx.agent.name,
+      },
       source: PROCESS_EVENT_SOURCE,
       channelId: ctx.channelId,
     });

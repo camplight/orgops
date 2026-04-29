@@ -88,5 +88,10 @@ export function createChannelLoopManager(input: CreateChannelLoopManagerInput) {
     workerStarts(agentName: string, channelId: string) {
       return workerStartCounts.get(workerKey(agentName, channelId)) ?? 0;
     },
+    isChannelBusy(agentName: string, channelId: string) {
+      const state = workers.get(workerKey(agentName, channelId));
+      if (!state) return false;
+      return state.running || state.queue.size > 0;
+    },
   };
 }
