@@ -1,7 +1,7 @@
 import type { Hono } from "hono";
 import { randomUUID, createHash } from "node:crypto";
 import { join } from "node:path";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 import { schema, type OrgOpsDrizzleDb } from "@orgops/db";
 import { and, asc, desc, eq, gt, inArray, sql } from "drizzle-orm";
@@ -56,7 +56,9 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
     if (!file) return jsonResponse(c, { error: "Missing file" }, 400);
     const bytes = new Uint8Array(await file.arrayBuffer());
     const id = randomUUID();
-    const storagePath = join(FILES_DIR, id);
+    const tempFilesDir = join(FILES_DIR, "tmp");
+    mkdirSync(tempFilesDir, { recursive: true });
+    const storagePath = join(tempFilesDir, id);
     writeFileSync(storagePath, bytes);
     const sha256 = createHash("sha256").update(bytes).digest("hex");
     orm

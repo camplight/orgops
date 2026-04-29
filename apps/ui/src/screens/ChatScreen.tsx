@@ -4,7 +4,9 @@ import {
   useMemo,
   useRef,
   useState,
+  type ChangeEvent,
   type AnchorHTMLAttributes,
+  type ClipboardEvent,
   type HTMLAttributes,
   type KeyboardEvent,
   type ReactNode
@@ -12,7 +14,7 @@ import {
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { EventRow } from "../types";
-import { apiJson } from "../api";
+import { apiFetch, apiJson } from "../api";
 import { Button, Card, SelectAutocomplete, Textarea } from "../components/ui";
 import { formatTimestamp } from "../utils/formatTimestamp";
 
@@ -30,7 +32,16 @@ type ChatScreenProps = {
   messageText: string;
   onSelectTarget: (id: string) => void;
   onMessageTextChange: (value: string) => void;
-  onSendMessage: () => Promise<void>;
+  onSendMessage: (input?: {
+    attachments?: {
+      fileId: string;
+      name: string;
+      mime: string;
+      size: number;
+      tempPath: string;
+      sha256?: string;
+    }[];
+  }) => Promise<void>;
   onClearMessages: () => Promise<void>;
 };
 
@@ -202,6 +213,31 @@ type AgentMemory = {
   error?: string;
 };
 
+type UploadedAttachment = {
+  localId: string;
+  fileId: string;
+  name: string;
+  mime: string;
+  size: number;
+  tempPath: string;
+  sha256?: string;
+};
+
+type PendingAttachment = {
+  localId: string;
+  name: string;
+  mime: string;
+  size: number;
+  status: "uploading" | "ready" | "error";
+  uploaded?: UploadedAttachment;
+  error?: string;
+};
+
+type MessageAttachment = {
+  name: string;
+  tempPath: string;
+};
+
 function summarizeMemoryTitle(record: MemoryRecord | null, fallback: string): string {
   if (!record || !record.summaryText.trim()) return fallback;
   return record.summaryText;
@@ -212,6 +248,29 @@ function getRecordMeta(record: MemoryRecord | null): string {
   const updated = formatTimestamp(record.updatedAt);
   const processed = formatTimestamp(record.lastProcessedAt);
   return `Updated: ${updated} | Last processed: ${processed}`;
+}
+
+function createLocalAttachmentId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function parseMessageAttachments(payload: unknown): MessageAttachment[] {
+  if (!payload || typeof payload !== "object") return [];
+  const payloadRecord = payload as { attachments?: unknown };
+  if (!Array.isArray(payloadRecord.attachments)) return [];
+  return payloadRecord.attachments
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return null;
+      const record = entry as Record<string, unknown>;
+      const name = typeof record.name === "string" ? record.name.trim() : "";
+      const tempPath = typeof record.tempPath === "string" ? record.tempPath.trim() : "";
+      if (!name || !tempPath) return null;
+      return { name, tempPath };
+    })
+    .filter((entry): entry is MessageAttachment => Boolean(entry));
 }
 
 function parseAgentContextUsage(event: EventRow): AgentContextUsage | null {
@@ -446,27 +505,134 @@ export function ChatScreen({
   const [agentMemories, setAgentMemories] = useState<AgentMemory[]>([]);
   const [memoryReloadToken, setMemoryReloadToken] = useState(0);
   const [visibleChatLineCount, setVisibleChatLineCount] = useState(CHAT_WINDOW_SIZE);
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const memoryCacheRef = useRef<Map<string, AgentMemory[]>>(new Map());
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const visibleChatLines = useMemo(() => {
     if (chatLines.length <= visibleChatLineCount) return chatLines;
     return chatLines.slice(chatLines.length - visibleChatLineCount);
   }, [chatLines, visibleChatLineCount]);
   const hiddenChatLineCount = chatLines.length - visibleChatLines.length;
   const lastVisibleChatLineId = visibleChatLines[visibleChatLines.length - 1]?.id ?? null;
+  const uploadingAttachmentCount = pendingAttachments.filter((item) => item.status === "uploading").length;
+  const readyAttachments = pendingAttachments
+    .filter((item) => item.status === "ready" && item.uploaded)
+    .map((item) => item.uploaded as UploadedAttachment);
+  const hasAttachmentErrors = pendingAttachments.some((item) => item.status === "error");
   const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key !== "Enter") return;
     if (!event.metaKey && !event.ctrlKey) return;
     event.preventDefault();
-    void onSendMessage();
+    if (uploadingAttachmentCount > 0) return;
+    void handleSendWithAttachments();
   };
   const handleExportPdf = () => {
     window.print();
+  };
+  const handleSendWithAttachments = async () => {
+    await onSendMessage({ attachments: readyAttachments });
+    setPendingAttachments([]);
   };
 
   useEffect(() => {
     setVisibleChatLineCount(CHAT_WINDOW_SIZE);
     isPinnedToBottomRef.current = true;
+    setPendingAttachments([]);
   }, [activeTargetId]);
+
+  const uploadSingleFile = async (file: File) => {
+    const localId = createLocalAttachmentId();
+    const mime = file.type || "application/octet-stream";
+    setPendingAttachments((prev) => [
+      ...prev,
+      {
+        localId,
+        name: file.name || "upload",
+        mime,
+        size: file.size,
+        status: "uploading"
+      }
+    ]);
+    try {
+      const body = new FormData();
+      body.append("file", file, file.name);
+      const uploadResponse = await apiFetch("/api/files", { method: "POST", body });
+      const uploadPayload = (await uploadResponse.json()) as { id: string };
+      const metaResponse = await apiJson<{
+        id: string;
+        storage_path: string;
+        original_name?: string;
+        mime?: string;
+        size?: number;
+        sha256?: string;
+      }>(`/api/files/${encodeURIComponent(uploadPayload.id)}/meta`);
+      const uploaded: UploadedAttachment = {
+        localId,
+        fileId: uploadPayload.id,
+        name: metaResponse.original_name || file.name || "upload",
+        mime: metaResponse.mime || mime,
+        size: typeof metaResponse.size === "number" ? metaResponse.size : file.size,
+        tempPath: metaResponse.storage_path,
+        ...(typeof metaResponse.sha256 === "string" && metaResponse.sha256
+          ? { sha256: metaResponse.sha256 }
+          : {})
+      };
+      setPendingAttachments((prev) =>
+        prev.map((entry) =>
+          entry.localId === localId
+            ? {
+                ...entry,
+                name: uploaded.name,
+                mime: uploaded.mime,
+                size: uploaded.size,
+                status: "ready",
+                uploaded,
+                error: undefined
+              }
+            : entry
+        )
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Upload failed";
+      setPendingAttachments((prev) =>
+        prev.map((entry) =>
+          entry.localId === localId ? { ...entry, status: "error", error: message } : entry
+        )
+      );
+    }
+  };
+
+  const uploadFiles = (files: File[]) => {
+    for (const file of files) {
+      void uploadSingleFile(file);
+    }
+  };
+
+  const handlePickFiles = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    if (files.length === 0) return;
+    uploadFiles(files);
+    event.currentTarget.value = "";
+  };
+
+  const handleComposerPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = Array.from(event.clipboardData.items ?? []);
+    const imageFiles = items
+      .map((item) => {
+        if (!item.type.startsWith("image/")) return null;
+        return item.getAsFile();
+      })
+      .filter((file): file is File => Boolean(file));
+    if (imageFiles.length === 0) return;
+    event.preventDefault();
+    const filesToUpload = imageFiles.map((image) => {
+      const ext = image.type.includes("/") ? image.type.split("/")[1] : "png";
+      const safeExt = ext.replace(/[^a-zA-Z0-9]/g, "") || "png";
+      const filename = `pasted-${Date.now()}-${Math.random().toString(16).slice(2, 8)}.${safeExt}`;
+      return new File([image], filename, { type: image.type || "image/png" });
+    });
+    uploadFiles(filesToUpload);
+  };
 
   useEffect(() => {
     if (!activeTargetId || !messagesContainerRef.current) {
@@ -618,6 +784,7 @@ export function ChatScreen({
                   );
                 }
 
+                const messageAttachments = parseMessageAttachments(event.payload);
                 return (
                   <div
                     key={event.id}
@@ -647,6 +814,24 @@ export function ChatScreen({
                       >
                         <div className="text-left text-slate-200">
                           <MessageMarkdown text={(event.payload as { text?: string })?.text ?? ""} />
+                          {messageAttachments.length > 0 && (
+                            <div className="mt-2 rounded border border-slate-700/60 bg-slate-950/60 p-2 text-xs text-slate-300">
+                              <div className="mb-1 text-[11px] uppercase tracking-wide text-slate-500">
+                                Attached files
+                              </div>
+                              <ul className="space-y-1">
+                                {messageAttachments.map((attachment, index) => (
+                                  <li key={`${event.id}-attachment-${index}`}>
+                                    <span className="text-slate-200">{attachment.name}</span>
+                                    <span className="mx-1 text-slate-500">{"->"}</span>
+                                    <span className="font-mono text-[11px] text-slate-400">
+                                      {attachment.tempPath}
+                                    </span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -672,14 +857,68 @@ export function ChatScreen({
             <div className="space-y-2 chat-print-hide">
               <Textarea
                 rows={3}
-                placeholder="Send a message..."
+                placeholder="Send a message... (you can paste screenshots)"
                 value={messageText}
                 onChange={(e) => onMessageTextChange(e.target.value)}
                 onKeyDown={handleComposerKeyDown}
+                onPaste={handleComposerPaste}
               />
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={handlePickFiles}
+              />
+              {pendingAttachments.length > 0 && (
+                <div className="rounded-lg border border-slate-800 bg-slate-950/70 p-2 text-xs text-slate-300">
+                  <div className="mb-1 text-[11px] uppercase tracking-wide text-slate-500">Attachments</div>
+                  <div className="space-y-1">
+                    {pendingAttachments.map((attachment) => (
+                      <div
+                        key={attachment.localId}
+                        className="flex items-center justify-between gap-2 rounded border border-slate-800 bg-slate-900/80 px-2 py-1"
+                      >
+                        <div className="min-w-0">
+                          <div className="truncate text-slate-200">{attachment.name}</div>
+                          <div className="truncate text-[11px] text-slate-500">
+                            {attachment.status === "ready"
+                              ? attachment.uploaded?.tempPath
+                              : attachment.status === "uploading"
+                                ? "Uploading..."
+                                : attachment.error || "Upload failed"}
+                          </div>
+                        </div>
+                        <Button
+                          variant="secondary"
+                          className="px-2 py-1 text-[11px]"
+                          onClick={() =>
+                            setPendingAttachments((prev) =>
+                              prev.filter((entry) => entry.localId !== attachment.localId)
+                            )
+                          }
+                        >
+                          Remove
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div className="flex flex-wrap items-center gap-2">
                 <div className="flex flex-wrap items-center gap-2">
-                  <Button onClick={onSendMessage}>Send message</Button>
+                  <Button
+                    variant="secondary"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    Attach files
+                  </Button>
+                  <Button
+                    onClick={() => void handleSendWithAttachments()}
+                    disabled={uploadingAttachmentCount > 0}
+                  >
+                    {uploadingAttachmentCount > 0 ? `Uploading ${uploadingAttachmentCount}...` : "Send message"}
+                  </Button>
                   <Button variant="secondary" onClick={handleExportPdf}>
                     Export PDF
                   </Button>
@@ -703,6 +942,11 @@ export function ChatScreen({
                     Clear messages
                   </Button>
                 </div>
+                {hasAttachmentErrors && (
+                  <div className="text-xs text-rose-300">
+                    One or more attachments failed to upload. Remove them or retry.
+                  </div>
+                )}
                 {contextUsageByAgent.length > 0 && (
                   <div className="ml-auto flex flex-wrap items-center gap-1.5 text-[11px] text-slate-400">
                     <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500">

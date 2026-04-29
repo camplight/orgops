@@ -30,6 +30,14 @@ import type {
 } from "./types";
 
 type ChatTarget = { kind: "channel"; id: string };
+type ChatAttachment = {
+  fileId: string;
+  name: string;
+  mime: string;
+  size: number;
+  tempPath: string;
+  sha256?: string;
+};
 
 function formatParticipantLabel(subscriberType: string, subscriberId: string) {
   if (subscriberType === "HUMAN") return `${subscriberId} (human)`;
@@ -425,15 +433,24 @@ export default function App() {
     [ensureDirectChannel, loadChatEventsForTarget]
   );
 
-  const handleSendMessage = useCallback(async () => {
-    if (!activeChatTarget || !messageText.trim()) return;
+  const handleSendMessage = useCallback(async (input?: { attachments?: ChatAttachment[] }) => {
+    if (!activeChatTarget) return;
+    const attachments = input?.attachments ?? [];
+    const trimmedText = messageText.trim();
+    if (!trimmedText && attachments.length === 0) return;
+    const effectiveText =
+      trimmedText ||
+      `Attached ${attachments.length} file${attachments.length === 1 ? "" : "s"} for reference.`;
     const eventSource = `human:${username ?? "unknown"}`;
     await apiFetch("/api/events", {
       method: "POST",
       headers: getApiHeaders(),
       body: JSON.stringify({
         type: "message.created",
-        payload: { text: messageText },
+        payload: {
+          text: effectiveText,
+          ...(attachments.length > 0 ? { attachments } : {})
+        },
         source: eventSource,
         channelId: activeChatTarget.id
       })
