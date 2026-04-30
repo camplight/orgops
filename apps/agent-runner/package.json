@@ -10,6 +10,7 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@orgops/js-runtime": "file:../../packages/js-runtime",
     "@orgops/llm": "file:../../packages/llm",
     "@orgops/schemas": "file:../../packages/schemas",
     "@orgops/skills": "file:../../packages/skills",

@@ -8,8 +8,6 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { hostname, tmpdir } from "node:os";
-import { PassThrough } from "node:stream";
-import * as repl from "node:repl";
 import { inspect } from "node:util";
 import { randomBytes } from "node:crypto";
 import { createInterface } from "node:readline/promises";
@@ -17,6 +15,7 @@ import { stdin, stdout } from "node:process";
 import { createRequire } from "node:module";
 import * as tar from "tar";
 import { generate, type LlmMessage } from "@orgops/llm";
+import { createJsRuntimeSession, type JsRuntimeSession } from "@orgops/js-runtime";
 
 type ShellResult = {
   exitCode: number | null;
@@ -35,7 +34,7 @@ type SessionRunHooks = {
 };
 
 type RlmSession = {
-  replServer: repl.REPLServer;
+  runtime: JsRuntimeSession;
   context: Record<string, unknown>;
   reservedKeys: Set<string>;
   exited: boolean;
@@ -61,6 +60,9 @@ const DEFAULT_ANTHROPIC_MODEL_ID = "anthropic:claude-3-5-sonnet-latest";
 const MAX_STEPS = Number(process.env.ORGOPS_OPSCLI_MAX_STEPS ?? 20);
 const COMMAND_TIMEOUT_MS = Number(process.env.ORGOPS_OPSCLI_COMMAND_TIMEOUT_MS ?? 120_000);
 const EVAL_TIMEOUT_MS = Number(process.env.ORGOPS_OPSCLI_EVAL_TIMEOUT_MS ?? 30_000);
+const EVAL_CALLBACK_TIMEOUT_MS = Number(
+  process.env.ORGOPS_OPSCLI_EVAL_CALLBACK_TIMEOUT_MS ?? 8_000
+);
 const MAX_OUTPUT_CHARS = 12_000;
 const MAX_INPUT_CHARS = 12_000;
 const MAX_CONTEXT_CHARS = Number(process.env.ORGOPS_OPSCLI_MAX_CONTEXT_CHARS ?? 100_000);
@@ -221,6 +223,9 @@ const RUNTIME_DIR = (() => {
 })();
 const SEA_ASSET_CACHE_DIR = resolve(tmpdir(), "orgops-opscli-sea-assets");
 const seaAssetFileCache = new Map<string, string>();
+const defaultRuntimeRequire = createRequire(
+  resolve(process.cwd(), "__orgops_opscli_default_require__.cjs")
+);
 const runtimeRequire = (() => {
   try {
     return createRequire(resolve(process.cwd(), "__orgops_opscli_require__.cjs"));
@@ -784,12 +789,15 @@ async function runShell(
 function buildSystemPrompt() {
   const docsText = loadBundledDocsText();
   const sections = [
-    "You are OrgOps OpsCLI, a recursive maintenance REPL agent for this host.",
+    "You are OrgOps OpsCLI, a recursive maintenance agent for this host.",
     "You are controlling a self-contained OrgOps release bundle.",
+    "Execution runs in a persistent Node.js vm context (not node:repl).",
     "Read and use global `prompt` before acting.",
     "global `prompt` is string-like and also supports `prompt.text`.",
-    "Return exactly ONE JavaScript REPL snippet each turn.",
+    "Return exactly ONE JavaScript snippet each turn.",
     "Do NOT return JSON and do NOT wrap in markdown fences.",
+    "Module loading is available via `require(...)` and `await import(...)`.",
+    "Prefer built-in tools (`shell`, `extractOrgOps`, `setupOrgOps`) before importing modules.",
     "Use shell(command) to execute host commands.",
     "shell(command) accepts exactly one string argument. Do NOT pass callbacks or extra args.",
     "shell(command) is async and returns stdout as a string.",
@@ -837,29 +845,20 @@ function buildSystemPrompt() {
 }
 
 function createSession(): RlmSession {
-  const inputStream = new PassThrough();
-  const outputStream = new PassThrough();
-  const replServer = repl.start({
-    prompt: "",
-    terminal: false,
-    input: inputStream,
-    output: outputStream,
-    useGlobal: false,
-    ignoreUndefined: false,
-    useColors: false,
-  });
-  const context = replServer.context as Record<string, unknown>;
+  const runtime = createJsRuntimeSession();
+  const context = runtime.context;
   Object.assign(context, {
     console,
     process,
     Buffer,
+    require: runtimeRequire ?? defaultRuntimeRequire,
     setTimeout,
     clearTimeout,
     setInterval,
     clearInterval,
   });
   const session: RlmSession = {
-    replServer,
+    runtime,
     context,
     reservedKeys: new Set(Object.keys(context)),
     exited: false,
@@ -1020,15 +1019,25 @@ async function evaluateInput(
   abortSignal?: AbortSignal
 ): Promise<string> {
   throwIfInterrupted(abortSignal);
-  const scriptValue = await new Promise<unknown>((resolve, reject) => {
-    session.replServer.eval(code, session.context as any, "opscli-repl", (error, result) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve(result);
+  let scriptValue: unknown;
+  try {
+    scriptValue = await session.runtime.evaluate(code, {
+      filename: "opscli-repl",
+      bootstrapTimeoutMs: EVAL_CALLBACK_TIMEOUT_MS,
     });
-  });
+  } catch (error) {
+    const message = String(error);
+    if (message.includes("Script execution timed out")) {
+      const preview = truncateText(code.replace(/\s+/g, " ").trim(), 240).text;
+      throw new Error(
+        `Snippet bootstrap timed out after ${EVAL_CALLBACK_TIMEOUT_MS}ms before execution started. ` +
+          `This usually means the snippet is too complex or stuck in synchronous setup.\n` +
+          `Snippet preview: ${preview}\n` +
+          `Retry with a simpler snippet and explicit early checkpoints (for example print("ckpt")).`
+      );
+    }
+    throw error;
+  }
   const value =
     scriptValue && typeof (scriptValue as Promise<unknown>).then === "function"
       ? await (async () => {
@@ -1142,7 +1151,7 @@ async function runAutonomousTask(
       appendHistoryMessage(memory, { role: "assistant", content: modelText });
       appendHistoryMessage(memory, {
         role: "user",
-        content: "Your last reply was empty. Return one non-empty JavaScript REPL snippet.",
+        content: "Your last reply was empty. Return one non-empty JavaScript snippet.",
       });
       continue;
     }
@@ -1431,7 +1440,7 @@ async function main() {
   } finally {
     rl.off("SIGINT", onSigint);
     session.runHooks = null;
-    session.replServer.close();
+    session.runtime.close();
     rl.close();
   }
 }

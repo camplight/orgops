@@ -1,0 +1,9 @@
+{
+  "name": "@orgops/js-runtime",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "lint": "tsc -p tsconfig.json --noEmit"
+  }
+}

@@ -1,8 +1,7 @@
 import { createRequire } from "node:module";
-import { PassThrough } from "node:stream";
-import * as repl from "node:repl";
 import { inspect } from "node:util";
 import { generate, type LlmMessage, type LlmTool } from "@orgops/llm";
+import { createJsRuntimeSession, type JsRuntimeSession } from "@orgops/js-runtime";
 import { createRunnerTools, executeTool, type ExecuteContext } from "./tools";
 import type { Agent, Event } from "./types";
 import { pullInjectedEventMessages } from "./channel-injection";
@@ -56,7 +55,7 @@ const RLM_MAX_SUBAGENTS_PER_EVENT = readPositiveIntEnv(
 type RlmSession = {
   id: string;
   depth: number;
-  replServer: repl.REPLServer;
+  runtime: JsRuntimeSession;
   context: Record<string, unknown>;
   reservedKeys: Set<string>;
   done: boolean;
@@ -354,19 +353,9 @@ async function evaluateInput(
   session: RlmSession,
   code: string,
 ): Promise<{ value: unknown; outputText: string; outputTruncated: boolean }> {
-  const scriptValue = await new Promise<unknown>((resolve, reject) => {
-    session.replServer.eval(
-      code,
-      session.context as any,
-      "rlm-repl",
-      (error, result) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        resolve(result);
-      },
-    );
+  const scriptValue = await session.runtime.evaluate(code, {
+    filename: "rlm-repl",
+    bootstrapTimeoutMs: RLM_EVAL_TIMEOUT_MS,
   });
   const value =
     scriptValue && typeof (scriptValue as Promise<unknown>).then === "function"
@@ -465,13 +454,15 @@ function createBaseContext() {
 function buildSystemMessage(depth: number): string {
   const recursionHint =
     depth === 0
-      ? "You are the root recursive REPL agent."
+      ? "You are the root recursive JavaScript agent."
       : `You are a recursive subagent at depth ${depth}.`;
   return [
     recursionHint,
+    "Execution runs in a persistent Node.js vm context (not node:repl).",
     "Read and use the global `prompt` variable before taking actions.",
-    "Respond with exactly one JavaScript REPL input snippet each turn.",
+    "Respond with exactly one JavaScript snippet each turn.",
     "Do not wrap your response in markdown fences.",
+    "Module loading is available via `require(...)` and `await import(...)`.",
     "Use the available tool functions directly (e.g., events_emit({...})).",
     "The only completion signal is done(result). Never use any other completion marker.",
     "You may call spawnSubagent(promptText) for recursive delegation.",
@@ -484,23 +475,13 @@ async function createSession(input: {
   depth: number;
 }): Promise<RlmSession> {
   const { agent, depth } = input;
-  const inputStream = new PassThrough();
-  const outputStream = new PassThrough();
-  const replServer = repl.start({
-    prompt: "",
-    terminal: false,
-    input: inputStream,
-    output: outputStream,
-    useGlobal: false,
-    ignoreUndefined: false,
-    useColors: false,
-  });
-  const context = replServer.context as Record<string, unknown>;
+  const runtime = createJsRuntimeSession();
+  const context = runtime.context;
   Object.assign(context, createBaseContext());
   const session: RlmSession = {
     id: newSessionId(agent.name, depth),
     depth,
-    replServer,
+    runtime,
     context,
     reservedKeys: new Set(),
     done: false,
@@ -663,7 +644,7 @@ async function bindSessionRuntime(
         },
       });
     }
-    childSession.replServer.close();
+    childSession.runtime.close();
     return childResult.doneValue;
   };
   for (const key of Object.keys(context)) {
@@ -767,7 +748,7 @@ async function runReplLoop(
           promptAvailableInRepl: true,
           promptReplPath: "globalThis.prompt",
           promptReminder:
-            "Read global `prompt` and produce one JS REPL input. Call done(result) when complete.",
+            "Read global `prompt` and produce one JS snippet. Call done(result) when complete.",
         },
         null,
         2,
@@ -1030,5 +1011,8 @@ export async function runRlmEvent(input: {
 }
 
 export function __resetRlmSessionsForTests() {
+  for (const session of rootSessions.values()) {
+    session.runtime.close();
+  }
   rootSessions.clear();
 }
