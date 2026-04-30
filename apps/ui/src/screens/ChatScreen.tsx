@@ -685,6 +685,11 @@ export function ChatScreen({
     }
     return [...latestByAgent.values()].sort((left, right) => right.updatedAt - left.updatedAt);
   }, [events]);
+  const visibleContextUsageByAgent = useMemo(() => {
+    if (activeAgentNames.length === 0) return contextUsageByAgent;
+    const activeNames = new Set(activeAgentNames);
+    return contextUsageByAgent.filter((usage) => activeNames.has(usage.agentName));
+  }, [activeAgentNames, contextUsageByAgent]);
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const isPinnedToBottomRef = useRef(true);
   const [memoryDrawerOpen, setMemoryDrawerOpen] = useState(false);
@@ -1153,12 +1158,12 @@ export function ChatScreen({
                     One or more attachments failed to upload. Remove them or retry.
                   </div>
                 )}
-                {contextUsageByAgent.length > 0 && (
+                {visibleContextUsageByAgent.length > 0 && (
                   <div className="ml-auto flex flex-wrap items-center gap-1.5 text-[11px] text-slate-400">
                     <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
                       Context
                     </span>
-                    {contextUsageByAgent.map((usage) => (
+                    {visibleContextUsageByAgent.map((usage) => (
                       <div
                         key={`context-footer-${usage.agentName}`}
                         className="group relative flex items-center gap-1.5 rounded border border-slate-800 bg-slate-900/70 px-1.5 py-1"
