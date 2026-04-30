@@ -1,7 +1,13 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { arch, hostname, release } from "node:os";
 import { join, resolve } from "node:path";
-import { generate } from "@orgops/llm";
+import {
+  generate,
+  type LlmImagePart,
+  type LlmMessage,
+  type LlmMessageContent,
+  type LlmTextPart,
+} from "@orgops/llm";
 import {
   listSkills,
   loadSkillEventShapes,
@@ -101,6 +107,8 @@ const CROSS_FULL_MEMORY_INTERVAL_MS = readPositiveIntEnv(
   process.env.ORGOPS_CROSS_FULL_MEMORY_INTERVAL_MS,
   DEFAULT_CROSS_FULL_MEMORY_INTERVAL_MS,
 );
+const MAX_HISTORY_IMAGES_PER_EVENT = 3;
+const MAX_HISTORY_IMAGE_BYTES = 5 * 1024 * 1024;
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string) {
   return new Promise<T>((resolve, reject) => {
@@ -471,16 +479,161 @@ async function emitStartupEvent(agent: Agent) {
   });
 }
 
-export function toHistoryMessage(agent: Agent, event: Event) {
+type EventAttachment = {
+  fileId: string;
+  mime?: string;
+};
+
+type AttachmentImageData = {
+  bytes: Uint8Array;
+  mimeType?: string;
+};
+
+type ApiFetchFn = (path: string, init?: RequestInit) => Promise<Response>;
+
+function extractImageAttachments(event: Event): EventAttachment[] {
+  const payload =
+    event.payload && typeof event.payload === "object"
+      ? (event.payload as { attachments?: unknown })
+      : undefined;
+  const attachments = payload?.attachments;
+  if (!Array.isArray(attachments)) return [];
+  return attachments
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const entry = item as { fileId?: unknown; mime?: unknown };
+      if (typeof entry.fileId !== "string" || entry.fileId.trim().length === 0) {
+        return null;
+      }
+      const mime = typeof entry.mime === "string" ? entry.mime.trim() : "";
+      return {
+        fileId: entry.fileId.trim(),
+        ...(mime ? { mime } : {}),
+      };
+    })
+    .filter((item): item is EventAttachment => Boolean(item))
+    .filter((item) => (item.mime ?? "").toLowerCase().startsWith("image/"));
+}
+
+async function fetchAttachmentImageData(
+  apiFetchFn: ApiFetchFn,
+  fileId: string,
+  mimeHint?: string,
+): Promise<AttachmentImageData | null> {
+  const response = await apiFetchFn(`/api/files/${encodeURIComponent(fileId)}`);
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (bytes.byteLength === 0 || bytes.byteLength > MAX_HISTORY_IMAGE_BYTES) {
+    return null;
+  }
+  const headerMime = response.headers.get("content-type")?.split(";")[0]?.trim();
+  const resolvedMime = (headerMime || mimeHint || "").toLowerCase();
+  if (!resolvedMime.startsWith("image/")) return null;
+  return {
+    bytes,
+    mimeType: resolvedMime,
+  };
+}
+
+function contentCharLength(content: LlmMessageContent): number {
+  if (typeof content === "string") return content.length;
+  return content.reduce((sum, part) => {
+    if (part.type === "text") return sum + part.text.length;
+    if (part.type === "image") {
+      const bytes =
+        part.image instanceof Uint8Array
+          ? part.image.byteLength
+          : String(part.image).length;
+      return sum + Math.min(bytes, 10_000);
+    }
+    return sum;
+  }, 0);
+}
+
+function contentForTelemetry(content: LlmMessageContent): string {
+  if (typeof content === "string") return content;
+  return content
+    .map((part) => {
+      if (part.type === "text") return part.text;
+      const bytes =
+        part.image instanceof Uint8Array
+          ? part.image.byteLength
+          : String(part.image).length;
+      return `[image attachment mime=${part.mimeType ?? "unknown"} bytes=${bytes}]`;
+    })
+    .join("\n");
+}
+
+function estimateTokensForContent(content: LlmMessageContent): number {
+  if (typeof content === "string") return estimateTokensForText(content);
+  return content.reduce((sum, part) => {
+    if (part.type === "text") {
+      return sum + estimateTokensForText(part.text);
+    }
+    return sum + 1024;
+  }, 0);
+}
+
+export async function toHistoryMessage(
+  agent: Agent,
+  event: Event,
+  options?: {
+    apiFetch?: ApiFetchFn;
+    attachmentCache?: Map<string, Promise<AttachmentImageData | null>>;
+  },
+): Promise<LlmMessage> {
   const role =
     event.source === `agent:${agent.name}`
       ? ("assistant" as const)
       : ("user" as const);
   const baseRecord = buildPromptEventRecord(event);
-  const content = JSON.stringify(baseRecord, null, 2);
+  const textContent = JSON.stringify(baseRecord, null, 2);
+  if (role !== "user" || !options?.apiFetch) {
+    return {
+      role,
+      content: textContent,
+    };
+  }
+  const attachments = extractImageAttachments(event).slice(
+    0,
+    MAX_HISTORY_IMAGES_PER_EVENT,
+  );
+  if (attachments.length === 0) {
+    return {
+      role,
+      content: textContent,
+    };
+  }
+  const cache = options.attachmentCache;
+  const parts: Array<LlmTextPart | LlmImagePart> = [
+    { type: "text", text: textContent },
+  ];
+  for (const attachment of attachments) {
+    let pending = cache?.get(attachment.fileId);
+    if (!pending) {
+      pending = fetchAttachmentImageData(
+        options.apiFetch,
+        attachment.fileId,
+        attachment.mime,
+      ).catch(() => null);
+      cache?.set(attachment.fileId, pending);
+    }
+    const loaded = await pending;
+    if (!loaded) continue;
+    parts.push({
+      type: "image",
+      image: loaded.bytes,
+      ...(loaded.mimeType ? { mimeType: loaded.mimeType } : {}),
+    });
+  }
+  if (parts.length === 1) {
+    return {
+      role,
+      content: textContent,
+    };
+  }
   return {
     role,
-    content,
+    content: parts,
   };
 }
 
@@ -547,17 +700,23 @@ function buildToolResultToStartIndexMap(channelEvents: Event[]) {
   return resultToStartIndex;
 }
 
-export function buildModelMessages(
+export async function buildModelMessages(
   agent: Agent,
   system: string,
   channelEvents: Event[],
-  options?: { systemContextMessages?: string[] },
-) {
+  options?: { systemContextMessages?: string[]; apiFetch?: ApiFetchFn },
+): Promise<LlmMessage[]> {
   const orderedChannelEvents = channelEvents
     .slice()
     .sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0));
-  const historyMessages = orderedChannelEvents.map((channelEvent) =>
-    toHistoryMessage(agent, channelEvent),
+  const attachmentCache = new Map<string, Promise<AttachmentImageData | null>>();
+  const historyMessages = await Promise.all(
+    orderedChannelEvents.map((channelEvent) =>
+      toHistoryMessage(agent, channelEvent, {
+        apiFetch: options?.apiFetch,
+        attachmentCache,
+      }),
+    ),
   );
   const resultToStartIndex =
     buildToolResultToStartIndexMap(orderedChannelEvents);
@@ -566,7 +725,7 @@ export function buildModelMessages(
   let keptMessageCount = 0;
   let totalHistoryChars = 0;
   for (let index = historyMessages.length - 1; index >= 0; index -= 1) {
-    const messageChars = historyMessages[index]?.content.length ?? 0;
+    const messageChars = contentCharLength(historyMessages[index]?.content ?? "");
     const exceedsMaxEvents = keptMessageCount + 1 > HISTORY_MAX_EVENTS;
     const exceedsMaxChars =
       keptMessageCount > 0 &&
@@ -636,9 +795,9 @@ function estimateTokensForText(text: string): number {
   return Math.ceil(text.length / CHARS_PER_TOKEN_ESTIMATE);
 }
 
-function estimateContextUsage(messages: Array<{ role: string; content: string }>) {
+function estimateContextUsage(messages: LlmMessage[]) {
   const usedTokens = messages.reduce(
-    (sum, message) => sum + estimateTokensForText(message.content),
+    (sum, message) => sum + estimateTokensForContent(message.content),
     0,
   );
   return usedTokens;
@@ -824,6 +983,34 @@ export function selectRecentDeltaEventsForPrompt(agent: Agent, events: Event[]):
   }
   if (!latestUserLikeEventId) return events;
   return events.filter((event) => event.id !== latestUserLikeEventId);
+}
+
+export async function reconcileLateInjectedMessages(input: {
+  apiFetch: (path: string, init?: RequestInit) => Promise<Response>;
+  agent: Agent;
+  channelId: string;
+  seenEventIds: Set<string>;
+  retryMessages: Array<{ role: "user"; content: string }>;
+  attempt: number;
+  maxAttempts: number;
+}) {
+  const injected = await pullInjectedEventMessages({
+    apiFetch: input.apiFetch,
+    agent: input.agent,
+    channelId: input.channelId,
+    seenEventIds: input.seenEventIds,
+    shouldInclude: shouldHandleEventForAgent,
+  });
+  if (!injected || injected.messages.length === 0) return false;
+  input.retryMessages.push(...injected.messages);
+  input.retryMessages.push({
+    role: "user",
+    content: [
+      `New channel events arrived while you were responding on attempt ${input.attempt}/${input.maxAttempts}.`,
+      "Re-evaluate using these events and return exactly one final JSON event object.",
+    ].join("\n"),
+  });
+  return true;
 }
 
 const channelLoopManager = createChannelLoopManager({
@@ -1021,8 +1208,9 @@ async function handleEvent(agent: Agent, events: Event[]) {
   ]
     .filter(Boolean)
     .join("\n\n");
-  const baseMessages = buildModelMessages(agent, system, eventHistory, {
+  const baseMessages = await buildModelMessages(agent, system, eventHistory, {
     systemContextMessages,
+    apiFetch,
   });
   const mergedTriggerMessage = buildBatchedTriggerMessage(events);
   const invokeMessages = mergedTriggerMessage
@@ -1044,7 +1232,7 @@ async function handleEvent(agent: Agent, events: Event[]) {
           systemContextMessages,
           messages: invokeMessages.map((message) => ({
             role: message.role,
-            content: String(message.content ?? ""),
+            content: contentForTelemetry(message.content),
           })),
         },
       });
@@ -1058,15 +1246,10 @@ async function handleEvent(agent: Agent, events: Event[]) {
   );
   const systemChars = system.length;
   const totalPromptChars = invokeMessages.reduce(
-    (sum, message) => sum + String(message.content ?? "").length,
+    (sum, message) => sum + contentCharLength(message.content),
     0,
   );
-  const estimatedUsedTokens = estimateContextUsage(
-    invokeMessages.map((message) => ({
-      role: message.role,
-      content: String(message.content ?? ""),
-    })),
-  );
+  const estimatedUsedTokens = estimateContextUsage(invokeMessages);
   const contextWindowTokens = resolveModelContextWindowTokens(agent.modelId);
   const estimatedAvailableTokens = Math.max(
     0,
@@ -1201,6 +1384,18 @@ async function handleEvent(agent: Agent, events: Event[]) {
     }
     const responseText = result.text ?? "";
     lastResponseText = responseText;
+    const hasLateInjectedEvents = await reconcileLateInjectedMessages({
+      apiFetch,
+      agent,
+      channelId,
+      seenEventIds,
+      retryMessages,
+      attempt,
+      maxAttempts: MAX_EVENT_DISPATCH_ATTEMPTS,
+    });
+    if (hasLateInjectedEvents) {
+      continue;
+    }
 
     let parsed: unknown;
     try {

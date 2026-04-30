@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createRunnerTools } from "./tools";
 import { executeTool } from "./tools";
 import {
+  reconcileLateInjectedMessages,
   buildModelMessages,
   resolveAgentClassicMaxModelSteps,
   resolveAgentMemoryContextMode,
@@ -43,7 +44,7 @@ describe("agent runner", () => {
     expect(Object.keys(tools)).toContain("memory_cross_recent_update");
   });
 
-  it("builds model messages from all channel events", () => {
+  it("builds model messages from all channel events", async () => {
     const agent: Agent = {
       name: "tester",
       systemInstructions: "",
@@ -77,7 +78,7 @@ describe("agent runner", () => {
       },
     ];
 
-    const messages = buildModelMessages(agent, "system prompt", events);
+    const messages = await buildModelMessages(agent, "system prompt", events);
     expect(messages).toHaveLength(4);
     expect(messages[0]).toEqual({ role: "system", content: "system prompt" });
     expect(messages[1]?.role).toBe("user");
@@ -88,6 +89,48 @@ describe("agent runner", () => {
       .slice(1)
       .map((message) => JSON.parse(message.content as string).eventId);
     expect(eventIds).toEqual(["evt-1", "evt-2", "evt-3"]);
+  });
+
+  it("includes image attachment parts when message payload references files", async () => {
+    const agent: Agent = {
+      name: "tester",
+      systemInstructions: "",
+      soulPath: "",
+      workspacePath: "/tmp",
+      modelId: "openai:gpt-4o-mini",
+      desiredState: "RUNNING",
+      runtimeState: "RUNNING",
+    };
+    const events: Event[] = [
+      {
+        id: "evt-1",
+        type: "message.created",
+        payload: {
+          text: "see screenshot",
+          attachments: [{ fileId: "img-1", mime: "image/png" }],
+        },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+    ];
+
+    const messages = await buildModelMessages(agent, "system prompt", events, {
+      apiFetch: async (path: string) => {
+        expect(path).toBe("/api/files/img-1");
+        return new Response(new Uint8Array([137, 80, 78, 71]), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        });
+      },
+    });
+
+    expect(messages).toHaveLength(2);
+    expect(messages[1]?.role).toBe("user");
+    expect(Array.isArray(messages[1]?.content)).toBe(true);
+    const parts = messages[1]?.content as Array<{ type: string; text?: string }>;
+    expect(parts[0]?.type).toBe("text");
+    expect(parts[0]?.text).toContain('"eventId": "evt-1"');
+    expect(parts[1]?.type).toBe("image");
   });
 
   it("resolves per-agent timeout and model-step overrides with sane defaults", () => {
@@ -144,7 +187,7 @@ describe("agent runner", () => {
     ).toBe("PER_CHANNEL_CROSS_CHANNEL");
   });
 
-  it("truncates oversized history to stay within model budget", () => {
+  it("truncates oversized history to stay within model budget", async () => {
     const agent: Agent = {
       name: "tester",
       systemInstructions: "",
@@ -162,7 +205,7 @@ describe("agent runner", () => {
       channelId: "chan-1",
     }));
 
-    const messages = buildModelMessages(agent, "system prompt", events);
+    const messages = await buildModelMessages(agent, "system prompt", events);
     expect(messages[0]).toEqual({ role: "system", content: "system prompt" });
     expect(messages[1]?.role).toBe("user");
     const truncationMeta = JSON.parse(String(messages[1]?.content));
@@ -176,7 +219,7 @@ describe("agent runner", () => {
     expect(eventIds[eventIds.length - 1]).toBe("evt-130");
   });
 
-  it("keeps newest events when history arrives newest-first", () => {
+  it("keeps newest events when history arrives newest-first", async () => {
     const agent: Agent = {
       name: "tester",
       systemInstructions: "",
@@ -195,7 +238,11 @@ describe("agent runner", () => {
       createdAt: index + 1,
     })).reverse();
 
-    const messages = buildModelMessages(agent, "system prompt", eventsNewestFirst);
+    const messages = await buildModelMessages(
+      agent,
+      "system prompt",
+      eventsNewestFirst,
+    );
     expect(messages[0]).toEqual({ role: "system", content: "system prompt" });
     expect(messages[1]?.role).toBe("user");
     const truncationMeta = JSON.parse(String(messages[1]?.content));
@@ -245,7 +292,7 @@ describe("agent runner", () => {
     expect(filtered.map((event) => event.id)).toEqual(["evt-1", "evt-2"]);
   });
 
-  it("injects memory summaries as system messages", () => {
+  it("injects memory summaries as system messages", async () => {
     const agent: Agent = {
       name: "tester",
       systemInstructions: "",
@@ -265,7 +312,7 @@ describe("agent runner", () => {
       },
     ];
 
-    const messages = buildModelMessages(agent, "system prompt", events, {
+    const messages = await buildModelMessages(agent, "system prompt", events, {
       systemContextMessages: [
         "Channel Recent Summary (last 10 minutes)\nA recent summary.",
         "Channel Full Memory\nA full summary.",
@@ -284,7 +331,74 @@ describe("agent runner", () => {
     expect(JSON.parse(String(messages[3]?.content)).eventId).toBe("evt-1");
   });
 
-  it("does not keep tool result when matching start is truncated", () => {
+  it("reconciles same turn when late injected channel events arrive", async () => {
+    const agent: Agent = {
+      name: "tester",
+      systemInstructions: "",
+      soulPath: "",
+      workspacePath: "/tmp",
+      modelId: "openai:gpt-4o-mini",
+      desiredState: "RUNNING",
+      runtimeState: "RUNNING",
+    };
+    const seenEventIds = new Set<string>(["evt-trigger"]);
+    const retryMessages: Array<{ role: "user"; content: string }> = [];
+    const apiFetch = async () =>
+      new Response(
+        JSON.stringify([
+          {
+            id: "evt-tool",
+            type: "tool.started",
+            source: "agent:tester",
+            channelId: "chan-1",
+            payload: { tool: "shell_run" },
+            createdAt: 1,
+          },
+          {
+            id: "evt-process-started",
+            type: "process.started",
+            source: "system:process-runner",
+            channelId: "chan-1",
+            payload: { processId: "proc-1", targetAgentName: "tester" },
+            createdAt: 2,
+          },
+        ] satisfies Event[]),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+
+    const hasLateMessages = await reconcileLateInjectedMessages({
+      apiFetch,
+      agent,
+      channelId: "chan-1",
+      seenEventIds,
+      retryMessages,
+      attempt: 1,
+      maxAttempts: 3,
+    });
+
+    expect(hasLateMessages).toBe(true);
+    expect(retryMessages).toHaveLength(2);
+    expect(retryMessages[0]?.content).toContain('"type": "process.started"');
+    expect(retryMessages[1]?.content).toContain("New channel events arrived");
+    expect(seenEventIds.has("evt-process-started")).toBe(true);
+    expect(seenEventIds.has("evt-tool")).toBe(true);
+
+    const hasNewMessagesOnSecondPull = await reconcileLateInjectedMessages({
+      apiFetch,
+      agent,
+      channelId: "chan-1",
+      seenEventIds,
+      retryMessages,
+      attempt: 2,
+      maxAttempts: 3,
+    });
+    expect(hasNewMessagesOnSecondPull).toBe(false);
+  });
+
+  it("does not keep tool result when matching start is truncated", async () => {
     const agent: Agent = {
       name: "tester",
       systemInstructions: "",
@@ -319,7 +433,7 @@ describe("agent runner", () => {
       createdAt: 11,
     };
 
-    const messages = buildModelMessages(agent, "system prompt", events);
+    const messages = await buildModelMessages(agent, "system prompt", events);
     const eventIds = messages
       .slice(2)
       .map((message) => JSON.parse(message.content as string).eventId);
@@ -328,7 +442,7 @@ describe("agent runner", () => {
     expect(eventIds[eventIds.length - 1]).toBe("evt-130");
   });
 
-  it("does not keep failed tool result when matching start is truncated", () => {
+  it("does not keep failed tool result when matching start is truncated", async () => {
     const agent: Agent = {
       name: "tester",
       systemInstructions: "",
@@ -363,7 +477,7 @@ describe("agent runner", () => {
       createdAt: 11,
     };
 
-    const messages = buildModelMessages(agent, "system prompt", events);
+    const messages = await buildModelMessages(agent, "system prompt", events);
     const eventIds = messages
       .slice(2)
       .map((message) => JSON.parse(message.content as string).eventId);

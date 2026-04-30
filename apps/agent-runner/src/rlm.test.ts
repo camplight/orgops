@@ -56,7 +56,14 @@ function parseDepthStep(messages: LlmMessage[]): {
     .reverse()
     .find((message) => message.role === "user");
   if (!lastUser) return { depth: 0, step: 1 };
-  const parsed = JSON.parse(lastUser.content) as {
+  const messageText =
+    typeof lastUser.content === "string"
+      ? lastUser.content
+      : lastUser.content
+          .filter((part) => part.type === "text")
+          .map((part) => part.text)
+          .join("\n");
+  const parsed = JSON.parse(messageText) as {
     depth?: number;
     step?: number;
   };
@@ -255,9 +262,16 @@ describe("RLM mode", () => {
       apiFetch: executeCtx.apiFetch,
       emitEvent: async () => {},
       generateFn: async (_modelId, messages) => {
-        const hasInjected = messages.some((message) =>
-          message.content.includes('"type": "process.output"'),
-        );
+        const hasInjected = messages.some((message) => {
+          const content =
+            typeof message.content === "string"
+              ? message.content
+              : message.content
+                  .filter((part) => part.type === "text")
+                  .map((part) => part.text)
+                  .join("\n");
+          return content.includes('"type": "process.output"');
+        });
         if (hasInjected) {
           return { text: "done({ injected: true })" };
         }
@@ -404,9 +418,16 @@ describe("RLM mode", () => {
         }
       },
       generateFn: async (_modelId, messages) => {
-        const hasDoneValidationError = messages.some((message) =>
-          message.content.includes('"type": "rlm.done.validation_error"'),
-        );
+        const hasDoneValidationError = messages.some((message) => {
+          const content =
+            typeof message.content === "string"
+              ? message.content
+              : message.content
+                  .filter((part) => part.type === "text")
+                  .map((part) => part.text)
+                  .join("\n");
+          return content.includes('"type": "rlm.done.validation_error"');
+        });
         if (hasDoneValidationError) {
           return {
             text: 'done({ type: "message.created", payload: { text: "fixed after validation error" } })',

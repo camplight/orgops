@@ -76,11 +76,11 @@ describe("channel loop manager", () => {
       desiredState: "RUNNING",
       runtimeState: "RUNNING",
     };
-    let releaseBatch: (() => void) | null = null;
+    const gate: { release?: () => void } = {};
     const manager = createChannelLoopManager({
       processBatch: async () =>
         await new Promise<void>((resolve) => {
-          releaseBatch = resolve;
+          gate.release = () => resolve();
         }),
     });
     const first: Event = {
@@ -96,7 +96,7 @@ describe("channel loop manager", () => {
     await sleep(5);
     expect(manager.isChannelBusy("zoro", "chan-1")).toBe(true);
 
-    releaseBatch?.();
+    gate.release?.();
     for (let idx = 0; idx < 20; idx += 1) {
       if (!manager.isChannelBusy("zoro", "chan-1")) break;
       await sleep(10);
@@ -118,12 +118,12 @@ describe("channel loop manager", () => {
       ...zoro,
       name: "alpha",
     };
-    let releaseBatch: (() => void) | null = null;
+    const gate: { release?: () => void } = {};
     const manager = createChannelLoopManager({
       processBatch: async (_agent, _channelId, events) => {
         if (events[0]?.channelId === "chan-1" && _agent.name === "zoro") {
           await new Promise<void>((resolve) => {
-            releaseBatch = resolve;
+            gate.release = () => resolve();
           });
         }
       },
@@ -143,7 +143,7 @@ describe("channel loop manager", () => {
     expect(manager.isChannelBusy("alpha", "chan-1")).toBe(false);
     expect(manager.isChannelBusy("zoro", "chan-2")).toBe(false);
 
-    releaseBatch?.();
+    gate.release?.();
     for (let idx = 0; idx < 20; idx += 1) {
       if (!manager.isChannelBusy("zoro", "chan-1")) break;
       await sleep(10);

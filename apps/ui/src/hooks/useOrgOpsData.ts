@@ -14,7 +14,7 @@ import type {
   RunnerNode,
   Team,
   Thread,
-  Conversation
+  Conversation,
 } from "../types";
 
 type DashboardEventStats = {
@@ -37,7 +37,7 @@ function getDashboardEventStats(events: EventRow[]): DashboardEventStats {
     processed: (statusCounts.DELIVERED ?? 0) + (statusCounts.PROCESSED ?? 0),
     failed: (statusCounts.FAILED ?? 0) + (statusCounts.DEAD ?? 0),
     pending: statusCounts.PENDING ?? 0,
-    scheduled: statusCounts.SCHEDULED ?? 0
+    scheduled: statusCounts.SCHEDULED ?? 0,
   };
 }
 
@@ -53,17 +53,22 @@ export function useOrgOpsData(authenticated: boolean) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [threads, setThreads] = useState<Thread[]>([]);
   const [processes, setProcesses] = useState<ProcessRow[]>([]);
-  const [processOutput, setProcessOutput] = useState<Record<string, ProcessOutputRow[]>>({});
+  const [processOutput, setProcessOutput] = useState<
+    Record<string, ProcessOutputRow[]>
+  >({});
   const [secrets, setSecrets] = useState<SecretRow[]>([]);
   const [channelEvents, setChannelEvents] = useState<EventRow[]>([]);
-  const [channelParticipants, setChannelParticipants] = useState<ChannelParticipant[]>([]);
-  const [dashboardEventStats, setDashboardEventStats] = useState<DashboardEventStats>({
-    total: 0,
-    processed: 0,
-    failed: 0,
-    pending: 0,
-    scheduled: 0
-  });
+  const [channelParticipants, setChannelParticipants] = useState<
+    ChannelParticipant[]
+  >([]);
+  const [dashboardEventStats, setDashboardEventStats] =
+    useState<DashboardEventStats>({
+      total: 0,
+      processed: 0,
+      failed: 0,
+      pending: 0,
+      scheduled: 0,
+    });
 
   const refreshDashboard = useCallback(() => {
     apiJson<Agent[]>("/api/agents").then(setAgents);
@@ -71,49 +76,57 @@ export function useOrgOpsData(authenticated: boolean) {
   }, []);
   const refreshSkills = useCallback(
     () => apiJson<SkillMeta[]>("/api/skills").then(setSkills),
-    []
+    [],
   );
   const refreshEvents = useCallback(
-    (query = "/api/events?limit=50&order=desc") => apiJson<EventRow[]>(query).then(setEvents),
-    []
+    (query = "/api/events?limit=50&order=desc") =>
+      apiJson<EventRow[]>(query).then(setEvents),
+    [],
   );
   const refreshDashboardEvents = useCallback(async () => {
     const [recentEvents, allEvents] = await Promise.all([
       apiJson<EventRow[]>("/api/events?limit=50&order=desc"),
-      apiJson<EventRow[]>("/api/events?all=1&order=desc")
+      apiJson<EventRow[]>("/api/events?all=1&order=desc"),
     ]);
     setEvents(recentEvents);
     setDashboardEventStats(getDashboardEventStats(allEvents));
   }, []);
 
-  const refreshTeams = useCallback(() => apiJson<Team[]>("/api/teams").then(setTeams), []);
-  const refreshHumans = useCallback(() => apiJson<Human[]>("/api/humans").then(setHumans), []);
+  const refreshTeams = useCallback(
+    () => apiJson<Team[]>("/api/teams").then(setTeams),
+    [],
+  );
+  const refreshHumans = useCallback(
+    () => apiJson<Human[]>("/api/humans").then(setHumans),
+    [],
+  );
   const refreshEventTypes = useCallback(
     () =>
-      apiJson<{ eventTypes: EventTypeInfo[] }>("/api/event-types").then((response) =>
-        setEventTypes(response.eventTypes ?? [])
+      apiJson<{ eventTypes: EventTypeInfo[] }>("/api/event-types").then(
+        (response) => setEventTypes(response.eventTypes ?? []),
       ),
-    []
+    [],
   );
   const refreshChannels = useCallback(
     () => apiJson<Channel[]>("/api/channels").then(setChannels),
-    []
+    [],
   );
   const refreshRunners = useCallback(
     () => apiJson<RunnerNode[]>("/api/runners").then(setRunners),
-    []
+    [],
   );
   const refreshConversations = useCallback(
     () => apiJson<Conversation[]>("/api/conversations").then(setConversations),
-    []
+    [],
   );
   const refreshProcesses = useCallback(
-    () => apiJson<ProcessRow[]>("/api/processes?reconcile=1").then(setProcesses),
-    []
+    () =>
+      apiJson<ProcessRow[]>("/api/processes?reconcile=1").then(setProcesses),
+    [],
   );
   const refreshSecrets = useCallback(
     () => apiJson<SecretRow[]>("/api/secrets").then(setSecrets),
-    []
+    [],
   );
 
   useEffect(() => {
@@ -139,33 +152,38 @@ export function useOrgOpsData(authenticated: boolean) {
     refreshProcesses,
     refreshSecrets,
     refreshTeams,
-    refreshHumans
+    refreshHumans,
   ]);
 
-  const loadConversation = useCallback(async (id: string, channelId?: string | null) => {
-    const threadsData = await apiJson<Thread[]>(`/api/conversations/${id}/threads`);
-    setThreads(threadsData);
-    if (channelId) {
-      const eventsData = await apiJson<EventRow[]>(
-        `/api/events?channelId=${channelId}&limit=200`
+  const loadConversation = useCallback(
+    async (id: string, channelId?: string | null) => {
+      const threadsData = await apiJson<Thread[]>(
+        `/api/conversations/${id}/threads`,
       );
-      setEvents(eventsData);
-    } else {
-      setEvents([]);
-    }
-    return threadsData;
-  }, []);
+      setThreads(threadsData);
+      if (channelId) {
+        const eventsData = await apiJson<EventRow[]>(
+          `/api/events?channelId=${channelId}&limit=200`,
+        );
+        setEvents(eventsData);
+      } else {
+        setEvents([]);
+      }
+      return threadsData;
+    },
+    [],
+  );
 
   const loadProcessOutput = useCallback(async (id: string) => {
     const output = await apiJson<ProcessOutputRow[]>(
-      `/api/processes/${id}/output?tail=1&limit=2000`
+      `/api/processes/${id}/output?tail=1&limit=2000`,
     );
     setProcessOutput((prev) => ({ ...prev, [id]: output }));
   }, []);
 
   const loadChannelEvents = useCallback(async (channelId: string) => {
     const data = await apiJson<EventRow[]>(
-      `/api/events?channelId=${channelId}&limit=200`
+      `/api/events?channelId=${channelId}&limit=200`,
     );
     setChannelEvents(data);
     return data;
@@ -173,7 +191,7 @@ export function useOrgOpsData(authenticated: boolean) {
 
   const loadChannelParticipants = useCallback(async (channelId: string) => {
     const data = await apiJson<ChannelParticipant[]>(
-      `/api/channels/${channelId}/participants`
+      `/api/channels/${channelId}/participants`,
     );
     setChannelParticipants(data);
   }, []);
@@ -224,6 +242,6 @@ export function useOrgOpsData(authenticated: boolean) {
     loadProcessOutput,
     apiFetch,
     apiJson,
-    getApiHeaders
+    getApiHeaders,
   };
 }

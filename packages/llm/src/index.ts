@@ -4,8 +4,21 @@ import { createAnthropic } from "@ai-sdk/anthropic";
 
 export type LlmMessage = {
   role: "system" | "user" | "assistant";
-  content: string;
+  content: LlmMessageContent;
 };
+
+export type LlmTextPart = {
+  type: "text";
+  text: string;
+};
+
+export type LlmImagePart = {
+  type: "image";
+  image: Uint8Array | string;
+  mimeType?: string;
+};
+
+export type LlmMessageContent = string | Array<LlmTextPart | LlmImagePart>;
 
 export type GenerateOptions = {
   temperature?: number;
@@ -84,7 +97,7 @@ export async function generate(
 
   const result = await generateText({
     model,
-    messages,
+    messages: messages as any,
     temperature: options.temperature,
     maxTokens: options.maxTokens,
     maxSteps: options.maxSteps,
