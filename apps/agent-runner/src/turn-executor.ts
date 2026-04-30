@@ -135,6 +135,28 @@ function extractJsonObject(rawText: string): unknown {
   }
 }
 
+export function normalizeFallbackMessageText(rawText: string): string {
+  const trimmed = rawText.trim();
+  if (!trimmed) return "Unable to produce structured event output.";
+  try {
+    const parsed = extractJsonObject(trimmed);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const payload = (parsed as Record<string, unknown>).payload;
+      if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+        const payloadText = (payload as Record<string, unknown>).text;
+        if (typeof payloadText === "string" && payloadText.trim()) {
+          return payloadText.trim();
+        }
+      }
+      // Do not leak raw event JSON into chat when fallback is triggered.
+      return "I hit a response-format issue and could not produce a clean chat message. Please try again.";
+    }
+  } catch {
+    // Keep plain-text fallbacks as-is.
+  }
+  return trimmed;
+}
+
 function normalizeEventDraft(
   parsed: unknown,
   agentName: string,
@@ -196,7 +218,7 @@ function buildFallbackMessageEvent(
     source: `agent:${agentName}`,
     channelId,
     payload: {
-      text: text.trim() || "Unable to produce structured event output.",
+      text: normalizeFallbackMessageText(text),
     },
     ...(parentEventId ? { parentEventId } : {}),
   };

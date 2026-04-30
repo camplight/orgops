@@ -112,6 +112,16 @@ const channelParticipantRemoveSchema = z.object({
   agentName: z.string().min(1),
 });
 
+const channelJoinSchema = z.object({
+  channelId: z.string().min(1).optional(),
+  agentName: z.string().min(1).optional(),
+});
+
+const channelLeaveSchema = z.object({
+  channelId: z.string().min(1).optional(),
+  agentName: z.string().min(1).optional(),
+});
+
 const channelsListSchema = z.object({
   kind: z.string().min(1).optional(),
   nameContains: z.string().min(1).optional(),
@@ -253,6 +263,16 @@ export const eventsToolDefs: ToolDef[] = [
     "events_channel_participant_remove",
     "Remove an agent participant from a non-integration channel.",
     channelParticipantRemoveSchema,
+  ],
+  [
+    "events_channel_join",
+    "Join an agent to a channel. Defaults to current channel and current agent when omitted. Membership updates are picked up on the next runner poll cycle.",
+    channelJoinSchema,
+  ],
+  [
+    "events_channel_leave",
+    "Remove an agent from a channel. Defaults to current channel and current agent when omitted. Membership updates are picked up on the next runner poll cycle.",
+    channelLeaveSchema,
   ],
   [
     "events_channels_list",
@@ -805,6 +825,56 @@ export async function execute(
       }),
     });
     return { ok: true, channelId: parsed.channelId, agentName: parsed.agentName };
+  }
+
+  if (tool === "events_channel_join") {
+    const parsedResult = parseToolArgs(tool, channelJoinSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const parsed = parsedResult.data;
+    const targetChannelId = parsed.channelId?.trim() || ctx.channelId;
+    if (!targetChannelId) {
+      return {
+        error:
+          "No target channel. Provide channelId or call this tool from a channel-scoped turn.",
+      };
+    }
+    const targetAgentName = parsed.agentName?.trim() || ctx.agent.name;
+    const manageable = await ensureManageableChannel(ctx, targetChannelId);
+    if (!manageable.ok) return { error: manageable.error };
+    await ctx.apiFetch(`/api/channels/${encodeURIComponent(targetChannelId)}/subscribe`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        subscriberType: "AGENT",
+        subscriberId: targetAgentName,
+      }),
+    });
+    return { ok: true, channelId: targetChannelId, agentName: targetAgentName };
+  }
+
+  if (tool === "events_channel_leave") {
+    const parsedResult = parseToolArgs(tool, channelLeaveSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const parsed = parsedResult.data;
+    const targetChannelId = parsed.channelId?.trim() || ctx.channelId;
+    if (!targetChannelId) {
+      return {
+        error:
+          "No target channel. Provide channelId or call this tool from a channel-scoped turn.",
+      };
+    }
+    const targetAgentName = parsed.agentName?.trim() || ctx.agent.name;
+    const manageable = await ensureManageableChannel(ctx, targetChannelId);
+    if (!manageable.ok) return { error: manageable.error };
+    await ctx.apiFetch(`/api/channels/${encodeURIComponent(targetChannelId)}/unsubscribe`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        subscriberType: "AGENT",
+        subscriberId: targetAgentName,
+      }),
+    });
+    return { ok: true, channelId: targetChannelId, agentName: targetAgentName };
   }
 
   if (tool === "events_channels_list") {

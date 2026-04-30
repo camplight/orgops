@@ -279,6 +279,48 @@ function getOpsCliEnvPath() {
 
 type ModelProvider = "openai" | "anthropic";
 
+type CliOptions = {
+  goal: string | null;
+  help: boolean;
+};
+
+function parseCliArgs(argv: string[]): CliOptions {
+  const args = [...argv];
+  let goal: string | null = null;
+  let help = false;
+  while (args.length > 0) {
+    const token = args.shift() ?? "";
+    if (token === "--help" || token === "-h") {
+      help = true;
+      continue;
+    }
+    if (token === "--goal" || token === "-g") {
+      const value = args.shift();
+      if (!value) {
+        throw new Error(`Missing value for ${token}. Usage: --goal "your instruction"`);
+      }
+      goal = value;
+      continue;
+    }
+    throw new Error(`Unknown argument: ${token}. Use --help for usage.`);
+  }
+  return { goal, help };
+}
+
+function printCliHelp() {
+  const lines = [
+    "OrgOps OpsCLI",
+    "",
+    "Usage:",
+    "  opscli-macos [--goal \"instruction\"]",
+    "",
+    "Options:",
+    "  -g, --goal <text>    Run one autonomous goal and exit",
+    "  -h, --help           Show help",
+  ];
+  stdout.write(`${lines.join("\n")}\n`);
+}
+
 function normalizeProvider(provider: string): ModelProvider | null {
   const normalized = provider.trim().toLowerCase();
   if (normalized === "openai") return "openai";
@@ -1326,6 +1368,18 @@ async function ensureModelCredentials(
 }
 
 async function main() {
+  let cli: CliOptions;
+  try {
+    cli = parseCliArgs(process.argv.slice(2));
+  } catch (error) {
+    writeRoleMessage("error", String(error), { toStderr: true });
+    process.exitCode = 1;
+    return;
+  }
+  if (cli.help) {
+    printCliHelp();
+    return;
+  }
   const rootEnvPath = getOpsCliEnvPath();
   loadDotEnvIntoProcess(rootEnvPath);
   resetSessionLog();
@@ -1344,7 +1398,11 @@ async function main() {
     return;
   }
   const session = createSession();
-  writeRoleMessage("opscli", "Type a maintenance goal (can be empty), or 'exit' to quit.");
+  if (!cli.goal) {
+    writeRoleMessage("opscli", "Type a maintenance goal (can be empty), or 'exit' to quit.");
+  } else {
+    writeRoleMessage("opscli", "Running one-shot goal from CLI argument.");
+  }
   let activeTaskAbortController: AbortController | null = null;
   let lastSigintAt = 0;
   const onSigint = () => {
@@ -1386,6 +1444,23 @@ async function main() {
   };
   rl.on("SIGINT", onSigint);
   try {
+    if (cli.goal) {
+      activeTaskAbortController = new AbortController();
+      const result = await runAutonomousTask(
+        cli.goal,
+        session,
+        async (promptText) => {
+          writeRoleMessage("agent", `${promptText}`, { leadingNewline: true });
+          return rl.question(`${rolePrefix("user")} `);
+        },
+        activeTaskAbortController.signal
+      );
+      activeTaskAbortController = null;
+      if (result.requestedExit) {
+        process.exitCode = result.exitCode;
+      }
+      return;
+    }
     while (true) {
       let input = "";
       try {

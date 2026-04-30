@@ -9,6 +9,10 @@ import { stopAllRlmChildren } from "./rlm-process";
 import { createRunnerState } from "./runner/state";
 import { createRunnerApi } from "./runner/api";
 import {
+  agentChannelKey,
+  shouldSuppressProcessLifecycleTrigger,
+} from "./turn-trigger-filter";
+import {
   createTurnExecutor,
   reconcileLateInjectedMessages,
   resolveAgentClassicMaxModelSteps,
@@ -95,8 +99,21 @@ const maintenanceLoop = createMaintenanceLoop({
 });
 
 const channelLoopManager = createChannelLoopManager({
-  processBatch: async (agent, _channelId, channelEvents) => {
-    await handleTurn(agent, channelEvents);
+  processBatch: async (agent, channelId, channelEvents) => {
+    const key = agentChannelKey(agent.name, channelId);
+    const startedAt = Date.now();
+    state.recentTurnWindows.set(key, {
+      startedAt,
+      completedAt: startedAt,
+    });
+    try {
+      await handleTurn(agent, channelEvents);
+    } finally {
+      const existing = state.recentTurnWindows.get(key);
+      if (!existing) return;
+      existing.completedAt = Date.now();
+      state.recentTurnWindows.set(key, existing);
+    }
   },
   onBatchError: async (agent, _channelId, channelEvents, error) => {
     const triggerEvent = channelEvents[channelEvents.length - 1];
@@ -192,9 +209,21 @@ async function pollAgent(agent: Agent) {
   const events = pendingBuckets.flat();
   const pendingByChannel = new Map<string, Event[]>();
   for (const event of events) {
-    if (!shouldHandleEventForAgent(agent, event)) continue;
     const channelId = event.channelId;
     if (!channelId) continue;
+    const recentWindow = state.recentTurnWindows.get(
+      agentChannelKey(agent.name, channelId),
+    );
+    if (
+      shouldSuppressProcessLifecycleTrigger({
+        agentName: agent.name,
+        event,
+        recentWindow,
+      })
+    ) {
+      continue;
+    }
+    if (!shouldHandleEventForAgent(agent, event)) continue;
     const bucket = pendingByChannel.get(channelId) ?? [];
     bucket.push(event);
     pendingByChannel.set(channelId, bucket);

@@ -14,7 +14,7 @@ import {
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { EventRow } from "../types";
-import { apiFetch, apiJson } from "../api";
+import { apiFetch, apiJson, getApiHeaders } from "../api";
 import { Button, Card, SelectAutocomplete, Textarea } from "../components/ui";
 import { formatTimestamp } from "../utils/formatTimestamp";
 
@@ -115,14 +115,6 @@ function getMessageRole(event: EventRow): "human" | "agent" | "system" {
   return "system";
 }
 
-function isTerminalAgentEvent(event: EventRow) {
-  if (event.type === "message.created" && event.source.startsWith("agent:")) return true;
-  if (event.type === "agent.turn.completed" || event.type === "agent.turn.failed") return true;
-  return /(completed|complete|done|finished|failed|error|cancelled|canceled|skipped|exited)$/i.test(
-    event.type
-  );
-}
-
 function getPayloadString(payload: Record<string, unknown>, key: string): string | null {
   const value = payload[key];
   return typeof value === "string" && value.trim() ? value.trim() : null;
@@ -145,9 +137,58 @@ function getAgentNameForStatusEvent(event: EventRow): string | null {
   return fromPayload;
 }
 
+function compactInlineText(value: string, maxChars = 96): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (!normalized) return "";
+  if (normalized.length <= maxChars) return normalized;
+  return `${normalized.slice(0, Math.max(0, maxChars - 1))}…`;
+}
+
+function payloadSnippet(payload: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = payload[key];
+    if (typeof value === "string" && value.trim()) {
+      const compact = compactInlineText(value);
+      if (compact) return compact;
+    }
+  }
+  return null;
+}
+
+function toInlineAgentDetail(event: EventRow): string | null {
+  const payload = asObject(event.payload);
+  if (event.type === "process.started") {
+    return payloadSnippet(payload, ["cmd"]);
+  }
+  if (event.type === "process.output") {
+    return payloadSnippet(payload, ["text"]);
+  }
+  if (event.type === "tool.started") {
+    const args = asObject(payload.args);
+    const commandLike =
+      payloadSnippet(args, ["cmd", "command", "path", "query", "pattern"]) ??
+      payloadSnippet(payload, ["tool"]);
+    return commandLike ? compactInlineText(commandLike) : null;
+  }
+  if (event.type === "tool.executed") {
+    const output = asObject(payload.output);
+    return (
+      payloadSnippet(output, ["stdout", "stderr", "text", "error"]) ??
+      payloadSnippet(payload, ["tool"])
+    );
+  }
+  if (event.type === "agent.turn.phase") {
+    return payloadSnippet(payload, ["phase"]);
+  }
+  return (
+    payloadSnippet(payload, ["status", "message", "phase", "tool"]) ??
+    (event.type.startsWith("audit.") ? null : compactInlineText(humanizeEventType(event.type), 64))
+  );
+}
+
 function toInlineAgentStatus(event: EventRow): string {
   const payload = asObject(event.payload);
-  if (event.type === "agent.turn.started") return "processing";
+  if (event.type === "agent.turn.started") return "working";
   if (event.type === "agent.turn.completed") return "completed";
   if (event.type === "agent.turn.failed") return "failed";
   if (event.type === "agent.turn.phase") {
@@ -236,6 +277,14 @@ type PendingAttachment = {
 type MessageAttachment = {
   name: string;
   tempPath: string;
+};
+
+type TypingIndicator = {
+  agentName: string;
+  status: string;
+  at: number;
+  eventType: string;
+  detail: string | null;
 };
 
 function summarizeMemoryTitle(record: MemoryRecord | null, fallback: string): string {
@@ -384,6 +433,146 @@ const MessageMarkdown = memo(function MessageMarkdown({ text }: { text: string }
   );
 });
 
+type SecretInputSpec = {
+  packageValue: string;
+  keyValue: string;
+  label: string;
+  submitLabel: string;
+  description: string | null;
+  placeholder: string;
+};
+
+function readSecretInputAttribute(node: Element, name: string, fallback: string, maxLength = 160): string {
+  const value = node.getAttribute(name);
+  if (!value) return fallback;
+  const trimmed = value.trim();
+  if (!trimmed) return fallback;
+  return trimmed.slice(0, maxLength);
+}
+
+function isSecretIdentifier(value: string): boolean {
+  return /^[A-Za-z0-9._-]{1,160}$/.test(value);
+}
+
+function parseSecretInputSpec(messageText: string): SecretInputSpec | null {
+  const trimmed = messageText.trim();
+  if (!trimmed.startsWith("<") || !trimmed.endsWith(">")) return null;
+  if (typeof DOMParser === "undefined") return null;
+  const doc = new DOMParser().parseFromString(trimmed, "text/html");
+  const children = Array.from(doc.body.children);
+  if (children.length !== 1) return null;
+  const node = children[0];
+  if (node.tagName.toLowerCase() !== "orgops-secret-input") return null;
+  if (node.children.length > 0) return null;
+  if ((node.textContent ?? "").trim().length > 0) return null;
+  const packageValue = readSecretInputAttribute(node, "package", "");
+  const keyValue = readSecretInputAttribute(node, "key", "");
+  if (packageValue && !isSecretIdentifier(packageValue)) return null;
+  if (keyValue && !isSecretIdentifier(keyValue)) return null;
+  return {
+    packageValue,
+    keyValue,
+    label: readSecretInputAttribute(node, "label", "Set a secret"),
+    submitLabel: readSecretInputAttribute(node, "submit-label", "Save secret", 48),
+    description: node.getAttribute("description")?.trim().slice(0, 280) || null,
+    placeholder: readSecretInputAttribute(node, "placeholder", "Enter secret value", 120)
+  };
+}
+
+function SecretInputCard({ spec }: { spec: SecretInputSpec }) {
+  const [packageValue, setPackageValue] = useState(spec.packageValue);
+  const [keyValue, setKeyValue] = useState(spec.keyValue);
+  const [secretValue, setSecretValue] = useState("");
+  const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [errorMessage, setErrorMessage] = useState("");
+
+  const submit = async () => {
+    const packageName = packageValue.trim();
+    const keyName = keyValue.trim();
+    if (!packageName || !keyName || !secretValue) {
+      setStatus("error");
+      setErrorMessage("Package, key, and secret value are required.");
+      return;
+    }
+    if (!isSecretIdentifier(packageName) || !isSecretIdentifier(keyName)) {
+      setStatus("error");
+      setErrorMessage("Package and key may only contain letters, numbers, dot, underscore, and hyphen.");
+      return;
+    }
+
+    setStatus("saving");
+    setErrorMessage("");
+    try {
+      await apiFetch("/api/secrets", {
+        method: "POST",
+        headers: getApiHeaders(),
+        body: JSON.stringify({
+          package: packageName,
+          key: keyName,
+          value: secretValue
+        })
+      });
+      setSecretValue("");
+      setStatus("saved");
+    } catch {
+      setStatus("error");
+      setErrorMessage("Unable to save secret right now.");
+    }
+  };
+
+  return (
+    <div className="space-y-3 rounded-xl border border-fuchsia-800/70 bg-fuchsia-950/20 p-3">
+      <div className="text-xs uppercase tracking-wide text-fuchsia-300">Secure secret input</div>
+      <div className="text-sm font-medium text-fuchsia-100">{spec.label}</div>
+      {spec.description ? <div className="text-xs text-fuchsia-200/90">{spec.description}</div> : null}
+      <div className="grid gap-2 md:grid-cols-2">
+        <label className="space-y-1 text-xs text-slate-300">
+          <div className="text-slate-400">Package</div>
+          <input
+            className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-100 focus:border-sky-500 focus:outline-none"
+            value={packageValue}
+            onChange={(event) => setPackageValue(event.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </label>
+        <label className="space-y-1 text-xs text-slate-300">
+          <div className="text-slate-400">Key</div>
+          <input
+            className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-100 focus:border-sky-500 focus:outline-none"
+            value={keyValue}
+            onChange={(event) => setKeyValue(event.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </label>
+      </div>
+      <label className="space-y-1 text-xs text-slate-300">
+        <div className="text-slate-400">Secret value</div>
+        <input
+          type="password"
+          className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-100 focus:border-sky-500 focus:outline-none"
+          value={secretValue}
+          onChange={(event) => setSecretValue(event.target.value)}
+          placeholder={spec.placeholder}
+          autoComplete="off"
+          spellCheck={false}
+        />
+      </label>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          onClick={() => void submit()}
+          disabled={status === "saving"}
+        >
+          {status === "saving" ? "Saving..." : spec.submitLabel}
+        </Button>
+        {status === "saved" ? <span className="text-xs text-emerald-300">Secret saved.</span> : null}
+        {status === "error" ? <span className="text-xs text-rose-300">{errorMessage}</span> : null}
+      </div>
+    </div>
+  );
+}
+
 export function ChatScreen({
   targetOptions,
   activeChannelId,
@@ -395,18 +584,6 @@ export function ChatScreen({
   onSendMessage,
   onClearMessages
 }: ChatScreenProps) {
-  const messageEvents = useMemo(
-    () =>
-      events
-        .filter((event) => event.type === "message.created")
-        .sort((left, right) => {
-          const leftTs = left.createdAt ?? 0;
-          const rightTs = right.createdAt ?? 0;
-          if (leftTs !== rightTs) return leftTs - rightTs;
-          return left.id.localeCompare(right.id);
-        }),
-    [events]
-  );
   const chatLines = useMemo(
     () =>
       events
@@ -431,53 +608,63 @@ export function ChatScreen({
   }, [activeTarget, activeTargetId]);
   const activeChannelParticipants =
     activeTargetId?.startsWith("channel:") ? activeTarget?.participantsText : undefined;
-  const latestHumanMessage = useMemo(() => {
-    const humanMessages = messageEvents.filter((event) => event.source.startsWith("human:"));
-    return humanMessages[humanMessages.length - 1] ?? null;
-  }, [messageEvents]);
-  const latestHumanMessageCreatedAt = latestHumanMessage?.createdAt ?? 0;
-  const activityEvents = useMemo(
-    () =>
-      events
-        .filter((event) => {
-          if (!latestHumanMessage) return false;
-          if ((event.createdAt ?? 0) < latestHumanMessageCreatedAt) return false;
-          if (event.id === latestHumanMessage.id) return false;
-          return Boolean(getAgentNameForStatusEvent(event));
-        })
-        .sort((left, right) => {
-          const leftTs = left.createdAt ?? 0;
-          const rightTs = right.createdAt ?? 0;
-          if (leftTs !== rightTs) return leftTs - rightTs;
-          return left.id.localeCompare(right.id);
-        }),
-    [events, latestHumanMessage, latestHumanMessageCreatedAt]
-  );
   const typingIndicators = useMemo(() => {
-    const stateByAgent = new Map<string, { status: string; latestActivityAt: number }>();
-    for (const event of activityEvents) {
+    const ordered = events
+      .slice()
+      .sort((left, right) => {
+        const leftTs = left.createdAt ?? 0;
+        const rightTs = right.createdAt ?? 0;
+        if (leftTs !== rightTs) return leftTs - rightTs;
+        return left.id.localeCompare(right.id);
+      });
+    const activeByAgent = new Map<
+      string,
+      TypingIndicator & {
+        openTurns: number;
+      }
+    >();
+    for (const event of ordered) {
       const agentName = getAgentNameForStatusEvent(event);
       if (!agentName) continue;
       const ts = event.createdAt ?? 0;
-      if (isTerminalAgentEvent(event)) {
-        stateByAgent.delete(agentName);
+      if (event.type === "agent.turn.started") {
+        const existing = activeByAgent.get(agentName);
+        activeByAgent.set(agentName, {
+          agentName,
+          status: "working",
+          at: ts,
+          eventType: event.type,
+          detail: null,
+          openTurns: (existing?.openTurns ?? 0) + 1
+        });
         continue;
       }
-      const status = toInlineAgentStatus(event);
-      const existing = stateByAgent.get(agentName);
-      if (!existing || ts >= existing.latestActivityAt) {
-        stateByAgent.set(agentName, { status, latestActivityAt: ts });
+      if (event.type === "agent.turn.completed" || event.type === "agent.turn.failed") {
+        const existing = activeByAgent.get(agentName);
+        if (!existing) continue;
+        if (existing.openTurns <= 1) {
+          activeByAgent.delete(agentName);
+        } else {
+          activeByAgent.set(agentName, { ...existing, openTurns: existing.openTurns - 1, at: ts });
+        }
+        continue;
       }
+      const existing = activeByAgent.get(agentName);
+      if (!existing || existing.openTurns <= 0) continue;
+      const status = toInlineAgentStatus(event);
+      activeByAgent.set(agentName, {
+        ...existing,
+        status,
+        at: ts,
+        eventType: event.type,
+        detail: toInlineAgentDetail(event)
+      });
     }
 
-    return [...stateByAgent.entries()]
-      .sort((left, right) => right[1].latestActivityAt - left[1].latestActivityAt)
-      .map(([agentName, value]) => ({
-        agentName,
-        status: value.status,
-        at: value.latestActivityAt
-      }));
-  }, [activityEvents]);
+    return [...activeByAgent.values()]
+      .sort((left, right) => right.at - left.at)
+      .map(({ openTurns: _openTurns, ...indicator }) => indicator);
+  }, [events]);
   const contextUsageByAgent = useMemo(() => {
     const latestByAgent = new Map<string, AgentContextUsage>();
     const ordered = events
@@ -785,6 +972,9 @@ export function ChatScreen({
                 }
 
                 const messageAttachments = parseMessageAttachments(event.payload);
+                const role = getMessageRole(event);
+                const messageText = (event.payload as { text?: string })?.text ?? "";
+                const secretInputSpec = role === "agent" ? parseSecretInputSpec(messageText) : null;
                 return (
                   <div
                     key={event.id}
@@ -792,7 +982,7 @@ export function ChatScreen({
                   >
                     <div
                       className={`flex items-center gap-2 text-xs text-slate-400 ${
-                        getMessageRole(event) === "human" ? "justify-end" : "justify-start"
+                        role === "human" ? "justify-end" : "justify-start"
                       }`}
                     >
                       <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[11px] text-slate-300">
@@ -801,19 +991,23 @@ export function ChatScreen({
                       <span>{formatTimestamp(event.createdAt)}</span>
                     </div>
                     <div
-                      className={`flex ${getMessageRole(event) === "human" ? "justify-end" : "justify-start"}`}
+                      className={`flex ${role === "human" ? "justify-end" : "justify-start"}`}
                     >
                       <div
                         className={`max-w-[85%] rounded-2xl border px-3 py-2 shadow-sm ${
-                          getMessageRole(event) === "human"
+                          role === "human"
                             ? "border-sky-700/70 bg-sky-900/30"
-                            : getMessageRole(event) === "agent"
+                            : role === "agent"
                               ? "border-slate-700 bg-slate-900"
                               : "border-amber-700/50 bg-amber-950/30"
                         }`}
                       >
                         <div className="text-left text-slate-200">
-                          <MessageMarkdown text={(event.payload as { text?: string })?.text ?? ""} />
+                          {secretInputSpec ? (
+                            <SecretInputCard spec={secretInputSpec} />
+                          ) : (
+                            <MessageMarkdown text={messageText} />
+                          )}
                           {messageAttachments.length > 0 && (
                             <div className="mt-2 rounded border border-slate-700/60 bg-slate-950/60 p-2 text-xs text-slate-300">
                               <div className="mb-1 text-[11px] uppercase tracking-wide text-slate-500">
@@ -841,10 +1035,22 @@ export function ChatScreen({
               {typingIndicators.map((indicator) => (
                 <div
                   key={`indicator-${indicator.agentName}`}
-                  className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-300 chat-print-hide"
+                  className="rounded-lg border border-sky-800/70 bg-slate-900 px-3 py-2 text-sm text-slate-300 chat-print-hide"
                 >
-                  <span className="font-medium text-slate-100">{indicator.agentName}</span>{" "}
-                  is {toSentenceCase(indicator.status)}...
+                  <div className="flex items-center gap-2">
+                    <span className="relative inline-flex h-2.5 w-2.5 shrink-0">
+                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-400/50" />
+                      <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-sky-400" />
+                    </span>
+                    <span className="font-medium text-slate-100">{indicator.agentName}</span>
+                    <span>is {toSentenceCase(indicator.status)}...</span>
+                    <span className="truncate rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-400">
+                      {humanizeEventType(indicator.eventType)}
+                    </span>
+                  </div>
+                  {indicator.detail ? (
+                    <div className="mt-1 truncate pl-4 text-xs text-slate-400">{indicator.detail}</div>
+                  ) : null}
                 </div>
               ))}
               {visibleChatLines.length === 0 && (

@@ -2,6 +2,10 @@ export function createRunnerState() {
   const heartbeats = new Map<string, number>();
   const bootstrappedAgents = new Set<string>();
   const lifecycleChannels = new Map<string, string>();
+  const recentTurnWindows = new Map<
+    string,
+    { startedAt: number; completedAt: number }
+  >();
   let registeredRunnerId: string | null = null;
   let lastRunnerHeartbeatAt = 0;
 
@@ -9,6 +13,7 @@ export function createRunnerState() {
     heartbeats,
     bootstrappedAgents,
     lifecycleChannels,
+    recentTurnWindows,
     get registeredRunnerId() {
       return registeredRunnerId;
     },

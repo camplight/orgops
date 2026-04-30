@@ -185,6 +185,14 @@ export function AgentsScreen({
     workspaceData && workspaceData.path !== "."
       ? workspaceData.path.split("/").filter(Boolean)
       : [];
+  const headerValidationMessage =
+    !form.name.trim()
+      ? "Name is required."
+      : !form.modelId.trim()
+        ? "Model is required."
+        : !form.workspacePath.trim()
+          ? "Workspace directory is required."
+          : null;
 
   useEffect(() => {
     if (isCreating) return;
@@ -706,8 +714,62 @@ export function AgentsScreen({
                     ? `${selectedAgent.runtimeState} | ${selectedAgent.modelId ?? "No model"}`
                     : "Select an agent row."}
               </p>
+              {activeTab === "details" && (isCreating || selectedAgent) ? (
+                <p
+                  className={`mt-1 text-xs ${
+                    saveStatus
+                      ? saveStatus.kind === "success"
+                        ? "text-emerald-300"
+                        : "text-rose-400"
+                      : headerValidationMessage
+                        ? "text-amber-300"
+                        : "text-slate-500"
+                  }`}
+                >
+                  {saveStatus?.message ??
+                    headerValidationMessage ??
+                    (isFormDirty ? "Unsaved changes." : "No unsaved changes.")}
+                </p>
+              ) : null}
             </div>
             <div className="flex items-center gap-2">
+              {activeTab === "details" && (isCreating || selectedAgent) ? (
+                <>
+                  <Button
+                    onClick={handleSubmit}
+                    disabled={
+                      isSubmitting ||
+                      (!isCreating && !isFormDirty) ||
+                      !form.name.trim() ||
+                      !form.modelId.trim() ||
+                      !form.workspacePath.trim()
+                    }
+                  >
+                    {isSubmitting
+                      ? isCreating
+                        ? "Creating..."
+                        : "Saving..."
+                      : isCreating
+                        ? "Create Agent"
+                        : "Save Details"}
+                  </Button>
+                  {!isCreating && selectedAgent && (
+                    <Button
+                      variant="secondary"
+                      onClick={handleToggleRuntime}
+                      disabled={isTogglingRuntime}
+                    >
+                      {isTogglingRuntime
+                        ? selectedAgent.runtimeState === "RUNNING"
+                          ? "Stopping..."
+                          : "Starting..."
+                        : selectedAgent.runtimeState === "RUNNING"
+                          ? "Stop"
+                          : "Start"}
+                    </Button>
+                  )}
+                </>
+              ) : null}
               <Button
                 type="button"
                 variant="secondary"
@@ -1011,57 +1073,24 @@ export function AgentsScreen({
                         {saveStatus.message}
                       </div>
                     )}
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        onClick={handleSubmit}
-                        disabled={
-                          isSubmitting ||
-                          (!isCreating && !isFormDirty) ||
-                          !form.name.trim() ||
-                          !form.modelId.trim() ||
-                          !form.workspacePath.trim()
-                        }
-                      >
-                        {isSubmitting
-                          ? isCreating
-                            ? "Creating..."
-                            : "Saving..."
-                          : isCreating
-                            ? "Create Agent"
-                            : "Save Details"}
-                      </Button>
-                      {!isCreating && selectedAgent && (
-                        <>
-                          <Button
-                            variant="secondary"
-                            onClick={handleToggleRuntime}
-                            disabled={isTogglingRuntime}
-                          >
-                            {isTogglingRuntime
-                              ? selectedAgent.runtimeState === "RUNNING"
-                                ? "Stopping..."
-                                : "Starting..."
-                              : selectedAgent.runtimeState === "RUNNING"
-                                ? "Stop"
-                                : "Start"}
-                          </Button>
-                          <Button
-                            variant="secondary"
-                            className="bg-amber-900 text-amber-100 hover:bg-amber-800"
-                            onClick={async () => {
-                              const confirmed = confirm(
-                                `Clean workspace for ${selectedAgent.name}? This deletes all files in ${form.workspacePath}.`
-                              );
-                              if (!confirmed) return;
-                              await onCleanupAgentWorkspace(selectedAgent.name);
-                              await openWorkspacePath(".");
-                            }}
-                          >
-                            Clean Workspace
-                          </Button>
-                        </>
-                      )}
-                    </div>
+                    {!isCreating && selectedAgent && (
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          variant="secondary"
+                          className="bg-amber-900 text-amber-100 hover:bg-amber-800"
+                          onClick={async () => {
+                            const confirmed = confirm(
+                              `Clean workspace for ${selectedAgent.name}? This deletes all files in ${form.workspacePath}.`
+                            );
+                            if (!confirmed) return;
+                            await onCleanupAgentWorkspace(selectedAgent.name);
+                            await openWorkspacePath(".");
+                          }}
+                        >
+                          Clean Workspace
+                        </Button>
+                      </div>
+                    )}
                   </>
                 )}
               </div>
