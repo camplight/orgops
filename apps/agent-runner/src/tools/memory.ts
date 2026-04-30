@@ -10,6 +10,7 @@ import {
   refreshCrossChannelFullMemory,
   refreshCrossChannelRecentMemory,
 } from "../context-maintenance";
+import type { ChannelRecord } from "../models/channel";
 import type { ExecuteContext, ToolDef } from "./types";
 
 const channelMemorySchema = z.object({
@@ -37,11 +38,6 @@ const crossUpdateSchema = z.object({
   lastProcessedEventId: z.string().min(1).optional(),
   expectedVersion: z.number().int().min(0).optional(),
 });
-
-type ChannelRecord = {
-  id?: string;
-  participants?: Array<{ subscriberType?: string; subscriberId?: string }>;
-};
 
 export const memoryToolDefs: ToolDef[] = [
   [

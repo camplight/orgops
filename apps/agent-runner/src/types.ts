@@ -26,7 +26,7 @@ export type Agent = {
 export type Event = {
   id: string;
   type: string;
-  payload: any;
+  payload: unknown;
   source: string;
   channelId?: string;
   parentEventId?: string;

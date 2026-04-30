@@ -4,17 +4,8 @@ import {
   refreshCrossChannelFullMemory,
   refreshCrossChannelRecentMemory,
 } from "./context-maintenance";
+import { isAgentSubscribed, type ChannelRecord } from "./models/channel";
 import type { Agent } from "./types";
-
-type ChannelParticipant = {
-  subscriberType?: string;
-  subscriberId?: string;
-};
-
-type ChannelRecord = {
-  id: string;
-  participants?: ChannelParticipant[];
-};
 
 type Dependencies = {
   listChannels: () => Promise<ChannelRecord[]>;
@@ -28,14 +19,6 @@ type Dependencies = {
   crossRecentMemoryIntervalMs: number;
   crossFullMemoryIntervalMs: number;
 };
-
-function isAgentSubscribed(channel: ChannelRecord, agentName: string): boolean {
-  return (channel.participants ?? []).some(
-    (participant) =>
-      String(participant.subscriberType ?? "").toUpperCase() === "AGENT" &&
-      participant.subscriberId === agentName,
-  );
-}
 
 function shouldRunMemoryMaintenance(agent: Agent): boolean {
   const mode = agent.memoryContextMode ?? "PER_CHANNEL_CROSS_CHANNEL";
