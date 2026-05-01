@@ -14,6 +14,52 @@ type AuthDeps = {
   verifyPassword: (password: string, hashed: string) => boolean;
 };
 
+type CookieSecureMode = "always" | "never" | "auto";
+
+function getCookieSecureMode(): CookieSecureMode {
+  const configured = (process.env.ORGOPS_COOKIE_SECURE ?? "auto").trim().toLowerCase();
+  if (configured === "always" || configured === "never" || configured === "auto") {
+    return configured;
+  }
+  return "auto";
+}
+
+function isRequestHttps(c: any): boolean {
+  const forwardedProto = (c.req.header("x-forwarded-proto") ?? "")
+    .split(",")[0]
+    ?.trim()
+    .toLowerCase();
+  if (forwardedProto === "https") return true;
+  try {
+    return new URL(c.req.url).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function shouldUseSecureCookie(c: any): boolean {
+  const mode = getCookieSecureMode();
+  if (mode === "always") return true;
+  if (mode === "never") return false;
+  return isRequestHttps(c);
+}
+
+function buildSessionCookie(c: any, sessionId: string, maxAge: number | null = null) {
+  const parts = [
+    `orgops_session=${sessionId}`,
+    "HttpOnly",
+    "Path=/",
+    "SameSite=Strict",
+  ];
+  if (shouldUseSecureCookie(c)) {
+    parts.push("Secure");
+  }
+  if (typeof maxAge === "number") {
+    parts.push(`Max-Age=${Math.max(0, Math.floor(maxAge))}`);
+  }
+  return parts.join("; ");
+}
+
 export function registerAuthRoutes(app: Hono<any>, deps: AuthDeps) {
   const {
     orm,
@@ -58,7 +104,7 @@ export function registerAuthRoutes(app: Hono<any>, deps: AuthDeps) {
       status: 200,
       headers: {
         "content-type": "application/json",
-        "set-cookie": `orgops_session=${sessionId}; HttpOnly; Path=/; SameSite=Strict`
+        "set-cookie": buildSessionCookie(c, sessionId)
       }
     });
   });
@@ -71,7 +117,7 @@ export function registerAuthRoutes(app: Hono<any>, deps: AuthDeps) {
       status: 200,
       headers: {
         "content-type": "application/json",
-        "set-cookie": "orgops_session=; HttpOnly; Path=/; Max-Age=0"
+        "set-cookie": buildSessionCookie(c, "", 0)
       }
     });
   });

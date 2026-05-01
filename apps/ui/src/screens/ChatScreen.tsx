@@ -713,7 +713,8 @@ export function ChatScreen({
   const hasAttachmentErrors = pendingAttachments.some((item) => item.status === "error");
   const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key !== "Enter") return;
-    if (!event.metaKey && !event.ctrlKey) return;
+    if (event.shiftKey) return;
+    if (event.nativeEvent.isComposing) return;
     event.preventDefault();
     if (uploadingAttachmentCount > 0) return;
     void handleSendWithAttachments();
@@ -1068,7 +1069,7 @@ export function ChatScreen({
             <div className="space-y-2 chat-print-hide">
               <Textarea
                 rows={3}
-                placeholder="Send a message... (you can paste screenshots)"
+                placeholder="Send a message... (Shift+Enter for new line, you can paste screenshots)"
                 value={messageText}
                 onChange={(e) => onMessageTextChange(e.target.value)}
                 onKeyDown={handleComposerKeyDown}

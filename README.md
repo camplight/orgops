@@ -64,6 +64,10 @@ npm run prod:all
 
 This builds the UI and runs the API, runner, and UI preview.
 
+If you deploy the UI separately, it uses same-origin `/api` and `/ws` paths in production
+builds. Put the UI and API behind the same public origin (or reverse proxy these paths to
+the API service) so browser auth cookies and WebSocket traffic work correctly.
+
 ## OpsCLI
 
 `apps/opscli` is the autonomous bootstrap and maintenance CLI for OrgOps hosts.
@@ -111,6 +115,7 @@ chmod +x ./opscli-macos
 - `ORGOPS_ADMIN_USER` / `ORGOPS_ADMIN_PASS` (defaults to `admin`)
 - `ORGOPS_RUNNER_TOKEN` (shared token for agent-runner -> API, default: `dev-runner-token`)
 - `ORGOPS_MASTER_KEY` (32-byte base64, required for secrets encryption)
+- `ORGOPS_COOKIE_SECURE` (`auto|always|never`, default: `auto`; `auto` enables `Secure` cookies on HTTPS requests)
 - `ORGOPS_API_URL` (agent-runner API base URL)
 - `ORGOPS_RUNNER_ID_FILE` (optional path for persisted runner identity; default: `.agent-runner-id`)
 - `ORGOPS_RUNNER_NAME` (optional runner display name used on registration)

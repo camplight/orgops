@@ -22,3 +22,4 @@ npm run dev --workspace @orgops/api
 - `ORGOPS_ADMIN_USER` / `ORGOPS_ADMIN_PASS`
 - `ORGOPS_RUNNER_TOKEN`
 - `ORGOPS_MASTER_KEY`
+- `ORGOPS_COOKIE_SECURE` (`auto|always|never`, default: `auto`)
