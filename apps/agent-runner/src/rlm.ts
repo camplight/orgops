@@ -694,7 +694,7 @@ async function runReplLoop(
   const promptPreview = truncateText(promptText, RLM_PROMPT_PREVIEW_MAX_CHARS);
   const localMessages: LlmMessage[] = [
     {
-      role: "user",
+      role: "system",
       content: JSON.stringify(
         {
           type: "rlm.prompt.preview",
@@ -711,7 +711,7 @@ async function runReplLoop(
   ];
   if (toolDocs && toolDocs.length > 0) {
     localMessages.push({
-      role: "user",
+      role: "system",
       content: JSON.stringify(
         {
           type: "rlm.tools.available",
@@ -738,7 +738,7 @@ async function runReplLoop(
     messages.push({ role: "system", content: buildSystemMessage(depth) });
     messages.push(...localMessages);
     messages.push({
-      role: "user",
+      role: "system",
       content: JSON.stringify(
         {
           type: "rlm.repl.next_input.requested",
@@ -777,7 +777,7 @@ async function runReplLoop(
       });
     }
     localMessages.push({
-      role: "assistant",
+      role: "system",
       content: extractedCode,
     });
     let outputText = "";
@@ -825,7 +825,7 @@ async function runReplLoop(
       });
     }
     localMessages.push({
-      role: "user",
+      role: "system",
       content: JSON.stringify(
         {
           type: executionError ? "rlm.repl.output.error" : "rlm.repl.output",
@@ -861,7 +861,7 @@ async function runReplLoop(
           });
         }
         localMessages.push({
-          role: "user",
+          role: "system",
           content: JSON.stringify(
             {
               type: "rlm.done.validation_error",

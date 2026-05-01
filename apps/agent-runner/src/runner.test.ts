@@ -82,8 +82,8 @@ describe("agent runner", () => {
     expect(messages).toHaveLength(4);
     expect(messages[0]).toEqual({ role: "system", content: "system prompt" });
     expect(messages[1]?.role).toBe("user");
-    expect(messages[2]?.role).toBe("assistant");
-    expect(messages[3]?.role).toBe("user");
+    expect(messages[2]?.role).toBe("system");
+    expect(messages[3]?.role).toBe("system");
 
     const eventIds = messages
       .slice(1)
@@ -207,7 +207,7 @@ describe("agent runner", () => {
 
     const messages = await buildModelMessages(agent, "system prompt", events);
     expect(messages[0]).toEqual({ role: "system", content: "system prompt" });
-    expect(messages[1]?.role).toBe("user");
+    expect(messages[1]?.role).toBe("system");
     const truncationMeta = JSON.parse(String(messages[1]?.content));
     expect(truncationMeta.type).toBe("system.history.truncated");
     expect(truncationMeta.omittedCount).toBeGreaterThan(0);
@@ -244,7 +244,7 @@ describe("agent runner", () => {
       eventsNewestFirst,
     );
     expect(messages[0]).toEqual({ role: "system", content: "system prompt" });
-    expect(messages[1]?.role).toBe("user");
+    expect(messages[1]?.role).toBe("system");
     const truncationMeta = JSON.parse(String(messages[1]?.content));
     expect(truncationMeta.type).toBe("system.history.truncated");
     const eventIds = messages
@@ -342,7 +342,7 @@ describe("agent runner", () => {
       runtimeState: "RUNNING",
     };
     const seenEventIds = new Set<string>(["evt-trigger"]);
-    const retryMessages: Array<{ role: "user"; content: string }> = [];
+    const retryMessages: Array<{ role: "system" | "user"; content: string }> = [];
     const apiFetch = async () =>
       new Response(
         JSON.stringify([

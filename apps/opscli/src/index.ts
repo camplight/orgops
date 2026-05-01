@@ -1157,7 +1157,7 @@ async function runAutonomousTask(
   session.runHooks = {
     appendObservation: (type, payload) => {
       appendHistoryMessage(memory, {
-        role: "user",
+        role: "system",
         content: JSON.stringify({ type, ...payload }, null, 2),
       });
     },
@@ -1181,7 +1181,7 @@ async function runAutonomousTask(
     }
     modelMessages.push(...memory.history);
     modelMessages.push({
-      role: "user",
+      role: "system",
       content: JSON.stringify(
         {
           type: "opscli.repl.next_input.requested",
@@ -1221,9 +1221,9 @@ async function runAutonomousTask(
       `step=${step} modelRaw=${JSON.stringify(truncateText(modelText, 4000).text)}`
     );
     if (!code.trim()) {
-      appendHistoryMessage(memory, { role: "assistant", content: modelText });
+      appendHistoryMessage(memory, { role: "system", content: modelText });
       appendHistoryMessage(memory, {
-        role: "user",
+        role: "system",
         content: "Your last reply was empty. Return one non-empty JavaScript snippet.",
       });
       continue;
@@ -1234,7 +1234,7 @@ async function runAutonomousTask(
     if (DEBUG_REPL_TRACE) {
       console.log(`\nopscli[js:${step}] ${truncatedInput.text}`);
     }
-    appendHistoryMessage(memory, { role: "assistant", content: code });
+    appendHistoryMessage(memory, { role: "system", content: code });
 
     try {
       reportProgress(`step ${step}/${MAX_STEPS}: running REPL plan`);
@@ -1248,7 +1248,7 @@ async function runAutonomousTask(
         console.log(`result:\n${outputText}`);
       }
       appendHistoryMessage(memory, {
-        role: "user",
+        role: "system",
         content: JSON.stringify(
           {
             type: "opscli.repl.output",
@@ -1280,7 +1280,7 @@ async function runAutonomousTask(
         });
       }
       appendHistoryMessage(memory, {
-        role: "user",
+        role: "system",
         content: JSON.stringify(
           {
             type: "opscli.repl.error",

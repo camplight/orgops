@@ -52,14 +52,23 @@ function parseDepthStep(messages: LlmMessage[]): {
   depth: number;
   step: number;
 } {
-  const lastUser = [...messages]
+  const lastControl = [...messages]
     .reverse()
-    .find((message) => message.role === "user");
-  if (!lastUser) return { depth: 0, step: 1 };
+    .find((message) => {
+      const content =
+        typeof message.content === "string"
+          ? message.content
+          : message.content
+              .filter((part) => part.type === "text")
+              .map((part) => part.text)
+              .join("\n");
+      return content.includes('"type": "rlm.repl.next_input.requested"');
+    });
+  if (!lastControl) return { depth: 0, step: 1 };
   const messageText =
-    typeof lastUser.content === "string"
-      ? lastUser.content
-      : lastUser.content
+    typeof lastControl.content === "string"
+      ? lastControl.content
+      : lastControl.content
           .filter((part) => part.type === "text")
           .map((part) => part.text)
           .join("\n");

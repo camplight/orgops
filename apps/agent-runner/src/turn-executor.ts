@@ -274,7 +274,7 @@ export async function reconcileLateInjectedMessages(input: {
   agent: Agent;
   channelId: string;
   seenEventIds: Set<string>;
-  retryMessages: Array<{ role: "user"; content: string }>;
+  retryMessages: Array<{ role: "system" | "user"; content: string }>;
   attempt: number;
   maxAttempts: number;
 }) {
@@ -288,7 +288,7 @@ export async function reconcileLateInjectedMessages(input: {
   if (!injected || injected.messages.length === 0) return false;
   input.retryMessages.push(...injected.messages);
   input.retryMessages.push({
-    role: "user",
+    role: "system",
     content: [
       `New channel events arrived while you were responding on attempt ${input.attempt}/${input.maxAttempts}.`,
       "Re-evaluate using these events and return exactly one final JSON event object.",
@@ -458,7 +458,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
     const mergedTriggerMessage =
       events.length > 1
         ? {
-            role: "user" as const,
+            role: "system" as const,
             content: JSON.stringify(
               {
                 type: "system.pending.events.merged",
@@ -605,7 +605,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       return;
     }
     const seenEventIds = new Set(events.map((event) => event.id));
-    const retryMessages: Array<{ role: "user"; content: string }> = [];
+    const retryMessages: Array<{ role: "system" | "user"; content: string }> = [];
     const channelPostingValidationCache = new Map<string, string | null>();
     const llmCallTimeoutMs =
       typeof agent.llmCallTimeoutMs === "number" &&
@@ -640,7 +640,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       } catch (error) {
         if (!isRetryableToolArgumentValidationError(error)) throw error;
         retryMessages.push({
-          role: "user",
+          role: "system",
           content: [
             `Your tool call arguments were invalid on attempt ${attempt}/${MAX_EVENT_DISPATCH_ATTEMPTS}.`,
             `Error: ${String(error)}`,
@@ -667,7 +667,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         parsed = extractJsonObject(responseText);
       } catch (error) {
         retryMessages.push({
-          role: "user",
+          role: "system",
           content: [
             `Your previous response was not valid JSON on attempt ${attempt}/${MAX_EVENT_DISPATCH_ATTEMPTS}.`,
             `Error: ${String(error)}`,
@@ -681,7 +681,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         eventDraft = normalizeEventDraft(parsed, agent.name, channelId);
       } catch (error) {
         retryMessages.push({
-          role: "user",
+          role: "system",
           content: [
             `Your previous JSON output was invalid on attempt ${attempt}/${MAX_EVENT_DISPATCH_ATTEMPTS}.`,
             `Error: ${String(error)}`,
@@ -694,7 +694,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       if (!validation.ok) {
         const details = formatValidationErrors(validation);
         retryMessages.push({
-          role: "user",
+          role: "system",
           content: [
             `Event validation failed on attempt ${attempt}/${MAX_EVENT_DISPATCH_ATTEMPTS}.`,
             `Type: ${eventDraft.type}`,
@@ -717,7 +717,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       }
       if (participationError) {
         retryMessages.push({
-          role: "user",
+          role: "system",
           content: [
             `Event validation failed on attempt ${attempt}/${MAX_EVENT_DISPATCH_ATTEMPTS}.`,
             `Type: ${eventDraft.type}`,

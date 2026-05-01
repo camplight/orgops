@@ -38,6 +38,12 @@ type AttachmentImageData = {
 
 type ApiFetchFn = (path: string, init?: RequestInit) => Promise<Response>;
 
+function isUserMessageEvent(event: Event): boolean {
+  if (event.type !== "message.created") return false;
+  const source = String(event.source ?? "").toLowerCase();
+  return !source.startsWith("agent:") && !source.startsWith("system:");
+}
+
 function extractImageAttachments(event: Event): EventAttachment[] {
   const payload =
     event.payload && typeof event.payload === "object"
@@ -133,17 +139,14 @@ export function estimateContextUsage(messages: LlmMessage[]) {
 }
 
 export async function toHistoryMessage(
-  agent: Agent,
+  _agent: Agent,
   event: Event,
   options?: {
     apiFetch?: ApiFetchFn;
     attachmentCache?: Map<string, Promise<AttachmentImageData | null>>;
   },
 ): Promise<LlmMessage> {
-  const role =
-    event.source === `agent:${agent.name}`
-      ? ("assistant" as const)
-      : ("user" as const);
+  const role = isUserMessageEvent(event) ? ("user" as const) : ("system" as const);
   const baseRecord = buildPromptEventRecord(event);
   const textContent = JSON.stringify(baseRecord, null, 2);
   if (role !== "user" || !options?.apiFetch) {
@@ -182,7 +185,7 @@ function buildHistoryTruncationMessage(
   maxChars: number,
 ) {
   return {
-    role: "user" as const,
+    role: "system" as const,
     content: JSON.stringify(
       {
         type: "system.history.truncated",

@@ -9,12 +9,18 @@ type PullInjectedEventsInput = {
   shouldInclude: (agent: Agent, event: Event) => boolean;
 };
 
+function roleForEvent(event: Event): "user" | "system" {
+  if (event.type !== "message.created") return "system";
+  const source = String(event.source ?? "").toLowerCase();
+  return !source.startsWith("agent:") && !source.startsWith("system:") ? "user" : "system";
+}
+
 export async function pullInjectedEventMessages(
   input: PullInjectedEventsInput,
 ): Promise<
   | {
       events: Event[];
-      messages: Array<{ role: "user"; content: string }>;
+      messages: Array<{ role: "user" | "system"; content: string }>;
     }
   | null
 > {
@@ -35,7 +41,7 @@ export async function pullInjectedEventMessages(
   return {
     events: fresh,
     messages: fresh.map((event) => ({
-      role: "user" as const,
+      role: roleForEvent(event),
       content: JSON.stringify(buildPromptEventRecord(event), null, 2),
     })),
   };
