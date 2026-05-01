@@ -7,8 +7,8 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^3.0.71",
-    "@ai-sdk/openai": "^0.0.58",
-    "ai": "^3.3.28"
+    "@ai-sdk/anthropic": "^3.0.73",
+    "@ai-sdk/openai": "^3.0.55",
+    "ai": "^6.0.172"
   }
 }

@@ -9,14 +9,14 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@hono/node-server": "^1.13.7",
+    "@hono/node-server": "^2.0.1",
     "@hono/node-ws": "^1.2.0",
+    "@orgops/crypto": "file:../../packages/crypto",
     "@orgops/db": "file:../../packages/db",
     "@orgops/event-bus": "file:../../packages/event-bus",
-    "@orgops/crypto": "file:../../packages/crypto",
     "@orgops/schemas": "file:../../packages/schemas",
     "@orgops/skills": "file:../../packages/skills",
-    "drizzle-orm": "^0.44.6",
-    "hono": "^4.5.0"
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.12.16"
   }
 }

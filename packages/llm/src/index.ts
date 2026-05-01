@@ -99,8 +99,10 @@ export async function generate(
     model,
     messages: messages as any,
     temperature: options.temperature,
-    maxTokens: options.maxTokens,
-    maxSteps: options.maxSteps,
+    maxOutputTokens: options.maxTokens,
+    ...(options.maxSteps !== undefined
+      ? ({ maxSteps: options.maxSteps } as any)
+      : {}),
     tools: options.tools as Record<string, any> | undefined,
     abortSignal: options.abortSignal,
   });

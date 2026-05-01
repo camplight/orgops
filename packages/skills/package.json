@@ -8,6 +8,6 @@
   },
   "dependencies": {
     "@orgops/schemas": "file:../schemas",
-    "yaml": "^2.5.1"
+    "yaml": "^2.8.3"
   }
 }
