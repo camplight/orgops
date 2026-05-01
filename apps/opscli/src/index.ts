@@ -37,6 +37,7 @@ type RlmSession = {
   runtime: JsRuntimeSession;
   context: Record<string, unknown>;
   reservedKeys: Set<string>;
+  memory: SessionMemory;
   exited: boolean;
   exitCode: number;
   turnDone: boolean;
@@ -568,10 +569,7 @@ async function setupBundledOrgOps(options?: {
 
   const steps: Array<Record<string, unknown>> = [];
   if (installDependencies) {
-    const installResult = await runShell(
-      `cd "${extractedRoot}" && npm ci`,
-      30 * 60_000
-    );
+    const installResult = await runShell("npm ci", 30 * 60_000, undefined, extractedRoot);
     steps.push({
       step: "npm ci",
       exitCode: installResult.exitCode,
@@ -602,8 +600,8 @@ async function setupBundledOrgOps(options?: {
       });
       continue;
     }
-    const command = `cd "${extractedRoot}" && npm run --workspace ${workspace} build`;
-    const result = await runShell(command, 10 * 60_000);
+    const command = `npm run --workspace ${workspace} build`;
+    const result = await runShell(command, 10 * 60_000, undefined, extractedRoot);
     steps.push({
       step: command,
       exitCode: result.exitCode,
@@ -648,6 +646,16 @@ function truncateText(value: string, maxChars: number) {
     text: `${value.slice(0, maxChars)}\n...[truncated ${value.length - maxChars} chars]`,
     truncated: true,
   };
+}
+
+function mergeShellOutput(stdoutText: string, stderrText: string) {
+  const stdoutChunk = stdoutText.trim();
+  const stderrChunk = stderrText.trim();
+  if (stdoutChunk && stderrChunk) {
+    const separator = stdoutText.endsWith("\n") ? "" : "\n";
+    return `${stdoutText}${separator}${stderrText}`;
+  }
+  return stdoutChunk ? stdoutText : stderrText;
 }
 
 type SpinnerControls = {
@@ -726,14 +734,21 @@ function formatPrintArg(value: unknown): string {
   return formatValue(value);
 }
 
+function messageContentToText(content: LlmMessage["content"]): string {
+  if (typeof content === "string") return content;
+  return content
+    .map((part) => (part.type === "text" ? part.text : "[image]"))
+    .join("\n");
+}
+
 function estimateMessageChars(messages: LlmMessage[]) {
-  return messages.reduce((acc, message) => acc + message.content.length, 0);
+  return messages.reduce((acc, message) => acc + messageContentToText(message.content).length, 0);
 }
 
 function summarizeMessages(messages: LlmMessage[]) {
   return messages
     .map((message, index) => {
-      const oneLine = message.content.replace(/\s+/g, " ").trim();
+      const oneLine = messageContentToText(message.content).replace(/\s+/g, " ").trim();
       const clipped = truncateText(oneLine, 240).text.replace(/\n/g, " ");
       return `${index + 1}. ${message.role}: ${clipped}`;
     })
@@ -761,7 +776,7 @@ function enforceMemoryBudget(memory: SessionMemory) {
 }
 
 function appendHistoryMessage(memory: SessionMemory, message: LlmMessage) {
-  const clipped = truncateText(message.content, MAX_OUTPUT_CHARS);
+  const clipped = truncateText(messageContentToText(message.content), MAX_OUTPUT_CHARS);
   memory.history.push({ role: message.role, content: clipped.text });
   enforceMemoryBudget(memory);
 }
@@ -769,15 +784,26 @@ function appendHistoryMessage(memory: SessionMemory, message: LlmMessage) {
 async function runShell(
   command: string,
   timeoutMs: number,
-  abortSignal?: AbortSignal
+  abortSignal?: AbortSignal,
+  cwd?: string
 ): Promise<ShellResult> {
   const startedAt = Date.now();
   return new Promise((resolve) => {
-    const child = spawn(command, {
-      cwd: process.cwd(),
-      env: process.env,
-      shell: true,
-    });
+    const child =
+      process.platform === "win32"
+        ? spawn(
+            "powershell.exe",
+            ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
+            {
+              cwd: cwd ?? process.cwd(),
+              env: process.env,
+            }
+          )
+        : spawn(command, {
+            cwd: cwd ?? process.cwd(),
+            env: process.env,
+            shell: true,
+          });
     let out = "";
     let err = "";
     let timedOut = false;
@@ -830,9 +856,11 @@ async function runShell(
 
 function buildSystemPrompt() {
   const docsText = loadBundledDocsText();
+  const hostPlatform = process.platform;
   const sections = [
     "You are OrgOps OpsCLI, a recursive maintenance agent for this host.",
     "You are controlling a self-contained OrgOps release bundle.",
+    `Host platform: ${hostPlatform}.`,
     "Execution runs in a persistent Node.js vm context (not node:repl).",
     "Read and use global `prompt` before acting.",
     "global `prompt` is string-like and also supports `prompt.text`.",
@@ -842,9 +870,11 @@ function buildSystemPrompt() {
     "Prefer built-in tools (`shell`, `extractOrgOps`, `setupOrgOps`) before importing modules.",
     "Use shell(command) to execute host commands.",
     "shell(command) accepts exactly one string argument. Do NOT pass callbacks or extra args.",
-    "shell(command) is async and returns stdout as a string.",
+    "shell(command) is async and returns command output as a string (stdout + stderr when present).",
     "Always use `await shell(...)`.",
     "shell(command) throws on timeout or non-zero exit; use try/catch when needed.",
+    "If host platform is win32, prefer PowerShell commands/syntax over Bash.",
+    "If host platform is win32, use Windows-compatible commands and avoid bash-only tools/features.",
     "Use print(...args) to write output to stdout.",
     "Use input(question) to ask the user for stdin input.",
     "input(question) is async. Always use `await input(...)`.",
@@ -903,6 +933,7 @@ function createSession(): RlmSession {
     runtime,
     context,
     reservedKeys: new Set(Object.keys(context)),
+    memory: { summary: "", history: [] },
     exited: false,
     exitCode: 0,
     turnDone: false,
@@ -963,7 +994,7 @@ function createSession(): RlmSession {
             ).text}`
           );
         }
-        return result.stdout;
+        return mergeShellOutput(result.stdout, result.stderr);
       })();
     },
     print: (...args: unknown[]) => {
@@ -1095,6 +1126,7 @@ async function evaluateInput(
 async function runAutonomousTask(
   goal: string,
   session: RlmSession,
+  memory: SessionMemory,
   requestUserInput: (promptText: string) => Promise<string>,
   abortSignal?: AbortSignal
 ): Promise<{ requestedExit: boolean; exitCode: number }> {
@@ -1102,7 +1134,6 @@ async function runAutonomousTask(
   session.exitCode = 0;
   session.turnDone = false;
   session.context.prompt = createPromptValue(goal);
-  const memory: SessionMemory = { summary: "", history: [] };
   appendHistoryMessage(memory, {
     role: "user",
     content: JSON.stringify(
@@ -1449,6 +1480,7 @@ async function main() {
       const result = await runAutonomousTask(
         cli.goal,
         session,
+        session.memory,
         async (promptText) => {
           writeRoleMessage("agent", `${promptText}`, { leadingNewline: true });
           return rl.question(`${rolePrefix("user")} `);
@@ -1483,10 +1515,16 @@ async function main() {
       if (normalized === "exit" || normalized === "quit") break;
       try {
         activeTaskAbortController = new AbortController();
-        const result = await runAutonomousTask(input, session, async (promptText) => {
-          writeRoleMessage("agent", `${promptText}`, { leadingNewline: true });
-          return rl.question(`${rolePrefix("user")} `);
-        }, activeTaskAbortController.signal);
+        const result = await runAutonomousTask(
+          input,
+          session,
+          session.memory,
+          async (promptText) => {
+            writeRoleMessage("agent", `${promptText}`, { leadingNewline: true });
+            return rl.question(`${rolePrefix("user")} `);
+          },
+          activeTaskAbortController.signal
+        );
         activeTaskAbortController = null;
         if (result.requestedExit) {
           process.exitCode = result.exitCode;
