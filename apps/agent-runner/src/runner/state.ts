@@ -1,3 +1,5 @@
+import type { IntentWatchRecord } from "../intent-watchdog";
+
 export function createRunnerState() {
   const heartbeats = new Map<string, number>();
   const bootstrappedAgents = new Set<string>();
@@ -6,6 +8,7 @@ export function createRunnerState() {
     string,
     { startedAt: number; completedAt: number }
   >();
+  const intentWatch = new Map<string, IntentWatchRecord>();
   let registeredRunnerId: string | null = null;
   let lastRunnerHeartbeatAt = 0;
 
@@ -14,6 +17,7 @@ export function createRunnerState() {
     bootstrappedAgents,
     lifecycleChannels,
     recentTurnWindows,
+    intentWatch,
     get registeredRunnerId() {
       return registeredRunnerId;
     },

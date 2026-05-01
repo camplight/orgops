@@ -88,10 +88,21 @@ OpsCLI keeps a rolling session summary and capped recent history to stay within 
 
 ## Release automation
 
-Pushes to `main` produce/update a rolling GitHub release tag named `main-latest`
-through `.github/workflows/release-main.yml`.
+Pushes to `main` produce versioned rolling GitHub releases through
+`.github/workflows/release-main.yml`.
+
+Release tags follow SemVer + date:
+
+- `0.0.1-YYYY-MM-DD` for the first release
+- `0.0.N-YYYY-MM-DD` for subsequent releases (patch increments on each release)
 
 The workflow builds self-contained `opscli` binaries for Linux/macOS/Windows.
+Each release includes:
+
+- platform binaries (`opscli-linux`, `opscli-macos`, `opscli-windows`)
+- a release changelog artifact (`CHANGELOG-<release-tag>.md`)
+- release notes generated from commits since the previous release tag
+
 Each binary bundles:
 
 - OrgOps source snapshot for `api`, `agent-runner`, `ui`, and shared packages
@@ -165,3 +176,8 @@ Built-in skills:
 - Browser automation via Playwright + Lightpanda (`skills/browser-use-lightpanda`)
 
 For Playwright install steps, see the upstream docs: https://playwright.dev/docs/intro
+
+## License
+
+This project is licensed under the Apache License 2.0.
+See `LICENSE` for the full text.

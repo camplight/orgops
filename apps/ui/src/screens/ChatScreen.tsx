@@ -279,6 +279,11 @@ type MessageAttachment = {
   tempPath: string;
 };
 
+type MessageIntent = {
+  id: string;
+  label: string;
+};
+
 type TypingIndicator = {
   agentName: string;
   status: string;
@@ -320,6 +325,27 @@ function parseMessageAttachments(payload: unknown): MessageAttachment[] {
       return { name, tempPath };
     })
     .filter((entry): entry is MessageAttachment => Boolean(entry));
+}
+
+function parseMessageIntent(payload: unknown): MessageIntent | null {
+  if (!payload || typeof payload !== "object") return null;
+  const payloadRecord = payload as { intent?: unknown };
+  if (payloadRecord.intent === true) {
+    return {
+      id: "intent",
+      label: "Intent announced",
+    };
+  }
+  if (!payloadRecord.intent || typeof payloadRecord.intent !== "object") return null;
+  const intentRecord = payloadRecord.intent as Record<string, unknown>;
+  if (intentRecord.active === false) return null;
+  const id = typeof intentRecord.id === "string" && intentRecord.id.trim()
+    ? intentRecord.id.trim()
+    : "intent";
+  const label = typeof intentRecord.label === "string" && intentRecord.label.trim()
+    ? intentRecord.label.trim()
+    : "Intent announced";
+  return { id, label };
 }
 
 function parseAgentContextUsage(event: EventRow): AgentContextUsage | null {
@@ -981,6 +1007,7 @@ export function ChatScreen({
                 const role = getMessageRole(event);
                 const messageText = (event.payload as { text?: string })?.text ?? "";
                 const secretInputSpec = role === "agent" ? parseSecretInputSpec(messageText) : null;
+                const messageIntent = role === "agent" ? parseMessageIntent(event.payload) : null;
                 return (
                   <div
                     key={event.id}
@@ -1004,10 +1031,22 @@ export function ChatScreen({
                           role === "human"
                             ? "border-sky-700/70 bg-sky-900/30"
                             : role === "agent"
-                              ? "border-slate-700 bg-slate-900"
+                              ? messageIntent
+                                ? "border-violet-700/70 bg-violet-950/30"
+                                : "border-slate-700 bg-slate-900"
                               : "border-amber-700/50 bg-amber-950/30"
                         }`}
                       >
+                        {messageIntent ? (
+                          <div className="mb-2 flex items-center gap-2 text-[11px] uppercase tracking-wide text-violet-300">
+                            <span className="rounded border border-violet-700/80 bg-violet-900/40 px-1.5 py-0.5">
+                              intent
+                            </span>
+                            <span className="truncate normal-case tracking-normal text-violet-200">
+                              {messageIntent.label}
+                            </span>
+                          </div>
+                        ) : null}
                         <div className="text-left text-slate-200">
                           {secretInputSpec ? (
                             <SecretInputCard spec={secretInputSpec} />

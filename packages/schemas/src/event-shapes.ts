@@ -116,6 +116,19 @@ const coreEventShapes: EventShapeDefinition[] = [
           eventType: z.string().min(1).optional(),
           hopCount: z.number().int().nonnegative().optional(),
           inReplyTo: z.string().min(1).optional(),
+          intent: z
+            .union([
+              z.boolean(),
+              z
+                .object({
+                  id: z.string().min(1).optional(),
+                  label: z.string().min(1).optional(),
+                  timeoutMs: z.number().int().positive().optional(),
+                  active: z.boolean().optional(),
+                })
+                .passthrough(),
+            ])
+            .optional(),
         })
         .passthrough(),
     }),
@@ -131,6 +144,27 @@ const coreEventShapes: EventShapeDefinition[] = [
         .object({
           text: z.string().min(1),
           targetAgentName: z.string().min(1),
+        })
+        .passthrough(),
+    }),
+  },
+  {
+    type: "agent.intent.timeout",
+    description:
+      "Runner-generated timeout nudge when an agent-declared intent has not been followed by an actionable event.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1),
+      source: sourceSchema,
+      payload: z
+        .object({
+          targetAgentName: z.string().min(1),
+          intentId: z.string().min(1),
+          intentMessageEventId: z.string().min(1),
+          label: z.string().min(1).optional(),
+          timeoutMs: z.number().int().positive(),
+          timeoutCount: z.number().int().positive(),
+          text: z.string().min(1).optional(),
         })
         .passthrough(),
     }),

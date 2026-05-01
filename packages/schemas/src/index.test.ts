@@ -28,6 +28,46 @@ describe("schemas", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("validates message.created with intent metadata", () => {
+    const result = validateEventAgainstShapes(
+      {
+        type: "message.created",
+        source: "agent:worker-a",
+        channelId: "chan-1",
+        payload: {
+          text: "I will do this shortly.",
+          intent: {
+            id: "intent-1",
+            label: "follow up with concrete output",
+            timeoutMs: 45_000,
+          },
+        },
+      },
+      getCoreEventShapes(),
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it("validates agent.intent.timeout core event shape", () => {
+    const result = validateEventAgainstShapes(
+      {
+        type: "agent.intent.timeout",
+        source: "system:runner:intent-watchdog",
+        channelId: "chan-1",
+        payload: {
+          targetAgentName: "worker-a",
+          intentId: "intent-1",
+          intentMessageEventId: "evt-message-1",
+          timeoutMs: 45_000,
+          timeoutCount: 1,
+          text: "Intent has not been acted on yet.",
+        },
+      },
+      getCoreEventShapes(),
+    );
+    expect(result.ok).toBe(true);
+  });
+
   it("validates noop core event shape", () => {
     const result = validateEventAgainstShapes(
       {

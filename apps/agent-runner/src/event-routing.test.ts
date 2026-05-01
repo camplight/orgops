@@ -83,4 +83,27 @@ describe("event routing", () => {
       ),
     ).toBe(true);
   });
+
+  it("only handles intent timeout nudges for the target agent", () => {
+    expect(
+      shouldHandleEventForAgent(
+        agent,
+        makeEvent({
+          type: "agent.intent.timeout",
+          source: "system:runner:intent-watchdog",
+          payload: { intentId: "i-1", targetAgentName: "worker-a", timeoutCount: 1 },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      shouldHandleEventForAgent(
+        agent,
+        makeEvent({
+          type: "agent.intent.timeout",
+          source: "system:runner:intent-watchdog",
+          payload: { intentId: "i-1", targetAgentName: "browser", timeoutCount: 1 },
+        }),
+      ),
+    ).toBe(true);
+  });
 });

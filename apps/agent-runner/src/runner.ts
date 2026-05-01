@@ -9,6 +9,11 @@ import { stopAllRlmChildren } from "./rlm-process";
 import { createRunnerState } from "./runner/state";
 import { createRunnerApi } from "./runner/api";
 import {
+  clearAgentIntentWatch,
+  collectDueIntentTimeouts,
+  ingestIntentEvents,
+} from "./intent-watchdog";
+import {
   agentChannelKey,
   shouldSuppressProcessLifecycleTrigger,
 } from "./turn-trigger-filter";
@@ -40,6 +45,8 @@ const DEFAULT_CHANNEL_FULL_MEMORY_INTERVAL_MS = 60_000;
 const DEFAULT_CROSS_RECENT_MEMORY_INTERVAL_MS = 15_000;
 const DEFAULT_CROSS_FULL_MEMORY_INTERVAL_MS = 120_000;
 const DEFAULT_LLM_CALL_TIMEOUT_MS = 10_800_000;
+const DEFAULT_AGENT_INTENT_TIMEOUT_MS = 45_000;
+const DEFAULT_AGENT_INTENT_MAX_TIMEOUTS = 3;
 
 function readPositiveIntEnv(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
@@ -65,6 +72,14 @@ const CROSS_RECENT_MEMORY_INTERVAL_MS = readPositiveIntEnv(
 const CROSS_FULL_MEMORY_INTERVAL_MS = readPositiveIntEnv(
   process.env.ORGOPS_CROSS_FULL_MEMORY_INTERVAL_MS,
   DEFAULT_CROSS_FULL_MEMORY_INTERVAL_MS,
+);
+const AGENT_INTENT_TIMEOUT_MS = readPositiveIntEnv(
+  process.env.ORGOPS_AGENT_INTENT_TIMEOUT_MS,
+  DEFAULT_AGENT_INTENT_TIMEOUT_MS,
+);
+const AGENT_INTENT_MAX_TIMEOUTS = readPositiveIntEnv(
+  process.env.ORGOPS_AGENT_INTENT_MAX_TIMEOUTS,
+  DEFAULT_AGENT_INTENT_MAX_TIMEOUTS,
 );
 
 const state = createRunnerState();
@@ -159,6 +174,7 @@ async function pollAgent(agent: Agent) {
   if (agent.desiredState !== "RUNNING") {
     state.heartbeats.delete(agent.name);
     state.bootstrappedAgents.delete(agent.name);
+    clearAgentIntentWatch(state.intentWatch, agent.name);
     maintenanceLoop.clearAgent(agent.name);
     if (agent.runtimeState !== "STOPPED") {
       await api.patchAgentState(agent.name, { runtimeState: "STOPPED" });
@@ -207,6 +223,35 @@ async function pollAgent(agent: Agent) {
     }),
   );
   const events = pendingBuckets.flat();
+  ingestIntentEvents({
+    intents: state.intentWatch,
+    agentName: agent.name,
+    events,
+    defaultTimeoutMs: AGENT_INTENT_TIMEOUT_MS,
+  });
+  const dueIntentTimeouts = collectDueIntentTimeouts({
+    intents: state.intentWatch,
+    agentName: agent.name,
+    channelIds: subscribedChannelIds,
+    nowMs: Date.now(),
+    maxTimeoutsPerIntent: AGENT_INTENT_MAX_TIMEOUTS,
+  });
+  for (const due of dueIntentTimeouts) {
+    await api.emitEvent({
+      type: "agent.intent.timeout",
+      source: "system:runner:intent-watchdog",
+      channelId: due.channelId,
+      payload: {
+        targetAgentName: agent.name,
+        intentId: due.intentId,
+        intentMessageEventId: due.messageEventId,
+        label: due.label,
+        timeoutMs: due.timeoutMs,
+        timeoutCount: due.timeoutCount,
+        text: `Intent "${due.label}" has not been acted on yet. Continue by taking a concrete next action now.`,
+      },
+    });
+  }
   const pendingByChannel = new Map<string, Event[]>();
   for (const event of events) {
     const channelId = event.channelId;
