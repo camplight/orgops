@@ -49,10 +49,48 @@ export function isOpenAICompletionModel(modelName: string) {
   return /(codex|instruct)/i.test(modelName);
 }
 
+export function isOpenAIReasoningModel(modelName: string) {
+  const normalized = modelName.trim().toLowerCase();
+  const vendorQualifiedName = normalized.includes("/")
+    ? normalized.slice(normalized.lastIndexOf("/") + 1)
+    : normalized;
+  return (
+    /^(gpt-5(\.|-|$)|o[1-9](\.|-|$))/i.test(normalized) ||
+    /^(gpt-5(\.|-|$)|o[1-9](\.|-|$))/i.test(vendorQualifiedName)
+  );
+}
+
 function normalizeProvider(provider: string) {
   const normalized = provider.trim().toLowerCase();
   if (normalized === "claude") return "anthropic";
+  if (normalized === "or") return "openrouter";
   return normalized;
+}
+
+function textFromContent(content: LlmMessageContent): string {
+  if (typeof content === "string") return content;
+  return content
+    .filter((part): part is LlmTextPart => part.type === "text")
+    .map((part) => part.text)
+    .join("\n")
+    .trim();
+}
+
+function splitSystemMessages(messages: LlmMessage[]) {
+  const systemBlocks: string[] = [];
+  const nonSystemMessages: LlmMessage[] = [];
+  for (const message of messages) {
+    if (message.role === "system") {
+      const text = textFromContent(message.content);
+      if (text) systemBlocks.push(text);
+      continue;
+    }
+    nonSystemMessages.push(message);
+  }
+  return {
+    system: systemBlocks.length > 0 ? systemBlocks.join("\n\n") : undefined,
+    messages: nonSystemMessages,
+  };
 }
 
 export async function generate(
@@ -88,6 +126,16 @@ export async function generate(
       );
     }
     model = useCompletionModel ? openai.completion(modelName) : openai.chat(modelName);
+  } else if (provider === "openrouter") {
+    const openrouter = createOpenAI({
+      apiKey: env.OPENROUTER_API_KEY,
+      baseURL: env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1",
+      headers: {
+        ...(env.OPENROUTER_HTTP_REFERER ? { "HTTP-Referer": env.OPENROUTER_HTTP_REFERER } : {}),
+        ...(env.OPENROUTER_APP_TITLE ? { "X-Title": env.OPENROUTER_APP_TITLE } : {}),
+      },
+    });
+    model = openrouter.chat(modelName);
   } else if (provider === "anthropic") {
     const anthropic = createAnthropic({ apiKey: env.ANTHROPIC_API_KEY });
     model = anthropic(modelName);
@@ -95,10 +143,19 @@ export async function generate(
     throw new Error(`Unsupported provider: ${rawProvider}`);
   }
 
+  const splitMessages = splitSystemMessages(messages);
+  const shouldSendTemperature =
+    options.temperature !== undefined &&
+    !(
+      (provider === "openai" || provider === "openrouter") &&
+      isOpenAIReasoningModel(modelName)
+    );
+
   const result = await generateText({
     model,
-    messages: messages as any,
-    temperature: options.temperature,
+    system: splitMessages.system,
+    messages: splitMessages.messages as any,
+    ...(shouldSendTemperature ? { temperature: options.temperature } : {}),
     maxOutputTokens: options.maxTokens,
     ...(options.maxSteps !== undefined
       ? ({ maxSteps: options.maxSteps } as any)

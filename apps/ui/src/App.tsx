@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Screen } from "./types";
 import { apiFetch, apiJson, getApiHeaders } from "./api";
+import { apiUrl } from "./config";
 import { AppLayout } from "./components/layout";
 import { LoginForm } from "./components/auth";
 import { DashboardDrawers } from "./components/drawers/DashboardDrawers";
@@ -686,7 +687,7 @@ export default function App() {
                 name
               )}/workspace/download?${params.toString()}`;
               const link = document.createElement("a");
-              link.href = href;
+              link.href = apiUrl(href);
               link.rel = "noopener";
               document.body.appendChild(link);
               link.click();
@@ -820,7 +821,7 @@ export default function App() {
               name
             )}/workspace/download?${params.toString()}`;
             const link = document.createElement("a");
-            link.href = href;
+            link.href = apiUrl(href);
             link.rel = "noopener";
             document.body.appendChild(link);
             link.click();

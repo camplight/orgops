@@ -1,7 +1,9 @@
+import { apiUrl } from "./config";
+
 const API_HEADERS = { "content-type": "application/json" };
 
 export async function apiFetch(path: string, init?: RequestInit) {
-  const res = await fetch(path, { credentials: "include", ...init });
+  const res = await fetch(apiUrl(path), { credentials: "include", ...init });
   if (!res.ok) {
     const text = await res.text();
     throw new Error(text || `Request failed: ${res.status}`);

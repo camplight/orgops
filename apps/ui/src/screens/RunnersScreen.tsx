@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Agent, RunnerNode, RunnerSetupConfig } from "../types";
 import { Button, Card } from "../components/ui";
+import { runnerApiUrlHint } from "../config";
 import { formatTimestamp } from "../utils/formatTimestamp";
 
 type RunnersScreenProps = {
@@ -58,7 +59,7 @@ export function RunnersScreen({
     return map;
   }, [agents]);
 
-  const apiBaseUrl = window.location.origin;
+  const apiBaseUrl = runnerApiUrlHint();
   const runnerTokenLine = runnerToken
     ? `- ORGOPS_RUNNER_TOKEN=${runnerToken}`
     : "- ORGOPS_RUNNER_TOKEN=<paste-shared-runner-token>";

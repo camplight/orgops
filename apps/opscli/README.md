@@ -3,9 +3,9 @@
 `opscli` is a lightweight autonomous maintenance CLI for OrgOps hosts.
 
 - Uses a local terminal chat loop (stdin/stdout)
-- Uses a persistent Node REPL session for an RLM-style loop
+- Uses a persistent JS runtime session (Node VM context) for an RLM-style loop
 - LLM emits one JS snippet per step; runtime evaluates it in REPL context
-- REPL helpers include `shell(command)`, `print(...args)`, `input(question)`, and `exit(code)`
+- REPL helpers include `shell(command)`, `print(...args)`, `input(question)`, `finish()`, `clear()`, and `exit(code)`
 - Session history is context-capped with rolling summarization
 - Bundled release executable can extract/setup `api`, `agent-runner`, and `ui` (including bundled `docs/` and `skills/`)
 
@@ -50,10 +50,15 @@ OpsCLI persists the extracted root in local `.env` as `ORGOPS_EXTRACTED_ROOT` an
 
 - `OPENAI_API_KEY` (used when model provider is `openai`; prompted on startup if missing; saved to local `.env`)
 - `ANTHROPIC_API_KEY` (used when model provider is `anthropic`; prompted on startup if missing; saved to local `.env`)
-- `ORGOPS_OPSCLI_MODEL` (default: `openai:gpt-5.2`; supports `openai:<model>` and `anthropic:<model>`)
+- `OPENROUTER_API_KEY` (used when model provider is `openrouter`; prompted on startup if missing; saved to local `.env`)
+- `OPENROUTER_BASE_URL` (optional; default: `https://openrouter.ai/api/v1`)
+- `OPENROUTER_HTTP_REFERER` (optional OpenRouter attribution/referrer header value)
+- `OPENROUTER_APP_TITLE` (optional OpenRouter `X-Title` header value)
+- `ORGOPS_OPSCLI_MODEL` (default: `openai:gpt-5.2`; supports `openai:<model>`, `anthropic:<model>`/`claude:<model>`, and `openrouter:<model>`/`or:<model>`)
 - `ORGOPS_OPSCLI_MAX_STEPS` (default: `20`)
 - `ORGOPS_OPSCLI_COMMAND_TIMEOUT_MS` (default: `120000`)
 - `ORGOPS_OPSCLI_EVAL_TIMEOUT_MS` (default: `30000`)
+- `ORGOPS_OPSCLI_EVAL_CALLBACK_TIMEOUT_MS` (default: `8000`)
 - `ORGOPS_OPSCLI_MAX_CONTEXT_CHARS` (default: `100000`)
 - `ORGOPS_OPSCLI_MAX_SUMMARY_CHARS` (default: `14000`)
 - `ORGOPS_OPSCLI_SUMMARY_CHUNK_MESSAGES` (default: `8`)
@@ -63,9 +68,10 @@ OpsCLI persists the extracted root in local `.env` as `ORGOPS_EXTRACTED_ROOT` an
 - `ORGOPS_OPSCLI_SPINNER` (default: enabled; set to `0`, `false`, `off`, or `no` to disable thinking/execution spinner)
 - `ORGOPS_OPSCLI_PROGRESS` (default: enabled; set to `0`, `false`, `off`, or `no` to disable live step/repl progress events)
 - `ORGOPS_OPSCLI_LOG_PATH` (default: `.opscli-output.log` in current working directory; reset on each new session start)
+- `ORGOPS_OPSCLI_DOUBLE_SIGINT_MS` (default: `1200`; window for "double Ctrl+C to exit")
 - `ORGOPS_EXTRACTED_ROOT` (auto-managed by OpsCLI; persisted extracted OrgOps path)
 
-If no API keys are configured, OpsCLI prompts on startup to choose OpenAI or Claude and saves the selected key to local `.env`.
+If no API keys are configured, OpsCLI prompts on startup to choose OpenAI, Claude, or OpenRouter and saves the selected key to local `.env`.
 
 During an active autonomous run, press `Ctrl+C` to interrupt the current run and return to the `You>` prompt without exiting OpsCLI.
 Press `Ctrl+C` twice quickly to exit OpsCLI immediately.

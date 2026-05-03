@@ -1,11 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { generate, isOpenAICompletionModel } from "./index";
+import {
+  generate,
+  isOpenAICompletionModel,
+  isOpenAIReasoningModel,
+} from "./index";
 
 describe("llm", () => {
   it("detects completion-only OpenAI model ids", () => {
     expect(isOpenAICompletionModel("gpt-5.3-codex")).toBe(true);
     expect(isOpenAICompletionModel("gpt-3.5-turbo-instruct")).toBe(true);
     expect(isOpenAICompletionModel("gpt-4o-mini")).toBe(false);
+  });
+
+  it("detects OpenAI reasoning model ids", () => {
+    expect(isOpenAIReasoningModel("gpt-5.2")).toBe(true);
+    expect(isOpenAIReasoningModel("o3")).toBe(true);
+    expect(isOpenAIReasoningModel("openai/gpt-5")).toBe(true);
+    expect(isOpenAIReasoningModel("gpt-4o-mini")).toBe(false);
   });
 
   it("returns stub response when configured", async () => {

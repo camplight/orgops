@@ -45,6 +45,7 @@ Stored in `agents`:
 - identity/config: `id`, `name`, `icon`, `description`, `model_id`
 - prompting/runtime config: `system_instructions`, `soul_path`, `soul_contents`
 - workspace/safety: `workspace_path`, `allow_outside_workspace`
+- per-agent runtime tuning: `llm_call_timeout_ms`, `classic_max_model_steps`, `context_session_gap_ms`, `emit_audit_events`, `memory_context_mode`
 - mode/state: `mode` (`CLASSIC` | `RLM_REPL`), `desired_state`, `runtime_state`, `last_heartbeat_at`
 - host assignment: `assigned_runner_id` (nullable; when set, only matching runner executes the agent)
 - skills: `enabled_skills_json`, `always_preloaded_skills_json`
@@ -72,9 +73,14 @@ Runner IDs are stable across restarts by persisting local `.agent-runner-id`.
 - `events`: append-only event log (`type`, `payload_json`, `source`, `channel_id`, `deliver_at`, `status`, failure counters, idempotency key)
 - `event_receipts`: per-agent delivery state (`PENDING`/`DELIVERED`) used by runner polling
 
+### Memory Summaries
+
+- `channel_memory_recent`, `channel_memory_full`
+- `cross_channel_memory_recent`, `cross_channel_memory_full`
+
 ### Processes / Files / Secrets / Models
 
-- `processes`, `process_output`
+- `processes` (includes `execution_mode` and process state fields), `process_output`
 - `files`
 - `secrets`
 - `models`
@@ -136,6 +142,7 @@ Server messages:
 { "type": "event", "topic": "...", "data": { "...": "..." } }
 { "type": "process_output", "topic": "process:...", "data": { "...": "..." } }
 { "type": "agent_status", "topic": "org:agentStatus", "data": { "...": "..." } }
+{ "type": "dashboard_refresh", "topic": "org:dashboard", "data": { "...": "..." } }
 { "type": "error", "message": "..." }
 ```
 
@@ -145,6 +152,7 @@ Published topics include:
 - `channel:<channelId>`
 - `process:<processId>`
 - `org:agentStatus`
+- `org:dashboard`
 - `agent:<name>`-style source topics for agent-sourced events
 
 ## HTTP API Surface
@@ -172,8 +180,11 @@ Published topics include:
 - `PATCH /api/agents/:name`
 - supports `assignedRunnerId` on create/update/read
 - supports `GET /api/agents?assignedRunnerId=<runnerId>` filtering
+- supports `GET /api/agents?assignedRunnerId=<runnerId>&includeUnassigned=1`
 - `POST /api/agents/:name/:action` where action is one of:
   - `start`, `stop`, `restart`, `reload-skills`, `cleanup-workspace`
+- debug endpoint:
+  - `GET /api/agents/:name/debug/system-prompt`
 - workspace browser endpoints:
   - `GET /api/agents/:name/workspace`
   - `GET /api/agents/:name/workspace/file`
@@ -201,11 +212,28 @@ Published topics include:
 - `POST /api/events`
 - `GET /api/events`
 - `GET /api/events/:id`
+- `PATCH /api/events/:id` (future scheduled `PENDING` events only)
 - `POST /api/events/:id/ack`
 - `POST /api/events/:id/fail`
 - `DELETE /api/events` (filtered or all clear)
+- `DELETE /api/events/:id` (future scheduled `PENDING` events only)
 - `DELETE /api/channels/:channelId/messages`
 - `GET /api/event-types`
+
+### Memory
+
+- channel memory:
+  - `GET /api/memory/channel/recent`
+  - `PUT /api/memory/channel/recent`
+  - `GET /api/memory/channel/full`
+  - `PUT /api/memory/channel/full`
+- cross-channel memory:
+  - `GET /api/memory/cross/recent`
+  - `PUT /api/memory/cross/recent`
+  - `GET /api/memory/cross/full`
+  - `PUT /api/memory/cross/full`
+- maintenance:
+  - `DELETE /api/memory`
 
 ### Runtime/Processes/Files
 
@@ -228,9 +256,11 @@ Published topics include:
 
 ### Runners
 
-- `GET /api/runners` (UI visibility)
+- `GET /api/runners`
+- `GET /api/runners/setup-config` (authenticated human users)
 - `POST /api/runners/register` (runner auth; register/re-register)
 - `POST /api/runners/:id/heartbeat` (runner auth)
+- `DELETE /api/runners/:id` (also unassigns pinned agents from deleted runner)
 
 ## Agent Runner Behavior
 
@@ -247,7 +277,7 @@ Runner loop:
 6. Filter control/audit/self-authored/agent-authored events.
 7. Group remaining pending events by channel and process each channel as a single handling batch.
 8. Build context from system prompt + bounded channel history + skills + soul, plus a synthetic merged-trigger message when a batch contains multiple events.
-9. Run model generation in step mode (single-step calls) and poll pending events for the same `(agent, channel)` between steps; inject newly arrived events into the ongoing conversation context.
+9. Run model generation in step mode (single-step/attempt calls) and poll pending events for the same `(agent, channel)` between attempts; newly arrived events are merged into subsequent attempt context.
 10. Execute one of two modes:
    - `CLASSIC`: call LLM, enforce JSON event output with retries, validate and emit.
    - `RLM_REPL`: run recursive REPL loop in child process with explicit `done(result)`.
@@ -276,14 +306,16 @@ Audit events are emitted around tool/process operations and RLM execution.
 
 ## OpsCLI Behavior
 
-`apps/opscli` is a lightweight standalone RLM REPL runtime for bootstrap/maintenance.
+`apps/opscli` is a lightweight standalone RLM runtime for bootstrap/maintenance.
 
-- persistent Node REPL session
+- persistent Node VM runtime session
 - LLM emits one JS snippet per step
 - built-in REPL methods:
   - `shell(command)`
   - `print(...args)`
   - `input(question)`
+  - `finish()`
+  - `clear()`
   - `exit(code)`
 - supports empty initial goal and interactive goal gathering via `input(...)`
 - maintains rolling summarization and context-capped recent messages
@@ -298,15 +330,36 @@ Audit events are emitted around tool/process operations and RLM execution.
 
 ## Environment Variables (Implemented)
 
+- `PORT`
 - `ORGOPS_API_URL`
 - `ORGOPS_RUNNER_TOKEN`
 - `ORGOPS_RUNNER_ID_FILE`
 - `ORGOPS_RUNNER_NAME`
 - `ORGOPS_ADMIN_USER`, `ORGOPS_ADMIN_PASS`
 - `ORGOPS_MASTER_KEY`
+- `ORGOPS_COOKIE_SECURE`
 - `ORGOPS_EVENT_MAX_FAILURES`
+- `ORGOPS_EVENT_SHAPES_CACHE_TTL_MS`
+- `ORGOPS_RUNNER_ONLINE_THRESHOLD_MS`
 - `ORGOPS_PROJECT_ROOT`
+- `ORGOPS_LLM_STUB`
+- `ORGOPS_LLM_CALL_TIMEOUT_MS`
 - `ORGOPS_HISTORY_MAX_EVENTS`, `ORGOPS_HISTORY_MAX_CHARS`
+- `ORGOPS_CHANNEL_RECENT_MEMORY_INTERVAL_MS`
+- `ORGOPS_CHANNEL_FULL_MEMORY_INTERVAL_MS`
+- `ORGOPS_CROSS_RECENT_MEMORY_INTERVAL_MS`
+- `ORGOPS_CROSS_FULL_MEMORY_INTERVAL_MS`
+- `ORGOPS_AGENT_INTENT_TIMEOUT_MS`
+- `ORGOPS_AGENT_INTENT_MAX_TIMEOUTS`
+- `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`
+- `OPENROUTER_BASE_URL`, `OPENROUTER_HTTP_REFERER`, `OPENROUTER_APP_TITLE`
+- `ORGOPS_GIT_BASH_PATH`
+- `ORGOPS_SHELL_PATH`, `ORGOPS_SHELL_ARGS`
+- `ORGOPS_SHELL_TIMEOUT_KILL_GRACE_MS`
+- UI build/runtime config:
+  - `VITE_API_BASE_URL`
+  - `VITE_WS_BASE_URL`
+  - optional runtime override: `window.__ORGOPS_UI_CONFIG__ = { apiBaseUrl, wsBaseUrl }`
 - RLM controls:
   - `ORGOPS_RLM_MAX_STEPS`
   - `ORGOPS_RLM_MAX_OUTPUT_CHARS`
@@ -320,7 +373,15 @@ Audit events are emitted around tool/process operations and RLM execution.
   - `ORGOPS_OPSCLI_MAX_STEPS`
   - `ORGOPS_OPSCLI_COMMAND_TIMEOUT_MS`
   - `ORGOPS_OPSCLI_EVAL_TIMEOUT_MS`
+  - `ORGOPS_OPSCLI_EVAL_CALLBACK_TIMEOUT_MS`
   - `ORGOPS_OPSCLI_MAX_CONTEXT_CHARS`
   - `ORGOPS_OPSCLI_MAX_SUMMARY_CHARS`
   - `ORGOPS_OPSCLI_SUMMARY_CHUNK_MESSAGES`
   - `ORGOPS_OPSCLI_MIN_RECENT_MESSAGES`
+  - `ORGOPS_OPSCLI_MAX_SYSTEM_DOC_CHARS`
+  - `ORGOPS_OPSCLI_DEBUG`
+  - `ORGOPS_OPSCLI_PROGRESS`
+  - `ORGOPS_OPSCLI_SPINNER`
+  - `ORGOPS_OPSCLI_LOG_PATH`
+  - `ORGOPS_OPSCLI_DOUBLE_SIGINT_MS`
+  - `ORGOPS_EXTRACTED_ROOT` (auto-managed by OpsCLI)

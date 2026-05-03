@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { EventRow } from "../types";
+import { wsUrl } from "../config";
 
 type ProcessOutputMessage = {
   topic: string;
@@ -80,7 +81,7 @@ export function useWebSocket({
     if (!authenticated) return;
 
     shouldReconnectRef.current = true;
-    const wsUrl = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`;
+    const websocketUrl = wsUrl();
 
     const clearReconnectTimer = () => {
       if (reconnectTimerRef.current !== null) {
@@ -90,7 +91,7 @@ export function useWebSocket({
     };
 
     const connect = () => {
-      const ws = new WebSocket(wsUrl);
+      const ws = new WebSocket(websocketUrl);
       wsRef.current = ws;
 
       ws.onopen = () => {

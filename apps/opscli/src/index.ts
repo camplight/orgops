@@ -58,6 +58,7 @@ class TaskInterruptedError extends Error {
 
 const DEFAULT_OPENAI_MODEL_ID = "openai:gpt-5.2";
 const DEFAULT_ANTHROPIC_MODEL_ID = "anthropic:claude-3-5-sonnet-latest";
+const DEFAULT_OPENROUTER_MODEL_ID = "openrouter:openai/gpt-4o-mini";
 const MAX_STEPS = Number(process.env.ORGOPS_OPSCLI_MAX_STEPS ?? 20);
 const COMMAND_TIMEOUT_MS = Number(process.env.ORGOPS_OPSCLI_COMMAND_TIMEOUT_MS ?? 120_000);
 const EVAL_TIMEOUT_MS = Number(process.env.ORGOPS_OPSCLI_EVAL_TIMEOUT_MS ?? 30_000);
@@ -278,7 +279,7 @@ function getOpsCliEnvPath() {
   return join(process.cwd(), ROOT_ENV_FILE);
 }
 
-type ModelProvider = "openai" | "anthropic";
+type ModelProvider = "openai" | "anthropic" | "openrouter";
 
 type CliOptions = {
   goal: string | null;
@@ -326,6 +327,7 @@ function normalizeProvider(provider: string): ModelProvider | null {
   const normalized = provider.trim().toLowerCase();
   if (normalized === "openai") return "openai";
   if (normalized === "anthropic" || normalized === "claude") return "anthropic";
+  if (normalized === "openrouter" || normalized === "or") return "openrouter";
   return null;
 }
 
@@ -335,19 +337,27 @@ function getModelProvider(modelId: string): ModelProvider {
 }
 
 function getProviderLabel(provider: ModelProvider) {
-  return provider === "openai" ? "OpenAI" : "Claude (Anthropic)";
+  if (provider === "openai") return "OpenAI";
+  if (provider === "anthropic") return "Claude (Anthropic)";
+  return "OpenRouter";
 }
 
 function getProviderApiKeyEnvKey(provider: ModelProvider) {
-  return provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+  if (provider === "openai") return "OPENAI_API_KEY";
+  if (provider === "anthropic") return "ANTHROPIC_API_KEY";
+  return "OPENROUTER_API_KEY";
 }
 
 function getDefaultModelIdForProvider(provider: ModelProvider) {
-  return provider === "openai" ? DEFAULT_OPENAI_MODEL_ID : DEFAULT_ANTHROPIC_MODEL_ID;
+  if (provider === "openai") return DEFAULT_OPENAI_MODEL_ID;
+  if (provider === "anthropic") return DEFAULT_ANTHROPIC_MODEL_ID;
+  return DEFAULT_OPENROUTER_MODEL_ID;
 }
 
-function getAlternateProvider(provider: ModelProvider): ModelProvider {
-  return provider === "openai" ? "anthropic" : "openai";
+function getAlternateProviders(provider: ModelProvider): ModelProvider[] {
+  return (["openai", "anthropic", "openrouter"] as const).filter(
+    (candidate) => candidate !== provider
+  );
 }
 
 function throwIfInterrupted(signal?: AbortSignal) {
@@ -554,9 +564,11 @@ async function setupBundledOrgOps(options?: {
     : {};
   const openAiApiKey = process.env.OPENAI_API_KEY?.trim();
   const anthropicApiKey = process.env.ANTHROPIC_API_KEY?.trim();
+  const openRouterApiKey = process.env.OPENROUTER_API_KEY?.trim();
   writeMergedEnvFile(envPath, {
     OPENAI_API_KEY: openAiApiKey || existingEnv.OPENAI_API_KEY || "",
     ANTHROPIC_API_KEY: anthropicApiKey || existingEnv.ANTHROPIC_API_KEY || "",
+    OPENROUTER_API_KEY: openRouterApiKey || existingEnv.OPENROUTER_API_KEY || "",
     ORGOPS_MASTER_KEY:
       existingEnv.ORGOPS_MASTER_KEY || randomBytes(32).toString("base64"),
     ORGOPS_RUNNER_TOKEN:
@@ -1323,7 +1335,7 @@ async function askProviderChoice(
   while (true) {
     const answer = (
       await rl.question(
-        "No model API key found. Choose provider: [1] OpenAI, [2] Claude (Anthropic): "
+        "No model API key found. Choose provider: [1] OpenAI, [2] Claude (Anthropic), [3] OpenRouter: "
       )
     )
       .trim()
@@ -1337,7 +1349,8 @@ async function askProviderChoice(
     ) {
       return "anthropic";
     }
-    console.log("Please choose 1 (OpenAI) or 2 (Claude/Anthropic).");
+    if (answer === "3" || answer === "openrouter" || answer === "or") return "openrouter";
+    console.log("Please choose 1 (OpenAI), 2 (Claude/Anthropic), or 3 (OpenRouter).");
   }
 }
 
@@ -1349,7 +1362,8 @@ async function ensureModelCredentials(
   let provider = getModelProvider(modelId);
   const hasOpenAiKey = Boolean(process.env.OPENAI_API_KEY?.trim());
   const hasAnthropicKey = Boolean(process.env.ANTHROPIC_API_KEY?.trim());
-  const hasAnyKey = hasOpenAiKey || hasAnthropicKey;
+  const hasOpenRouterKey = Boolean(process.env.OPENROUTER_API_KEY?.trim());
+  const hasAnyKey = hasOpenAiKey || hasAnthropicKey || hasOpenRouterKey;
 
   if (!hasAnyKey) {
     provider = await askProviderChoice(rl);
@@ -1361,9 +1375,11 @@ async function ensureModelCredentials(
 
   let requiredApiKeyEnv = getProviderApiKeyEnvKey(provider);
   if (!process.env[requiredApiKeyEnv]?.trim()) {
-    const alternateProvider = getAlternateProvider(provider);
-    const alternateApiKeyEnv = getProviderApiKeyEnvKey(alternateProvider);
-    if (process.env[alternateApiKeyEnv]?.trim()) {
+    const alternateProvider = getAlternateProviders(provider).find((candidate) =>
+      Boolean(process.env[getProviderApiKeyEnvKey(candidate)]?.trim())
+    );
+    if (alternateProvider) {
+      const alternateApiKeyEnv = getProviderApiKeyEnvKey(alternateProvider);
       const switchAnswer = (
         await rl.question(
           `Current model uses ${getProviderLabel(provider)} but ${requiredApiKeyEnv} is missing.\nSwitch model to ${getProviderLabel(alternateProvider)} to use existing ${alternateApiKeyEnv}? [Y/n]: `
@@ -1545,7 +1561,7 @@ async function main() {
         });
         writeRoleMessage(
           "muted",
-          "You can switch models with ORGOPS_OPSCLI_MODEL, e.g. `openai:gpt-4o-mini` or `anthropic:claude-3-5-sonnet-latest`.",
+          "You can switch models with ORGOPS_OPSCLI_MODEL, e.g. `openai:gpt-4o-mini`, `anthropic:claude-3-5-sonnet-latest`, or `openrouter:openai/gpt-4o-mini`.",
           { toStderr: true }
         );
       }

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { apiFetch } from "../../api";
 import { Button, Input, Label } from "../ui";
 
 type LoginFormProps = {
@@ -12,13 +13,13 @@ export function LoginForm({ onSuccess }: LoginFormProps) {
 
   const handleLogin = async () => {
     setStatus(null);
-    const res = await fetch("/api/auth/login", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify({ username, password })
-    });
-    if (!res.ok) {
+    try {
+      await apiFetch("/api/auth/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ username, password })
+      });
+    } catch {
       setStatus("Login failed");
       return;
     }
