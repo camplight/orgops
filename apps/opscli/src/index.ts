@@ -801,21 +801,11 @@ async function runShell(
 ): Promise<ShellResult> {
   const startedAt = Date.now();
   return new Promise((resolve) => {
-    const child =
-      process.platform === "win32"
-        ? spawn(
-            "powershell.exe",
-            ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
-            {
-              cwd: cwd ?? process.cwd(),
-              env: process.env,
-            }
-          )
-        : spawn(command, {
-            cwd: cwd ?? process.cwd(),
-            env: process.env,
-            shell: true,
-          });
+    const child = spawn(command, {
+      cwd: cwd ?? process.cwd(),
+      env: process.env,
+      shell: true,
+    });
     let out = "";
     let err = "";
     let timedOut = false;
@@ -883,9 +873,11 @@ function buildSystemPrompt() {
     "Use shell(command) to execute host commands.",
     "shell(command) accepts exactly one string argument. Do NOT pass callbacks or extra args.",
     "shell(command) is async and returns command output as a string (stdout + stderr when present).",
+    "shell(command) passes the command string directly to Node.js `spawn(command, { shell: true })`.",
     "Always use `await shell(...)`.",
     "shell(command) throws on timeout or non-zero exit; use try/catch when needed.",
-    "If host platform is win32, prefer PowerShell commands/syntax over Bash.",
+    "On Windows, `shell: true` uses the system shell (typically `cmd.exe`) unless the command explicitly invokes another shell.",
+    "If host platform is win32 and you need PowerShell semantics, invoke it explicitly (e.g. `powershell.exe -NoProfile -Command \"...\"`).",
     "If host platform is win32, use Windows-compatible commands and avoid bash-only tools/features.",
     "Use print(...args) to write output to stdout.",
     "Use input(question) to ask the user for stdin input.",
