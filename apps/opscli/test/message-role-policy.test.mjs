@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-const SOURCE_PATH = resolve(process.cwd(), "src/index.ts");
+const AGENT_SOURCE = resolve(process.cwd(), "src/agent.ts");
 
-test("opscli uses user role only for actual user prompt history", () => {
-  const source = readFileSync(SOURCE_PATH, "utf-8");
+test("opscli agent writes user and assistant roles to memory", () => {
+  const source = readFileSync(AGENT_SOURCE, "utf-8");
 
   const userRoleMatches = source.match(/appendHistoryMessage\(memory,\s*\{\s*role:\s*"user"/g) ?? [];
   assert.equal(
@@ -16,17 +16,12 @@ test("opscli uses user role only for actual user prompt history", () => {
   );
 
   assert.ok(
-    source.includes('appendHistoryMessage(memory, { role: "system", content: code });'),
-    "Model-produced code should be recorded as system context."
+    source.includes('appendHistoryMessage(memory, { role: "assistant", content: finalText });'),
+    "Assistant final text should be recorded as assistant role."
   );
 
   assert.ok(
-    source.includes('role: "system",\n        content: JSON.stringify({ type, ...payload }, null, 2),'),
-    "Runtime observations should be recorded as system context."
-  );
-
-  assert.ok(
-    source.includes('role: "system",\n      content: JSON.stringify(\n        {\n          type: "opscli.repl.next_input.requested"'),
-    "Control messages for next-step requests should be system role."
+    source.includes("modelMessages.push(...memory.history);"),
+    "Conversation history should be replayed into subsequent model calls."
   );
 });

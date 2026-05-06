@@ -44,6 +44,11 @@ function outputNameForCurrentPlatform() {
   return "opscli-linux";
 }
 
+function prebuildFrontendArtifacts() {
+  runCommand("npm", ["run", "--workspace", "@orgops/ui", "build"]);
+  runCommand("npm", ["run", "--workspace", "site", "build"]);
+}
+
 function stageOrgOpsSource() {
   const stagedRoot = resolve(TMP_ROOT, "orgops");
   rmSync(stagedRoot, { recursive: true, force: true });
@@ -52,6 +57,7 @@ function stageOrgOpsSource() {
     "apps/api",
     "apps/agent-runner",
     "apps/ui",
+    "apps/site",
     "packages",
     "docs",
     "skills",
@@ -96,6 +102,7 @@ async function buildReleaseExecutable() {
   mkdirSync(ASSET_DIR, { recursive: true });
   mkdirSync(OUTPUT_DIR, { recursive: true });
 
+  prebuildFrontendArtifacts();
   stageOrgOpsSource();
   await tar.c(
     {

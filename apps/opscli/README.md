@@ -3,11 +3,10 @@
 `opscli` is a lightweight autonomous maintenance CLI for OrgOps hosts.
 
 - Uses a local terminal chat loop (stdin/stdout)
-- Uses a persistent JS runtime session (Node VM context) for an RLM-style loop
-- LLM emits one JS snippet per step; runtime evaluates it in REPL context
-- REPL helpers include `shell(command)`, `print(...args)`, `input(question)`, `finish()`, `clear()`, and `exit(code)`
+- Uses a plain tool-calling agent loop (prompt + tools, no VM/REPL code execution)
+- Built-in tools include `shell`, `askPassword`, `extractOrgOps`, `getBundledDocs`, and `exitOpscli`
 - Session history is context-capped with rolling summarization
-- Bundled release executable can extract/setup `api`, `agent-runner`, and `ui` (including bundled `docs/` and `skills/`)
+- Bundled release executable prebuilds and embeds `ui` + `site` artifacts, then extracts full OrgOps source/docs/skills
 
 ## Run
 
@@ -37,14 +36,13 @@ chmod +x ./opscli-macos
 
 If Finder still blocks first launch, use right-click -> Open once.
 
-## Bundled setup helpers in REPL
+## Bundled setup helpers via tools
 
-- `extractOrgOps(options?)`: extract bundled OrgOps source tree
-- `setupOrgOps(options?)`: extract + install deps + configure `.env` + prep components
+- `extractOrgOps(options?)`: extract bundled OrgOps source tree into `./orgops` (current working directory)
 - `getBundledDocs()`: return bundled OrgOps docs that also feed the system prompt
 
-By default, extraction is done to `./orgops` from the current working directory.
-OpsCLI persists the extracted root in local `.env` as `ORGOPS_EXTRACTED_ROOT` and reuses it in later sessions.
+Extraction always targets `./orgops` from the current working directory; custom extract paths are intentionally unsupported.
+The `extractOrgOps` result includes PM2 startup commands that use env-aware npm scripts, so `orgops/.env` is loaded for API/runner/UI/site on macOS/Linux/Windows.
 
 ## Environment
 
@@ -55,21 +53,16 @@ OpsCLI persists the extracted root in local `.env` as `ORGOPS_EXTRACTED_ROOT` an
 - `OPENROUTER_HTTP_REFERER` (optional OpenRouter attribution/referrer header value)
 - `OPENROUTER_APP_TITLE` (optional OpenRouter `X-Title` header value)
 - `ORGOPS_OPSCLI_MODEL` (default: `openai:gpt-5.2`; supports `openai:<model>`, `anthropic:<model>`/`claude:<model>`, and `openrouter:<model>`/`or:<model>`)
-- `ORGOPS_OPSCLI_MAX_STEPS` (default: `20`)
 - `ORGOPS_OPSCLI_COMMAND_TIMEOUT_MS` (default: `120000`)
-- `ORGOPS_OPSCLI_EVAL_TIMEOUT_MS` (default: `30000`)
-- `ORGOPS_OPSCLI_EVAL_CALLBACK_TIMEOUT_MS` (default: `8000`)
 - `ORGOPS_OPSCLI_MAX_CONTEXT_CHARS` (default: `100000`)
 - `ORGOPS_OPSCLI_MAX_SUMMARY_CHARS` (default: `14000`)
 - `ORGOPS_OPSCLI_SUMMARY_CHUNK_MESSAGES` (default: `8`)
 - `ORGOPS_OPSCLI_MIN_RECENT_MESSAGES` (default: `12`)
 - `ORGOPS_OPSCLI_MAX_SYSTEM_DOC_CHARS` (default: `40000`)
-- `ORGOPS_OPSCLI_DEBUG` (default: unset/`0`; set to `1` to show internal REPL step code/results)
 - `ORGOPS_OPSCLI_SPINNER` (default: enabled; set to `0`, `false`, `off`, or `no` to disable thinking/execution spinner)
 - `ORGOPS_OPSCLI_PROGRESS` (default: enabled; set to `0`, `false`, `off`, or `no` to disable live step/repl progress events)
 - `ORGOPS_OPSCLI_LOG_PATH` (default: `.opscli-output.log` in current working directory; reset on each new session start)
 - `ORGOPS_OPSCLI_DOUBLE_SIGINT_MS` (default: `1200`; window for "double Ctrl+C to exit")
-- `ORGOPS_EXTRACTED_ROOT` (auto-managed by OpsCLI; persisted extracted OrgOps path)
 
 If no API keys are configured, OpsCLI prompts on startup to choose OpenAI, Claude, or OpenRouter and saves the selected key to local `.env`.
 

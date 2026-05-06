@@ -11,9 +11,9 @@
     "build:release": "node --import tsx scripts/build-release.ts"
   },
   "dependencies": {
-    "@orgops/js-runtime": "file:../../packages/js-runtime",
     "@orgops/llm": "file:../../packages/llm",
-    "tar": "^7.5.13"
+    "tar": "^7.5.13",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/node": "^24.5.2",

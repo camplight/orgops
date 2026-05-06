@@ -42,8 +42,24 @@ export type GenerateResult = {
 export type LlmTool = {
   description?: string;
   parameters?: unknown;
+  inputSchema?: unknown;
   execute?: (args: any) => Promise<unknown> | unknown;
 };
+
+function normalizeToolsForSdk(tools?: Record<string, LlmTool>) {
+  if (!tools) return undefined;
+  return Object.fromEntries(
+    Object.entries(tools).map(([name, tool]) => [
+      name,
+      {
+        description: tool.description,
+        // AI SDK v6 uses inputSchema; keep backwards compatibility with parameters.
+        inputSchema: (tool as { inputSchema?: unknown }).inputSchema ?? tool.parameters,
+        execute: tool.execute,
+      },
+    ])
+  ) as Record<string, any>;
+}
 
 export function isOpenAICompletionModel(modelName: string) {
   return /(codex|instruct)/i.test(modelName);
@@ -160,7 +176,7 @@ export async function generate(
     ...(options.maxSteps !== undefined
       ? ({ maxSteps: options.maxSteps } as any)
       : {}),
-    tools: options.tools as Record<string, any> | undefined,
+    tools: normalizeToolsForSdk(options.tools),
     abortSignal: options.abortSignal,
   });
   return {
