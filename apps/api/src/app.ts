@@ -120,12 +120,12 @@ export function createApp(config: AppConfig = {}) {
     return timingSafeEqual(storedBytes, computedBytes);
   }
 
-  const existingAdmin = orm
+  const existingHuman = orm
     .select({ id: schema.humans.id })
     .from(schema.humans)
-    .where(eq(schema.humans.username, ADMIN_USER))
+    .limit(1)
     .get();
-  if (!existingAdmin) {
+  if (!existingHuman) {
     const now = Date.now();
     orm
       .insert(schema.humans)

@@ -11,10 +11,46 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { openDb } from "@orgops/db";
+import { createDrizzleDb, migrate, openDb, schema } from "@orgops/db";
 import { createApp } from "./app";
 
 describe("api app", () => {
+  it("does not inject admin when any human already exists", async () => {
+    const db = openDb(":memory:");
+    migrate(db);
+    const orm = createDrizzleDb(db);
+    const now = Date.now();
+    orm
+      .insert(schema.humans)
+      .values({
+        id: randomUUID(),
+        username: "existing-user",
+        password_hash: "seeded-password-hash",
+        must_change_password: 0,
+        created_at: now,
+        updated_at: now,
+        invited_by_human_id: null,
+      })
+      .run();
+
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(401);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("registers runners and filters agents by assigned runner", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");
