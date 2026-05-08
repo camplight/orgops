@@ -1,5 +1,5 @@
 import type { LlmTool } from "@orgops/llm";
-import type { AgentRuntimeState } from "../types";
+import type { AgentRuntimeState } from "../lib/types";
 
 export type ToolContext = {
   requestPasswordInput: (promptText: string) => Promise<string>;

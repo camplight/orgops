@@ -1,19 +1,19 @@
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
-import { runAgentTurn } from "./agent";
-import { SESSION_LOG_PATH, DOUBLE_SIGINT_WINDOW_MS } from "./config";
-import { loadBuildTimestamp, loadBundledDocsText } from "./bundle";
+import { runAgentTurn } from "./lib/agent";
+import { SESSION_LOG_PATH, DOUBLE_SIGINT_WINDOW_MS } from "./lib/config";
+import { loadBuildTimestamp, loadBundledDocsText } from "./lib/bundle";
 import {
   ensureModelCredentials,
   getModelId,
   getOpsCliEnvPath,
   loadDotEnvIntoProcess,
-} from "./env";
-import { appendSessionLog, resetSessionLog } from "./logger";
-import type { CliOptions, SessionMemory } from "./types";
-import { TaskInterruptedError } from "./types";
-import { forceStopSpinner, rolePrefix, writeRoleMessage } from "./ui";
-import { toDisplayError } from "./utils";
+} from "./lib/env";
+import { appendSessionLog, resetSessionLog } from "./lib/logger";
+import type { CliOptions, SessionMemory } from "./lib/types";
+import { TaskInterruptedError } from "./lib/types";
+import { forceStopSpinner, rolePrefix, writeRoleMessage } from "./lib/ui";
+import { toDisplayError } from "./lib/utils";
 
 function parseCliArgs(argv: string[]): CliOptions {
   const args = [...argv];

@@ -1,8 +1,8 @@
 import { z } from "zod";
-import { COMMAND_TIMEOUT_MS } from "../config";
-import { runShell } from "../shell";
-import { TaskInterruptedError } from "../types";
-import { mergeShellOutput, truncateText } from "../utils";
+import { COMMAND_TIMEOUT_MS } from "../lib/config";
+import { runShell } from "../lib/shell";
+import { TaskInterruptedError } from "../lib/types";
+import { mergeShellOutput, truncateText } from "../lib/utils";
 import type { NamedTool, ToolContext } from "./types";
 
 const shellToolSchema = z.object({

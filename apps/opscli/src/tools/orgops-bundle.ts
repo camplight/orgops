@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { extractBundledOrgOps, loadBundledDocsText } from "../bundle";
+import { extractBundledOrgOps, loadBundledDocsText } from "../lib/bundle";
 import type { NamedTool, ToolContext } from "./types";
 
 const extractSchema = z.object({

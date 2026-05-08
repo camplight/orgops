@@ -1,28 +1,33 @@
-import { generateText } from "ai";
+import { generateText, stepCountIs } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createAnthropic } from "@ai-sdk/anthropic";
+import type { ImagePart, ModelMessage, TextPart } from "ai";
 
-export type LlmMessage = {
-  role: "system" | "user" | "assistant";
-  content: LlmMessageContent;
-};
+export type LlmMessage = ModelMessage;
 
-export type LlmTextPart = {
-  type: "text";
-  text: string;
-};
+export type LlmTextPart = TextPart;
+export type LlmImagePart = ImagePart;
+export type LlmToolResultOutput =
+  | { type: "text"; value: string; providerOptions?: unknown }
+  | { type: "json"; value: unknown; providerOptions?: unknown }
+  | { type: "execution-denied"; reason?: string; providerOptions?: unknown }
+  | { type: "error-text"; value: string; providerOptions?: unknown }
+  | { type: "error-json"; value: unknown; providerOptions?: unknown }
+  | { type: "content"; value: Array<Record<string, unknown>> };
+export type LlmToolContent = Array<{
+  type: "tool-result";
+  toolCallId: string;
+  toolName: string;
+  output: LlmToolResultOutput;
+  providerOptions?: unknown;
+}>;
 
-export type LlmImagePart = {
-  type: "image";
-  image: Uint8Array | string;
-  mimeType?: string;
-};
-
-export type LlmMessageContent = string | Array<LlmTextPart | LlmImagePart>;
+export type LlmMessageContent = LlmMessage["content"];
 
 export type GenerateOptions = {
   temperature?: number;
   maxTokens?: number;
+  /** Maximum tool-loop steps for AI SDK generateText. */
   maxSteps?: number;
   tools?: Record<string, LlmTool>;
   abortSignal?: AbortSignal;
@@ -97,7 +102,7 @@ function splitSystemMessages(messages: LlmMessage[]) {
   const nonSystemMessages: LlmMessage[] = [];
   for (const message of messages) {
     if (message.role === "system") {
-      const text = textFromContent(message.content);
+      const text = typeof message.content === "string" ? message.content : textFromContent(message.content);
       if (text) systemBlocks.push(text);
       continue;
     }
@@ -173,8 +178,8 @@ export async function generate(
     messages: splitMessages.messages as any,
     ...(shouldSendTemperature ? { temperature: options.temperature } : {}),
     maxOutputTokens: options.maxTokens,
-    ...(options.maxSteps !== undefined
-      ? ({ maxSteps: options.maxSteps } as any)
+    ...(options.maxSteps !== undefined && Number.isFinite(options.maxSteps) && options.maxSteps > 0
+      ? { stopWhen: stepCountIs(Math.floor(options.maxSteps)) }
       : {}),
     tools: normalizeToolsForSdk(options.tools),
     abortSignal: options.abortSignal,

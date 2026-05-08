@@ -11,7 +11,18 @@ import { truncateText } from "./utils";
 
 function messageContentToText(content: LlmMessage["content"]): string {
   if (typeof content === "string") return content;
-  return content.map((part) => (part.type === "text" ? part.text : "[image]")).join("\n");
+  return content
+    .map((part) => {
+      if (part.type === "text") return part.text;
+      if (part.type === "tool-call") {
+        return `[tool-call ${part.toolName} id=${part.toolCallId}]`;
+      }
+      if (part.type === "tool-result") {
+        return `[tool-result ${part.toolName} id=${part.toolCallId}]`;
+      }
+      return `[${part.type}]`;
+    })
+    .join("\n");
 }
 
 function estimateMessageChars(messages: LlmMessage[]) {
@@ -49,7 +60,20 @@ function enforceMemoryBudget(memory: SessionMemory) {
 }
 
 export function appendHistoryMessage(memory: SessionMemory, message: LlmMessage) {
-  const clipped = truncateText(messageContentToText(message.content), MAX_OUTPUT_CHARS);
-  memory.history.push({ role: message.role, content: clipped.text });
+  if (typeof message.content === "string") {
+    if (message.role === "tool") {
+      memory.history.push(message);
+      enforceMemoryBudget(memory);
+      return;
+    }
+    const clipped = truncateText(message.content, MAX_OUTPUT_CHARS);
+    memory.history.push({
+      role: message.role,
+      content: clipped.text,
+    });
+    enforceMemoryBudget(memory);
+    return;
+  }
+  memory.history.push(message);
   enforceMemoryBudget(memory);
 }

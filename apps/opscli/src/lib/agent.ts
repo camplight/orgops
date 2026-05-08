@@ -4,11 +4,11 @@ import { TOOL_LOOP_MAX_STEPS, MAX_INPUT_CHARS } from "./config";
 import { appendSessionLog } from "./logger";
 import { appendHistoryMessage } from "./memory";
 import { buildSystemPrompt } from "./prompt";
-import { createOpsCliTools } from "./tools";
+import { createOpsCliTools } from "../tools";
 import type { AgentRuntimeState, SessionMemory } from "./types";
 import { TaskInterruptedError } from "./types";
 import { reportProgress, startSpinner, writeRoleMessage, forceStopSpinner } from "./ui";
-import { summarizeToolResults, toDisplayError, truncateText } from "./utils";
+import { toDisplayError, truncateText } from "./utils";
 
 function isAbortError(error: unknown) {
   if (!error || typeof error !== "object") return false;
@@ -20,30 +20,54 @@ function isAbortError(error: unknown) {
   );
 }
 
-async function synthesizeFinalAnswerFromToolResults(input: {
-  modelId: string;
-  baseMessages: LlmMessage[];
-  toolResults: unknown[];
-  abortSignal?: AbortSignal;
-}) {
-  const { modelId, baseMessages, toolResults, abortSignal } = input;
-  const synthesis = await generate(
-    modelId,
-    [
-      ...baseMessages,
-      {
-        role: "system",
-        content: JSON.stringify({ type: "opscli.tool_results", results: toolResults }, null, 2),
-      },
-      {
-        role: "system",
-        content:
-          "Write a concise direct answer to the user based on the tool results. Explicitly state success/failure and key evidence. Do not call any tools.",
-      },
-    ],
-    { abortSignal }
-  );
-  return (synthesis.text ?? "").trim();
+function normalizeToolOutputToModelShape(output: unknown) {
+  if (
+    output &&
+    typeof output === "object" &&
+    "type" in output &&
+    typeof (output as { type?: unknown }).type === "string"
+  ) {
+    const type = (output as { type: string }).type;
+    if (
+      type === "text" ||
+      type === "json" ||
+      type === "execution-denied" ||
+      type === "error-text" ||
+      type === "error-json" ||
+      type === "content"
+    ) {
+      return output;
+    }
+  }
+  return { type: "json", value: output as Record<string, unknown> };
+}
+
+function normalizeToolResultForHistory(toolResult: unknown, index: number) {
+  const record = toolResult as {
+    toolCallId?: string;
+    toolName?: string;
+    tool?: string;
+    input?: unknown;
+    args?: unknown;
+    output?: unknown;
+    error?: unknown;
+  };
+  const toolCallId =
+    typeof record.toolCallId === "string" && record.toolCallId.trim().length > 0
+      ? record.toolCallId
+      : `opscli-tool-${index + 1}`;
+  const toolName =
+    typeof record.toolName === "string" && record.toolName.trim().length > 0
+      ? record.toolName
+      : typeof record.tool === "string" && record.tool.trim().length > 0
+        ? record.tool
+        : "unknown_tool";
+  const inputValue = "input" in record ? record.input : ("args" in record ? record.args : {});
+  const outputValue =
+    record.error !== undefined
+      ? { type: "error-text", value: String(record.error) }
+      : normalizeToolOutputToModelShape("output" in record ? record.output : toolResult);
+  return { toolCallId, toolName, inputValue, outputValue };
 }
 
 export async function runAgentTurn(input: {
@@ -131,17 +155,38 @@ export async function runAgentTurn(input: {
       Array.isArray(result.toolResults) && result.toolResults.length > 0
         ? result.toolResults
         : executedToolResults;
-    let assistantText = (result.text ?? "").trim();
-    if (!assistantText && toolResults.length > 0) {
-      assistantText = await synthesizeFinalAnswerFromToolResults({
-        modelId,
-        baseMessages: modelMessages,
-        toolResults,
-        abortSignal,
+    const finalText = (result.text ?? "").trim();
+    if (!finalText) {
+      throw new Error("Model returned an empty final response.");
+    }
+    for (const [index, toolResult] of toolResults.entries()) {
+      const { toolCallId, toolName, inputValue, outputValue } = normalizeToolResultForHistory(
+        toolResult,
+        index
+      );
+      appendHistoryMessage(memory, {
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId,
+            toolName,
+            input: inputValue,
+          },
+        ],
+      });
+      appendHistoryMessage(memory, {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId,
+            toolName,
+            output: outputValue as any,
+          },
+        ],
       });
     }
-
-    const finalText = assistantText || summarizeToolResults(toolResults);
     appendHistoryMessage(memory, { role: "assistant", content: finalText });
     writeRoleMessage("agent", finalText, { leadingNewline: true });
     appendSessionLog(

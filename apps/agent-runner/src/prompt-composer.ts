@@ -98,6 +98,12 @@ export function contentCharLength(content: LlmMessageContent): number {
           : String(part.image).length;
       return sum + Math.min(bytes, 10_000);
     }
+    if (part.type === "tool-call") {
+      return sum + part.toolName.length + part.toolCallId.length + 32;
+    }
+    if (part.type === "tool-result") {
+      return sum + part.toolName.length + part.toolCallId.length + 48;
+    }
     return sum;
   }, 0);
 }
@@ -107,11 +113,20 @@ export function contentForTelemetry(content: LlmMessageContent): string {
   return content
     .map((part) => {
       if (part.type === "text") return part.text;
+      if (part.type === "tool-call") {
+        return `[tool-call ${part.toolName} id=${part.toolCallId}]`;
+      }
+      if (part.type === "tool-result") {
+        return `[tool-result ${part.toolName} id=${part.toolCallId}]`;
+      }
+      if (part.type !== "image") {
+        return `[${part.type}]`;
+      }
       const bytes =
         part.image instanceof Uint8Array
           ? part.image.byteLength
           : String(part.image).length;
-      return `[image attachment mime=${part.mimeType ?? "unknown"} bytes=${bytes}]`;
+      return `[image attachment mime=${part.mediaType ?? "unknown"} bytes=${bytes}]`;
     })
     .join("\n");
 }
@@ -126,6 +141,9 @@ export function estimateTokensForContent(content: LlmMessageContent): number {
   return content.reduce((sum, part) => {
     if (part.type === "text") {
       return sum + estimateTokensForText(part.text);
+    }
+    if (part.type === "tool-call" || part.type === "tool-result") {
+      return sum + 64;
     }
     return sum + 1024;
   }, 0);
@@ -171,7 +189,7 @@ export async function toHistoryMessage(
     parts.push({
       type: "image",
       image: loaded.bytes,
-      ...(loaded.mimeType ? { mimeType: loaded.mimeType } : {}),
+      ...(loaded.mimeType ? { mediaType: loaded.mimeType } : {}),
     });
   }
   if (parts.length === 1) return { role, content: textContent };
