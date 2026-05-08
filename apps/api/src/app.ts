@@ -43,6 +43,7 @@ import { registerSecretsRoutes } from "./routes/secrets";
 import { registerWsRoutes, type WsServerMessage } from "./routes/ws";
 import { registerHumansRoutes } from "./routes/humans";
 import { registerRunnersRoutes } from "./routes/runners";
+import { createAccessControl } from "./routes/access";
 
 export type AppConfig = {
   db?: OrgOpsDb;
@@ -51,6 +52,7 @@ export type AppConfig = {
   adminUser?: string;
   adminPass?: string;
   runnerToken?: string;
+  runnerApiUrl?: string;
 };
 
 type AppEnv = {
@@ -97,6 +99,11 @@ export function createApp(config: AppConfig = {}) {
     config.adminPass ?? process.env.ORGOPS_ADMIN_PASS ?? "admin";
   const RUNNER_TOKEN =
     config.runnerToken ?? process.env.ORGOPS_RUNNER_TOKEN ?? "dev-runner-token";
+  const RUNNER_API_URL =
+    config.runnerApiUrl ??
+    process.env.ORGOPS_RUNNER_API_URL ??
+    process.env.ORGOPS_PUBLIC_API_URL ??
+    `http://localhost:${process.env.PORT ?? "8787"}`;
 
   const FILES_DIR = join(PROJECT_ROOT, "files");
   const SKILL_ROOT = resolveSkillRoot(PROJECT_ROOT);
@@ -304,7 +311,6 @@ export function createApp(config: AppConfig = {}) {
     const createdAt = Math.max(now, lastEventCreatedAt + 1);
     lastEventCreatedAt = createdAt;
     const id = input.id ?? randomUUID();
-    const status = input.status ?? "PENDING";
     const payloadJson = JSON.stringify(input.payload ?? {});
     const row = {
       id,
@@ -314,7 +320,7 @@ export function createApp(config: AppConfig = {}) {
       channel_id: input.channelId ?? null,
       parent_event_id: input.parentEventId ?? null,
       deliver_at: input.deliverAt ?? null,
-      status,
+      status: input.status ?? "PENDING",
       fail_count: 0,
       last_error: null,
       idempotency_key: input.idempotencyKey ?? null,
@@ -359,6 +365,8 @@ export function createApp(config: AppConfig = {}) {
     return row;
   }
 
+  const access = createAccessControl({ orm });
+
   registerAuthRoutes(app as any, {
     orm,
     humanSchema: schema.humans,
@@ -389,9 +397,10 @@ export function createApp(config: AppConfig = {}) {
     getDefaultSoulPath,
     resolveWorkspacePath,
     insertEvent,
+    access,
   });
 
-  registerCollabRoutes(app as any, { orm, jsonResponse });
+  registerCollabRoutes(app as any, { orm, jsonResponse, access });
 
   registerEventsRoutes(app as any, {
     orm,
@@ -412,9 +421,10 @@ export function createApp(config: AppConfig = {}) {
     getCoreEventShapes,
     validateEventAgainstShapes,
     serializeEventShapes,
+    access,
   });
 
-  registerMemoryRoutes(app as any, { orm, jsonResponse });
+  registerMemoryRoutes(app as any, { orm, jsonResponse, access });
 
   registerRuntimeRoutes(app as any, {
     orm,
@@ -434,7 +444,21 @@ export function createApp(config: AppConfig = {}) {
     insertEvent,
   });
 
-  registerWsRoutes(app as any, { bus, upgradeWebSocket });
+  registerWsRoutes(app as any, {
+    bus,
+    upgradeWebSocket,
+    resolveRequestUser: (c: any) => {
+      const runnerHeader = c.req.header("x-orgops-runner-token");
+      if (RUNNER_TOKEN && runnerHeader === RUNNER_TOKEN) {
+        return { username: "runner", mustChangePassword: false };
+      }
+      const cookie = c.req.header("cookie") ?? "";
+      const match = cookie.match(/orgops_session=([^;]+)/);
+      if (!match) return null;
+      return sessions.get(match[1]) ?? null;
+    },
+    access,
+  });
 
   registerRunnersRoutes(app as any, {
     orm,
@@ -442,6 +466,7 @@ export function createApp(config: AppConfig = {}) {
     jsonResponse,
     requireRunnerAuth,
     runnerToken: RUNNER_TOKEN,
+    runnerApiUrl: RUNNER_API_URL,
   });
 
   return { app, db, bus, injectWebSocket };

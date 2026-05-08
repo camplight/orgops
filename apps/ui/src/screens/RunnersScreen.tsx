@@ -23,6 +23,7 @@ export function RunnersScreen({
   const [pendingRunnerId, setPendingRunnerId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [runnerToken, setRunnerToken] = useState<string>("");
+  const [runnerApiUrl, setRunnerApiUrl] = useState<string>("");
 
   useEffect(() => {
     let cancelled = false;
@@ -30,10 +31,12 @@ export function RunnersScreen({
       .then((config) => {
         if (cancelled) return;
         setRunnerToken((config.runnerToken ?? "").trim());
+        setRunnerApiUrl((config.runnerApiUrl ?? "").trim());
       })
       .catch(() => {
         if (cancelled) return;
         setRunnerToken("");
+        setRunnerApiUrl("");
       });
     return () => {
       cancelled = true;
@@ -59,7 +62,7 @@ export function RunnersScreen({
     return map;
   }, [agents]);
 
-  const apiBaseUrl = runnerApiUrlHint();
+  const apiBaseUrl = runnerApiUrl || runnerApiUrlHint();
   const runnerTokenLine = runnerToken
     ? `- ORGOPS_RUNNER_TOKEN=${runnerToken}`
     : "- ORGOPS_RUNNER_TOKEN=<paste-shared-runner-token>";

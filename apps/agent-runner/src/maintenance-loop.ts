@@ -25,6 +25,10 @@ function shouldRunMemoryMaintenance(agent: Agent): boolean {
   return mode === "PER_CHANNEL_CROSS_CHANNEL";
 }
 
+function lifecycleChannelName(agentName: string): string {
+  return `agent.lifecycle.${agentName}`;
+}
+
 export function createMaintenanceLoop(deps: Dependencies) {
   const maintenanceInFlight = new Map<string, Promise<void>>();
   const channelRecentLastRunAtByChannel = new Map<string, number>();
@@ -45,18 +49,24 @@ export function createMaintenanceLoop(deps: Dependencies) {
       injectionEnvByChannel.set(channelId, env);
       return env;
     };
-    let crossMemoryEnv: Record<string, string> | null = null;
-    const ensureCrossMemoryEnv = async (): Promise<Record<string, string>> => {
-      if (crossMemoryEnv) return crossMemoryEnv;
-      crossMemoryEnv = await deps.getPackageSecretsEnv(agent.name);
-      return crossMemoryEnv;
-    };
     const subscribedChannels = channels.filter((channel) =>
       isAgentSubscribed(channel, agent.name),
     );
     const subscribedChannelIds = subscribedChannels
       .map((channel) => channel.id)
       .filter((channelId): channelId is string => Boolean(channelId));
+    let crossMemoryEnv: Record<string, string> | null = null;
+    const crossMemoryAuditChannelId = subscribedChannels.find(
+      (channel) => channel.id && channel.name === lifecycleChannelName(agent.name),
+    )?.id;
+    const ensureCrossMemoryEnv = async (): Promise<Record<string, string>> => {
+      if (crossMemoryEnv) return crossMemoryEnv;
+      crossMemoryEnv = await deps.getPackageSecretsEnv(
+        agent.name,
+        crossMemoryAuditChannelId,
+      );
+      return crossMemoryEnv;
+    };
     const now = Date.now();
     let updatedAnyChannelRecent = false;
     let updatedAnyChannelFull = false;

@@ -5,6 +5,14 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { schema } from "./schema";
 export { CHANNEL_KINDS, isChannelKind, type ChannelKind } from "./channel-kinds";
+export {
+  CHANNEL_VISIBILITY,
+  AGENT_VISIBILITY,
+  isChannelVisibility,
+  isAgentVisibility,
+  type ChannelVisibility,
+  type AgentVisibility,
+} from "./visibility";
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url));
 

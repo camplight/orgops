@@ -238,6 +238,9 @@ type AgentContextUsage = {
   contextWindowTokens: number;
   utilizationPct: number;
   updatedAt: number;
+  usageSource?: string;
+  outputTokens?: number;
+  totalTokens?: number;
 };
 
 type MemoryRecord = {
@@ -357,10 +360,15 @@ function parseAgentContextUsage(event: EventRow): AgentContextUsage | null {
       ? agentNameRaw.trim()
       : getAgentNameForStatusEvent(event);
   if (!agentName) return null;
+  const providerInputTokens =
+    typeof payload.inputTokens === "number" && Number.isFinite(payload.inputTokens)
+      ? Math.max(0, Math.floor(payload.inputTokens))
+      : undefined;
   const usedTokens =
-    typeof payload.estimatedUsedTokens === "number" && Number.isFinite(payload.estimatedUsedTokens)
+    providerInputTokens ??
+    (typeof payload.estimatedUsedTokens === "number" && Number.isFinite(payload.estimatedUsedTokens)
       ? Math.max(0, Math.floor(payload.estimatedUsedTokens))
-      : 0;
+      : 0);
   const availableTokens =
     typeof payload.estimatedAvailableTokens === "number" &&
     Number.isFinite(payload.estimatedAvailableTokens)
@@ -382,6 +390,18 @@ function parseAgentContextUsage(event: EventRow): AgentContextUsage | null {
     contextWindowTokens,
     utilizationPct,
     updatedAt: event.createdAt ?? 0,
+    usageSource:
+      typeof payload.usageSource === "string" && payload.usageSource.trim()
+        ? payload.usageSource.trim()
+        : undefined,
+    outputTokens:
+      typeof payload.outputTokens === "number" && Number.isFinite(payload.outputTokens)
+        ? Math.max(0, Math.floor(payload.outputTokens))
+        : undefined,
+    totalTokens:
+      typeof payload.totalTokens === "number" && Number.isFinite(payload.totalTokens)
+        ? Math.max(0, Math.floor(payload.totalTokens))
+        : undefined,
   };
 }
 
@@ -938,7 +958,7 @@ export function ChatScreen({
         <Card title="Destination">
         <div className="space-y-2">
           <div className="text-slate-400 text-sm">
-            Select a channel or pick an agent to open a direct channel.
+            Select a public/private channel or pick an agent to open a private direct channel.
           </div>
           <SelectAutocomplete
             value={activeTargetId}
@@ -1225,6 +1245,14 @@ export function ChatScreen({
                                 {Math.round(usage.utilizationPct)}%
                               </span>
                             </div>
+                            {usage.usageSource ? (
+                              <div className="flex items-center justify-between gap-3">
+                                <span className="text-slate-400">Source</span>
+                                <span className="font-medium text-slate-200">
+                                  {usage.usageSource === "provider" ? "Provider" : "Estimate"}
+                                </span>
+                              </div>
+                            ) : null}
                             <div className="flex items-center justify-between gap-3">
                               <span className="text-slate-400">Used</span>
                               <span className="font-medium text-slate-200">
@@ -1237,6 +1265,22 @@ export function ChatScreen({
                                 {usage.availableTokens.toLocaleString()} tokens
                               </span>
                             </div>
+                            {usage.outputTokens !== undefined ? (
+                              <div className="flex items-center justify-between gap-3">
+                                <span className="text-slate-400">Output</span>
+                                <span className="font-medium text-slate-200">
+                                  {usage.outputTokens.toLocaleString()} tokens
+                                </span>
+                              </div>
+                            ) : null}
+                            {usage.totalTokens !== undefined ? (
+                              <div className="flex items-center justify-between gap-3">
+                                <span className="text-slate-400">Total call</span>
+                                <span className="font-medium text-slate-200">
+                                  {usage.totalTokens.toLocaleString()} tokens
+                                </span>
+                              </div>
+                            ) : null}
                             <div className="flex items-center justify-between gap-3">
                               <span className="text-slate-400">Context window</span>
                               <span className="font-medium text-slate-200">

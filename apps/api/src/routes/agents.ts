@@ -9,9 +9,15 @@ import {
 import { basename, extname, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 
-import { schema, type OrgOpsDrizzleDb } from "@orgops/db";
-import { desc, eq, isNull, or } from "drizzle-orm";
+import {
+  AGENT_VISIBILITY,
+  isAgentVisibility,
+  schema,
+  type OrgOpsDrizzleDb
+} from "@orgops/db";
+import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import type { EventBus } from "@orgops/event-bus";
+import type { AccessControl, RequestUser } from "./access";
 
 type AgentsDeps = {
   orm: OrgOpsDrizzleDb;
@@ -22,6 +28,7 @@ type AgentsDeps = {
   getDefaultSoulPath: (agentName: string) => string;
   resolveWorkspacePath: (workspacePath: string) => string;
   insertEvent: (input: any) => any;
+  access: AccessControl;
 };
 
 const AGENT_MEMORY_CONTEXT_MODES = new Set([
@@ -39,7 +46,8 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     parseStringArraySafe,
     getDefaultSoulPath,
     resolveWorkspacePath,
-    insertEvent
+    insertEvent,
+    access
   } = deps;
   const publishDashboardRefresh = (reason: string, meta?: Record<string, unknown>) => {
     bus.publish("org:dashboard", {
@@ -117,6 +125,31 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       return { error: "Workspace path is not configured", status: 400 as const };
     }
     return { workspacePath };
+  }
+
+  function lifecycleChannelName(agentName: string) {
+    return `agent.lifecycle.${agentName}`;
+  }
+
+  function resolveAgentLifecycleChannelId(agentName: string): string | undefined {
+    const lifecycle = orm
+      .select({ id: schema.channels.id })
+      .from(schema.channels)
+      .where(eq(schema.channels.name, lifecycleChannelName(agentName)))
+      .get() as { id: string } | undefined;
+    if (!lifecycle?.id) return undefined;
+    const membership = orm
+      .select({ channelId: schema.channelSubscriptions.channel_id })
+      .from(schema.channelSubscriptions)
+      .where(
+        and(
+          eq(schema.channelSubscriptions.channel_id, lifecycle.id),
+          eq(schema.channelSubscriptions.subscriber_type, "AGENT"),
+          eq(schema.channelSubscriptions.subscriber_id, agentName),
+        ),
+      )
+      .get() as { channelId: string } | undefined;
+    return membership?.channelId;
   }
 
   function resolveSafeWorkspaceTarget(
@@ -219,6 +252,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
           )
           .all() as any[])
       : (orm.select().from(schema.agents).all() as any[]);
+    const user = c.get("user") as RequestUser | undefined;
     return jsonResponse(
       c,
       rows.map((row) => ({
@@ -245,13 +279,20 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         runtimeState: row.runtime_state,
         lastHeartbeatAt: row.last_heartbeat_at,
         createdAt: row.created_at,
-        updatedAt: row.updated_at
+        updatedAt: row.updated_at,
+        visibility:
+          row.visibility === AGENT_VISIBILITY.PRIVATE
+            ? AGENT_VISIBILITY.PRIVATE
+            : AGENT_VISIBILITY.PUBLIC,
+        ownerHumanId: row.owner_human_id ?? null,
       }))
+        .filter((row) => access.canViewAgent(user, row.name))
     );
   });
 
   app.post("/api/agents", async (c) => {
     const body = await c.req.json();
+    const user = c.get("user") as RequestUser | undefined;
     const assignedRunnerId =
       typeof body.assignedRunnerId === "string" && body.assignedRunnerId.trim()
         ? body.assignedRunnerId.trim()
@@ -309,6 +350,22 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     }
     const emitAuditEvents =
       body.emitAuditEvents === undefined ? true : Boolean(body.emitAuditEvents);
+    const visibilityRaw =
+      typeof body.visibility === "string" ? body.visibility.trim().toUpperCase() : "";
+    const visibility = isAgentVisibility(visibilityRaw)
+      ? visibilityRaw
+      : AGENT_VISIBILITY.PUBLIC;
+    const ownerHumanId =
+      visibility === AGENT_VISIBILITY.PRIVATE
+        ? (user?.username && user.username !== "runner" ? user.id ?? null : null)
+        : null;
+    if (visibility === AGENT_VISIBILITY.PRIVATE && !ownerHumanId) {
+      return jsonResponse(
+        c,
+        { error: "Authenticated human user required for private agents" },
+        401,
+      );
+    }
     orm
       .insert(schema.agents)
       .values({
@@ -331,6 +388,8 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
           typeof body.mode === "string" && body.mode.trim()
             ? body.mode.trim()
             : "CLASSIC",
+        visibility,
+        owner_human_id: ownerHumanId,
         assigned_runner_id: assignedRunnerId,
         enabled_skills_json: JSON.stringify(enabledSkills),
         always_preloaded_skills_json: JSON.stringify(sanitizedAlwaysPreloadedSkills),
@@ -346,6 +405,10 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
 
   app.get("/api/agents/:name", (c) => {
     const name = c.req.param("name");
+    const user = c.get("user") as RequestUser | undefined;
+    if (!access.canViewAgent(user, name)) {
+      return jsonResponse(c, { error: "Not found" }, 404);
+    }
     const row = orm.select().from(schema.agents).where(eq(schema.agents.name, name)).get() as any;
     if (!row) return jsonResponse(c, { error: "Not found" }, 404);
     return jsonResponse(c, {
@@ -372,12 +435,21 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       runtimeState: row.runtime_state,
       lastHeartbeatAt: row.last_heartbeat_at,
       createdAt: row.created_at,
-      updatedAt: row.updated_at
+      updatedAt: row.updated_at,
+      visibility:
+        row.visibility === AGENT_VISIBILITY.PRIVATE
+          ? AGENT_VISIBILITY.PRIVATE
+          : AGENT_VISIBILITY.PUBLIC,
+      ownerHumanId: row.owner_human_id ?? null,
     });
   });
 
   app.patch("/api/agents/:name", async (c) => {
     const name = c.req.param("name");
+    const user = c.get("user") as RequestUser | undefined;
+    if (!access.canManageAgent(user, name)) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
     const body = await c.req.json();
     const existing = orm.select().from(schema.agents).where(eq(schema.agents.name, name)).get() as any;
     if (!existing) return jsonResponse(c, { error: "Not found" }, 404);
@@ -458,6 +530,17 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
           ? body.assignedRunnerId.trim()
           : null
         : undefined;
+    const visibilityRaw =
+      body.visibility !== undefined ? String(body.visibility).trim().toUpperCase() : "";
+    const visibility =
+      body.visibility !== undefined
+        ? isAgentVisibility(visibilityRaw)
+          ? visibilityRaw
+          : null
+        : undefined;
+    if (body.visibility !== undefined && !visibility) {
+      return jsonResponse(c, { error: "visibility must be PUBLIC or PRIVATE" }, 400);
+    }
     orm
       .update(schema.agents)
       .set({
@@ -492,6 +575,16 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
           typeof body.mode === "string" && body.mode.trim()
             ? body.mode.trim()
             : existing.mode,
+        visibility:
+          visibility !== undefined
+            ? visibility
+            : (existing.visibility ?? AGENT_VISIBILITY.PUBLIC),
+        owner_human_id:
+          visibility === AGENT_VISIBILITY.PRIVATE
+            ? (existing.owner_human_id ?? user?.id ?? null)
+            : visibility === AGENT_VISIBILITY.PUBLIC
+              ? null
+              : existing.owner_human_id,
         assigned_runner_id:
           assignedRunnerId !== undefined
             ? assignedRunnerId
@@ -516,8 +609,110 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     return jsonResponse(c, { ok: true });
   });
 
+  app.delete("/api/agents/:name", (c) => {
+    const name = c.req.param("name");
+    const user = c.get("user") as RequestUser | undefined;
+    const existing = orm
+      .select({ name: schema.agents.name })
+      .from(schema.agents)
+      .where(eq(schema.agents.name, name))
+      .get() as { name: string } | undefined;
+    if (!existing) return jsonResponse(c, { error: "Not found" }, 404);
+    if (!access.canManageAgent(user, name)) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
+
+    const processRows = orm
+      .select({
+        id: schema.processes.id,
+        pid: schema.processes.pid,
+        state: schema.processes.state
+      })
+      .from(schema.processes)
+      .where(eq(schema.processes.agent_name, name))
+      .all() as Array<{ id: string; pid: number | null; state: string }>;
+    let terminatedProcessCount = 0;
+    for (const row of processRows) {
+      if (
+        row.pid !== null &&
+        row.pid !== undefined &&
+        (row.state === "RUNNING" || row.state === "STARTING")
+      ) {
+        try {
+          process.kill(row.pid, "SIGTERM");
+          terminatedProcessCount += 1;
+        } catch {
+          // Process already ended or cannot be signaled.
+        }
+      }
+    }
+    if (processRows.length > 0) {
+      const processIds = processRows.map((row) => row.id);
+      orm
+        .delete(schema.processOutput)
+        .where(inArray(schema.processOutput.process_id, processIds))
+        .run();
+      orm
+        .delete(schema.processes)
+        .where(inArray(schema.processes.id, processIds))
+        .run();
+    }
+
+    const conversations = orm
+      .select({ id: schema.conversations.id })
+      .from(schema.conversations)
+      .where(eq(schema.conversations.agent_name, name))
+      .all() as Array<{ id: string }>;
+    if (conversations.length > 0) {
+      const conversationIds = conversations.map((conversation) => conversation.id);
+      orm
+        .delete(schema.threads)
+        .where(inArray(schema.threads.conversation_id, conversationIds))
+        .run();
+      orm
+        .delete(schema.conversations)
+        .where(inArray(schema.conversations.id, conversationIds))
+        .run();
+    }
+
+    orm
+      .delete(schema.channelSubscriptions)
+      .where(
+        and(
+          eq(schema.channelSubscriptions.subscriber_type, "AGENT"),
+          eq(schema.channelSubscriptions.subscriber_id, name),
+        ),
+      )
+      .run();
+    orm.delete(schema.eventReceipts).where(eq(schema.eventReceipts.agent_name, name)).run();
+    orm.delete(schema.channelMemoryRecent).where(eq(schema.channelMemoryRecent.agent_name, name)).run();
+    orm.delete(schema.channelMemoryFull).where(eq(schema.channelMemoryFull.agent_name, name)).run();
+    orm
+      .delete(schema.crossChannelMemoryRecent)
+      .where(eq(schema.crossChannelMemoryRecent.agent_name, name))
+      .run();
+    orm
+      .delete(schema.crossChannelMemoryFull)
+      .where(eq(schema.crossChannelMemoryFull.agent_name, name))
+      .run();
+    orm.delete(schema.agents).where(eq(schema.agents.name, name)).run();
+
+    publishDashboardRefresh("agent.deleted", { agentName: name });
+    return jsonResponse(c, {
+      ok: true,
+      deleted: true,
+      name,
+      removedProcessCount: processRows.length,
+      terminatedProcessCount
+    });
+  });
+
   app.post("/api/agents/:name/:action", (c) => {
     const name = c.req.param("name");
+    const user = c.get("user") as RequestUser | undefined;
+    if (!access.canManageAgent(user, name)) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
     const action = c.req.param("action");
     if (!["start", "stop", "restart", "reload-skills", "cleanup-workspace"].includes(action)) {
       return jsonResponse(c, { error: "Invalid action" }, 400);
@@ -542,8 +737,10 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
 
       rmSync(resolvedWorkspacePath, { recursive: true, force: true });
       mkdirSync(resolvedWorkspacePath, { recursive: true });
+      const lifecycleChannelId = resolveAgentLifecycleChannelId(name);
       insertEvent({
         type: "audit.workspace.cleaned",
+        channelId: lifecycleChannelId,
         payload: { agentName: name, workspacePath: resolvedWorkspacePath },
         source: "system"
       });
@@ -578,6 +775,10 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
 
   app.get("/api/agents/:name/debug/system-prompt", (c) => {
     const name = c.req.param("name");
+    const user = c.get("user") as RequestUser | undefined;
+    if (!access.canViewAgent(user, name)) {
+      return jsonResponse(c, { error: "Not found" }, 404);
+    }
     const promptEvents = orm
       .select({
         id: schema.events.id,
@@ -636,6 +837,10 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
 
   app.get("/api/agents/:name/workspace", (c) => {
     const name = c.req.param("name");
+    const user = c.get("user") as RequestUser | undefined;
+    if (!access.canViewAgent(user, name)) {
+      return jsonResponse(c, { error: "Not found" }, 404);
+    }
     const workspaceResult = resolveAgentWorkspacePath(name);
     if ("error" in workspaceResult) {
       return jsonResponse(c, { error: workspaceResult.error }, workspaceResult.status);
@@ -691,6 +896,10 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
 
   app.get("/api/agents/:name/workspace/file", (c) => {
     const name = c.req.param("name");
+    const user = c.get("user") as RequestUser | undefined;
+    if (!access.canViewAgent(user, name)) {
+      return jsonResponse(c, { error: "Not found" }, 404);
+    }
     const workspaceResult = resolveAgentWorkspacePath(name);
     if ("error" in workspaceResult) {
       return jsonResponse(c, { error: workspaceResult.error }, workspaceResult.status);
@@ -730,6 +939,10 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
 
   app.get("/api/agents/:name/workspace/download", (c) => {
     const name = c.req.param("name");
+    const user = c.get("user") as RequestUser | undefined;
+    if (!access.canViewAgent(user, name)) {
+      return jsonResponse(c, { error: "Not found" }, 404);
+    }
     const workspaceResult = resolveAgentWorkspacePath(name);
     if ("error" in workspaceResult) {
       return jsonResponse(c, { error: workspaceResult.error }, workspaceResult.status);

@@ -2,10 +2,12 @@ import type { Hono } from "hono";
 import { sql } from "drizzle-orm";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { schema, type OrgOpsDrizzleDb } from "@orgops/db";
+import type { AccessControl, RequestUser } from "./access";
 
 type MemoryDeps = {
   orm: OrgOpsDrizzleDb;
   jsonResponse: (c: any, data: unknown, status?: number) => Response;
+  access: AccessControl;
 };
 
 type ChannelMode = "recent" | "full";
@@ -22,7 +24,7 @@ function asInt(value: unknown, fallback = 0): number {
 }
 
 export function registerMemoryRoutes(app: Hono<any>, deps: MemoryDeps) {
-  const { orm, jsonResponse } = deps;
+  const { orm, jsonResponse, access } = deps;
 
   const channelTable = (mode: ChannelMode) =>
     mode === "recent" ? schema.channelMemoryRecent : schema.channelMemoryFull;
@@ -78,7 +80,14 @@ export function registerMemoryRoutes(app: Hono<any>, deps: MemoryDeps) {
     app.get(path, (c) => {
       const agentName = asNonEmptyString(c.req.query("agentName"));
       if (!agentName) return jsonResponse(c, { error: "agentName is required" }, 400);
+      const user = c.get("user") as RequestUser | undefined;
+      if (!access.canViewAgent(user, agentName)) {
+        return jsonResponse(c, { error: "Not found" }, 404);
+      }
       const channelId = asNonEmptyString(c.req.query("channelId"));
+      if (channelId && !access.canViewChannel(user, channelId)) {
+        return jsonResponse(c, { error: "Forbidden" }, 403);
+      }
       if (channelId) {
         const record = orm
           .select()
@@ -115,6 +124,10 @@ export function registerMemoryRoutes(app: Hono<any>, deps: MemoryDeps) {
       const channelId = asNonEmptyString(body.channelId);
       if (!agentName || !channelId) {
         return jsonResponse(c, { error: "agentName and channelId are required" }, 400);
+      }
+      const user = c.get("user") as RequestUser | undefined;
+      if (!access.canManageAgent(user, agentName) || !access.canPostToChannel(user, channelId)) {
+        return jsonResponse(c, { error: "Forbidden" }, 403);
       }
 
       const existing = orm
@@ -184,6 +197,10 @@ export function registerMemoryRoutes(app: Hono<any>, deps: MemoryDeps) {
     app.get(path, (c) => {
       const agentName = asNonEmptyString(c.req.query("agentName"));
       if (!agentName) return jsonResponse(c, { error: "agentName is required" }, 400);
+      const user = c.get("user") as RequestUser | undefined;
+      if (!access.canViewAgent(user, agentName)) {
+        return jsonResponse(c, { error: "Not found" }, 404);
+      }
       const record = orm
         .select()
         .from(table)
@@ -197,6 +214,10 @@ export function registerMemoryRoutes(app: Hono<any>, deps: MemoryDeps) {
       if (!body) return jsonResponse(c, { error: "Invalid JSON" }, 400);
       const agentName = asNonEmptyString(body.agentName);
       if (!agentName) return jsonResponse(c, { error: "agentName is required" }, 400);
+      const user = c.get("user") as RequestUser | undefined;
+      if (!access.canManageAgent(user, agentName)) {
+        return jsonResponse(c, { error: "Forbidden" }, 403);
+      }
       const existing = orm
         .select()
         .from(table)
@@ -261,6 +282,10 @@ export function registerMemoryRoutes(app: Hono<any>, deps: MemoryDeps) {
   registerCross("full");
 
   app.delete("/api/memory", (c) => {
+    const user = c.get("user") as RequestUser | undefined;
+    if (user?.username !== "runner") {
+      return jsonResponse(c, { error: "Runner token required" }, 401);
+    }
     const countRows = {
       channelRecent:
         (orm

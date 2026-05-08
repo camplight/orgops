@@ -8,6 +8,7 @@ import {
   uniqueIndex
 } from "drizzle-orm/sqlite-core";
 import { CHANNEL_KINDS } from "./channel-kinds";
+import { AGENT_VISIBILITY, CHANNEL_VISIBILITY } from "./visibility";
 
 export const migrations = sqliteTable("migrations", {
   id: text("id").primaryKey(),
@@ -35,6 +36,8 @@ export const agents = sqliteTable("agents", {
     .notNull()
     .default("PER_CHANNEL_CROSS_CHANNEL"),
   mode: text("mode").notNull().default("CLASSIC"),
+  visibility: text("visibility").notNull().default(AGENT_VISIBILITY.PUBLIC),
+  owner_human_id: text("owner_human_id"),
   desired_state: text("desired_state").notNull().default("RUNNING"),
   runtime_state: text("runtime_state").notNull().default("STOPPED"),
   assigned_runner_id: text("assigned_runner_id"),
@@ -96,6 +99,8 @@ export const channels = sqliteTable("channels", {
   name: text("name").notNull().unique(),
   description: text("description"),
   metadata_json: text("metadata_json"),
+  visibility: text("visibility").notNull().default(CHANNEL_VISIBILITY.PUBLIC),
+  owner_human_id: text("owner_human_id"),
   kind: text("kind").notNull().default(CHANNEL_KINDS.GROUP),
   direct_participant_key: text("direct_participant_key"),
   created_at: integer("created_at").notNull()

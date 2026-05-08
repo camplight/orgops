@@ -37,11 +37,22 @@ export type GenerateOptions = {
   pullMessages?: () => Promise<LlmMessage[] | undefined>;
 };
 
+export type LlmUsage = {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  reasoningTokens?: number;
+  cachedInputTokens?: number;
+  [key: string]: unknown;
+};
+
 export type GenerateResult = {
   text: string;
   toolCalls?: unknown[];
   toolResults?: unknown[];
   finishReason?: string;
+  usage?: LlmUsage;
+  providerMetadata?: unknown;
 };
 
 export type LlmTool = {
@@ -112,6 +123,42 @@ function splitSystemMessages(messages: LlmMessage[]) {
     system: systemBlocks.length > 0 ? systemBlocks.join("\n\n") : undefined,
     messages: nonSystemMessages,
   };
+}
+
+function readTokenCount(record: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return Math.max(0, Math.floor(value));
+    }
+  }
+  return undefined;
+}
+
+function normalizeUsage(value: unknown): LlmUsage | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const usage: LlmUsage = { ...record };
+  const inputTokens = readTokenCount(record, ["inputTokens", "promptTokens", "prompt_tokens"]);
+  const outputTokens = readTokenCount(record, [
+    "outputTokens",
+    "completionTokens",
+    "completion_tokens",
+  ]);
+  const totalTokens = readTokenCount(record, ["totalTokens", "total_tokens"]);
+  const reasoningTokens = readTokenCount(record, ["reasoningTokens", "reasoning_tokens"]);
+  const cachedInputTokens = readTokenCount(record, [
+    "cachedInputTokens",
+    "cachedPromptTokens",
+    "cached_input_tokens",
+    "cached_prompt_tokens",
+  ]);
+  if (inputTokens !== undefined) usage.inputTokens = inputTokens;
+  if (outputTokens !== undefined) usage.outputTokens = outputTokens;
+  if (totalTokens !== undefined) usage.totalTokens = totalTokens;
+  if (reasoningTokens !== undefined) usage.reasoningTokens = reasoningTokens;
+  if (cachedInputTokens !== undefined) usage.cachedInputTokens = cachedInputTokens;
+  return usage;
 }
 
 export async function generate(
@@ -189,5 +236,7 @@ export async function generate(
     toolCalls: (result as { toolCalls?: unknown[] }).toolCalls,
     toolResults: (result as { toolResults?: unknown[] }).toolResults,
     finishReason: (result as { finishReason?: string }).finishReason,
+    usage: normalizeUsage((result as { usage?: unknown }).usage),
+    providerMetadata: (result as { providerMetadata?: unknown }).providerMetadata,
   };
 }

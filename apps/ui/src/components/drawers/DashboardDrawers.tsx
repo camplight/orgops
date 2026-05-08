@@ -58,6 +58,7 @@ type DashboardDrawersProps = {
   onSelectProcess: (id: string | null) => void;
   onCreateAgent: (agent: AgentForm) => Promise<void>;
   onUpdateAgent: (name: string, agent: Omit<AgentForm, "name">) => Promise<void>;
+  onDeleteAgent: (name: string) => Promise<void>;
   onStartAgent: (name: string) => Promise<void>;
   onStopAgent: (name: string) => Promise<void>;
   onCleanupAgentWorkspace: (name: string) => Promise<void>;
@@ -118,6 +119,7 @@ export function DashboardDrawers({
   onSelectProcess,
   onCreateAgent,
   onUpdateAgent,
+  onDeleteAgent,
   onStartAgent,
   onStopAgent,
   onCleanupAgentWorkspace,
@@ -147,6 +149,7 @@ export function DashboardDrawers({
         skills={skills}
         onCreateAgent={onCreateAgent}
         onUpdateAgent={onUpdateAgent}
+        onDeleteAgent={onDeleteAgent}
         onStartAgent={onStartAgent}
         onStopAgent={onStopAgent}
         onCleanupAgentWorkspace={onCleanupAgentWorkspace}

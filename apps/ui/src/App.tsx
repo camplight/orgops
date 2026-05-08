@@ -618,6 +618,16 @@ export default function App() {
               });
               data.refreshDashboard();
             }}
+            onDeleteAgent={async (name) => {
+              await data.apiFetch(`/api/agents/${encodeURIComponent(name)}`, {
+                method: "DELETE",
+                headers: data.getApiHeaders()
+              });
+              data.setAgents((prev) => prev.filter((agent) => agent.name !== name));
+              data.refreshDashboard();
+              data.refreshChannels();
+              data.refreshProcesses();
+            }}
             onStartAgent={async (name) => {
               await data.apiFetch(`/api/agents/${name}/start`, { method: "POST" });
             }}
@@ -749,6 +759,16 @@ export default function App() {
               body: JSON.stringify(agent)
             });
             data.refreshDashboard();
+          }}
+          onDeleteAgent={async (name) => {
+            await data.apiFetch(`/api/agents/${encodeURIComponent(name)}`, {
+              method: "DELETE",
+              headers: data.getApiHeaders()
+            });
+            data.setAgents((prev) => prev.filter((agent) => agent.name !== name));
+            data.refreshDashboard();
+            data.refreshChannels();
+            data.refreshProcesses();
           }}
           onStartAgent={async (name) => {
             await data.apiFetch(`/api/agents/${name}/start`, { method: "POST" });
@@ -902,6 +922,7 @@ export default function App() {
       {activeScreen === "channels" && (
         <ChannelsScreen
           agents={data.agents}
+          humans={data.humans}
           channels={data.channels}
           channelEvents={data.channelEvents}
           channelParticipants={data.channelParticipants}
@@ -942,6 +963,13 @@ export default function App() {
               body: JSON.stringify({ subscriberType: "AGENT", subscriberId: agentName })
             });
           }}
+          onInviteHuman={async (channelId, username) => {
+            await data.apiFetch(`/api/channels/${channelId}/subscribe`, {
+              method: "POST",
+              headers: data.getApiHeaders(),
+              body: JSON.stringify({ subscriberType: "HUMAN", subscriberId: username })
+            });
+          }}
           onUnsubscribe={async (channelId, agentName) => {
             await data.apiFetch(`/api/channels/${channelId}/unsubscribe`, {
               method: "POST",
@@ -964,7 +992,10 @@ export default function App() {
               .map((agent) => ({
                 id: `agent:${agent.name}`,
                 label: `DM Agent: ${agent.name}`,
-                meta: "Creates/uses a direct channel",
+                meta:
+                  agent.visibility === "PRIVATE"
+                    ? "Private agent DM; creates/uses a private direct channel"
+                    : "Creates/uses a private direct channel",
                 agentNames: [agent.name]
               })),
             ...data.channels
@@ -976,7 +1007,9 @@ export default function App() {
               )
               .map((channel) => ({
                 id: `channel:${channel.id}`,
-                label: `Channel: ${channel.name}`,
+                label: `${channel.visibility === "PRIVATE" ? "Private" : "Public"} Channel: ${
+                  channel.name
+                }`,
                 meta: channel.description ?? undefined,
                 agentNames: (channel.participants ?? [])
                   .filter((participant) => participant.subscriberType === "AGENT")

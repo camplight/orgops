@@ -14,6 +14,7 @@
     "@orgops/llm": "file:../../packages/llm",
     "@orgops/schemas": "file:../../packages/schemas",
     "@orgops/skills": "file:../../packages/skills",
+    "models-dev-db": "^1.0.353",
     "zod": "^3.23.8"
   },
   "devDependencies": {

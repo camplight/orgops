@@ -16,6 +16,7 @@ import {
   or,
   sql,
 } from "drizzle-orm";
+import type { AccessControl, RequestUser } from "./access";
 
 type EventsDeps = {
   orm: OrgOpsDrizzleDb;
@@ -49,6 +50,7 @@ type EventsDeps = {
   serializeEventShapes: (
     shapes: EventShapeDefinition[],
   ) => Array<{ type: string; description: string; source: string; payloadExample?: unknown }>;
+  access: AccessControl;
 };
 
 export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
@@ -64,6 +66,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     getCoreEventShapes,
     validateEventAgainstShapes,
     serializeEventShapes,
+    access,
   } = deps;
   const EventSchema = deps.EventSchema;
   const EVENT_SHAPES_CACHE_TTL_MS = Number(process.env.ORGOPS_EVENT_SHAPES_CACHE_TTL_MS ?? 3000);
@@ -195,6 +198,9 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
         400,
       );
     }
+    if (parsed.data.channelId && !access.canPostToChannel(user, parsed.data.channelId)) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
 
     const eventShapes = await getEventShapes();
     const validationResult = validateEventAgainstShapes(
@@ -243,6 +249,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
 
   app.get("/api/events/:id", (c) => {
     const id = c.req.param("id");
+    const user = c.get("user") as RequestUser | undefined;
     const row = orm
       .select()
       .from(schema.events)
@@ -251,11 +258,15 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     if (!row) {
       return jsonResponse(c, { error: "Not found" }, 404);
     }
+    if (row.channel_id && !access.canViewChannel(user, row.channel_id)) {
+      return jsonResponse(c, { error: "Not found" }, 404);
+    }
     return jsonResponse(c, eventRowToApi(row));
   });
 
   app.patch("/api/events/:id", async (c) => {
     const id = c.req.param("id");
+    const user = c.get("user") as RequestUser | undefined;
     const existing = orm
       .select()
       .from(schema.events)
@@ -263,6 +274,9 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       .get() as any | undefined;
     if (!existing) {
       return jsonResponse(c, { error: "Not found" }, 404);
+    }
+    if (existing.channel_id && !access.canPostToChannel(user, existing.channel_id)) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
     }
     const now = Date.now();
     const isFutureScheduled =
@@ -391,6 +405,12 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     const scheduledOnly = scheduled === "1" || scheduled === "true";
     const user = c.get("user") as { username?: string } | undefined;
     const isRunnerRequest = user?.username === "runner";
+    if (channelId && !access.canViewChannel(user, channelId)) {
+      return jsonResponse(c, [], 200);
+    }
+    if (agentName && !isRunnerRequest && !access.canViewAgent(user, agentName)) {
+      return jsonResponse(c, [], 200);
+    }
     const now = Date.now();
 
     const whereClauses: any[] = [];
@@ -591,8 +611,12 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
           : asc(schema.events.created_at),
       );
     const rows = (all ? query : query.limit(limit)).all() as any[];
-
-    const data = rows.map(eventRowToApi);
+    const visibleRows = isRunnerRequest
+      ? rows
+      : rows.filter((row) =>
+          !row.channel_id || access.canViewChannel(user, row.channel_id),
+        );
+    const data = visibleRows.map(eventRowToApi);
     return jsonResponse(c, data);
   });
 
@@ -603,6 +627,12 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     const type = params.get("type");
     const sourceFilter = params.get("source");
     const status = params.get("status");
+    const user = c.get("user") as RequestUser | undefined;
+    if (user?.username !== "runner") {
+      if (channelId && !access.canPostToChannel(user, channelId)) {
+        return jsonResponse(c, { error: "Forbidden" }, 403);
+      }
+    }
 
     const whereClauses: any[] = [];
     if (channelId) {
@@ -640,7 +670,6 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       orm.delete(schema.events).where(whereExpr).run();
     }
 
-    const user = c.get("user") as { username?: string } | undefined;
     const auditSource =
       user?.username && user.username !== "runner"
         ? `human:${user.username}`
@@ -665,6 +694,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
 
   app.delete("/api/events/:id", (c) => {
     const id = c.req.param("id");
+    const user = c.get("user") as RequestUser | undefined;
     const existing = orm
       .select()
       .from(schema.events)
@@ -672,6 +702,9 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       .get() as any | undefined;
     if (!existing) {
       return jsonResponse(c, { error: "Not found" }, 404);
+    }
+    if (existing.channel_id && !access.canPostToChannel(user, existing.channel_id)) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
     }
     const now = Date.now();
     const isFutureScheduled =
@@ -696,6 +729,10 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
 
   app.delete("/api/channels/:channelId/messages", (c) => {
     const channelId = c.req.param("channelId");
+    const user = c.get("user") as RequestUser | undefined;
+    if (!access.canPostToChannel(user, channelId)) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
     const whereExpr = and(
       eq(schema.events.channel_id, channelId),
       eq(schema.events.type, "message.created"),
@@ -709,7 +746,6 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
 
     orm.delete(schema.events).where(whereExpr).run();
 
-    const user = c.get("user") as { username?: string } | undefined;
     const source =
       user?.username && user.username !== "runner"
         ? `human:${user.username}`

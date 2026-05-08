@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { eq } from "drizzle-orm";
 import { createDrizzleDb, migrate, openDb, schema } from "@orgops/db";
 import { createApp } from "./app";
 
@@ -231,8 +232,12 @@ describe("api app", () => {
       headers: { cookie },
     });
     expect(humanAccessRes.status).toBe(200);
-    const body = (await humanAccessRes.json()) as { runnerToken?: string };
+    const body = (await humanAccessRes.json()) as {
+      runnerToken?: string;
+      runnerApiUrl?: string;
+    };
     expect(body.runnerToken).toBe("test-token");
+    expect(body.runnerApiUrl).toBe("http://localhost:8787");
 
     rmSync(dataDir, { recursive: true, force: true });
   });
@@ -368,6 +373,250 @@ describe("api app", () => {
     };
     expect(patchedAgent.enabledSkills).toEqual(["secrets"]);
     expect(patchedAgent.alwaysPreloadedSkills).toEqual(["secrets"]);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("deletes agents and directly related state", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const orm = createDrizzleDb(db);
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const createAgentRes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "delete-agent",
+        modelId: "openai:gpt-4o-mini",
+        workspacePath: ".orgops-data/workspaces/delete-agent",
+      }),
+    });
+    expect(createAgentRes.status).toBe(201);
+
+    const now = Date.now();
+    const channelId = randomUUID();
+    const eventId = randomUUID();
+    const processId = randomUUID();
+    const conversationId = randomUUID();
+    orm
+      .insert(schema.channels)
+      .values({
+        id: channelId,
+        name: "delete-agent-channel",
+        description: null,
+        metadata_json: null,
+        visibility: "PUBLIC",
+        owner_human_id: null,
+        kind: "GROUP",
+        direct_participant_key: null,
+        created_at: now,
+      })
+      .run();
+    orm
+      .insert(schema.channelSubscriptions)
+      .values({
+        channel_id: channelId,
+        subscriber_type: "AGENT",
+        subscriber_id: "delete-agent",
+      })
+      .run();
+    orm
+      .insert(schema.events)
+      .values({
+        id: eventId,
+        type: "message.created",
+        payload_json: "{}",
+        source: "human:admin",
+        channel_id: channelId,
+        parent_event_id: null,
+        deliver_at: null,
+        status: "DELIVERED",
+        idempotency_key: null,
+        created_at: now,
+        fail_count: 0,
+        last_error: null,
+      })
+      .run();
+    orm
+      .insert(schema.eventReceipts)
+      .values({
+        event_id: eventId,
+        agent_name: "delete-agent",
+        status: "DELIVERED",
+        delivered_at: now,
+      })
+      .run();
+    orm
+      .insert(schema.processes)
+      .values({
+        id: processId,
+        agent_name: "delete-agent",
+        channel_id: channelId,
+        cmd: "echo ok",
+        cwd: dataDir,
+        pid: null,
+        execution_mode: "SYNC",
+        state: "EXITED",
+        exit_code: 0,
+        started_at: now,
+        ended_at: now,
+      })
+      .run();
+    orm
+      .insert(schema.processOutput)
+      .values({
+        id: randomUUID(),
+        process_id: processId,
+        seq: 0,
+        stream: "STDOUT",
+        text: "ok",
+        ts: now,
+      })
+      .run();
+    orm
+      .insert(schema.channelMemoryRecent)
+      .values({
+        agent_name: "delete-agent",
+        channel_id: channelId,
+        summary_text: "recent",
+        window_start_at: now,
+        last_processed_at: now,
+        last_processed_event_id: eventId,
+        version: 1,
+        created_at: now,
+        updated_at: now,
+      })
+      .run();
+    orm
+      .insert(schema.channelMemoryFull)
+      .values({
+        agent_name: "delete-agent",
+        channel_id: channelId,
+        summary_text: "full",
+        last_processed_at: now,
+        last_processed_event_id: eventId,
+        version: 1,
+        created_at: now,
+        updated_at: now,
+      })
+      .run();
+    orm
+      .insert(schema.crossChannelMemoryRecent)
+      .values({
+        agent_name: "delete-agent",
+        summary_text: "cross recent",
+        window_start_at: now,
+        last_processed_at: now,
+        last_processed_event_id: eventId,
+        version: 1,
+        created_at: now,
+        updated_at: now,
+      })
+      .run();
+    orm
+      .insert(schema.crossChannelMemoryFull)
+      .values({
+        agent_name: "delete-agent",
+        summary_text: "cross full",
+        last_processed_at: now,
+        last_processed_event_id: eventId,
+        version: 1,
+        created_at: now,
+        updated_at: now,
+      })
+      .run();
+    orm
+      .insert(schema.conversations)
+      .values({
+        id: conversationId,
+        kind: "HUMAN_AGENT_DM",
+        human_id: "admin",
+        agent_name: "delete-agent",
+        channel_id: channelId,
+        title: null,
+        created_at: now,
+      })
+      .run();
+    orm
+      .insert(schema.threads)
+      .values({
+        id: randomUUID(),
+        conversation_id: conversationId,
+        title: null,
+        created_at: now,
+      })
+      .run();
+
+    const deleteRes = await app.request("http://localhost/api/agents/delete-agent", {
+      method: "DELETE",
+      headers: { cookie },
+    });
+    expect(deleteRes.status).toBe(200);
+    const deleteBody = (await deleteRes.json()) as {
+      ok?: boolean;
+      removedProcessCount?: number;
+    };
+    expect(deleteBody.ok).toBe(true);
+    expect(deleteBody.removedProcessCount).toBe(1);
+
+    const getDeletedRes = await app.request("http://localhost/api/agents/delete-agent", {
+      headers: { cookie },
+    });
+    expect(getDeletedRes.status).toBe(404);
+    expect(orm.select().from(schema.events).where(eq(schema.events.id, eventId)).all()).toHaveLength(1);
+    expect(
+      orm.select().from(schema.eventReceipts).where(eq(schema.eventReceipts.agent_name, "delete-agent")).all(),
+    ).toHaveLength(0);
+    expect(
+      orm
+        .select()
+        .from(schema.channelSubscriptions)
+        .where(eq(schema.channelSubscriptions.subscriber_id, "delete-agent"))
+        .all(),
+    ).toHaveLength(0);
+    expect(orm.select().from(schema.processes).where(eq(schema.processes.agent_name, "delete-agent")).all()).toHaveLength(0);
+    expect(orm.select().from(schema.processOutput).where(eq(schema.processOutput.process_id, processId)).all()).toHaveLength(0);
+    expect(
+      orm.select().from(schema.channelMemoryRecent).where(eq(schema.channelMemoryRecent.agent_name, "delete-agent")).all(),
+    ).toHaveLength(0);
+    expect(
+      orm.select().from(schema.channelMemoryFull).where(eq(schema.channelMemoryFull.agent_name, "delete-agent")).all(),
+    ).toHaveLength(0);
+    expect(
+      orm
+        .select()
+        .from(schema.crossChannelMemoryRecent)
+        .where(eq(schema.crossChannelMemoryRecent.agent_name, "delete-agent"))
+        .all(),
+    ).toHaveLength(0);
+    expect(
+      orm
+        .select()
+        .from(schema.crossChannelMemoryFull)
+        .where(eq(schema.crossChannelMemoryFull.agent_name, "delete-agent"))
+        .all(),
+    ).toHaveLength(0);
+    expect(
+      orm.select().from(schema.conversations).where(eq(schema.conversations.agent_name, "delete-agent")).all(),
+    ).toHaveLength(0);
+    expect(
+      orm.select().from(schema.threads).where(eq(schema.threads.conversation_id, conversationId)).all(),
+    ).toHaveLength(0);
 
     rmSync(dataDir, { recursive: true, force: true });
   });
@@ -2494,6 +2743,83 @@ describe("api app", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("records workspace cleanup audit event in agent lifecycle channel", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const agentName = "agent-cleanup-lifecycle";
+    const workspacePath = join(dataDir, "workspaces", agentName);
+    mkdirSync(workspacePath, { recursive: true });
+    const createAgentRes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: agentName,
+        modelId: "openai:gpt-4o-mini",
+        workspacePath,
+        soulContents: "",
+      }),
+    });
+    expect(createAgentRes.status).toBe(201);
+
+    const createLifecycleRes = await app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ name: `agent.lifecycle.${agentName}` }),
+    });
+    expect(createLifecycleRes.status).toBe(201);
+    const lifecycleChannel = (await createLifecycleRes.json()) as { id: string };
+
+    const subscribeRes = await app.request(
+      `http://localhost/api/channels/${lifecycleChannel.id}/subscribe`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({
+          subscriberType: "AGENT",
+          subscriberId: agentName,
+        }),
+      },
+    );
+    expect(subscribeRes.status).toBe(200);
+
+    const cleanupRes = await app.request(
+      `http://localhost/api/agents/${agentName}/cleanup-workspace`,
+      {
+        method: "POST",
+        headers: { cookie },
+      },
+    );
+    expect(cleanupRes.status).toBe(200);
+
+    const auditRes = await app.request(
+      "http://localhost/api/events?type=audit.workspace.cleaned&order=desc&limit=1",
+      { headers: { cookie } },
+    );
+    expect(auditRes.status).toBe(200);
+    const events = (await auditRes.json()) as Array<{ channelId?: string; payload?: { agentName?: string } }>;
+    expect(events.length).toBeGreaterThan(0);
+    expect(events[0]?.payload?.agentName).toBe(agentName);
+    expect(events[0]?.channelId).toBe(lifecycleChannel.id);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("signals a single running process by id", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");
@@ -2934,6 +3260,257 @@ describe("api app", () => {
     expect(getBody.record?.summaryText).toBe("global summary");
     expect(getBody.record?.lastProcessedAt).toBe(5000);
     expect(getBody.record?.version).toBe(1);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("shows private channels only to owner and invited humans", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const adminLoginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(adminLoginRes.status).toBe(200);
+    const adminCookie = adminLoginRes.headers.get("set-cookie") ?? "";
+
+    const inviteRes = await app.request("http://localhost/api/humans/invite", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ username: "bob" }),
+    });
+    expect(inviteRes.status).toBe(201);
+    const inviteBody = (await inviteRes.json()) as { temporaryPassword: string };
+
+    const bobLoginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        username: "bob",
+        password: inviteBody.temporaryPassword,
+      }),
+    });
+    expect(bobLoginRes.status).toBe(200);
+    const bobCookie = bobLoginRes.headers.get("set-cookie") ?? "";
+    const bobProfileRes = await app.request("http://localhost/api/auth/profile", {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie: bobCookie },
+      body: JSON.stringify({
+        username: "bob",
+        newPassword: "bob-password-123",
+      }),
+    });
+    expect(bobProfileRes.status).toBe(200);
+
+    const createPrivateChannelRes = await app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({
+        name: "owner-private-channel",
+        visibility: "PRIVATE",
+      }),
+    });
+    expect(createPrivateChannelRes.status).toBe(201);
+    const created = (await createPrivateChannelRes.json()) as { id: string };
+
+    const bobBeforeInviteRes = await app.request("http://localhost/api/channels", {
+      headers: { cookie: bobCookie },
+    });
+    expect(bobBeforeInviteRes.status).toBe(200);
+    const bobBeforeInvite = (await bobBeforeInviteRes.json()) as Array<{ id: string }>;
+    expect(bobBeforeInvite.some((channel) => channel.id === created.id)).toBe(false);
+
+    const inviteBobToChannelRes = await app.request(
+      `http://localhost/api/channels/${created.id}/subscribe`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: adminCookie },
+        body: JSON.stringify({
+          subscriberType: "HUMAN",
+          subscriberId: "bob",
+        }),
+      },
+    );
+    expect(inviteBobToChannelRes.status).toBe(200);
+
+    const bobAfterInviteRes = await app.request("http://localhost/api/channels", {
+      headers: { cookie: bobCookie },
+    });
+    expect(bobAfterInviteRes.status).toBe(200);
+    const bobAfterInvite = (await bobAfterInviteRes.json()) as Array<{ id: string }>;
+    expect(bobAfterInvite.some((channel) => channel.id === created.id)).toBe(true);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("creates human-agent direct channels as private by default", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const createAgentRes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "dm-private-agent",
+        modelId: "openai:gpt-4o-mini",
+        workspacePath: ".orgops-data/workspaces/dm-private-agent",
+      }),
+    });
+    expect(createAgentRes.status).toBe(201);
+
+    const directRes = await app.request("http://localhost/api/channels/direct/human-agent", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ agentName: "dm-private-agent" }),
+    });
+    expect(directRes.status).toBe(201);
+    const direct = (await directRes.json()) as { id: string };
+
+    const channelsRes = await app.request("http://localhost/api/channels", {
+      headers: { cookie },
+    });
+    expect(channelsRes.status).toBe(200);
+    const channels = (await channelsRes.json()) as Array<{
+      id: string;
+      visibility?: string;
+    }>;
+    expect(channels.find((channel) => channel.id === direct.id)?.visibility).toBe("PRIVATE");
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("limits private agent discoverability to owner and humans sharing a channel", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const adminLoginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(adminLoginRes.status).toBe(200);
+    const adminCookie = adminLoginRes.headers.get("set-cookie") ?? "";
+
+    const createPrivateAgentRes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({
+        name: "owner-private-agent",
+        modelId: "openai:gpt-4o-mini",
+        workspacePath: ".orgops-data/workspaces/owner-private-agent",
+        visibility: "PRIVATE",
+      }),
+    });
+    expect(createPrivateAgentRes.status).toBe(201);
+
+    const inviteRes = await app.request("http://localhost/api/humans/invite", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ username: "charlie" }),
+    });
+    expect(inviteRes.status).toBe(201);
+    const inviteBody = (await inviteRes.json()) as { temporaryPassword: string };
+
+    const charlieLoginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        username: "charlie",
+        password: inviteBody.temporaryPassword,
+      }),
+    });
+    expect(charlieLoginRes.status).toBe(200);
+    const charlieCookie = charlieLoginRes.headers.get("set-cookie") ?? "";
+    const charlieProfileRes = await app.request("http://localhost/api/auth/profile", {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie: charlieCookie },
+      body: JSON.stringify({
+        username: "charlie",
+        newPassword: "charlie-password-123",
+      }),
+    });
+    expect(charlieProfileRes.status).toBe(200);
+
+    const charlieBeforeShareRes = await app.request("http://localhost/api/agents", {
+      headers: { cookie: charlieCookie },
+    });
+    expect(charlieBeforeShareRes.status).toBe(200);
+    const charlieBeforeShare = (await charlieBeforeShareRes.json()) as Array<{ name: string }>;
+    expect(charlieBeforeShare.some((agent) => agent.name === "owner-private-agent")).toBe(false);
+
+    const createChannelRes = await app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({
+        name: "shared-visibility-channel",
+        visibility: "PRIVATE",
+      }),
+    });
+    expect(createChannelRes.status).toBe(201);
+    const channel = (await createChannelRes.json()) as { id: string };
+
+    const addPrivateAgentRes = await app.request(
+      `http://localhost/api/channels/${channel.id}/subscribe`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: adminCookie },
+        body: JSON.stringify({
+          subscriberType: "AGENT",
+          subscriberId: "owner-private-agent",
+        }),
+      },
+    );
+    expect(addPrivateAgentRes.status).toBe(200);
+    const addCharlieRes = await app.request(
+      `http://localhost/api/channels/${channel.id}/subscribe`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: adminCookie },
+        body: JSON.stringify({
+          subscriberType: "HUMAN",
+          subscriberId: "charlie",
+        }),
+      },
+    );
+    expect(addCharlieRes.status).toBe(200);
+
+    const charlieAfterShareRes = await app.request("http://localhost/api/agents", {
+      headers: { cookie: charlieCookie },
+    });
+    expect(charlieAfterShareRes.status).toBe(200);
+    const charlieAfterShare = (await charlieAfterShareRes.json()) as Array<{ name: string }>;
+    expect(charlieAfterShare.some((agent) => agent.name === "owner-private-agent")).toBe(true);
 
     rmSync(dataDir, { recursive: true, force: true });
   });

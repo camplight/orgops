@@ -2,21 +2,25 @@ import type { Hono } from "hono";
 import { createHash, randomUUID } from "node:crypto";
 
 import {
+  CHANNEL_VISIBILITY,
   CHANNEL_KINDS,
+  isChannelVisibility,
   isChannelKind,
   schema,
   type ChannelKind,
   type OrgOpsDrizzleDb
 } from "@orgops/db";
 import { and, asc, eq } from "drizzle-orm";
+import type { AccessControl, RequestUser } from "./access";
 
 type CollabDeps = {
   orm: OrgOpsDrizzleDb;
   jsonResponse: (c: any, data: unknown, status?: number) => Response;
+  access: AccessControl;
 };
 
 export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
-  const { orm, jsonResponse } = deps;
+  const { orm, jsonResponse, access } = deps;
   const DIRECT_CHANNEL_PARTICIPANT_TYPES = new Set(["HUMAN", "AGENT"]);
   const DIRECT_CHANNEL_KIND: Record<
     "humanAgent" | "agentAgent" | "group",
@@ -169,6 +173,7 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
   function ensureDirectChannel(
     participants: Array<{ subscriberType: string; subscriberId: string }>,
     description?: string | null,
+    ownerHumanId?: string | null,
   ) {
     const directParticipantKey =
       directParticipantKeyForParticipants(participants);
@@ -208,6 +213,8 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
         name,
         description: description ?? "Direct channel",
         metadata_json: null,
+        visibility: CHANNEL_VISIBILITY.PRIVATE,
+        owner_human_id: ownerHumanId ?? null,
         kind,
         direct_participant_key: directParticipantKey,
         created_at: Date.now(),
@@ -338,8 +345,10 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
   });
 
   app.get("/api/channels", (c) => {
+    const user = c.get("user") as RequestUser | undefined;
     const rows = orm.select().from(schema.channels).all() as any[];
     const data = rows.map((channel) => {
+      if (!access.canViewChannel(user, channel.id)) return null;
       const participants = orm
         .select({
           subscriber_type: schema.channelSubscriptions.subscriber_type,
@@ -358,13 +367,18 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
         }));
       return {
         ...channel,
+        visibility:
+          channel.visibility === CHANNEL_VISIBILITY.PRIVATE
+            ? CHANNEL_VISIBILITY.PRIVATE
+            : CHANNEL_VISIBILITY.PUBLIC,
+        ownerHumanId: channel.owner_human_id ?? null,
         metadata: parseStoredMetadata(channel.metadata_json),
         kind: channel.kind ?? CHANNEL_KINDS.GROUP,
         directParticipantKey: channel.direct_participant_key ?? undefined,
         participants,
       };
     });
-    return jsonResponse(c, data);
+    return jsonResponse(c, data.filter(Boolean));
   });
 
   app.post("/api/channels", async (c) => {
@@ -389,6 +403,23 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
     if (!parsedMetadata.ok) {
       return jsonResponse(c, { error: parsedMetadata.error }, 400);
     }
+    const user = c.get("user") as RequestUser | undefined;
+    const visibilityRaw =
+      typeof body.visibility === "string" ? body.visibility.trim().toUpperCase() : "";
+    const visibility = isChannelVisibility(visibilityRaw)
+      ? visibilityRaw
+      : CHANNEL_VISIBILITY.PUBLIC;
+    const ownerHumanId =
+      visibility === CHANNEL_VISIBILITY.PRIVATE
+        ? (user?.username && user.username !== "runner" ? user.id ?? null : null)
+        : null;
+    if (visibility === CHANNEL_VISIBILITY.PRIVATE && !ownerHumanId) {
+      return jsonResponse(
+        c,
+        { error: "Authenticated human user required for private channels" },
+        401,
+      );
+    }
     const id = randomUUID();
     orm
       .insert(schema.channels)
@@ -402,11 +433,24 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
             : parsedMetadata.value === null
               ? null
               : JSON.stringify(parsedMetadata.value),
+        visibility,
+        owner_human_id: ownerHumanId,
         kind: requestedKind,
         direct_participant_key: null,
         created_at: Date.now(),
       })
       .run();
+    if (ownerHumanId && user?.username) {
+      orm
+        .insert(schema.channelSubscriptions)
+        .values({
+          channel_id: id,
+          subscriber_type: "HUMAN",
+          subscriber_id: user.username,
+        })
+        .onConflictDoNothing()
+        .run();
+    }
     return jsonResponse(c, { id }, 201);
   });
 
@@ -430,7 +474,7 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
         404,
       );
     }
-    const user = c.get("user") as { username?: string } | undefined;
+    const user = c.get("user") as RequestUser | undefined;
     if (user?.username && user.username !== "runner") {
       const mismatchedHuman = participants.find(
         (participant) =>
@@ -445,13 +489,17 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
         );
       }
     }
-    const direct = ensureDirectChannel(participants, body.description);
+    const direct = ensureDirectChannel(
+      participants,
+      body.description,
+      user?.username && user.username !== "runner" ? user.id ?? null : null,
+    );
     return jsonResponse(c, direct, direct.created ? 201 : 200);
   });
 
   app.post("/api/channels/direct/human-agent", async (c) => {
     const body = await c.req.json().catch(() => ({}));
-    const user = c.get("user") as { username?: string } | undefined;
+    const user = c.get("user") as RequestUser | undefined;
     const humanId = user?.username;
     const agentName =
       typeof body.agentName === "string" ? body.agentName.trim() : "";
@@ -473,6 +521,7 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
         { subscriberType: "AGENT", subscriberId: agentName },
       ]),
       body.description ?? "Human-agent direct channel",
+      user?.id ?? null,
     );
     return jsonResponse(c, direct, direct.created ? 201 : 200);
   });
@@ -503,18 +552,24 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
     if (!agentExists(rightAgentName)) {
       return jsonResponse(c, { error: `AGENT not found: ${rightAgentName}` }, 404);
     }
+    const user = c.get("user") as RequestUser | undefined;
     const direct = ensureDirectChannel(
       normalizeDirectParticipants([
         { subscriberType: "AGENT", subscriberId: leftAgentName },
         { subscriberType: "AGENT", subscriberId: rightAgentName },
       ]),
       body.description ?? "Agent-agent direct channel",
+      user?.username && user.username !== "runner" ? user.id ?? null : null,
     );
     return jsonResponse(c, direct, direct.created ? 201 : 200);
   });
 
   app.patch("/api/channels/:id", async (c) => {
     const id = c.req.param("id");
+    const user = c.get("user") as RequestUser | undefined;
+    if (!access.canManageChannel(user, id)) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
     const rawBody = await c.req.json();
     const body =
       rawBody && typeof rawBody === "object" && !Array.isArray(rawBody)
@@ -546,6 +601,10 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
 
   const deleteChannelHandler = (c: any) => {
     const id = c.req.param("id");
+    const user = c.get("user") as RequestUser | undefined;
+    if (!access.canManageChannel(user, id)) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
     const existing = orm
       .select({ id: schema.channels.id })
       .from(schema.channels)
@@ -563,33 +622,47 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
   app.post("/api/channels/:id/delete", deleteChannelHandler);
 
   app.delete("/api/channels", (c) => {
+    const user = c.get("user") as RequestUser | undefined;
     const channelIds = orm
       .select({ id: schema.channels.id })
       .from(schema.channels)
       .all()
-      .map((row) => row.id);
+      .map((row) => row.id)
+      .filter((channelId) => access.canManageChannel(user, channelId));
     if (channelIds.length === 0) {
       return jsonResponse(c, { ok: true, deletedCount: 0 });
     }
-    orm.delete(schema.channelSubscriptions).run();
-    orm.delete(schema.channels).run();
+    for (const channelId of channelIds) {
+      orm
+        .delete(schema.channelSubscriptions)
+        .where(eq(schema.channelSubscriptions.channel_id, channelId))
+        .run();
+      orm.delete(schema.channels).where(eq(schema.channels.id, channelId)).run();
+    }
     return jsonResponse(c, { ok: true, deletedCount: channelIds.length });
   });
 
   app.post("/api/channels/:id/subscribe", async (c) => {
     const id = c.req.param("id");
+    const user = c.get("user") as RequestUser | undefined;
+    if (!access.canManageChannel(user, id)) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
     const body = await c.req.json();
     const subscriberType = String(body.subscriberType ?? "").trim().toUpperCase();
     const subscriberId = String(body.subscriberId ?? "").trim();
-    if (subscriberType !== "AGENT" || !subscriberId) {
+    if (!subscriberId || (subscriberType !== "AGENT" && subscriberType !== "HUMAN")) {
       return jsonResponse(
         c,
-        { error: "Only AGENT channel subscriptions are supported" },
+        { error: "Only AGENT and HUMAN channel subscriptions are supported" },
         400,
       );
     }
-    if (!agentExists(subscriberId)) {
+    if (subscriberType === "AGENT" && !agentExists(subscriberId)) {
       return jsonResponse(c, { error: `AGENT not found: ${subscriberId}` }, 404);
+    }
+    if (subscriberType === "HUMAN" && !humanExists(subscriberId)) {
+      return jsonResponse(c, { error: `HUMAN not found: ${subscriberId}` }, 404);
     }
     orm
       .insert(schema.channelSubscriptions)
@@ -605,6 +678,10 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
 
   app.post("/api/channels/:id/unsubscribe", async (c) => {
     const id = c.req.param("id");
+    const user = c.get("user") as RequestUser | undefined;
+    if (!access.canManageChannel(user, id)) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
     const body = await c.req.json();
     orm
       .delete(schema.channelSubscriptions)
@@ -621,6 +698,10 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
 
   app.get("/api/channels/:id/participants", (c) => {
     const id = c.req.param("id");
+    const user = c.get("user") as RequestUser | undefined;
+    if (!access.canViewChannel(user, id)) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
     const rows = orm
       .select({
         subscriber_type: schema.channelSubscriptions.subscriber_type,

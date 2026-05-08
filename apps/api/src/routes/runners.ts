@@ -23,6 +23,7 @@ type RunnersDeps = {
   jsonResponse: (c: any, data: unknown, status?: number) => Response;
   requireRunnerAuth: (c: any, next: any) => Response | Promise<Response>;
   runnerToken: string;
+  runnerApiUrl: string;
 };
 
 function parseMetadataSafe(input: string | null | undefined): Record<string, unknown> {
@@ -57,7 +58,7 @@ function toApiRunner(row: RunnerRecord, onlineThresholdMs: number) {
 }
 
 export function registerRunnersRoutes(app: Hono<any>, deps: RunnersDeps) {
-  const { orm, bus, jsonResponse, requireRunnerAuth, runnerToken } = deps;
+  const { orm, bus, jsonResponse, requireRunnerAuth, runnerToken, runnerApiUrl } = deps;
   const ONLINE_THRESHOLD_MS = Number(
     process.env.ORGOPS_RUNNER_ONLINE_THRESHOLD_MS ?? 15_000
   );
@@ -89,7 +90,7 @@ export function registerRunnersRoutes(app: Hono<any>, deps: RunnersDeps) {
     if (!user?.username || user.username === "runner") {
       return jsonResponse(c, { error: "Authenticated human user required" }, 401);
     }
-    return jsonResponse(c, { runnerToken });
+    return jsonResponse(c, { runnerToken, runnerApiUrl });
   });
 
   app.post("/api/runners/register", requireRunnerAuth, async (c) => {

@@ -1,7 +1,8 @@
 import { arch, hostname, release } from "node:os";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
-import { generate } from "@orgops/llm";
+import { generate, type GenerateResult, type LlmUsage } from "@orgops/llm";
+import { getModel } from "models-dev-db";
 import { listSkills, loadSkillEventShapes } from "@orgops/skills";
 import {
   type EventValidationResult,
@@ -228,14 +229,99 @@ function shouldEmitAuditEvents(agent: Agent): boolean {
   return agent.emitAuditEvents !== false;
 }
 
-function resolveModelContextWindowTokens(modelId: string): number {
+const modelContextWindowCache = new Map<string, Promise<number>>();
+
+function normalizeModelMetadataProvider(provider: string) {
+  const normalized = provider.trim().toLowerCase();
+  if (normalized === "claude") return "anthropic";
+  if (normalized === "or") return "openrouter";
+  return normalized;
+}
+
+function resolveFallbackModelContextWindowTokens(modelId: string): number {
   const normalized = modelId.toLowerCase();
   if (normalized.includes("gpt-4o-mini")) return 128_000;
   if (normalized.includes("gpt-4o")) return 128_000;
   if (normalized.includes("gpt-4.1-mini")) return 1_000_000;
   if (normalized.includes("gpt-4.1")) return 1_000_000;
   if (normalized.includes("gpt-5")) return 1_000_000;
+  if (normalized.includes("claude")) return 200_000;
   return FALLBACK_MODEL_CONTEXT_WINDOW_TOKENS;
+}
+
+async function resolveModelContextWindowTokens(modelId: string): Promise<number> {
+  const cached = modelContextWindowCache.get(modelId);
+  if (cached) return cached;
+  const pending = (async () => {
+    const [rawProvider, ...modelParts] = modelId.split(":");
+    const modelName = modelParts.join(":");
+    if (!rawProvider || !modelName) return resolveFallbackModelContextWindowTokens(modelId);
+    try {
+      const model = await getModel(normalizeModelMetadataProvider(rawProvider), modelName);
+      const contextWindow = model.limit.context ?? model.limit.input;
+      if (typeof contextWindow === "number" && Number.isFinite(contextWindow) && contextWindow > 0) {
+        return Math.floor(contextWindow);
+      }
+    } catch {
+      // Metadata may lag brand-new model IDs; keep runner behavior stable.
+    }
+    return resolveFallbackModelContextWindowTokens(modelId);
+  })();
+  modelContextWindowCache.set(modelId, pending);
+  return pending;
+}
+
+function readUsageTokenCount(usage: LlmUsage | undefined, keys: string[]) {
+  if (!usage) return undefined;
+  for (const key of keys) {
+    const value = usage[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return Math.max(0, Math.floor(value));
+    }
+  }
+  return undefined;
+}
+
+function buildProviderUsageTelemetry(
+  usage: LlmUsage | undefined,
+  contextWindowTokens: number,
+  fallbackUsedTokens: number,
+) {
+  const inputTokens = readUsageTokenCount(usage, [
+    "inputTokens",
+    "promptTokens",
+    "prompt_tokens",
+  ]);
+  const outputTokens = readUsageTokenCount(usage, [
+    "outputTokens",
+    "completionTokens",
+    "completion_tokens",
+  ]);
+  const totalTokens = readUsageTokenCount(usage, ["totalTokens", "total_tokens"]);
+  const reasoningTokens = readUsageTokenCount(usage, [
+    "reasoningTokens",
+    "reasoning_tokens",
+  ]);
+  const cachedInputTokens = readUsageTokenCount(usage, [
+    "cachedInputTokens",
+    "cachedPromptTokens",
+    "cached_input_tokens",
+    "cached_prompt_tokens",
+  ]);
+  const usedTokens = inputTokens ?? fallbackUsedTokens;
+  const utilizationPct =
+    contextWindowTokens > 0 ? Math.min(100, (usedTokens / contextWindowTokens) * 100) : 0;
+  return {
+    usageSource: inputTokens !== undefined ? "provider" : "estimate",
+    estimatedUsedTokens: usedTokens,
+    estimatedAvailableTokens: Math.max(0, contextWindowTokens - usedTokens),
+    utilizationPct: Math.round(utilizationPct * 100) / 100,
+    ...(inputTokens !== undefined ? { inputTokens } : {}),
+    ...(outputTokens !== undefined ? { outputTokens } : {}),
+    ...(totalTokens !== undefined ? { totalTokens } : {}),
+    ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
+    ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
+  };
 }
 
 export function resolveAgentLlmCallTimeoutMs(agent: Agent): number {
@@ -515,13 +601,14 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       0,
     );
     const estimatedUsedTokens = estimateContextUsage(invokeMessages);
-    const contextWindowTokens = resolveModelContextWindowTokens(agent.modelId);
+    const contextWindowTokens = await resolveModelContextWindowTokens(agent.modelId);
     const estimatedAvailableTokens = Math.max(0, contextWindowTokens - estimatedUsedTokens);
     const utilizationPct =
       contextWindowTokens > 0
         ? Math.min(100, (estimatedUsedTokens / contextWindowTokens) * 100)
         : 0;
-    if (shouldEmitAuditEvents(agent)) {
+    const emitContextWindowTelemetry = async (payload: Record<string, unknown>) => {
+      if (!shouldEmitAuditEvents(agent)) return;
       await bestEffort("runner.context.telemetry_failed", async () => {
         await input.api.emitEvent({
           type: "telemetry.context.window.updated",
@@ -532,19 +619,23 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
             agentName: agent.name,
             modelId: agent.modelId,
             contextWindowTokens,
-            estimatedUsedTokens,
-            estimatedAvailableTokens,
-            utilizationPct: Math.round(utilizationPct * 100) / 100,
             memoryContextMode,
             messageCount: invokeMessages.length,
             systemChars,
             systemContextChars,
             historyChars: Math.max(0, totalPromptChars - systemChars - systemContextChars),
             triggerEventId: triggerEvent.id,
+            ...payload,
           },
         });
       });
-    }
+    };
+    await emitContextWindowTelemetry({
+      usageSource: "estimate",
+      estimatedUsedTokens,
+      estimatedAvailableTokens,
+      utilizationPct: Math.round(utilizationPct * 100) / 100,
+    });
 
     const executeCtx = {
       agent,
@@ -616,9 +707,9 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
     const classicMaxModelSteps = resolveAgentClassicMaxModelSteps(agent);
     let lastResponseText = "";
     for (let attempt = 1; attempt <= MAX_EVENT_DISPATCH_ATTEMPTS; attempt += 1) {
-      let result: { text?: string };
+      let result: GenerateResult;
       try {
-        result = (await withTimeout(
+        result = await withTimeout(
           generate(agent.modelId, [...invokeMessages, ...retryMessages], {
             tools,
             maxSteps: classicMaxModelSteps,
@@ -636,7 +727,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
           }),
           llmCallTimeoutMs,
           `LLM generate (attempt ${attempt})`,
-        )) as { text?: string };
+        );
       } catch (error) {
         if (!isRetryableToolArgumentValidationError(error)) throw error;
         retryMessages.push({
@@ -649,6 +740,17 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
           ].join("\n"),
         });
         continue;
+      }
+      if (result.usage) {
+        await emitContextWindowTelemetry({
+          ...buildProviderUsageTelemetry(
+            result.usage,
+            contextWindowTokens,
+            estimatedUsedTokens,
+          ),
+          attempt,
+          finishReason: result.finishReason ?? "unknown",
+        });
       }
       const responseText = result.text ?? "";
       lastResponseText = responseText;

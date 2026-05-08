@@ -20,6 +20,8 @@ export type Agent = {
     | "FULL_CHANNEL_EVENTS"
     | "OFF";
   mode?: "CLASSIC" | "RLM_REPL";
+  visibility?: "PUBLIC" | "PRIVATE";
+  ownerHumanId?: string | null;
   assignedRunnerId?: string | null;
 };
 
@@ -39,6 +41,7 @@ export type RunnerNode = {
 
 export type RunnerSetupConfig = {
   runnerToken: string;
+  runnerApiUrl?: string;
 };
 
 export type AgentWorkspaceEntry = {
@@ -113,6 +116,8 @@ export type Channel = {
   name: string;
   description?: string;
   metadata?: Record<string, unknown> | null;
+  visibility?: "PUBLIC" | "PRIVATE";
+  ownerHumanId?: string | null;
   kind?: string;
   directParticipantKey?: string;
   participants?: ChannelParticipant[];

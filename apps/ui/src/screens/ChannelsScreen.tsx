@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import type { Agent, Channel, ChannelParticipant, EventRow } from "../types";
+import type { Agent, Channel, ChannelParticipant, EventRow, Human } from "../types";
 import { Button, Card, Input, Select } from "../components/ui";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 import { formatTimestamp } from "../utils/formatTimestamp";
 
 type ChannelsScreenProps = {
   agents: Agent[];
+  humans: Human[];
   channels: Channel[];
   channelEvents: EventRow[];
   channelParticipants: ChannelParticipant[];
@@ -13,15 +14,21 @@ type ChannelsScreenProps = {
   onSelectChannel: (id: string | null) => void;
   loadChannelEvents: (id: string) => Promise<unknown>;
   loadChannelParticipants: (id: string) => Promise<unknown>;
-  onCreateChannel: (channel: { name: string; description: string }) => Promise<void>;
+  onCreateChannel: (channel: {
+    name: string;
+    description: string;
+    visibility: "PUBLIC" | "PRIVATE";
+  }) => Promise<void>;
   onDeleteChannel: (id: string) => Promise<void>;
   onDeleteAllChannels: () => Promise<void>;
   onSubscribe: (channelId: string, agentName: string) => Promise<void>;
+  onInviteHuman: (channelId: string, username: string) => Promise<void>;
   onUnsubscribe: (channelId: string, agentName: string) => Promise<void>;
 };
 
 export function ChannelsScreen({
   agents,
+  humans,
   channels,
   channelEvents,
   channelParticipants,
@@ -33,19 +40,28 @@ export function ChannelsScreen({
   onDeleteChannel,
   onDeleteAllChannels,
   onSubscribe,
+  onInviteHuman,
   onUnsubscribe
 }: ChannelsScreenProps) {
-  const [newChannel, setNewChannel] = useState({ name: "", description: "" });
+  const [newChannel, setNewChannel] = useState<{
+    name: string;
+    description: string;
+    visibility: "PUBLIC" | "PRIVATE";
+  }>({ name: "", description: "", visibility: "PUBLIC" });
   const [newSubscription, setNewSubscription] = useState({ agentName: "" });
+  const [newHumanInvite, setNewHumanInvite] = useState({ username: "" });
   const [deletingChannelId, setDeletingChannelId] = useState<string | null>(null);
   const [deletingAllChannels, setDeletingAllChannels] = useState(false);
   const [subscribing, setSubscribing] = useState(false);
+  const [invitingHuman, setInvitingHuman] = useState(false);
   const [unsubscribingAgent, setUnsubscribingAgent] = useState<string | null>(null);
   const [createDrawerOpen, setCreateDrawerOpen] = useState(false);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const selectedChannel = channels.find((channel) => channel.id === activeChannelId) ?? null;
   const selectedEvent = channelEvents.find((event) => event.id === selectedEventId) ?? null;
+  const publicChannels = channels.filter((channel) => channel.visibility !== "PRIVATE");
+  const privateChannels = channels.filter((channel) => channel.visibility === "PRIVATE");
 
   useEscapeKey(createDrawerOpen || Boolean(selectedChannel) || Boolean(selectedEvent), () => {
     if (selectedEvent) {
@@ -81,7 +97,7 @@ export function ChannelsScreen({
       return;
     }
     await onCreateChannel(newChannel);
-    setNewChannel({ name: "", description: "" });
+    setNewChannel({ name: "", description: "", visibility: "PUBLIC" });
     setCreateDrawerOpen(false);
   };
 
@@ -104,6 +120,22 @@ export function ChannelsScreen({
       setNewSubscription({ agentName: "" });
     } finally {
       setSubscribing(false);
+    }
+  };
+
+  const handleInviteHuman = async () => {
+    setError(null);
+    if (!activeChannelId || !newHumanInvite.username.trim()) {
+      setError("Select a channel and human.");
+      return;
+    }
+    setInvitingHuman(true);
+    try {
+      await onInviteHuman(activeChannelId, newHumanInvite.username);
+      await loadChannelParticipants(activeChannelId);
+      setNewHumanInvite({ username: "" });
+    } finally {
+      setInvitingHuman(false);
     }
   };
 
@@ -195,6 +227,42 @@ export function ChannelsScreen({
   const hasMetadata = (channel: Channel | null) =>
     Boolean(channel?.metadata && Object.keys(channel.metadata).length > 0);
 
+  const renderVisibilityBadge = (channel: Channel) => (
+    <span
+      className={`rounded px-1.5 py-0.5 text-[11px] ${
+        channel.visibility === "PRIVATE"
+          ? "border border-violet-700/70 bg-violet-950/40 text-violet-200"
+          : "border border-slate-700 bg-slate-900 text-slate-300"
+      }`}
+    >
+      {channel.visibility === "PRIVATE" ? "Private" : "Public"}
+    </span>
+  );
+
+  const renderChannelRows = (list: Channel[]) =>
+    list.map((channel) => (
+      <tr
+        key={channel.id}
+        className={`cursor-pointer border-b border-slate-900 align-top hover:bg-slate-900/40 ${
+          activeChannelId === channel.id ? "bg-slate-900/70" : ""
+        }`}
+        onClick={() => handleChannelClick(channel.id)}
+      >
+        <td className="whitespace-nowrap px-2 py-2">
+          {renderVisibilityBadge(channel)}
+        </td>
+        <td className="whitespace-nowrap px-2 py-2 text-slate-200">
+          {channel.name}
+        </td>
+        <td className="max-w-[520px] px-2 py-2 text-slate-400">
+          {channelSubtitle(channel)}
+        </td>
+        <td className="max-w-[320px] truncate px-2 py-2 text-xs text-slate-500">
+          {channel.id}
+        </td>
+      </tr>
+    ));
+
   return (
     <div className="space-y-4">
       <Card title={`Channels (${channels.length})`}>
@@ -216,33 +284,57 @@ export function ChannelsScreen({
             </Button>
           </div>
         </div>
-        <div className="overflow-x-auto">
+        <div className="space-y-6 overflow-x-auto">
+          <div>
+            <div className="mb-2 flex items-center gap-2 text-xs uppercase tracking-wide text-slate-500">
+              <span>Public channels</span>
+              <span className="rounded bg-slate-900 px-1.5 py-0.5 text-slate-400">
+                {publicChannels.length}
+              </span>
+            </div>
           <table className="min-w-full text-sm">
             <thead>
               <tr className="border-b border-slate-800 text-left text-slate-300">
+                <th className="px-2 py-2">Visibility</th>
                 <th className="px-2 py-2">Name</th>
                 <th className="px-2 py-2">Description / Participants</th>
                 <th className="px-2 py-2">ID</th>
               </tr>
             </thead>
             <tbody>
-              {channels.map((channel) => (
-                <tr
-                  key={channel.id}
-                  className={`cursor-pointer border-b border-slate-900 align-top hover:bg-slate-900/40 ${
-                    activeChannelId === channel.id ? "bg-slate-900/70" : ""
-                  }`}
-                  onClick={() => handleChannelClick(channel.id)}
-                >
-                  <td className="whitespace-nowrap px-2 py-2 text-slate-200">{channel.name}</td>
-                  <td className="max-w-[520px] px-2 py-2 text-slate-400">{channelSubtitle(channel)}</td>
-                  <td className="max-w-[320px] truncate px-2 py-2 text-xs text-slate-500">
-                    {channel.id}
-                  </td>
-                </tr>
-              ))}
+              {renderChannelRows(publicChannels)}
             </tbody>
           </table>
+          {publicChannels.length === 0 && (
+            <div className="py-4 text-center text-slate-500">No public channels found.</div>
+          )}
+          </div>
+
+          <div>
+            <div className="mb-2 flex items-center gap-2 text-xs uppercase tracking-wide text-violet-300">
+              <span>Private channels</span>
+              <span className="rounded bg-violet-950/60 px-1.5 py-0.5 text-violet-200">
+                {privateChannels.length}
+              </span>
+            </div>
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-800 text-left text-slate-300">
+                  <th className="px-2 py-2">Visibility</th>
+                  <th className="px-2 py-2">Name</th>
+                  <th className="px-2 py-2">Description / Participants</th>
+                  <th className="px-2 py-2">ID</th>
+                </tr>
+              </thead>
+              <tbody>{renderChannelRows(privateChannels)}</tbody>
+            </table>
+            {privateChannels.length === 0 && (
+              <div className="py-4 text-center text-slate-500">
+                No private channels visible to you.
+              </div>
+            )}
+          </div>
+
           {channels.length === 0 && (
             <div className="py-8 text-center text-slate-500">No channels found.</div>
           )}
@@ -286,6 +378,22 @@ export function ChannelsScreen({
                 setNewChannel({ ...newChannel, description: e.target.value })
               }
             />
+            <label className="space-y-1 text-sm text-slate-300">
+              <div className="text-slate-400">Visibility</div>
+              <select
+                value={newChannel.visibility}
+                onChange={(e) =>
+                  setNewChannel({
+                    ...newChannel,
+                    visibility: e.target.value === "PRIVATE" ? "PRIVATE" : "PUBLIC"
+                  })
+                }
+                className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+              >
+                <option value="PUBLIC">Public</option>
+                <option value="PRIVATE">Private (owner + invited humans/agents)</option>
+              </select>
+            </label>
             {error && <div className="text-sm text-rose-400">{error}</div>}
           </div>
           <div className="mt-auto border-t border-slate-800 px-4 py-3">
@@ -309,6 +417,9 @@ export function ChannelsScreen({
               <h3 className="text-sm font-semibold text-slate-100">
                 {selectedChannel ? selectedChannel.name : "No channel selected"}
               </h3>
+              {selectedChannel ? (
+                <div className="mt-1">{renderVisibilityBadge(selectedChannel)}</div>
+              ) : null}
               <p className="text-sm text-slate-500">
                 {selectedChannel
                   ? channelSubtitle(selectedChannel) ?? "No description"
@@ -380,6 +491,36 @@ export function ChannelsScreen({
                   </Button>
                 </div>
               </div>
+
+              {selectedChannel?.visibility === "PRIVATE" ? (
+                <div className="space-y-3 rounded border border-violet-900/60 bg-violet-950/20 p-3">
+                  <h3 className="text-sm text-violet-200">Invite Human</h3>
+                  <div className="grid gap-3 md:grid-cols-[1fr_auto]">
+                    <Select
+                      value={newHumanInvite.username}
+                      onChange={(e) =>
+                        setNewHumanInvite({
+                          username: e.target.value
+                        })
+                      }
+                      disabled={!activeChannelId || invitingHuman}
+                    >
+                      <option value="">Select human</option>
+                      {humans.map((human) => (
+                        <option key={human.username} value={human.username}>
+                          {human.username}
+                        </option>
+                      ))}
+                    </Select>
+                    <Button
+                      onClick={handleInviteHuman}
+                      disabled={!activeChannelId || invitingHuman}
+                    >
+                      Invite
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
 
               <div className="space-y-2 rounded border border-slate-800 bg-slate-950 p-3">
                 <h3 className="text-sm text-slate-300">Current Participants</h3>

@@ -14,6 +14,7 @@ import { formatTimestamp } from "../utils/formatTimestamp";
 type AgentForm = {
   name: string;
   modelId: string;
+  visibility: "PUBLIC" | "PRIVATE";
   mode: "CLASSIC" | "RLM_REPL";
   memoryContextMode: "PER_CHANNEL_CROSS_CHANNEL" | "FULL_CHANNEL_EVENTS" | "OFF";
   emitAuditEvents: boolean;
@@ -30,6 +31,7 @@ type AgentForm = {
 const DEFAULT_AGENT_FORM: AgentForm = {
   name: "",
   modelId: "openai:gpt-4o-mini",
+  visibility: "PUBLIC",
   mode: "CLASSIC",
   memoryContextMode: "PER_CHANNEL_CROSS_CHANNEL",
   emitAuditEvents: true,
@@ -62,6 +64,7 @@ type AgentsScreenProps = {
   skills: SkillMeta[];
   onCreateAgent: (agent: AgentForm) => Promise<void>;
   onUpdateAgent: (name: string, agent: Omit<AgentForm, "name">) => Promise<void>;
+  onDeleteAgent: (name: string) => Promise<void>;
   onStartAgent: (name: string) => Promise<void>;
   onStopAgent: (name: string) => Promise<void>;
   onCleanupAgentWorkspace: (name: string) => Promise<void>;
@@ -100,6 +103,7 @@ export function AgentsScreen({
   skills,
   onCreateAgent,
   onUpdateAgent,
+  onDeleteAgent,
   onStartAgent,
   onStopAgent,
   onCleanupAgentWorkspace,
@@ -126,6 +130,7 @@ export function AgentsScreen({
   } | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isTogglingRuntime, setIsTogglingRuntime] = useState(false);
+  const [isDeletingAgent, setIsDeletingAgent] = useState(false);
   const [agentEvents, setAgentEvents] = useState<EventRow[]>([]);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [eventsLoading, setEventsLoading] = useState(false);
@@ -179,6 +184,8 @@ export function AgentsScreen({
     () => agentEvents.find((event) => event.id === selectedEventId) ?? null,
     [agentEvents, selectedEventId]
   );
+  const publicAgents = agents.filter((agent) => agent.visibility !== "PRIVATE");
+  const privateAgents = agents.filter((agent) => agent.visibility === "PRIVATE");
   const drawerOpen = Boolean(selectedAgent || isCreating);
   const eventDetailsDrawerOpen = activeTab === "events" && Boolean(selectedEvent);
   const workspaceSegments =
@@ -201,6 +208,7 @@ export function AgentsScreen({
     setForm({
       name: selectedAgent.name,
       modelId: selectedAgent.modelId ?? "openai:gpt-4o-mini",
+      visibility: selectedAgent.visibility === "PRIVATE" ? "PRIVATE" : "PUBLIC",
       mode: selectedAgent.mode ?? "CLASSIC",
       memoryContextMode: selectedAgent.memoryContextMode ?? "PER_CHANNEL_CROSS_CHANNEL",
       emitAuditEvents: selectedAgent.emitAuditEvents !== false,
@@ -501,6 +509,7 @@ export function AgentsScreen({
           ...form,
           name: normalizedName,
           modelId: form.modelId.trim(),
+          visibility: form.visibility,
           mode: form.mode,
           memoryContextMode: form.memoryContextMode,
           emitAuditEvents: form.emitAuditEvents,
@@ -527,6 +536,7 @@ export function AgentsScreen({
       if (!selectedAgent) return;
       await onUpdateAgent(selectedAgent.name, {
         modelId: form.modelId.trim(),
+        visibility: form.visibility,
         mode: form.mode,
         memoryContextMode: form.memoryContextMode,
         emitAuditEvents: form.emitAuditEvents,
@@ -569,6 +579,42 @@ export function AgentsScreen({
       setSaveStatus({ kind: "error", message });
     } finally {
       setIsTogglingRuntime(false);
+    }
+  };
+
+  const handleDeleteAgent = async () => {
+    if (!selectedAgent) return;
+    const agentName = selectedAgent.name;
+    const confirmed = window.confirm(
+      `Delete agent "${agentName}"? This removes its runtime state, memory, and channel memberships. This cannot be undone.`
+    );
+    if (!confirmed) return;
+    setIsDeletingAgent(true);
+    setSaveStatus(null);
+    setPanelError(null);
+    try {
+      await onDeleteAgent(agentName);
+      crossMemoryCacheRef.current.delete(agentName);
+      systemPromptCacheRef.current.delete(agentName);
+      setSelectedAgentName(null);
+      setIsCreating(false);
+      setActiveTab("details");
+      setForm(DEFAULT_AGENT_FORM);
+      setIsFormDirty(false);
+      setAgentEvents([]);
+      setSelectedEventId(null);
+      setWorkspaceData(null);
+      setOpenFile(null);
+      setCrossMemoryDrawerOpen(false);
+      setSystemPromptDrawerOpen(false);
+      setCrossMemory(null);
+      setSystemPromptText("");
+      setSystemPromptMeta(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to delete agent.";
+      setSaveStatus({ kind: "error", message });
+    } finally {
+      setIsDeletingAgent(false);
     }
   };
 
@@ -618,6 +664,57 @@ export function AgentsScreen({
     });
   };
 
+  const renderVisibilityBadge = (agent: Pick<Agent, "visibility">) => (
+    <span
+      className={`rounded px-1.5 py-0.5 text-[11px] ${
+        agent.visibility === "PRIVATE"
+          ? "border border-violet-700/70 bg-violet-950/40 text-violet-200"
+          : "border border-slate-700 bg-slate-900 text-slate-300"
+      }`}
+    >
+      {agent.visibility === "PRIVATE" ? "Private" : "Public"}
+    </span>
+  );
+
+  const renderAgentRows = (list: Agent[]) =>
+    list.map((agent) => (
+      <tr
+        key={agent.name}
+        className={`cursor-pointer border-b border-slate-900 align-top hover:bg-slate-900/40 ${
+          selectedAgentName === agent.name && !isCreating ? "bg-slate-900/70" : ""
+        }`}
+        onClick={() => handleSelectAgent(agent.name)}
+      >
+        <td className="whitespace-nowrap px-2 py-2">
+          {renderVisibilityBadge(agent)}
+        </td>
+        <td className="whitespace-nowrap px-2 py-2 text-slate-200">
+          {agent.name}
+        </td>
+        <td className="whitespace-nowrap px-2 py-2 text-slate-300">
+          {agent.runtimeState}
+        </td>
+        <td className="whitespace-nowrap px-2 py-2 text-slate-400">
+          {agent.desiredState}
+        </td>
+        <td className="max-w-[220px] truncate px-2 py-2 text-slate-400">
+          {agent.modelId ?? "-"}
+        </td>
+        <td className="whitespace-nowrap px-2 py-2 text-slate-400">
+          {agent.mode ?? "CLASSIC"}
+        </td>
+        <td className="whitespace-nowrap px-2 py-2 text-slate-400">
+          {agent.memoryContextMode ?? "PER_CHANNEL_CROSS_CHANNEL"}
+        </td>
+        <td className="whitespace-nowrap px-2 py-2 text-slate-400">
+          {agent.assignedRunnerId ?? "-"}
+        </td>
+        <td className="max-w-[420px] truncate px-2 py-2 text-slate-500">
+          {agent.workspacePath ?? "-"}
+        </td>
+      </tr>
+    ));
+
   return (
     <div className="space-y-4">
       {!drawerOnly ? (
@@ -628,10 +725,18 @@ export function AgentsScreen({
           </div>
           <Button onClick={handleNewAgent}>New agent</Button>
         </div>
-        <div className="overflow-x-auto">
+        <div className="space-y-6 overflow-x-auto">
+          <div>
+            <div className="mb-2 flex items-center gap-2 text-xs uppercase tracking-wide text-slate-500">
+              <span>Public agents</span>
+              <span className="rounded bg-slate-900 px-1.5 py-0.5 text-slate-400">
+                {publicAgents.length}
+              </span>
+            </div>
           <table className="min-w-full text-sm">
             <thead>
               <tr className="border-b border-slate-800 text-left text-slate-300">
+                <th className="px-2 py-2">Visibility</th>
                 <th className="px-2 py-2">Name</th>
                 <th className="px-2 py-2">Runtime</th>
                 <th className="px-2 py-2">Desired</th>
@@ -642,41 +747,43 @@ export function AgentsScreen({
                 <th className="px-2 py-2">Workspace</th>
               </tr>
             </thead>
-            <tbody>
-              {agents.map((agent) => (
-                <tr
-                  key={agent.name}
-                  className={`cursor-pointer border-b border-slate-900 align-top hover:bg-slate-900/40 ${
-                    selectedAgentName === agent.name && !isCreating ? "bg-slate-900/70" : ""
-                  }`}
-                  onClick={() => handleSelectAgent(agent.name)}
-                >
-                  <td className="whitespace-nowrap px-2 py-2 text-slate-200">{agent.name}</td>
-                  <td className="whitespace-nowrap px-2 py-2 text-slate-300">
-                    {agent.runtimeState}
-                  </td>
-                  <td className="whitespace-nowrap px-2 py-2 text-slate-400">
-                    {agent.desiredState}
-                  </td>
-                  <td className="max-w-[220px] truncate px-2 py-2 text-slate-400">
-                    {agent.modelId ?? "-"}
-                  </td>
-                  <td className="whitespace-nowrap px-2 py-2 text-slate-400">
-                    {agent.mode ?? "CLASSIC"}
-                  </td>
-                  <td className="whitespace-nowrap px-2 py-2 text-slate-400">
-                    {agent.memoryContextMode ?? "PER_CHANNEL_CROSS_CHANNEL"}
-                  </td>
-                  <td className="whitespace-nowrap px-2 py-2 text-slate-400">
-                    {agent.assignedRunnerId ?? "-"}
-                  </td>
-                  <td className="max-w-[420px] truncate px-2 py-2 text-slate-500">
-                    {agent.workspacePath ?? "-"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
+            <tbody>{renderAgentRows(publicAgents)}</tbody>
           </table>
+          {publicAgents.length === 0 && (
+            <div className="py-4 text-center text-slate-500">No public agents found.</div>
+          )}
+          </div>
+
+          <div>
+            <div className="mb-2 flex items-center gap-2 text-xs uppercase tracking-wide text-violet-300">
+              <span>Private agents visible to you</span>
+              <span className="rounded bg-violet-950/60 px-1.5 py-0.5 text-violet-200">
+                {privateAgents.length}
+              </span>
+            </div>
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-800 text-left text-slate-300">
+                  <th className="px-2 py-2">Visibility</th>
+                  <th className="px-2 py-2">Name</th>
+                  <th className="px-2 py-2">Runtime</th>
+                  <th className="px-2 py-2">Desired</th>
+                  <th className="px-2 py-2">Model</th>
+                  <th className="px-2 py-2">Mode</th>
+                  <th className="px-2 py-2">Memory Context</th>
+                  <th className="px-2 py-2">Runner</th>
+                  <th className="px-2 py-2">Workspace</th>
+                </tr>
+              </thead>
+              <tbody>{renderAgentRows(privateAgents)}</tbody>
+            </table>
+            {privateAgents.length === 0 && (
+              <div className="py-4 text-center text-slate-500">
+                No private agents visible to you.
+              </div>
+            )}
+          </div>
+
           {agents.length === 0 && (
             <div className="py-8 text-center text-slate-500">No agents found.</div>
           )}
@@ -711,7 +818,9 @@ export function AgentsScreen({
                 {isCreating
                   ? "Set up a new agent."
                   : selectedAgent
-                    ? `${selectedAgent.runtimeState} | ${selectedAgent.modelId ?? "No model"}`
+                    ? `${selectedAgent.runtimeState} | ${selectedAgent.modelId ?? "No model"} | ${
+                        selectedAgent.visibility === "PRIVATE" ? "Private" : "Public"
+                      }`
                     : "Select an agent row."}
               </p>
               {activeTab === "details" && (isCreating || selectedAgent) ? (
@@ -873,6 +982,29 @@ export function AgentsScreen({
                         }}
                         placeholder="openai:gpt-4o-mini"
                       />
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-sm text-slate-400">Visibility</div>
+                      <select
+                        value={form.visibility}
+                        onChange={(e) => {
+                          setIsFormDirty(true);
+                          setSaveStatus(null);
+                          setForm((prev) => ({
+                            ...prev,
+                            visibility: e.target.value === "PRIVATE" ? "PRIVATE" : "PUBLIC"
+                          }));
+                        }}
+                        className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+                      >
+                        <option value="PUBLIC">Public (discoverable by everyone)</option>
+                        <option value="PRIVATE">
+                          Private (owner + humans sharing a channel)
+                        </option>
+                      </select>
+                      <p className="text-xs text-slate-500">
+                        Private agents can still participate in channels but are hidden from global discovery.
+                      </p>
                     </div>
                     <div className="space-y-1">
                       <div className="text-sm text-slate-400">Mode</div>
@@ -1088,6 +1220,14 @@ export function AgentsScreen({
                           }}
                         >
                           Clean Workspace
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          className="bg-rose-900 text-rose-100 hover:bg-rose-800"
+                          onClick={handleDeleteAgent}
+                          disabled={isDeletingAgent}
+                        >
+                          {isDeletingAgent ? "Deleting..." : "Delete Agent"}
                         </Button>
                       </div>
                     )}

@@ -1,6 +1,7 @@
 import type { Hono } from "hono";
 
 import type { EventBus } from "@orgops/event-bus";
+import type { AccessControl, RequestUser } from "./access";
 
 type WsMessage =
   | { type: "subscribe"; topic: string }
@@ -18,25 +19,37 @@ export type WsServerMessage =
 type WsDeps = {
   bus: EventBus<WsServerMessage>;
   upgradeWebSocket: (createEvents: any) => any;
+  resolveRequestUser: (c: any) => RequestUser | null;
+  access: AccessControl;
 };
 
 export function registerWsRoutes(app: Hono<any>, deps: WsDeps) {
-  const { bus, upgradeWebSocket } = deps;
+  const { bus, upgradeWebSocket, resolveRequestUser, access } = deps;
 
   app.get(
     "/ws",
-    upgradeWebSocket(() => {
+    upgradeWebSocket((c: any) => {
+      const user = resolveRequestUser(c);
       const subscriptions = new Set<string>();
       const unsubscribeByTopic = new Map<string, () => void>();
       const send = (ws: { send: (data: string) => void }, data: WsServerMessage) =>
         ws.send(JSON.stringify(data));
       return {
         onMessage: (event: { data: string | Uint8Array }, ws: { send: (data: string) => void }) => {
+          if (!user) {
+            return send(ws, { type: "error", message: "Unauthorized" });
+          }
           const message = JSON.parse(event.data.toString()) as WsMessage;
           if (message.type === "ping") {
             return send(ws, { type: "subscribed", topic: "pong" });
           }
           if (message.type === "subscribe") {
+            if (
+              message.topic.startsWith("channel:") &&
+              !access.canViewChannel(user, message.topic.slice("channel:".length))
+            ) {
+              return send(ws, { type: "error", message: "Forbidden topic subscription" });
+            }
             subscriptions.add(message.topic);
             const unsubscribe = bus.subscribe(message.topic, (payload) => send(ws, payload));
             unsubscribeByTopic.set(message.topic, unsubscribe);
