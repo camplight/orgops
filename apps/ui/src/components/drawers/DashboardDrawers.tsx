@@ -87,6 +87,7 @@ type DashboardDrawersProps = {
   }>;
   onDownloadAgentWorkspaceFile: (name: string, path: string) => void;
   onApplyEventFilters: (filters?: EventFilters) => void;
+  onExportEvents: (filters?: EventFilters) => void;
   onClearEvents: () => Promise<void>;
   onEmitEvent: (rawJson: string) => Promise<void>;
   onRefreshEventTypes: () => Promise<void> | void;
@@ -130,6 +131,7 @@ export function DashboardDrawers({
   loadAgentSystemPrompt,
   onDownloadAgentWorkspaceFile,
   onApplyEventFilters,
+  onExportEvents,
   onClearEvents,
   onEmitEvent,
   onRefreshEventTypes,
@@ -170,6 +172,7 @@ export function DashboardDrawers({
         filters={eventFilters}
         onFiltersChange={() => undefined}
         onApplyFilters={onApplyEventFilters}
+        onExportEvents={onExportEvents}
         onClearEvents={onClearEvents}
         onEmitEvent={onEmitEvent}
         onRefreshEventTypes={onRefreshEventTypes}

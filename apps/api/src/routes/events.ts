@@ -1,8 +1,11 @@
 import type { Hono } from "hono";
-import { schema, type OrgOpsDrizzleDb } from "@orgops/db";
+import { openDb, schema, type OrgOpsDrizzleDb } from "@orgops/db";
 import type { SkillMeta, SkillRoot } from "@orgops/skills";
 import type { EventShapeDefinition } from "@orgops/schemas";
 import { z } from "zod";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   and,
   asc,
@@ -13,6 +16,7 @@ import {
   isNull,
   like,
   lte,
+  not,
   or,
   sql,
 } from "drizzle-orm";
@@ -162,6 +166,448 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     return null;
   }
 
+  function readEventQuery(url: string) {
+    const params = new URL(url).searchParams;
+    const scheduled = params.get("scheduled");
+    return {
+      params,
+      channelId: params.get("channelId"),
+      agentName: params.get("agentName"),
+      type: params.get("type"),
+      typePrefix: params.get("typePrefix"),
+      excludeTypePrefixes: params.getAll("excludeTypePrefix"),
+      sourceFilter: params.get("source"),
+      sourcePrefix: params.get("sourcePrefix"),
+      status: params.get("status"),
+      after: params.get("after"),
+      limit: Number(params.get("limit") ?? 100),
+      order: params.get("order"),
+      descending: params.get("order") === "desc",
+      all: params.get("all") === "1",
+      scheduledOnly: scheduled === "1" || scheduled === "true",
+    };
+  }
+
+  function serializeEventQueryFilters(query: ReturnType<typeof readEventQuery>) {
+    return {
+      channelId: query.channelId ?? undefined,
+      agentName: query.agentName ?? undefined,
+      type: query.type ?? undefined,
+      typePrefix: query.typePrefix ?? undefined,
+      excludeTypePrefixes:
+        query.excludeTypePrefixes.length > 0
+          ? query.excludeTypePrefixes
+          : undefined,
+      source: query.sourceFilter ?? undefined,
+      sourcePrefix: query.sourcePrefix ?? undefined,
+      status: query.status ?? undefined,
+      after: query.after ?? undefined,
+      scheduled: query.scheduledOnly ? true : undefined,
+      order: query.order ?? undefined,
+    };
+  }
+
+  function selectEventRows(
+    query: ReturnType<typeof readEventQuery>,
+    user: RequestUser | undefined,
+    options: { includeAll: boolean; markRunnerDelivered: boolean },
+  ): any[] {
+    const {
+      channelId,
+      agentName,
+      type,
+      typePrefix,
+      excludeTypePrefixes,
+      sourceFilter,
+      sourcePrefix,
+      status,
+      after,
+      limit,
+      descending,
+      all,
+      scheduledOnly,
+    } = query;
+    const isRunnerRequest = user?.username === "runner";
+    if (channelId && !access.canViewChannel(user, channelId)) return [];
+    if (agentName && !isRunnerRequest && !access.canViewAgent(user, agentName)) {
+      return [];
+    }
+    const now = Date.now();
+    const shouldReturnAll = options.includeAll || all;
+
+    const whereClauses: any[] = [];
+
+    if (channelId) {
+      whereClauses.push(eq(schema.events.channel_id, channelId));
+    }
+    if (after) {
+      whereClauses.push(gt(schema.events.created_at, Number(after)));
+    }
+    if (type) {
+      whereClauses.push(eq(schema.events.type, type));
+    }
+    if (typePrefix) {
+      whereClauses.push(like(schema.events.type, `${typePrefix}%`));
+    }
+    for (const excludeTypePrefix of excludeTypePrefixes) {
+      whereClauses.push(not(like(schema.events.type, `${excludeTypePrefix}%`)));
+    }
+    if (sourceFilter) {
+      whereClauses.push(eq(schema.events.source, sourceFilter));
+    }
+    if (sourcePrefix) {
+      whereClauses.push(like(schema.events.source, `${sourcePrefix}%`));
+    }
+    if (status && !(agentName && isRunnerRequest)) {
+      whereClauses.push(eq(schema.events.status, status));
+    }
+
+    if (scheduledOnly && !status) {
+      whereClauses.push(eq(schema.events.status, "PENDING"));
+    }
+
+    if (!isRunnerRequest && !scheduledOnly) {
+      whereClauses.push(
+        or(
+          isNull(schema.events.deliver_at),
+          lte(schema.events.deliver_at, now),
+        ) as any,
+      );
+    }
+
+    if (agentName) {
+      if (isRunnerRequest) {
+        const receiptClauses: any[] = [
+          eq(schema.eventReceipts.agent_name, agentName),
+        ];
+        if (scheduledOnly) {
+          receiptClauses.push(gt(schema.events.deliver_at, now));
+        } else {
+          receiptClauses.push(
+            or(
+              isNull(schema.events.deliver_at),
+              lte(schema.events.deliver_at, now),
+            ),
+          );
+        }
+        if (status) {
+          receiptClauses.push(eq(schema.eventReceipts.status, status));
+        } else if (scheduledOnly) {
+          receiptClauses.push(eq(schema.eventReceipts.status, "PENDING"));
+        }
+        if (channelId) {
+          receiptClauses.push(eq(schema.events.channel_id, channelId));
+        }
+        if (after) {
+          receiptClauses.push(gt(schema.events.created_at, Number(after)));
+        }
+        if (type) {
+          receiptClauses.push(eq(schema.events.type, type));
+        }
+        if (typePrefix) {
+          receiptClauses.push(like(schema.events.type, `${typePrefix}%`));
+        }
+        for (const excludeTypePrefix of excludeTypePrefixes) {
+          receiptClauses.push(not(like(schema.events.type, `${excludeTypePrefix}%`)));
+        }
+        if (sourceFilter) {
+          receiptClauses.push(eq(schema.events.source, sourceFilter));
+        }
+        if (sourcePrefix) {
+          receiptClauses.push(like(schema.events.source, `${sourcePrefix}%`));
+        }
+        const joinedQuery = orm
+          .select({
+            event: schema.events,
+            receiptStatus: schema.eventReceipts.status,
+          })
+          .from(schema.events)
+          .innerJoin(
+            schema.eventReceipts,
+            eq(schema.events.id, schema.eventReceipts.event_id),
+          )
+          .where(and(...(receiptClauses as [any, ...any[]])))
+          .orderBy(
+            descending
+              ? desc(schema.events.created_at)
+              : asc(schema.events.created_at),
+          );
+        const joinedRows = (
+          shouldReturnAll ? joinedQuery : joinedQuery.limit(limit)
+        ).all() as Array<{
+          event: any;
+          receiptStatus: string;
+        }>;
+
+        if (options.markRunnerDelivered && !scheduledOnly) {
+          const pendingDeliveredIds = joinedRows
+            .filter((row) => row.receiptStatus === "PENDING")
+            .map((row) => row.event.id);
+          if (pendingDeliveredIds.length > 0) {
+            orm
+              .update(schema.eventReceipts)
+              .set({ status: "DELIVERED", delivered_at: now })
+              .where(
+                and(
+                  eq(schema.eventReceipts.agent_name, agentName),
+                  eq(schema.eventReceipts.status, "PENDING"),
+                  inArray(schema.eventReceipts.event_id, pendingDeliveredIds),
+                ),
+              )
+              .run();
+
+            const uniqueEventIds = [...new Set(pendingDeliveredIds)];
+            for (const eventId of uniqueEventIds) {
+              const pendingCountRow = orm
+                .select({
+                  count: sql<number>`count(*)`,
+                })
+                .from(schema.eventReceipts)
+                .where(
+                  and(
+                    eq(schema.eventReceipts.event_id, eventId),
+                    eq(schema.eventReceipts.status, "PENDING"),
+                  ),
+                )
+                .get() as { count: number } | undefined;
+              if ((pendingCountRow?.count ?? 0) === 0) {
+                orm
+                  .update(schema.events)
+                  .set({ status: "DELIVERED" })
+                  .where(eq(schema.events.id, eventId))
+                  .run();
+                const updated = orm
+                  .select()
+                  .from(schema.events)
+                  .where(eq(schema.events.id, eventId))
+                  .get() as any | undefined;
+                if (updated) {
+                  publishEventRow(updated);
+                }
+              }
+            }
+          }
+        }
+
+        return joinedRows.map((row) => row.event);
+      }
+
+      const agentChannels = orm
+        .select({ channelId: schema.channelSubscriptions.channel_id })
+        .from(schema.channelSubscriptions)
+        .where(
+          and(
+            eq(schema.channelSubscriptions.subscriber_type, "AGENT"),
+            eq(schema.channelSubscriptions.subscriber_id, agentName),
+          ),
+        )
+        .all();
+      const channelIds = agentChannels.map((row) => row.channelId);
+      const visibilityClauses: any[] = [];
+      if (channelIds.length > 0) {
+        visibilityClauses.push(inArray(schema.events.channel_id, channelIds));
+      }
+      if (visibilityClauses.length === 0) {
+        return [];
+      }
+      const agentVisibility = or(...(visibilityClauses as [any, ...any[]]));
+      if (agentVisibility) whereClauses.push(agentVisibility);
+      whereClauses.push(
+        (scheduledOnly
+          ? gt(schema.events.deliver_at, now)
+          : or(
+              isNull(schema.events.deliver_at),
+              lte(schema.events.deliver_at, now),
+            )) as any,
+      );
+    } else if (scheduledOnly) {
+      whereClauses.push(gt(schema.events.deliver_at, now));
+    }
+
+    const whereExpr =
+      whereClauses.length > 0
+        ? and(...(whereClauses as [any, ...any[]]))
+        : undefined;
+    const dbQuery = orm
+      .select()
+      .from(schema.events)
+      .where(whereExpr)
+      .orderBy(
+        descending
+          ? desc(schema.events.created_at)
+          : asc(schema.events.created_at),
+      );
+    const rows = (shouldReturnAll ? dbQuery : dbQuery.limit(limit)).all() as any[];
+    return isRunnerRequest
+      ? rows
+      : rows.filter((row) =>
+          !row.channel_id || access.canViewChannel(user, row.channel_id),
+        );
+  }
+
+  function createEventExportSqlite(query: ReturnType<typeof readEventQuery>, rows: any[]) {
+    const timestamp = new Date().toISOString();
+    const filenameTimestamp = timestamp.replace(/[:.]/g, "-");
+    const tmpDir = mkdtempSync(join(tmpdir(), "orgops-events-export-"));
+    const dbPath = join(tmpDir, "orgops-events.sqlite");
+    const exportDb = openDb(dbPath);
+    try {
+      exportDb.exec(`
+        PRAGMA journal_mode=DELETE;
+        PRAGMA synchronous=OFF;
+        CREATE TABLE export_metadata (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+        CREATE TABLE events (
+          id TEXT PRIMARY KEY,
+          type TEXT NOT NULL,
+          source TEXT NOT NULL,
+          channel_id TEXT,
+          parent_event_id TEXT,
+          created_at INTEGER NOT NULL,
+          deliver_at INTEGER,
+          status TEXT NOT NULL,
+          fail_count INTEGER NOT NULL,
+          last_error TEXT,
+          idempotency_key TEXT,
+          payload_json TEXT NOT NULL
+        );
+        CREATE TABLE channels (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          kind TEXT NOT NULL
+        );
+        CREATE TABLE event_type_counts (
+          type TEXT PRIMARY KEY,
+          count INTEGER NOT NULL
+        );
+        CREATE INDEX idx_export_events_type ON events(type);
+        CREATE INDEX idx_export_events_channel_id ON events(channel_id);
+        CREATE INDEX idx_export_events_created_at ON events(created_at);
+      `);
+
+      const insertEvent = exportDb.prepare(`
+        INSERT INTO events (
+          id,
+          type,
+          source,
+          channel_id,
+          parent_event_id,
+          created_at,
+          deliver_at,
+          status,
+          fail_count,
+          last_error,
+          idempotency_key,
+          payload_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      const insertEvents = exportDb.transaction((eventRows: any[]) => {
+        for (const row of eventRows) {
+          insertEvent.run(
+            row.id,
+            row.type,
+            row.source,
+            row.channel_id ?? null,
+            row.parent_event_id ?? null,
+            row.created_at,
+            row.deliver_at ?? null,
+            row.status,
+            row.fail_count ?? 0,
+            row.last_error ?? null,
+            row.idempotency_key ?? null,
+            row.payload_json,
+          );
+        }
+      });
+      insertEvents(rows);
+
+      const channelIds = [
+        ...new Set(
+          rows
+            .map((row) => row.channel_id)
+            .filter((channelId): channelId is string => typeof channelId === "string" && channelId.length > 0),
+        ),
+      ];
+      const channels =
+        channelIds.length === 0
+          ? []
+          : (orm
+              .select({
+                id: schema.channels.id,
+                name: schema.channels.name,
+                kind: schema.channels.kind,
+              })
+              .from(schema.channels)
+              .where(inArray(schema.channels.id, channelIds))
+              .all() as Array<{ id: string; name: string; kind: string }>);
+      const insertChannel = exportDb.prepare(
+        "INSERT INTO channels (id, name, kind) VALUES (?, ?, ?)",
+      );
+      const insertChannels = exportDb.transaction(
+        (channelRows: Array<{ id: string; name: string; kind: string }>) => {
+          for (const channel of channelRows) {
+            insertChannel.run(channel.id, channel.name, channel.kind);
+          }
+        },
+      );
+      insertChannels(channels);
+
+      const typeCounts = new Map<string, number>();
+      for (const row of rows) {
+        typeCounts.set(row.type, (typeCounts.get(row.type) ?? 0) + 1);
+      }
+      const insertTypeCount = exportDb.prepare(
+        "INSERT INTO event_type_counts (type, count) VALUES (?, ?)",
+      );
+      const insertTypeCounts = exportDb.transaction((counts: Map<string, number>) => {
+        for (const [eventType, count] of counts) {
+          insertTypeCount.run(eventType, count);
+        }
+      });
+      insertTypeCounts(typeCounts);
+
+      const createdAtValues = rows
+        .map((row) => row.created_at)
+        .filter((value): value is number => typeof value === "number");
+      const metadata: Record<string, string> = {
+        schema_version: "orgops.event-export.sqlite.v1",
+        exported_at: timestamp,
+        source: "orgops-api",
+        filters_json: JSON.stringify(serializeEventQueryFilters(query)),
+        event_count: String(rows.length),
+        channel_count: String(channels.length),
+        event_type_count: String(typeCounts.size),
+        earliest_created_at:
+          createdAtValues.length > 0 ? String(Math.min(...createdAtValues)) : "",
+        latest_created_at:
+          createdAtValues.length > 0 ? String(Math.max(...createdAtValues)) : "",
+      };
+      const insertMetadata = exportDb.prepare(
+        "INSERT INTO export_metadata (key, value) VALUES (?, ?)",
+      );
+      const insertMetadataRows = exportDb.transaction((values: Record<string, string>) => {
+        for (const [key, value] of Object.entries(values)) {
+          insertMetadata.run(key, value);
+        }
+      });
+      insertMetadataRows(metadata);
+
+      exportDb.close();
+      const bytes = readFileSync(dbPath);
+      return {
+        bytes,
+        filename: `orgops-events-${filenameTimestamp}.sqlite`,
+      };
+    } finally {
+      if (exportDb.open) {
+        exportDb.close();
+      }
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }
+
   app.post("/api/events", async (c) => {
     const raw = await c.req.text();
     let body: any = {};
@@ -245,6 +691,23 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
 
     const row = insertEvent({ ...parsed.data, type, source });
     return jsonResponse(c, eventRowToApi(row), 201);
+  });
+
+  app.get("/api/events/export.sqlite", (c) => {
+    const query = readEventQuery(c.req.url);
+    const user = c.get("user") as RequestUser | undefined;
+    const rows = selectEventRows(query, user, {
+      includeAll: true,
+      markRunnerDelivered: false,
+    });
+    const { bytes, filename } = createEventExportSqlite(query, rows);
+    return new Response(bytes, {
+      status: 200,
+      headers: {
+        "content-type": "application/vnd.sqlite3",
+        "content-disposition": `attachment; filename="${filename}"`,
+      },
+    });
   });
 
   app.get("/api/events/:id", (c) => {
@@ -387,237 +850,13 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
   });
 
   app.get("/api/events", (c) => {
-    const url = new URL(c.req.url);
-    const params = url.searchParams;
-    const channelId = params.get("channelId");
-    const agentName = params.get("agentName");
-    const type = params.get("type");
-    const typePrefix = params.get("typePrefix");
-    const sourceFilter = params.get("source");
-    const sourcePrefix = params.get("sourcePrefix");
-    const status = params.get("status");
-    const scheduled = params.get("scheduled");
-    const after = params.get("after");
-    const limit = Number(params.get("limit") ?? 100);
-    const order = params.get("order");
-    const descending = order === "desc";
-    const all = params.get("all") === "1";
-    const scheduledOnly = scheduled === "1" || scheduled === "true";
-    const user = c.get("user") as { username?: string } | undefined;
-    const isRunnerRequest = user?.username === "runner";
-    if (channelId && !access.canViewChannel(user, channelId)) {
-      return jsonResponse(c, [], 200);
-    }
-    if (agentName && !isRunnerRequest && !access.canViewAgent(user, agentName)) {
-      return jsonResponse(c, [], 200);
-    }
-    const now = Date.now();
-
-    const whereClauses: any[] = [];
-
-    if (channelId) {
-      whereClauses.push(eq(schema.events.channel_id, channelId));
-    }
-    if (after) {
-      whereClauses.push(gt(schema.events.created_at, Number(after)));
-    }
-    if (type) {
-      whereClauses.push(eq(schema.events.type, type));
-    }
-    if (typePrefix) {
-      whereClauses.push(like(schema.events.type, `${typePrefix}%`));
-    }
-    if (sourceFilter) {
-      whereClauses.push(eq(schema.events.source, sourceFilter));
-    }
-    if (sourcePrefix) {
-      whereClauses.push(like(schema.events.source, `${sourcePrefix}%`));
-    }
-    if (status && !(agentName && isRunnerRequest)) {
-      whereClauses.push(eq(schema.events.status, status));
-    }
-
-    if (scheduledOnly && !status) {
-      whereClauses.push(eq(schema.events.status, "PENDING"));
-    }
-
-    if (!isRunnerRequest && !scheduledOnly) {
-      whereClauses.push(
-        or(
-          isNull(schema.events.deliver_at),
-          lte(schema.events.deliver_at, now),
-        ) as any,
-      );
-    }
-
-    if (agentName) {
-      if (isRunnerRequest) {
-        const receiptClauses: any[] = [
-          eq(schema.eventReceipts.agent_name, agentName),
-        ];
-        if (scheduledOnly) {
-          receiptClauses.push(gt(schema.events.deliver_at, now));
-        } else {
-          receiptClauses.push(
-            or(
-              isNull(schema.events.deliver_at),
-              lte(schema.events.deliver_at, now),
-            ),
-          );
-        }
-        if (status) {
-          receiptClauses.push(eq(schema.eventReceipts.status, status));
-        } else if (scheduledOnly) {
-          receiptClauses.push(eq(schema.eventReceipts.status, "PENDING"));
-        }
-        if (channelId) {
-          receiptClauses.push(eq(schema.events.channel_id, channelId));
-        }
-        if (after) {
-          receiptClauses.push(gt(schema.events.created_at, Number(after)));
-        }
-        if (type) {
-          receiptClauses.push(eq(schema.events.type, type));
-        }
-        if (typePrefix) {
-          receiptClauses.push(like(schema.events.type, `${typePrefix}%`));
-        }
-        if (sourceFilter) {
-          receiptClauses.push(eq(schema.events.source, sourceFilter));
-        }
-        if (sourcePrefix) {
-          receiptClauses.push(like(schema.events.source, `${sourcePrefix}%`));
-        }
-        const joinedQuery = orm
-          .select({
-            event: schema.events,
-            receiptStatus: schema.eventReceipts.status,
-          })
-          .from(schema.events)
-          .innerJoin(
-            schema.eventReceipts,
-            eq(schema.events.id, schema.eventReceipts.event_id),
-          )
-          .where(and(...(receiptClauses as [any, ...any[]])))
-          .orderBy(
-            descending
-              ? desc(schema.events.created_at)
-              : asc(schema.events.created_at),
-          );
-        const joinedRows = (
-          all ? joinedQuery : joinedQuery.limit(limit)
-        ).all() as Array<{
-          event: any;
-          receiptStatus: string;
-        }>;
-
-        if (!scheduledOnly) {
-          const pendingDeliveredIds = joinedRows
-            .filter((row) => row.receiptStatus === "PENDING")
-            .map((row) => row.event.id);
-          if (pendingDeliveredIds.length > 0) {
-            orm
-              .update(schema.eventReceipts)
-              .set({ status: "DELIVERED", delivered_at: now })
-              .where(
-                and(
-                  eq(schema.eventReceipts.agent_name, agentName),
-                  eq(schema.eventReceipts.status, "PENDING"),
-                  inArray(schema.eventReceipts.event_id, pendingDeliveredIds),
-                ),
-              )
-              .run();
-
-            const uniqueEventIds = [...new Set(pendingDeliveredIds)];
-            for (const eventId of uniqueEventIds) {
-              const pendingCountRow = orm
-                .select({
-                  count: sql<number>`count(*)`,
-                })
-                .from(schema.eventReceipts)
-                .where(
-                  and(
-                    eq(schema.eventReceipts.event_id, eventId),
-                    eq(schema.eventReceipts.status, "PENDING"),
-                  ),
-                )
-                .get() as { count: number } | undefined;
-              if ((pendingCountRow?.count ?? 0) === 0) {
-                orm
-                  .update(schema.events)
-                  .set({ status: "DELIVERED" })
-                  .where(eq(schema.events.id, eventId))
-                  .run();
-                const updated = orm
-                  .select()
-                  .from(schema.events)
-                  .where(eq(schema.events.id, eventId))
-                  .get() as any | undefined;
-                if (updated) {
-                  publishEventRow(updated);
-                }
-              }
-            }
-          }
-        }
-
-        const data = joinedRows.map((row) => eventRowToApi(row.event));
-        return jsonResponse(c, data);
-      }
-
-      const agentChannels = orm
-        .select({ channelId: schema.channelSubscriptions.channel_id })
-        .from(schema.channelSubscriptions)
-        .where(
-          and(
-            eq(schema.channelSubscriptions.subscriber_type, "AGENT"),
-            eq(schema.channelSubscriptions.subscriber_id, agentName),
-          ),
-        )
-        .all();
-      const channelIds = agentChannels.map((row) => row.channelId);
-      const visibilityClauses: any[] = [];
-      if (channelIds.length > 0) {
-        visibilityClauses.push(inArray(schema.events.channel_id, channelIds));
-      }
-      if (visibilityClauses.length === 0) {
-        return jsonResponse(c, []);
-      }
-      const agentVisibility = or(...(visibilityClauses as [any, ...any[]]));
-      if (agentVisibility) whereClauses.push(agentVisibility);
-      whereClauses.push(
-        (scheduledOnly
-          ? gt(schema.events.deliver_at, now)
-          : or(
-              isNull(schema.events.deliver_at),
-              lte(schema.events.deliver_at, now),
-            )) as any,
-      );
-    } else if (scheduledOnly) {
-      whereClauses.push(gt(schema.events.deliver_at, now));
-    }
-
-    const whereExpr =
-      whereClauses.length > 0
-        ? and(...(whereClauses as [any, ...any[]]))
-        : undefined;
-    const query = orm
-      .select()
-      .from(schema.events)
-      .where(whereExpr)
-      .orderBy(
-        descending
-          ? desc(schema.events.created_at)
-          : asc(schema.events.created_at),
-      );
-    const rows = (all ? query : query.limit(limit)).all() as any[];
-    const visibleRows = isRunnerRequest
-      ? rows
-      : rows.filter((row) =>
-          !row.channel_id || access.canViewChannel(user, row.channel_id),
-        );
-    const data = visibleRows.map(eventRowToApi);
-    return jsonResponse(c, data);
+    const query = readEventQuery(c.req.url);
+    const user = c.get("user") as RequestUser | undefined;
+    const rows = selectEventRows(query, user, {
+      includeAll: false,
+      markRunnerDelivered: true,
+    });
+    return jsonResponse(c, rows.map(eventRowToApi));
   });
 
   app.delete("/api/events", (c) => {

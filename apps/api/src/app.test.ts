@@ -803,6 +803,144 @@ describe("api app", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("exports filtered events as a SQLite database", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const orm = createDrizzleDb(db);
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const now = Date.now();
+    const channelId = randomUUID();
+    orm
+      .insert(schema.channels)
+      .values({
+        id: channelId,
+        name: "event-export-channel",
+        description: null,
+        metadata_json: null,
+        visibility: "PUBLIC",
+        owner_human_id: null,
+        kind: "GROUP",
+        direct_participant_key: null,
+        created_at: now,
+      })
+      .run();
+
+    for (let index = 0; index < 1005; index += 1) {
+      orm
+        .insert(schema.events)
+        .values({
+          id: `export-event-${index}`,
+          type: "message.created",
+          payload_json: JSON.stringify({ index, text: `event ${index}` }),
+          source: "human:admin",
+          channel_id: channelId,
+          parent_event_id: null,
+          deliver_at: null,
+          status: "DELIVERED",
+          idempotency_key: null,
+          created_at: now + index,
+          fail_count: 0,
+          last_error: null,
+        })
+        .run();
+    }
+    orm
+      .insert(schema.events)
+      .values({
+        id: "excluded-audit-event",
+        type: "audit.memory.updated",
+        payload_json: JSON.stringify({ text: "exclude me" }),
+        source: "system",
+        channel_id: channelId,
+        parent_event_id: null,
+        deliver_at: null,
+        status: "DELIVERED",
+        idempotency_key: null,
+        created_at: now + 2000,
+        fail_count: 0,
+        last_error: null,
+      })
+      .run();
+
+    const exportRes = await app.request(
+      `http://localhost/api/events/export.sqlite?channelId=${encodeURIComponent(channelId)}&excludeTypePrefix=audit.memory.&order=asc`,
+      { headers: { cookie } },
+    );
+    expect(exportRes.status).toBe(200);
+    expect(exportRes.headers.get("content-type")).toContain("application/vnd.sqlite3");
+    expect(exportRes.headers.get("content-disposition")).toContain(
+      "attachment; filename=\"orgops-events-",
+    );
+
+    const exportDir = mkdtempSync(join(tmpdir(), "orgops-events-export-test-"));
+    const exportPath = join(exportDir, "events.sqlite");
+    writeFileSync(exportPath, Buffer.from(await exportRes.arrayBuffer()));
+    const exportDb = openDb(exportPath);
+    try {
+      const count = exportDb
+        .prepare("SELECT COUNT(*) AS count FROM events")
+        .get() as { count: number };
+      expect(count.count).toBe(1005);
+
+      const excluded = exportDb
+        .prepare("SELECT COUNT(*) AS count FROM events WHERE type LIKE 'audit.memory.%'")
+        .get() as { count: number };
+      expect(excluded.count).toBe(0);
+
+      const channel = exportDb
+        .prepare("SELECT name, kind FROM channels WHERE id = ?")
+        .get(channelId) as { name: string; kind: string } | undefined;
+      expect(channel).toEqual({ name: "event-export-channel", kind: "GROUP" });
+
+      const metadataRows = exportDb
+        .prepare("SELECT key, value FROM export_metadata")
+        .all() as Array<{ key: string; value: string }>;
+      const metadata = Object.fromEntries(
+        metadataRows.map((row) => [row.key, row.value]),
+      );
+      expect(metadata.schema_version).toBe("orgops.event-export.sqlite.v1");
+      expect(metadata.event_count).toBe("1005");
+      expect(JSON.parse(metadata.filters_json)).toMatchObject({
+        channelId,
+        excludeTypePrefixes: ["audit.memory."],
+        order: "asc",
+      });
+
+      const typeCount = exportDb
+        .prepare("SELECT count FROM event_type_counts WHERE type = ?")
+        .get("message.created") as { count: number } | undefined;
+      expect(typeCount?.count).toBe(1005);
+
+      const firstEvent = exportDb
+        .prepare("SELECT id, payload_json FROM events ORDER BY created_at ASC LIMIT 1")
+        .get() as { id: string; payload_json: string };
+      expect(firstEvent.id).toBe("export-event-0");
+      expect(JSON.parse(firstEvent.payload_json)).toEqual({
+        index: 0,
+        text: "event 0",
+      });
+    } finally {
+      exportDb.close();
+      rmSync(exportDir, { recursive: true, force: true });
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it("returns schema validation errors for invalid event emit", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");

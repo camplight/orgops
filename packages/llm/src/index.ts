@@ -125,6 +125,20 @@ function splitSystemMessages(messages: LlmMessage[]) {
   };
 }
 
+function buildPromptArgs(splitMessages: ReturnType<typeof splitSystemMessages>) {
+  if (splitMessages.messages.length > 0) {
+    return {
+      system: splitMessages.system,
+      messages: splitMessages.messages as any,
+    };
+  }
+  const prompt = splitMessages.system?.trim();
+  if (!prompt) {
+    throw new Error("LLM generate requires at least one non-empty message.");
+  }
+  return { prompt };
+}
+
 function readTokenCount(record: Record<string, unknown>, keys: string[]) {
   for (const key of keys) {
     const value = record[key];
@@ -221,8 +235,7 @@ export async function generate(
 
   const result = await generateText({
     model,
-    system: splitMessages.system,
-    messages: splitMessages.messages as any,
+    ...buildPromptArgs(splitMessages),
     ...(shouldSendTemperature ? { temperature: options.temperature } : {}),
     maxOutputTokens: options.maxTokens,
     ...(options.maxSteps !== undefined && Number.isFinite(options.maxSteps) && options.maxSteps > 0

@@ -23,6 +23,7 @@ type EventsScreenProps = {
   filters: EventFilters;
   onFiltersChange: (filters: EventFilters) => void;
   onApplyFilters: (filters?: EventFilters) => void;
+  onExportEvents: (filters?: EventFilters) => void;
   onClearEvents: () => Promise<void>;
   onEmitEvent: (rawJson: string) => Promise<void>;
   onRefreshEventTypes: () => Promise<void> | void;
@@ -59,6 +60,7 @@ export function EventsScreen({
   filters,
   onFiltersChange,
   onApplyFilters,
+  onExportEvents,
   onClearEvents,
   onUpdateScheduledEvent,
   onDeleteScheduledEvent,
@@ -484,6 +486,9 @@ export function EventsScreen({
             {Math.min(endIndex, filteredAndSortedEvents.length)} of {filteredAndSortedEvents.length}
           </div>
           <div className="flex items-center gap-2">
+            <Button type="button" variant="secondary" onClick={() => onExportEvents(filters)}>
+              Export SQLite
+            </Button>
             <Button type="button" variant="secondary" onClick={handleTogglePause}>
               {isPaused ? "Resume live updates" : "Pause live updates"}
             </Button>

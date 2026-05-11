@@ -121,6 +121,20 @@ function matchesAppliedEventFilters(
   return true;
 }
 
+function buildEventQueryParams(filters: EventFilters) {
+  const params = new URLSearchParams();
+  if (filters.agentName) params.set("agentName", filters.agentName);
+  if (filters.channelId) params.set("channelId", filters.channelId);
+  if (filters.type) params.set("type", filters.type);
+  if (filters.source) params.set("source", filters.source);
+  if (filters.status) params.set("status", filters.status);
+  if (filters.auditOnly) params.set("typePrefix", "audit.");
+  if (filters.excludeAuditMemory) params.append("excludeTypePrefix", "audit.memory.");
+  if (filters.excludeAuditSecret) params.append("excludeTypePrefix", "audit.secret");
+  if (filters.scheduledOnly) params.set("scheduled", "1");
+  return params;
+}
+
 export default function App() {
   const [activeScreen, setActiveScreen] = useState<Screen>("dashboard");
   const [activeProcessId, setActiveProcessId] = useState<string | null>(null);
@@ -479,14 +493,7 @@ export default function App() {
   const handleApplyEventFilters = useCallback(async (nextFilters?: EventFilters) => {
     const filtersToApply = nextFilters ?? eventFilters;
     setAppliedEventFilters(filtersToApply);
-    const params = new URLSearchParams();
-    if (filtersToApply.agentName) params.set("agentName", filtersToApply.agentName);
-    if (filtersToApply.channelId) params.set("channelId", filtersToApply.channelId);
-    if (filtersToApply.type) params.set("type", filtersToApply.type);
-    if (filtersToApply.source) params.set("source", filtersToApply.source);
-    if (filtersToApply.status) params.set("status", filtersToApply.status);
-    if (filtersToApply.auditOnly) params.set("typePrefix", "audit.");
-    if (filtersToApply.scheduledOnly) params.set("scheduled", "1");
+    const params = buildEventQueryParams(filtersToApply);
     const list = await fetchAllEvents(params);
     const now = Date.now();
     data.setEvents(
@@ -495,6 +502,17 @@ export default function App() {
       )
     );
   }, [eventFilters, data.channels, data.setEvents, fetchAllEvents]);
+
+  const handleExportEvents = useCallback((filtersToExport?: EventFilters) => {
+    const params = buildEventQueryParams(filtersToExport ?? appliedEventFilters);
+    params.set("order", "desc");
+    const href = `/api/events/export.sqlite?${params.toString()}`;
+    const link = document.createElement("a");
+    link.href = apiUrl(href);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }, [appliedEventFilters]);
 
   const handleEmitEvent = useCallback(
     async (rawJson: string) => {
@@ -704,6 +722,7 @@ export default function App() {
               link.remove();
             }}
             onApplyEventFilters={handleApplyEventFilters}
+            onExportEvents={handleExportEvents}
             onClearEvents={handleClearEvents}
             onEmitEvent={handleEmitEvent}
             onRefreshEventTypes={data.refreshEventTypes}
@@ -1041,6 +1060,7 @@ export default function App() {
           filters={eventFilters}
           onFiltersChange={setEventFilters}
           onApplyFilters={handleApplyEventFilters}
+          onExportEvents={handleExportEvents}
           onClearEvents={handleClearEvents}
           onEmitEvent={handleEmitEvent}
           onRefreshEventTypes={data.refreshEventTypes}
