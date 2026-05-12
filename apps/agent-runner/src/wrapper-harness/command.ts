@@ -462,25 +462,58 @@ async function ensureSourceCheckout(
 function extractPayloadTexts(value: unknown): string {
   const record = asRecord(value);
   const payloads = Array.isArray(record.payloads) ? record.payloads : [];
-  return payloads
+  const text = payloads
     .map((payload) => asRecord(payload).text)
     .filter((text): text is string => typeof text === "string" && text.trim().length > 0)
     .join("\n\n")
     .trim();
+  if (text) return text;
+  return record.result ? extractPayloadTexts(record.result) : "";
+}
+
+function firstCompleteJsonObjects(output: string): string[] {
+  const objects: string[] = [];
+  for (let start = output.indexOf("{"); start >= 0; start = output.indexOf("{", start + 1)) {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let index = start; index < output.length; index += 1) {
+      const char = output[index];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaped = inString;
+        continue;
+      }
+      if (char === "\"") {
+        inString = !inString;
+        continue;
+      }
+      if (inString) continue;
+      if (char === "{") depth += 1;
+      if (char === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          objects.push(output.slice(start, index + 1));
+          break;
+        }
+      }
+    }
+  }
+  return objects;
 }
 
 function extractPayloadTextsFromJsonOutput(output: string): string {
   const trimmed = output.trim();
-  const jsonStart = trimmed.indexOf("{");
-  if (jsonStart < 0) return "";
-  for (let i = jsonStart; i >= 0 && i < trimmed.length; i = trimmed.indexOf("{", i + 1)) {
-    if (i < 0) break;
+  for (const candidate of firstCompleteJsonObjects(trimmed)) {
     try {
-      const parsed = JSON.parse(trimmed.slice(i));
+      const parsed = JSON.parse(candidate);
       const text = extractPayloadTexts(parsed);
       if (text) return text;
     } catch {
-      // Try the next JSON-looking offset.
+      // Try the next complete JSON-looking object.
     }
   }
   return "";

@@ -21,6 +21,18 @@ describe("wrapped runtime", () => {
     expect(parseWrappedRuntimeOutput(output, "gateway warning", "json-payloads")).toBe("hello");
   });
 
+  it("extracts OpenClaw agent result payload text from JSON output", () => {
+    const output = JSON.stringify({
+      runId: "run-1",
+      status: "ok",
+      result: {
+        payloads: [{ text: "nested hello", mediaUrl: null }],
+        meta: { durationMs: 10 },
+      },
+    });
+    expect(parseWrappedRuntimeOutput(output, "", "json-payloads")).toBe("nested hello");
+  });
+
   it("runs a command recipe and emits a message event", async () => {
     const workspacePath = mkdtempSync(join(tmpdir(), "orgops-wrapped-"));
     const emitted: unknown[] = [];
