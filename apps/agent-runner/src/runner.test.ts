@@ -44,6 +44,7 @@ describe("agent runner", () => {
     expect(Object.keys(tools)).toContain("memory_cross_recent_update");
     expect(Object.keys(tools)).toContain("agents_create");
     expect(Object.keys(tools)).toContain("agents_search");
+    expect(Object.keys(tools)).toContain("agents_update");
   });
 
   it("builds model messages from all channel events", async () => {
@@ -2087,6 +2088,66 @@ describe("agent runner", () => {
     expect(requests[1]?.body).toEqual({
       subscriberType: "AGENT",
       subscriberId: "worker-c",
+    });
+  });
+
+  it("updates agents via agents_update with wrappedConfigJson", async () => {
+    const requests: Array<{ path: string; init?: RequestInit; body?: any }> = [];
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        soulContents: "role prompt",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+        assignedRunnerId: "runner-1",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async (path: string, init?: RequestInit) => {
+        const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+        requests.push({ path, init, body });
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+    };
+
+    const result = (await executeTool(ctx, "agents_update", {
+      agentName: "TestOrgOpsCoordinator",
+      wrappedConfigJson: JSON.stringify({
+        kind: "openclaw",
+        harness: "command",
+        runtime: { command: "./run-openclaw.sh" },
+      }),
+      desiredState: "RUNNING",
+    })) as { ok?: boolean; agentName?: string };
+
+    expect(result.ok).toBe(true);
+    expect(result.agentName).toBe("TestOrgOpsCoordinator");
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.path).toBe("/api/agents/TestOrgOpsCoordinator");
+    expect(requests[0]?.init?.method).toBe("PATCH");
+    expect(requests[0]?.body).toEqual({
+      wrappedConfig: {
+        kind: "openclaw",
+        harness: "command",
+        runtime: { command: "./run-openclaw.sh" },
+      },
+      desiredState: "RUNNING",
     });
   });
 

@@ -21,6 +21,7 @@ export type WrapperSourceConfig = {
 
 export type WrapperCommandConfig = {
   command?: unknown;
+  args?: unknown;
   cwd?: unknown;
   timeoutMs?: unknown;
   env?: unknown;

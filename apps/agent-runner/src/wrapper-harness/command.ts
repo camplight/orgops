@@ -14,6 +14,7 @@ import type {
 
 type NormalizedCommand = {
   command: string;
+  args?: string[];
   cwd?: string;
   timeoutMs: number;
   env: Record<string, string>;
@@ -47,17 +48,52 @@ const DEFAULT_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_SIDECAR_RESTART_DELAY_MS = 2_000;
 const sidecars = new Map<string, SidecarEntry>();
 
+function mergeEnv(...envs: Array<NodeJS.ProcessEnv | Record<string, string>>): Record<string, string> {
+  const merged: Record<string, string> = {};
+  for (const env of envs) {
+    for (const [key, value] of Object.entries(env)) {
+      if (value !== undefined) merged[key] = value;
+    }
+  }
+  return merged;
+}
+
+function readStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const args = value.filter((item): item is string => typeof item === "string");
+  return args.length === value.length ? args : undefined;
+}
+
+function resolveCommandCwd(
+  configuredCwd: unknown,
+  fallbackCwd: string,
+  projectRoot?: string,
+): string {
+  const cwd = readString(configuredCwd);
+  if (!cwd) return fallbackCwd;
+  if (cwd.startsWith("/")) return cwd;
+  if (cwd === "." || cwd.startsWith("./") || cwd.startsWith("../")) {
+    return resolve(fallbackCwd, cwd);
+  }
+  if (projectRoot && cwd.startsWith(".orgops-data/")) {
+    return resolve(projectRoot, cwd);
+  }
+  return resolve(fallbackCwd, cwd);
+}
+
 function normalizeCommand(
   config: WrapperCommandConfig | undefined,
   fallbackCwd: string,
   fallbackTimeoutMs = DEFAULT_COMMAND_TIMEOUT_MS,
+  projectRoot?: string,
 ): NormalizedCommand | null {
   const command = readString(config?.command);
   if (!command) return null;
   const parse = readString(config?.parse);
   return {
     command,
-    cwd: readString(config?.cwd) ?? fallbackCwd,
+    args: readStringArray(config?.args),
+    cwd: resolveCommandCwd(config?.cwd, fallbackCwd, projectRoot),
     timeoutMs: readPositiveInt(config?.timeoutMs, fallbackTimeoutMs),
     env: readStringEnv(config?.env),
     parse: parse === "json-payloads" ? "json-payloads" : parse === "text" ? "text" : undefined,
@@ -68,12 +104,13 @@ function normalizeSidecar(
   config: Record<string, unknown>,
   index: number,
   fallbackCwd: string,
+  projectRoot?: string,
 ): NormalizedSidecar | null {
-  const command = normalizeCommand(config, fallbackCwd);
+  const command = normalizeCommand(config, fallbackCwd, DEFAULT_COMMAND_TIMEOUT_MS, projectRoot);
   if (!command) return null;
   const checkCommandValue = readString(config.checkCommand);
   const checkCommand = checkCommandValue
-    ? normalizeCommand({ ...config, command: checkCommandValue }, fallbackCwd, 60_000)
+    ? normalizeCommand({ ...config, command: checkCommandValue }, fallbackCwd, 60_000, projectRoot)
     : undefined;
   return {
     ...command,
@@ -84,28 +121,21 @@ function normalizeSidecar(
   };
 }
 
-function shellForPlatform() {
-  if (process.platform === "win32") {
-    return { command: process.env.COMSPEC ?? "cmd.exe", args: ["/d", "/s", "/c"] };
-  }
-  return { command: process.env.SHELL ?? "/bin/sh", args: ["-lc"] };
-}
-
 async function runCommand(
   commandConfig: NormalizedCommand,
   env: Record<string, string>,
 ): Promise<CommandResult> {
-  const shell = shellForPlatform();
+  const mergedEnv = mergeEnv(process.env, env, commandConfig.env);
+  if (commandConfig.cwd) {
+    mkdirSync(commandConfig.cwd, { recursive: true });
+  }
   return new Promise((resolvePromise, rejectPromise) => {
     let stdout = "";
     let stderr = "";
-    const child = spawn(shell.command, [...shell.args, commandConfig.command], {
+    const child = spawn(commandConfig.command, commandConfig.args ?? [], {
       cwd: commandConfig.cwd,
-      env: {
-        ...process.env,
-        ...env,
-        ...commandConfig.env,
-      },
+      env: mergedEnv,
+      shell: true,
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });
@@ -170,15 +200,16 @@ async function ensureSidecarStarted(
     }
   }
 
-  const shell = shellForPlatform();
-  const child = spawn(shell.command, [...shell.args, sidecar.command], {
+  const sidecarEnv = mergeEnv(process.env, env, sidecar.env, {
+    ORGOPS_WRAPPED_SIDECAR_NAME: sidecar.name,
+  });
+  if (sidecar.cwd) {
+    mkdirSync(sidecar.cwd, { recursive: true });
+  }
+  const child = spawn(sidecar.command, sidecar.args ?? [], {
     cwd: sidecar.cwd,
-    env: {
-      ...process.env,
-      ...env,
-      ...sidecar.env,
-      ORGOPS_WRAPPED_SIDECAR_NAME: sidecar.name,
-    },
+    env: sidecarEnv,
+    shell: true,
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
@@ -370,17 +401,17 @@ async function ensureSourceCheckout(
   const ref = readString(source?.ref);
   if (!existsSync(targetDir)) {
     const cloneCommand = [
-      "git clone",
-      ref ? `--branch ${JSON.stringify(ref)}` : "",
-      "--depth 1",
-      JSON.stringify(githubCloneUrl(repo)),
-      JSON.stringify(targetDir),
-    ]
-      .filter(Boolean)
-      .join(" ");
+      "clone",
+      ...(ref ? ["--branch", ref] : []),
+      "--depth",
+      "1",
+      githubCloneUrl(repo),
+      targetDir,
+    ];
     const result = await runCommand(
       {
-        command: cloneCommand,
+        command: "git",
+        args: cloneCommand,
         cwd: workspacePath,
         timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS,
         env: {},
@@ -391,12 +422,13 @@ async function ensureSourceCheckout(
       throw new Error(`Source checkout failed: ${result.stderr || result.stdout}`.slice(0, 1000));
     }
   } else if (source?.updateOnStart === true) {
-    const updateCommand = ref
-      ? `git fetch --depth 1 origin ${JSON.stringify(ref)} && git checkout FETCH_HEAD`
-      : "git pull --ff-only";
+    const fetchOrPull = ref
+      ? ["fetch", "--depth", "1", "origin", ref]
+      : ["pull", "--ff-only"];
     const result = await runCommand(
       {
-        command: updateCommand,
+        command: "git",
+        args: fetchOrPull,
         cwd: targetDir,
         timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS,
         env: {},
@@ -405,6 +437,23 @@ async function ensureSourceCheckout(
     );
     if (result.exitCode !== 0) {
       throw new Error(`Source update failed: ${result.stderr || result.stdout}`.slice(0, 1000));
+    }
+    if (ref) {
+      const checkout = await runCommand(
+        {
+          command: "git",
+          args: ["checkout", "FETCH_HEAD"],
+          cwd: targetDir,
+          timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS,
+          env: {},
+        },
+        baseEnv,
+      );
+      if (checkout.exitCode !== 0) {
+        throw new Error(
+          `Source update failed: ${checkout.stderr || checkout.stdout}`.slice(0, 1000),
+        );
+      }
     }
   }
   return targetDir;
@@ -473,6 +522,7 @@ export const commandWrapperHarness: WrapperHarness = {
         : undefined,
       setupCwd,
       60_000,
+      ctx.projectRoot,
     );
     if (checkCommand) {
       const check = await runCommand(checkCommand, baseEnv);
@@ -483,7 +533,7 @@ export const commandWrapperHarness: WrapperHarness = {
           reason: "check-command-passed",
         });
       } else {
-        const setupCommand = normalizeCommand(config.setup, setupCwd);
+        const setupCommand = normalizeCommand(config.setup, setupCwd, DEFAULT_COMMAND_TIMEOUT_MS, ctx.projectRoot);
         if (setupCommand) {
           await emitWrapperEvent(ctx, agent, "wrapper.setup.started", {
             kind: config.kind,
@@ -515,7 +565,7 @@ export const commandWrapperHarness: WrapperHarness = {
         }
       }
     } else {
-      const setupCommand = normalizeCommand(config.setup, setupCwd);
+      const setupCommand = normalizeCommand(config.setup, setupCwd, DEFAULT_COMMAND_TIMEOUT_MS, ctx.projectRoot);
       if (!setupCommand) {
         await emitWrapperEvent(ctx, agent, "wrapper.setup.skipped", {
           kind: config.kind,
@@ -553,7 +603,7 @@ export const commandWrapperHarness: WrapperHarness = {
       }
     }
     for (let index = 0; index < config.sidecars.length; index += 1) {
-      const sidecar = normalizeSidecar(asRecord(config.sidecars[index]), index, setupCwd);
+      const sidecar = normalizeSidecar(asRecord(config.sidecars[index]), index, setupCwd, ctx.projectRoot);
       if (!sidecar) continue;
       await ensureSidecarStarted(ctx, agent.name, config, sidecar, baseEnv);
     }
@@ -562,7 +612,7 @@ export const commandWrapperHarness: WrapperHarness = {
     const { ctx, agent, config, channelId, triggerEvent, message, sessionId } = input;
     const sourceDir = sourceCheckoutPath(agent.workspacePath, config.source);
     const runtimeCwd = sourceDir && existsSync(sourceDir) ? sourceDir : agent.workspacePath;
-    const runtime = normalizeCommand(config.runtime, runtimeCwd);
+    const runtime = normalizeCommand(config.runtime, runtimeCwd, DEFAULT_COMMAND_TIMEOUT_MS, ctx.projectRoot);
     if (!runtime) {
       throw new Error(`Wrapped agent ${agent.name} is missing wrappedConfig.runtime.command.`);
     }

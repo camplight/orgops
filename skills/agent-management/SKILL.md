@@ -9,6 +9,7 @@ Use the native runner tools for agent operations:
 
 - `agents_search`: list or filter existing agents.
 - `agents_create`: create `CLASSIC`, `RLM_REPL`, or `WRAPPED` agents.
+- `agents_update`: patch an existing agent's config, lifecycle state, skills, model, workspace, or wrapped runtime config.
 - `events_channel_participant_add` or `events_channel_join`: add an agent to a channel when it should receive channel events.
 
 ## List Agents
@@ -53,6 +54,20 @@ For a wrapped agent, set:
 - a `wrappedConfig` object with `kind`, `harness`, optional `setup`, optional `sidecars`, and `runtime`
 
 Wrapped agents do not use OrgOps model calls, prompts, memory, skills, or `allowOutsideWorkspace` for turns. The external runtime owns its session, tools, memory, prompt behavior, and filesystem policy through its own settings.
+
+## Update Existing Agents
+
+Use `agents_update` instead of direct database writes. For wrapped agents, prefer `wrappedConfigJson` when patching a whole config from generated JSON; it must parse to a JSON object.
+
+Example:
+
+```json
+{
+  "agentName": "OrgOpsCoordinator",
+  "wrappedConfigJson": "{\"kind\":\"openclaw\",\"harness\":\"command\",\"runtime\":{\"command\":\"./run-openclaw.sh\",\"cwd\":\".orgops-data/workspaces/OrgOpsCoordinator/wrapper\",\"parse\":\"json-payloads\",\"timeoutMs\":600000}}",
+  "desiredState": "RUNNING"
+}
+```
 
 ## OpenClaw With Gateway Sidecar
 

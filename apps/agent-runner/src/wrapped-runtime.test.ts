@@ -143,6 +143,111 @@ describe("wrapped runtime", () => {
     }
   });
 
+  it("uses Node's cross-platform shell for wrapped commands", async () => {
+    const workspacePath = mkdtempSync(join(tmpdir(), "orgops-shell-wrapped-"));
+    const emitted: unknown[] = [];
+    const agent: Agent = {
+      name: "shell-test",
+      systemInstructions: "",
+      soulPath: "",
+      workspacePath,
+      modelId: "wrapped:none",
+      desiredState: "RUNNING",
+      runtimeState: "RUNNING",
+      mode: "WRAPPED",
+      wrappedConfig: {
+        kind: "custom",
+        runtime: {
+          command:
+            'node -e "process.stdout.write(JSON.stringify({payloads:[{text:\\"first\\"}]}))" && node -e "process.stdout.write(JSON.stringify({payloads:[{text:\\"second\\"}]}))"',
+          parse: "json-payloads",
+        },
+      },
+    };
+    const event: Event = {
+      id: "evt-1",
+      type: "message.created",
+      payload: { text: "hello wrapped" },
+      source: "human:alice",
+      channelId: "chan-1",
+      createdAt: Date.now(),
+    };
+
+    try {
+      await runWrappedAgentTurn(
+        {
+          projectRoot: workspacePath,
+          api: {
+            emitEvent: async (outbound: unknown) => {
+              emitted.push(outbound);
+            },
+            getPackageSecretsEnv: async () => ({}),
+          },
+        },
+        agent,
+        [event],
+      );
+
+      expect(
+        emitted.some(
+          (outbound) =>
+            (outbound as any).type === "message.created" &&
+            (outbound as any).payload?.text === "first",
+        ),
+      ).toBe(true);
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true });
+    }
+  });
+
+  it("creates configured command cwd before spawning", async () => {
+    const workspacePath = mkdtempSync(join(tmpdir(), "orgops-cwd-wrapped-"));
+    const emitted: unknown[] = [];
+    const setupCwd = join(workspacePath, "missing", "wrapper");
+    const agent: Agent = {
+      name: "cwd-test",
+      systemInstructions: "",
+      soulPath: "",
+      workspacePath,
+      modelId: "wrapped:none",
+      desiredState: "RUNNING",
+      runtimeState: "RUNNING",
+      mode: "WRAPPED",
+      wrappedConfig: {
+        kind: "test",
+        setup: {
+          command: 'node -e "process.stdout.write(process.cwd())"',
+          cwd: setupCwd,
+        },
+      },
+    };
+
+    try {
+      await ensureWrappedAgentReady(
+        {
+          projectRoot: workspacePath,
+          api: {
+            emitEvent: async (outbound: unknown) => {
+              emitted.push(outbound);
+            },
+            getPackageSecretsEnv: async () => ({}),
+          },
+        },
+        agent,
+      );
+
+      expect(
+        emitted.some(
+          (outbound) =>
+            (outbound as any).type === "wrapper.setup.completed" &&
+            (outbound as any).payload?.stdout === setupCwd,
+        ),
+      ).toBe(true);
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true });
+    }
+  });
+
   it("starts configured wrapper sidecars", async () => {
     const workspacePath = mkdtempSync(join(tmpdir(), "orgops-sidecar-wrapped-"));
     const emitted: unknown[] = [];

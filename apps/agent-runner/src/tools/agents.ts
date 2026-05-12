@@ -43,6 +43,51 @@ const agentsCreateSchema = z.object({
   joinCurrentChannel: z.boolean().optional(),
 });
 
+const agentsUpdateSchema = z
+  .object({
+    agentName: z.string().min(1),
+    icon: z.string().nullable().optional(),
+    description: z.string().nullable().optional(),
+    modelId: z.string().min(1).optional(),
+    systemInstructions: z.string().optional(),
+    soulPath: z.string().min(1).optional(),
+    soulContents: z.string().optional(),
+    enabledSkills: z.array(z.string()).optional(),
+    alwaysPreloadedSkills: z.array(z.string()).optional(),
+    workspacePath: z.string().min(1).optional(),
+    allowOutsideWorkspace: z.boolean().optional(),
+    llmCallTimeoutMs: z.number().int().positive().nullable().optional(),
+    classicMaxModelSteps: z.number().int().positive().nullable().optional(),
+    contextSessionGapMs: z.number().int().positive().nullable().optional(),
+    emitAuditEvents: z.boolean().optional(),
+    memoryContextMode: memoryContextModeSchema.optional(),
+    mode: agentModeSchema.optional(),
+    wrappedConfig: z.record(z.unknown()).optional(),
+    wrappedConfigJson: z.string().min(2).optional(),
+    assignedRunnerId: z.string().nullable().optional(),
+    desiredState: desiredStateSchema.optional(),
+    runtimeState: runtimeStateSchema.optional(),
+    visibility: z.enum(["PUBLIC", "PRIVATE"]).optional(),
+  })
+  .superRefine((value, ctx) => {
+    const updateKeys = Object.keys(value).filter(
+      (key) => key !== "agentName" && value[key as keyof typeof value] !== undefined,
+    );
+    if (updateKeys.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Provide at least one agent field to update.",
+      });
+    }
+    if (value.wrappedConfig !== undefined && value.wrappedConfigJson !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["wrappedConfigJson"],
+        message: "Use either wrappedConfig or wrappedConfigJson, not both.",
+      });
+    }
+  });
+
 export const agentsToolDefs: ToolDef[] = [
   [
     "agents_create",
@@ -53,6 +98,11 @@ export const agentsToolDefs: ToolDef[] = [
     "agents_search",
     "List/search agents with optional filters by name/runtime/desired state.",
     agentsSearchSchema,
+  ],
+  [
+    "agents_update",
+    "Update an existing OrgOps agent via the agent API. Use wrappedConfig for object input or wrappedConfigJson for a JSON string when patching wrapped runtime config.",
+    agentsUpdateSchema,
   ],
 ];
 
@@ -96,6 +146,14 @@ function trimOptional(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function parseWrappedConfigJson(value: string): Record<string, unknown> {
+  const parsed = JSON.parse(value) as unknown;
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("wrappedConfigJson must parse to a JSON object.");
+  }
+  return parsed as Record<string, unknown>;
+}
+
 export async function execute(
   ctx: ExecuteContext,
   tool: string,
@@ -125,6 +183,70 @@ export async function execute(
     });
     const limited = parsed.limit ? filtered.slice(0, parsed.limit) : filtered;
     return { agents: limited, totalMatched: filtered.length, filters: parsed };
+  }
+
+  if (tool === "agents_update") {
+    const parsedResult = parseToolArgs(tool, agentsUpdateSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const parsed = parsedResult.data;
+    const agentName = parsed.agentName.trim();
+    let wrappedConfigFromJson: Record<string, unknown> | undefined;
+    if (parsed.wrappedConfigJson !== undefined) {
+      try {
+        wrappedConfigFromJson = parseWrappedConfigJson(parsed.wrappedConfigJson);
+      } catch (error) {
+        return { error: String(error) };
+      }
+    }
+
+    const updateBody: Record<string, unknown> = {
+      ...(parsed.icon !== undefined ? { icon: parsed.icon } : {}),
+      ...(parsed.description !== undefined ? { description: parsed.description } : {}),
+      ...(parsed.modelId !== undefined ? { modelId: parsed.modelId.trim() } : {}),
+      ...(parsed.systemInstructions !== undefined
+        ? { systemInstructions: parsed.systemInstructions }
+        : {}),
+      ...(parsed.soulPath !== undefined ? { soulPath: parsed.soulPath.trim() } : {}),
+      ...(parsed.soulContents !== undefined ? { soulContents: parsed.soulContents } : {}),
+      ...(parsed.enabledSkills !== undefined ? { enabledSkills: parsed.enabledSkills } : {}),
+      ...(parsed.alwaysPreloadedSkills !== undefined
+        ? { alwaysPreloadedSkills: parsed.alwaysPreloadedSkills }
+        : {}),
+      ...(parsed.workspacePath !== undefined ? { workspacePath: parsed.workspacePath.trim() } : {}),
+      ...(parsed.allowOutsideWorkspace !== undefined
+        ? { allowOutsideWorkspace: parsed.allowOutsideWorkspace }
+        : {}),
+      ...(parsed.llmCallTimeoutMs !== undefined
+        ? { llmCallTimeoutMs: parsed.llmCallTimeoutMs }
+        : {}),
+      ...(parsed.classicMaxModelSteps !== undefined
+        ? { classicMaxModelSteps: parsed.classicMaxModelSteps }
+        : {}),
+      ...(parsed.contextSessionGapMs !== undefined
+        ? { contextSessionGapMs: parsed.contextSessionGapMs }
+        : {}),
+      ...(parsed.emitAuditEvents !== undefined ? { emitAuditEvents: parsed.emitAuditEvents } : {}),
+      ...(parsed.memoryContextMode !== undefined
+        ? { memoryContextMode: parsed.memoryContextMode }
+        : {}),
+      ...(parsed.mode !== undefined ? { mode: parsed.mode } : {}),
+      ...(parsed.wrappedConfig !== undefined ? { wrappedConfig: parsed.wrappedConfig } : {}),
+      ...(wrappedConfigFromJson !== undefined ? { wrappedConfig: wrappedConfigFromJson } : {}),
+      ...(parsed.assignedRunnerId !== undefined
+        ? { assignedRunnerId: trimOptional(parsed.assignedRunnerId ?? undefined) ?? null }
+        : {}),
+      ...(parsed.desiredState !== undefined ? { desiredState: parsed.desiredState } : {}),
+      ...(parsed.runtimeState !== undefined ? { runtimeState: parsed.runtimeState } : {}),
+      ...(parsed.visibility !== undefined ? { visibility: parsed.visibility } : {}),
+    };
+
+    const response = await ctx.apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(updateBody),
+    });
+    const updated = await parseResponseBody(response);
+    return { ok: true, agentName, updated };
   }
 
   if (tool === "agents_create") {
