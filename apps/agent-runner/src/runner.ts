@@ -218,6 +218,7 @@ async function pollAgent(agent: Agent) {
             api: {
               apiFetch: api.apiFetch,
               emitEvent: api.emitEvent,
+              ensureLifecycleChannel: api.ensureLifecycleChannel,
               getPackageSecretsEnv: api.getPackageSecretsEnv,
             },
           },

@@ -3145,6 +3145,103 @@ describe("api app", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("stores process output events as delivered when requested", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const orm = createDrizzleDb(db);
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const channelId = randomUUID();
+    const processId = randomUUID();
+    const now = Date.now();
+    orm
+      .insert(schema.channels)
+      .values({
+        id: channelId,
+        name: "agent.lifecycle.wrapper-output-test",
+        description: null,
+        metadata_json: null,
+        visibility: "PUBLIC",
+        owner_human_id: null,
+        kind: "GROUP",
+        direct_participant_key: null,
+        created_at: now,
+      })
+      .run();
+    orm
+      .insert(schema.channelSubscriptions)
+      .values({
+        channel_id: channelId,
+        subscriber_type: "AGENT",
+        subscriber_id: "wrapper-output-test",
+      })
+      .run();
+
+    const createProcessRes = await app.request("http://localhost/api/processes", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        id: processId,
+        agentName: "wrapper-output-test",
+        channelId,
+        cmd: "gateway",
+        cwd: "/tmp",
+        state: "RUNNING",
+      }),
+    });
+    expect(createProcessRes.status).toBe(201);
+
+    const outputRes = await app.request(
+      `http://localhost/api/processes/${processId}/output`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({
+          id: randomUUID(),
+          seq: 1,
+          stream: "STDOUT",
+          text: "gateway ready\n",
+          source: "system:runner:wrapper",
+          status: "DELIVERED",
+        }),
+      },
+    );
+    expect(outputRes.status).toBe(201);
+
+    const outputEvent = orm
+      .select()
+      .from(schema.events)
+      .where(eq(schema.events.type, "process.output"))
+      .get();
+    expect(outputEvent?.channel_id).toBe(channelId);
+    expect(outputEvent?.status).toBe("DELIVERED");
+
+    const receipt = orm
+      .select()
+      .from(schema.eventReceipts)
+      .where(eq(schema.eventReceipts.event_id, outputEvent?.id ?? ""))
+      .get();
+    expect(receipt?.agent_name).toBe("wrapper-output-test");
+    expect(receipt?.status).toBe("DELIVERED");
+    expect(typeof receipt?.delivered_at).toBe("number");
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("reconciles missing running processes as exited on refresh", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");

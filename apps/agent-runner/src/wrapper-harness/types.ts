@@ -5,6 +5,7 @@ export type WrapperRuntimeContext = {
   api: {
     apiFetch?: (path: string, init?: RequestInit) => Promise<Response>;
     emitEvent: (event: unknown) => Promise<void>;
+    ensureLifecycleChannel?: (agentName: string) => Promise<string>;
     getPackageSecretsEnv: (agentName: string, channelId?: string) => Promise<Record<string, string>>;
   };
 };

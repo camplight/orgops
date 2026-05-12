@@ -171,6 +171,7 @@ async function ensureSidecarStarted(
     api: {
       apiFetch?: (path: string, init?: RequestInit) => Promise<Response>;
       emitEvent: (event: unknown) => Promise<void>;
+      ensureLifecycleChannel?: (agentName: string) => Promise<string>;
     };
   },
   agentName: string,
@@ -221,6 +222,7 @@ async function ensureSidecarStarted(
     seq: 0,
   };
   sidecars.set(key, entry);
+  const lifecycleChannelId = await ctx.api.ensureLifecycleChannel?.(agentName);
   if (ctx.api.apiFetch) {
     entry.processId = randomUUID();
     await ctx.api.apiFetch("/api/processes", {
@@ -229,6 +231,7 @@ async function ensureSidecarStarted(
       body: JSON.stringify({
         id: entry.processId,
         agentName,
+        channelId: lifecycleChannelId,
         cmd: sidecar.command,
         cwd: sidecar.cwd,
         pid: child.pid,
@@ -265,6 +268,7 @@ async function ensureSidecarStarted(
         text: String(chunk),
         ts: Date.now(),
         source: "system:runner:wrapper",
+        status: "DELIVERED",
       }),
     }).catch(() => {
       // The process row may have been removed during agent deletion.
@@ -304,6 +308,7 @@ async function ensureSidecarStarted(
           state: signal ? "TERMINATED" : "EXITED",
           endedAt: Date.now(),
           source: "system:runner:wrapper",
+        status: "DELIVERED",
         }),
       }).catch(() => {
         // The process row may have been removed during agent deletion.

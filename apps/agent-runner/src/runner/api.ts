@@ -312,6 +312,7 @@ export function createRunnerApi(deps: RunnerApiDeps) {
     listChannels,
     getChannelRecord,
     getChannelParticipationValidationError,
+    ensureLifecycleChannel,
     emitStartupEvent,
     getPackageSecretsEnv,
   };

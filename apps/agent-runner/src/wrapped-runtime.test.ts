@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -252,7 +252,7 @@ describe("wrapped runtime", () => {
         emitted.some(
           (outbound) =>
             (outbound as any).type === "wrapper.setup.completed" &&
-            (outbound as any).payload?.stdout === setupCwd,
+            (outbound as any).payload?.stdout === realpathSync(setupCwd),
         ),
       ).toBe(true);
     } finally {
@@ -300,6 +300,7 @@ describe("wrapped runtime", () => {
             emitEvent: async (outbound: unknown) => {
               emitted.push(outbound);
             },
+            ensureLifecycleChannel: async () => "lifecycle-channel",
             getPackageSecretsEnv: async () => ({}),
           },
         },
@@ -320,6 +321,7 @@ describe("wrapped runtime", () => {
           (request) =>
             request.path === "/api/processes" &&
             request.body?.agentName === "sidecar-test" &&
+            request.body?.channelId === "lifecycle-channel" &&
             request.body?.cmd === 'node -e "setInterval(() => {}, 1000)"',
         ),
       ).toBe(true);

@@ -67,6 +67,7 @@ type CreateTurnExecutorInput = {
     | "listChannels"
     | "getChannelRecord"
     | "getChannelParticipationValidationError"
+    | "ensureLifecycleChannel"
     | "getPackageSecretsEnv"
   >;
 };
@@ -420,6 +421,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
           api: {
             apiFetch: input.api.apiFetch,
             emitEvent: input.api.emitEvent,
+            ensureLifecycleChannel: input.api.ensureLifecycleChannel,
             getPackageSecretsEnv: input.api.getPackageSecretsEnv,
           },
         },

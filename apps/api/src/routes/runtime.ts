@@ -327,6 +327,7 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
       },
       source: body.source ?? PROCESS_EVENT_SOURCE,
       channelId: processContext?.channelId ?? undefined,
+      status: body.status === "DELIVERED" ? "DELIVERED" : undefined,
     });
     return jsonResponse(c, { ok: true }, 201);
   });
@@ -358,6 +359,7 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
       },
       source: body.source ?? PROCESS_EVENT_SOURCE,
       channelId: processContext?.channelId ?? undefined,
+      status: body.status === "DELIVERED" ? "DELIVERED" : undefined,
     });
     return jsonResponse(c, { ok: true });
   });
