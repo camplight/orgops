@@ -15,7 +15,7 @@ type AgentForm = {
   name: string;
   modelId: string;
   visibility: "PUBLIC" | "PRIVATE";
-  mode: "CLASSIC" | "RLM_REPL";
+  mode: "CLASSIC" | "RLM_REPL" | "WRAPPED";
   memoryContextMode: "PER_CHANNEL_CROSS_CHANNEL" | "FULL_CHANNEL_EVENTS" | "OFF";
   emitAuditEvents: boolean;
   llmCallTimeoutMs: string;
@@ -26,7 +26,26 @@ type AgentForm = {
   soulContents: string;
   enabledSkills: string[];
   alwaysPreloadedSkills: string[];
+  wrappedConfigJson: string;
+  wrappedConfig?: Record<string, unknown>;
 };
+
+const DEFAULT_WRAPPED_CONFIG = JSON.stringify(
+  {
+    kind: "custom",
+    harness: "command",
+    runtime: {
+      command: 'printf "%s" "$ORGOPS_WRAPPED_MESSAGE"',
+      parse: "text",
+      timeoutMs: 600000
+    },
+    session: {
+      scope: "per-channel"
+    }
+  },
+  null,
+  2
+);
 
 const DEFAULT_AGENT_FORM: AgentForm = {
   name: "",
@@ -42,7 +61,8 @@ const DEFAULT_AGENT_FORM: AgentForm = {
   assignedRunnerId: "",
   soulContents: "",
   enabledSkills: [],
-  alwaysPreloadedSkills: []
+  alwaysPreloadedSkills: [],
+  wrappedConfigJson: DEFAULT_WRAPPED_CONFIG
 };
 
 function parseOptionalPositiveIntInput(
@@ -56,6 +76,36 @@ function parseOptionalPositiveIntInput(
     throw new Error(`${fieldName} must be a positive integer when provided.`);
   }
   return Math.floor(parsed);
+}
+
+function stringifyWrappedConfig(value: unknown) {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return JSON.stringify(value, null, 2);
+  }
+  return DEFAULT_WRAPPED_CONFIG;
+}
+
+function parseWrappedConfigJson(value: string): Record<string, unknown> {
+  const trimmed = value.trim();
+  if (!trimmed) return {};
+  const parsed = JSON.parse(trimmed);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Wrapped config must be a JSON object.");
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function readWrappedDisplayValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function formatAgentModelLabel(agent: Agent): string {
+  if ((agent.mode ?? "CLASSIC") !== "WRAPPED") return agent.modelId ?? "-";
+  const config = agent.wrappedConfig ?? {};
+  const kind = readWrappedDisplayValue(config.kind);
+  const name = readWrappedDisplayValue(config.name);
+  const harness = readWrappedDisplayValue(config.harness) ?? readWrappedDisplayValue(config.transport);
+  return `wrapped: ${kind ?? name ?? harness ?? "custom"}`;
 }
 
 type AgentsScreenProps = {
@@ -188,6 +238,7 @@ export function AgentsScreen({
   const privateAgents = agents.filter((agent) => agent.visibility === "PRIVATE");
   const drawerOpen = Boolean(selectedAgent || isCreating);
   const eventDetailsDrawerOpen = activeTab === "events" && Boolean(selectedEvent);
+  const isWrappedMode = form.mode === "WRAPPED";
   const workspaceSegments =
     workspaceData && workspaceData.path !== "."
       ? workspaceData.path.split("/").filter(Boolean)
@@ -195,11 +246,20 @@ export function AgentsScreen({
   const headerValidationMessage =
     !form.name.trim()
       ? "Name is required."
-      : !form.modelId.trim()
+      : !isWrappedMode && !form.modelId.trim()
         ? "Model is required."
         : !form.workspacePath.trim()
           ? "Workspace directory is required."
           : null;
+  const wrappedConfigValidationMessage = useMemo(() => {
+    if (form.mode !== "WRAPPED") return null;
+    try {
+      parseWrappedConfigJson(form.wrappedConfigJson);
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : "Wrapped config must be valid JSON.";
+    }
+  }, [form.mode, form.wrappedConfigJson]);
 
   useEffect(() => {
     if (isCreating) return;
@@ -227,7 +287,8 @@ export function AgentsScreen({
       assignedRunnerId: selectedAgent.assignedRunnerId ?? "",
       soulContents: selectedAgent.soulContents ?? "",
       enabledSkills: selectedAgent.enabledSkills ?? [],
-      alwaysPreloadedSkills: selectedAgent.alwaysPreloadedSkills ?? []
+      alwaysPreloadedSkills: selectedAgent.alwaysPreloadedSkills ?? [],
+      wrappedConfigJson: stringifyWrappedConfig(selectedAgent.wrappedConfig)
     });
   }, [isCreating, selectedAgent, isFormDirty]);
 
@@ -489,39 +550,48 @@ export function AgentsScreen({
   };
 
   const handleSubmit = async () => {
-    if (!form.name.trim() || !form.modelId.trim() || !form.workspacePath.trim()) {
+    if (!form.name.trim() || (!isWrappedMode && !form.modelId.trim()) || !form.workspacePath.trim()) {
       return;
     }
     setIsSubmitting(true);
     setSaveStatus(null);
     try {
-      const llmCallTimeoutMs = parseOptionalPositiveIntInput(
-        form.llmCallTimeoutMs,
-        "LLM call timeout"
-      );
-      const contextSessionGapMs = parseOptionalPositiveIntInput(
-        form.contextSessionGapMs,
-        "Context session gap"
-      );
+      const llmCallTimeoutMs = isWrappedMode
+        ? null
+        : parseOptionalPositiveIntInput(form.llmCallTimeoutMs, "LLM call timeout");
+      const contextSessionGapMs = isWrappedMode
+        ? null
+        : parseOptionalPositiveIntInput(form.contextSessionGapMs, "Context session gap");
+      const wrappedConfig =
+        isWrappedMode ? parseWrappedConfigJson(form.wrappedConfigJson) : {};
+      const modelId = isWrappedMode ? "wrapped:none" : form.modelId.trim();
+      const memoryContextMode = isWrappedMode ? "OFF" : form.memoryContextMode;
+      const emitAuditEvents = isWrappedMode ? true : form.emitAuditEvents;
+      const soulContents = isWrappedMode ? "" : form.soulContents;
+      const enabledSkills = isWrappedMode ? [] : form.enabledSkills;
+      const alwaysPreloadedSkills = isWrappedMode ? [] : form.alwaysPreloadedSkills;
+      const allowOutsideWorkspace = isWrappedMode ? false : form.allowOutsideWorkspace;
       if (isCreating) {
         const normalizedName = form.name.trim();
         await onCreateAgent({
           ...form,
           name: normalizedName,
-          modelId: form.modelId.trim(),
+          modelId,
           visibility: form.visibility,
           mode: form.mode,
-          memoryContextMode: form.memoryContextMode,
-          emitAuditEvents: form.emitAuditEvents,
+          memoryContextMode,
+          emitAuditEvents,
           llmCallTimeoutMs: llmCallTimeoutMs === null ? "" : String(llmCallTimeoutMs),
           contextSessionGapMs:
             contextSessionGapMs === null ? "" : String(contextSessionGapMs),
           workspacePath: form.workspacePath.trim(),
-          allowOutsideWorkspace: form.allowOutsideWorkspace,
+          allowOutsideWorkspace,
           assignedRunnerId: form.assignedRunnerId.trim(),
-          soulContents: form.soulContents,
-          enabledSkills: form.enabledSkills,
-          alwaysPreloadedSkills: form.alwaysPreloadedSkills
+          soulContents,
+          enabledSkills,
+          alwaysPreloadedSkills,
+          wrappedConfigJson: JSON.stringify(wrappedConfig),
+          wrappedConfig
         });
         setIsCreating(false);
         setSelectedAgentName(normalizedName);
@@ -535,20 +605,22 @@ export function AgentsScreen({
       }
       if (!selectedAgent) return;
       await onUpdateAgent(selectedAgent.name, {
-        modelId: form.modelId.trim(),
+        modelId,
         visibility: form.visibility,
         mode: form.mode,
-        memoryContextMode: form.memoryContextMode,
-        emitAuditEvents: form.emitAuditEvents,
+        memoryContextMode,
+        emitAuditEvents,
         llmCallTimeoutMs: llmCallTimeoutMs === null ? "" : String(llmCallTimeoutMs),
         contextSessionGapMs:
           contextSessionGapMs === null ? "" : String(contextSessionGapMs),
         workspacePath: form.workspacePath.trim(),
-        allowOutsideWorkspace: form.allowOutsideWorkspace,
+        allowOutsideWorkspace,
         assignedRunnerId: form.assignedRunnerId.trim(),
-        soulContents: form.soulContents,
-        enabledSkills: form.enabledSkills,
-        alwaysPreloadedSkills: form.alwaysPreloadedSkills
+        soulContents,
+        enabledSkills,
+        alwaysPreloadedSkills,
+        wrappedConfigJson: JSON.stringify(wrappedConfig),
+        wrappedConfig
       });
       setIsFormDirty(false);
       setSaveStatus({
@@ -698,7 +770,7 @@ export function AgentsScreen({
           {agent.desiredState}
         </td>
         <td className="max-w-[220px] truncate px-2 py-2 text-slate-400">
-          {agent.modelId ?? "-"}
+          {formatAgentModelLabel(agent)}
         </td>
         <td className="whitespace-nowrap px-2 py-2 text-slate-400">
           {agent.mode ?? "CLASSIC"}
@@ -818,7 +890,7 @@ export function AgentsScreen({
                 {isCreating
                   ? "Set up a new agent."
                   : selectedAgent
-                    ? `${selectedAgent.runtimeState} | ${selectedAgent.modelId ?? "No model"} | ${
+                    ? `${selectedAgent.runtimeState} | ${formatAgentModelLabel(selectedAgent)} | ${
                         selectedAgent.visibility === "PRIVATE" ? "Private" : "Public"
                       }`
                     : "Select an agent row."}
@@ -850,8 +922,9 @@ export function AgentsScreen({
                       isSubmitting ||
                       (!isCreating && !isFormDirty) ||
                       !form.name.trim() ||
-                      !form.modelId.trim() ||
-                      !form.workspacePath.trim()
+                      (!isWrappedMode && !form.modelId.trim()) ||
+                      !form.workspacePath.trim() ||
+                      Boolean(wrappedConfigValidationMessage)
                     }
                   >
                     {isSubmitting
@@ -925,7 +998,7 @@ export function AgentsScreen({
                   </div>
                 ) : (
                   <>
-                    {!isCreating && selectedAgent && (
+                    {!isWrappedMode && !isCreating && selectedAgent && (
                       <div className="rounded border border-slate-800 bg-slate-950 p-3">
                         <div className="flex items-center justify-between gap-2">
                           <div className="text-sm text-slate-300">Cross-Channel Memory</div>
@@ -942,6 +1015,7 @@ export function AgentsScreen({
                         </div>
                       </div>
                     )}
+                    {!isWrappedMode ? (
                     <div className="rounded border border-slate-800 bg-slate-950 p-3">
                       <div className="flex items-center justify-between gap-2">
                         <div className="text-sm text-slate-300">System Prompt</div>
@@ -958,6 +1032,7 @@ export function AgentsScreen({
                         </Button>
                       </div>
                     </div>
+                    ) : null}
                     <div className="space-y-1">
                       <div className="text-sm text-slate-400">Name</div>
                       <Input
@@ -971,6 +1046,7 @@ export function AgentsScreen({
                         placeholder="Agent name"
                       />
                     </div>
+                    {!isWrappedMode ? (
                     <div className="space-y-1">
                       <div className="text-sm text-slate-400">Model</div>
                       <Input
@@ -983,6 +1059,7 @@ export function AgentsScreen({
                         placeholder="openai:gpt-4o-mini"
                       />
                     </div>
+                    ) : null}
                     <div className="space-y-1">
                       <div className="text-sm text-slate-400">Visibility</div>
                       <select
@@ -1013,17 +1090,85 @@ export function AgentsScreen({
                         onChange={(e) => {
                           setIsFormDirty(true);
                           setSaveStatus(null);
+                          const nextMode =
+                            e.target.value === "WRAPPED"
+                              ? "WRAPPED"
+                              : e.target.value === "RLM_REPL"
+                                ? "RLM_REPL"
+                                : "CLASSIC";
                           setForm((prev) => ({
                             ...prev,
-                            mode: e.target.value === "RLM_REPL" ? "RLM_REPL" : "CLASSIC"
+                            mode: nextMode,
+                            modelId:
+                              nextMode === "WRAPPED" && prev.modelId === "openai:gpt-4o-mini"
+                                ? "wrapped:none"
+                                : nextMode !== "WRAPPED" && prev.modelId === "wrapped:none"
+                                  ? "openai:gpt-4o-mini"
+                                  : prev.modelId
                           }));
                         }}
                         className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
                       >
                         <option value="CLASSIC">CLASSIC</option>
                         <option value="RLM_REPL">RLM_REPL</option>
+                        <option value="WRAPPED">WRAPPED</option>
                       </select>
+                      {form.mode === "WRAPPED" ? (
+                        <p className="text-xs text-slate-500">
+                          Wrapped agents use an external runtime harness. OrgOps manages lifecycle and routing.
+                        </p>
+                      ) : null}
                     </div>
+                    {form.mode === "WRAPPED" ? (
+                      <div className="space-y-2 rounded border border-slate-800 bg-slate-950 p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <div>
+                            <div className="text-sm text-slate-300">Wrapped runtime config</div>
+                            <p className="text-xs text-slate-500">
+                              JSON object passed to the selected wrapper harness. Use `harness: "command"` for command recipes.
+                            </p>
+                          </div>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            className="px-2 py-1 text-xs"
+                            onClick={() => {
+                              setIsFormDirty(true);
+                              setSaveStatus(null);
+                              setForm((prev) => ({
+                                ...prev,
+                                wrappedConfigJson: DEFAULT_WRAPPED_CONFIG
+                              }));
+                            }}
+                          >
+                            Reset template
+                          </Button>
+                        </div>
+                        <Textarea
+                          rows={14}
+                          value={form.wrappedConfigJson}
+                          onChange={(e) => {
+                            setIsFormDirty(true);
+                            setSaveStatus(null);
+                            setForm((prev) => ({
+                              ...prev,
+                              wrappedConfigJson: e.target.value
+                            }));
+                          }}
+                          className="font-mono text-xs"
+                          placeholder={DEFAULT_WRAPPED_CONFIG}
+                        />
+                        <div
+                          className={`text-xs ${
+                            wrappedConfigValidationMessage ? "text-rose-400" : "text-slate-500"
+                          }`}
+                        >
+                          {wrappedConfigValidationMessage ??
+                            "Valid JSON. Setup/runtime commands execute on the runner host."}
+                        </div>
+                      </div>
+                    ) : null}
+                    {!isWrappedMode ? (
                     <div className="space-y-1">
                       <div className="text-sm text-slate-400">Memory context mode</div>
                       <select
@@ -1051,6 +1196,8 @@ export function AgentsScreen({
                         <option value="OFF">OFF</option>
                       </select>
                     </div>
+                    ) : null}
+                    {!isWrappedMode ? (
                     <label className="flex items-center gap-2 rounded border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-300">
                       <input
                         type="checkbox"
@@ -1066,6 +1213,7 @@ export function AgentsScreen({
                       />
                       <span>Emit observability/debug audit events for this agent</span>
                     </label>
+                    ) : null}
                     <div className="space-y-1">
                       <div className="text-sm text-slate-400">Assigned runner</div>
                       <select
@@ -1088,6 +1236,7 @@ export function AgentsScreen({
                         ))}
                       </select>
                     </div>
+                    {!isWrappedMode ? (
                     <div className="space-y-1">
                       <div className="text-sm text-slate-400">LLM call timeout (ms)</div>
                       <Input
@@ -1100,6 +1249,8 @@ export function AgentsScreen({
                         placeholder="Leave empty to use system default (10800000)"
                       />
                     </div>
+                    ) : null}
+                    {!isWrappedMode ? (
                     <div className="space-y-1">
                       <div className="text-sm text-slate-400">
                         Session gap threshold (ms)
@@ -1117,6 +1268,7 @@ export function AgentsScreen({
                         placeholder="Leave empty to use default (300000)"
                       />
                     </div>
+                    ) : null}
                     <div className="space-y-1">
                       <div className="text-sm text-slate-400">Workspace directory</div>
                       <Input
@@ -1129,6 +1281,7 @@ export function AgentsScreen({
                         placeholder=".orgops-data/workspaces/agent-name"
                       />
                     </div>
+                    {!isWrappedMode ? (
                     <label className="flex items-center gap-2 rounded border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-300">
                       <input
                         type="checkbox"
@@ -1144,6 +1297,8 @@ export function AgentsScreen({
                       />
                       <span>Allow access outside workspace (full host filesystem)</span>
                     </label>
+                    ) : null}
+                    {!isWrappedMode ? (
                     <div className="space-y-2">
                       <div className="text-sm text-slate-400">Enabled skills</div>
                       <div className="grid gap-2 sm:grid-cols-2">
@@ -1180,6 +1335,8 @@ export function AgentsScreen({
                         ))}
                       </div>
                     </div>
+                    ) : null}
+                    {!isWrappedMode ? (
                     <div className="space-y-1">
                       <div className="text-sm text-slate-400">SOUL contents</div>
                       <Textarea
@@ -1193,6 +1350,7 @@ export function AgentsScreen({
                         placeholder="System-level guidance and behavior instructions."
                       />
                     </div>
+                    ) : null}
                     {isFormDirty && (
                       <div className="text-sm text-amber-300">Unsaved changes.</div>
                     )}

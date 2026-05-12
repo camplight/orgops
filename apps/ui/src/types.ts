@@ -19,7 +19,8 @@ export type Agent = {
     | "PER_CHANNEL_CROSS_CHANNEL"
     | "FULL_CHANNEL_EVENTS"
     | "OFF";
-  mode?: "CLASSIC" | "RLM_REPL";
+  mode?: "CLASSIC" | "RLM_REPL" | "WRAPPED";
+  wrappedConfig?: Record<string, unknown>;
   visibility?: "PUBLIC" | "PRIVATE";
   ownerHumanId?: string | null;
   assignedRunnerId?: string | null;

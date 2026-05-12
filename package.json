@@ -28,6 +28,7 @@
     "@types/node": "^24.5.2",
     "concurrently": "^9.0.1",
     "dotenv-cli": "^8.0.0",
+    "openclaw": "2026.5.7",
     "tsx": "^4.20.5",
     "typescript": "^5.5.4",
     "vitest": "^3.2.4",

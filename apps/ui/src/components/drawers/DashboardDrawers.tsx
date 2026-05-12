@@ -27,7 +27,8 @@ type EventFilters = {
 type AgentForm = {
   name: string;
   modelId: string;
-  mode: "CLASSIC" | "RLM_REPL";
+  visibility: "PUBLIC" | "PRIVATE";
+  mode: "CLASSIC" | "RLM_REPL" | "WRAPPED";
   memoryContextMode: "PER_CHANNEL_CROSS_CHANNEL" | "FULL_CHANNEL_EVENTS" | "OFF";
   emitAuditEvents: boolean;
   llmCallTimeoutMs: string;
@@ -38,6 +39,8 @@ type AgentForm = {
   soulContents: string;
   enabledSkills: string[];
   alwaysPreloadedSkills: string[];
+  wrappedConfigJson: string;
+  wrappedConfig?: Record<string, unknown>;
 };
 
 type DashboardDrawersProps = {

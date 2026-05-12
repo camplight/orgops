@@ -47,7 +47,8 @@ export const agents = sqliteTable("agents", {
   enabled_skills_json: text("enabled_skills_json").notNull().default("[]"),
   always_preloaded_skills_json: text("always_preloaded_skills_json")
     .notNull()
-    .default("[]")
+    .default("[]"),
+  wrapped_config_json: text("wrapped_config_json").notNull().default("{}")
 });
 
 export const runnerNodes = sqliteTable("runner_nodes", {

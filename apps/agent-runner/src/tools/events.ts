@@ -74,15 +74,6 @@ const scheduledDeleteSchema = z.object({
   eventId: z.string().min(1),
 });
 
-const agentsSearchSchema = z.object({
-  nameContains: z.string().min(1).optional(),
-  runtimeState: z
-    .enum(["STARTING", "RUNNING", "STOPPED", "CRASHED"])
-    .optional(),
-  desiredState: z.enum(["RUNNING", "STOPPED"]).optional(),
-  limit: z.number().int().min(1).max(500).optional(),
-});
-
 const channelCreateSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
@@ -228,11 +219,6 @@ export const eventsToolDefs: ToolDef[] = [
     "events_scheduled_delete",
     "Delete a future scheduled event by id.",
     scheduledDeleteSchema,
-  ],
-  [
-    "events_agents_search",
-    "List/search agents with optional filters by name/runtime/desired state.",
-    agentsSearchSchema,
   ],
   [
     "events_channel_create",
@@ -694,32 +680,6 @@ export async function execute(
     );
     const result = await response.json();
     return { eventId: parsed.eventId, ...result };
-  }
-
-  if (tool === "events_agents_search") {
-    const parsedResult = parseToolArgs(tool, agentsSearchSchema, args);
-    if (!parsedResult.ok) return { error: parsedResult.error };
-    const parsed = parsedResult.data;
-    const response = await ctx.apiFetch("/api/agents");
-    const agents = (await response.json()) as Array<{
-      name: string;
-      runtimeState?: string;
-      desiredState?: string;
-      modelId?: string;
-      description?: string | null;
-      enabledSkills?: string[];
-      workspacePath?: string;
-      lastHeartbeatAt?: number | null;
-    }>;
-    const nameContains = parsed.nameContains?.toLowerCase();
-    const filtered = agents.filter((agent) => {
-      if (nameContains && !agent.name.toLowerCase().includes(nameContains)) return false;
-      if (parsed.runtimeState && agent.runtimeState !== parsed.runtimeState) return false;
-      if (parsed.desiredState && agent.desiredState !== parsed.desiredState) return false;
-      return true;
-    });
-    const limited = parsed.limit ? filtered.slice(0, parsed.limit) : filtered;
-    return { agents: limited, totalMatched: filtered.length, filters: parsed };
   }
 
   if (tool === "events_channel_create") {

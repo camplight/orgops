@@ -10,6 +10,8 @@ export function shouldHandleEventForAgent(agent: Agent, event: Event): boolean {
   if (event.type?.startsWith("agent.control.")) return false;
   // Turn lifecycle events are runner bookkeeping, not actionable input.
   if (event.type?.startsWith("agent.turn.")) return false;
+  // Wrapped runtime lifecycle events are observable bookkeeping.
+  if (event.type?.startsWith("wrapper.")) return false;
   // Explicit no-op events are observable but should never trigger work.
   if (event.type === "noop") return false;
   const payloadTargetAgentName = getPayloadTargetAgentName(event.payload);

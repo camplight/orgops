@@ -488,6 +488,13 @@ type SecretInputSpec = {
   placeholder: string;
 };
 
+type MessageSegment =
+  | { kind: "markdown"; text: string }
+  | { kind: "secret-input"; spec: SecretInputSpec };
+
+const SECRET_INPUT_TAG_PATTERN =
+  /<orgops-secret-input\b[^>]*(?:\/>|>\s*<\/orgops-secret-input>)/gi;
+
 function readSecretInputAttribute(node: Element, name: string, fallback: string, maxLength = 160): string {
   const value = node.getAttribute(name);
   if (!value) return fallback;
@@ -523,6 +530,31 @@ function parseSecretInputSpec(messageText: string): SecretInputSpec | null {
     description: node.getAttribute("description")?.trim().slice(0, 280) || null,
     placeholder: readSecretInputAttribute(node, "placeholder", "Enter secret value", 120)
   };
+}
+
+function parseMessageSegments(messageText: string): MessageSegment[] {
+  const segments: MessageSegment[] = [];
+  let cursor = 0;
+  for (const match of messageText.matchAll(SECRET_INPUT_TAG_PATTERN)) {
+    const matchedText = match[0];
+    const index = match.index ?? 0;
+    if (index > cursor) {
+      const text = messageText.slice(cursor, index);
+      if (text.trim()) segments.push({ kind: "markdown", text });
+    }
+    const spec = parseSecretInputSpec(matchedText);
+    if (spec) {
+      segments.push({ kind: "secret-input", spec });
+    } else if (matchedText.trim()) {
+      segments.push({ kind: "markdown", text: matchedText });
+    }
+    cursor = index + matchedText.length;
+  }
+  if (cursor < messageText.length) {
+    const text = messageText.slice(cursor);
+    if (text.trim()) segments.push({ kind: "markdown", text });
+  }
+  return segments.length > 0 ? segments : [{ kind: "markdown", text: messageText }];
 }
 
 function SecretInputCard({ spec }: { spec: SecretInputSpec }) {
@@ -1026,7 +1058,10 @@ export function ChatScreen({
                 const messageAttachments = parseMessageAttachments(event.payload);
                 const role = getMessageRole(event);
                 const messageText = (event.payload as { text?: string })?.text ?? "";
-                const secretInputSpec = role === "agent" ? parseSecretInputSpec(messageText) : null;
+                const messageSegments =
+                  role === "agent"
+                    ? parseMessageSegments(messageText)
+                    : [{ kind: "markdown" as const, text: messageText }];
                 const messageIntent = role === "agent" ? parseMessageIntent(event.payload) : null;
                 return (
                   <div
@@ -1068,11 +1103,21 @@ export function ChatScreen({
                           </div>
                         ) : null}
                         <div className="text-left text-slate-200">
-                          {secretInputSpec ? (
-                            <SecretInputCard spec={secretInputSpec} />
-                          ) : (
-                            <MessageMarkdown text={messageText} />
-                          )}
+                          <div className="space-y-3">
+                            {messageSegments.map((segment, index) =>
+                              segment.kind === "secret-input" ? (
+                                <SecretInputCard
+                                  key={`${event.id}-secret-input-${index}`}
+                                  spec={segment.spec}
+                                />
+                              ) : (
+                                <MessageMarkdown
+                                  key={`${event.id}-markdown-${index}`}
+                                  text={segment.text}
+                                />
+                              )
+                            )}
+                          </div>
                           {messageAttachments.length > 0 && (
                             <div className="mt-2 rounded border border-slate-700/60 bg-slate-950/60 p-2 text-xs text-slate-300">
                               <div className="mb-1 text-[11px] uppercase tracking-wide text-slate-500">

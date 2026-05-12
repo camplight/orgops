@@ -124,6 +124,87 @@ describe("api app", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("persists wrapped agent configuration as editable JSON", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const createRes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "wrapped-agent",
+        mode: "WRAPPED",
+        modelId: "wrapped:none",
+        memoryContextMode: "PER_CHANNEL_CROSS_CHANNEL",
+        allowOutsideWorkspace: true,
+        workspacePath: ".orgops-data/workspaces/wrapped-agent",
+        wrappedConfig: {
+          kind: "openclaw",
+          runtime: { command: "openclaw agent --local --json" },
+        },
+      }),
+    });
+    expect(createRes.status).toBe(201);
+
+    const getRes = await app.request("http://localhost/api/agents/wrapped-agent", {
+      headers: { cookie },
+    });
+    expect(getRes.status).toBe(200);
+    const body = (await getRes.json()) as {
+      mode?: string;
+      memoryContextMode?: string;
+      allowOutsideWorkspace?: boolean;
+      wrappedConfig?: { kind?: string; runtime?: { command?: string } };
+    };
+    expect(body.mode).toBe("WRAPPED");
+    expect(body.memoryContextMode).toBe("OFF");
+    expect(body.allowOutsideWorkspace).toBe(false);
+    expect(body.wrappedConfig?.kind).toBe("openclaw");
+
+    const patchRes = await app.request("http://localhost/api/agents/wrapped-agent", {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        memoryContextMode: "FULL_CHANNEL_EVENTS",
+        allowOutsideWorkspace: true,
+        wrappedConfig: JSON.stringify({
+          kind: "custom",
+          runtime: { command: "node ./agent.js" },
+        }),
+      }),
+    });
+    expect(patchRes.status).toBe(200);
+
+    const updatedRes = await app.request("http://localhost/api/agents/wrapped-agent", {
+      headers: { cookie },
+    });
+    const updated = (await updatedRes.json()) as {
+      memoryContextMode?: string;
+      allowOutsideWorkspace?: boolean;
+      wrappedConfig?: { kind?: string; runtime?: { command?: string } };
+    };
+    expect(updated.memoryContextMode).toBe("OFF");
+    expect(updated.allowOutsideWorkspace).toBe(false);
+    expect(updated.wrappedConfig?.kind).toBe("custom");
+    expect(updated.wrappedConfig?.runtime?.command).toBe("node ./agent.js");
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("de-registers runner and clears assigned agents", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");
@@ -2877,6 +2958,52 @@ describe("api app", () => {
 
     expect(existsSync(workspacePath)).toBe(true);
     expect(existsSync(testFilePath)).toBe(false);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("rejects root-level workspace cleanup paths", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const createAgentRes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "agent-root-cleanup",
+        modelId: "openai:gpt-4o-mini",
+        workspacePath: "/agent-root-cleanup",
+        soulContents: "",
+      }),
+    });
+    expect(createAgentRes.status).toBe(201);
+
+    const cleanupRes = await app.request(
+      "http://localhost/api/agents/agent-root-cleanup/cleanup-workspace",
+      {
+        method: "POST",
+        headers: { cookie },
+      },
+    );
+    expect(cleanupRes.status).toBe(400);
+    await expect(cleanupRes.json()).resolves.toEqual({
+      error: "Refusing to clean unsafe workspace path",
+    });
 
     rmSync(dataDir, { recursive: true, force: true });
   });

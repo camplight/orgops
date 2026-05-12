@@ -17,6 +17,7 @@ import { shouldHandleEventForAgent } from "./event-routing";
 import { getReservedEventTypeError } from "./event-type-guard";
 import { buildRunnerGuidance } from "./prompt";
 import { runRlmEventInChild } from "./rlm-process";
+import { runWrappedAgentTurn } from "./wrapped-runtime";
 import {
   buildChannelRecentDeltaSystemMessage,
   buildSystemMemoryMessage,
@@ -412,6 +413,22 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
     };
 
     await emitTurnEvent("agent.turn.started", {});
+    if ((agent.mode ?? "CLASSIC") === "WRAPPED") {
+      await runWrappedAgentTurn(
+        {
+          projectRoot: input.projectRoot,
+          api: {
+            apiFetch: input.api.apiFetch,
+            emitEvent: input.api.emitEvent,
+            getPackageSecretsEnv: input.api.getPackageSecretsEnv,
+          },
+        },
+        agent,
+        events,
+      );
+      await emitTurnEvent("agent.turn.completed", { runtime: "wrapped" });
+      return;
+    }
     const injectionEnv = await input.api.getPackageSecretsEnv(agent.name, channelId);
     const channelRecord = await input.api.getChannelRecord(channelId);
     const soul = typeof agent.soulContents === "string" ? agent.soulContents : "";

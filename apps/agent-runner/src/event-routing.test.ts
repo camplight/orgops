@@ -47,6 +47,12 @@ describe("event routing", () => {
     expect(
       shouldHandleEventForAgent(
         agent,
+        makeEvent({ type: "wrapper.setup.completed", source: "system:runner:wrapper" }),
+      ),
+    ).toBe(false);
+    expect(
+      shouldHandleEventForAgent(
+        agent,
         makeEvent({ type: "noop", source: "agent:worker-a" }),
       ),
     ).toBe(false);

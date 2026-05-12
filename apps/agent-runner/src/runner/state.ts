@@ -3,6 +3,7 @@ import type { IntentWatchRecord } from "../intent-watchdog";
 export function createRunnerState() {
   const heartbeats = new Map<string, number>();
   const bootstrappedAgents = new Set<string>();
+  const bootstrappedAgentKeys = new Map<string, string>();
   const lifecycleChannels = new Map<string, string>();
   const recentTurnWindows = new Map<
     string,
@@ -15,6 +16,7 @@ export function createRunnerState() {
   return {
     heartbeats,
     bootstrappedAgents,
+    bootstrappedAgentKeys,
     lifecycleChannels,
     recentTurnWindows,
     intentWatch,

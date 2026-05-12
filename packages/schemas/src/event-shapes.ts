@@ -249,6 +249,84 @@ const coreEventShapes: EventShapeDefinition[] = [
     }),
   },
   {
+    type: "wrapper.lifecycle.started",
+    description: "Wrapped runtime lifecycle started for an agent.",
+    source: "core",
+    payloadSchema: z
+      .object({
+        targetAgentName: z.string().min(1),
+        kind: z.string().min(1).optional(),
+        text: z.string().optional(),
+      })
+      .passthrough(),
+  },
+  {
+    type: "wrapper.setup.started",
+    description: "Wrapped runtime setup command started.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "wrapper.setup.skipped",
+    description: "Wrapped runtime setup was not needed.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "wrapper.setup.completed",
+    description: "Wrapped runtime setup completed successfully.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "wrapper.setup.failed",
+    description: "Wrapped runtime setup failed.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "wrapper.sidecar.started",
+    description: "Wrapped runtime sidecar process started.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "wrapper.sidecar.skipped",
+    description: "Wrapped runtime sidecar was already healthy or not needed.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "wrapper.sidecar.exited",
+    description: "Wrapped runtime sidecar process exited.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "wrapper.sidecar.failed",
+    description: "Wrapped runtime sidecar process failed to start.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "wrapper.turn.started",
+    description: "Wrapped runtime command started for a turn.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "wrapper.turn.completed",
+    description: "Wrapped runtime command completed for a turn.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "wrapper.turn.failed",
+    description: "Wrapped runtime command failed for a turn.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
     type: "channel.event.created",
     description: "Inbound external channel event envelope.",
     source: "core",

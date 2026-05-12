@@ -6,7 +6,7 @@ import {
   rmSync,
   statSync
 } from "node:fs";
-import { basename, extname, relative, resolve, sep } from "node:path";
+import { basename, dirname, extname, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 
 import {
@@ -107,6 +107,15 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
   function isWithinDirectory(targetPath: string, basePath: string) {
     if (targetPath === basePath) return true;
     return targetPath.startsWith(`${basePath}${sep}`);
+  }
+
+  function isUnsafeWorkspaceCleanupPath(workspacePath: string) {
+    const rootPath = resolve("/");
+    return (
+      workspacePath === rootPath ||
+      workspacePath === resolve(PROJECT_ROOT) ||
+      dirname(workspacePath) === rootPath
+    );
   }
 
   function resolveAgentWorkspacePath(agentName: string) {
@@ -234,6 +243,46 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     }
   }
 
+  function parseWrappedConfigInput(
+    value: unknown,
+    fallback: Record<string, unknown> = {}
+  ): { ok: true; value: Record<string, unknown> } | { ok: false; error: string } {
+    if (value === undefined || value === null) return { ok: true, value: fallback };
+    if (typeof value === "string") {
+      try {
+        const parsed = JSON.parse(value);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          return { ok: true, value: parsed as Record<string, unknown> };
+        }
+      } catch {
+        return { ok: false, error: "wrappedConfig must be valid JSON when provided as a string" };
+      }
+      return { ok: false, error: "wrappedConfig must be a JSON object" };
+    }
+    if (typeof value === "object" && !Array.isArray(value)) {
+      return { ok: true, value: value as Record<string, unknown> };
+    }
+    return { ok: false, error: "wrappedConfig must be an object" };
+  }
+
+  function normalizeAgentMode(value: unknown, fallback = "CLASSIC") {
+    const normalized =
+      typeof value === "string" && value.trim() ? value.trim().toUpperCase() : fallback;
+    return normalized === "WRAPPED" || normalized === "RLM_REPL" ? normalized : "CLASSIC";
+  }
+
+  function getAgentMemoryContextMode(row: { mode?: string | null; memory_context_mode?: string | null }) {
+    return normalizeAgentMode(row.mode) === "WRAPPED"
+      ? "OFF"
+      : row.memory_context_mode ?? "PER_CHANNEL_CROSS_CHANNEL";
+  }
+
+  function getAgentAllowOutsideWorkspace(row: { mode?: string | null; allow_outside_workspace?: number | null }) {
+    return normalizeAgentMode(row.mode) === "WRAPPED"
+      ? false
+      : Boolean(row.allow_outside_workspace);
+  }
+
   app.get("/api/agents", (c) => {
     const url = new URL(c.req.url);
     const assignedRunnerId = (url.searchParams.get("assignedRunnerId") ?? "").trim();
@@ -267,13 +316,14 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         enabledSkills: parseStringArraySafe(row.enabled_skills_json),
         alwaysPreloadedSkills: parseStringArraySafe(row.always_preloaded_skills_json),
         workspacePath: row.workspace_path,
-        allowOutsideWorkspace: Boolean(row.allow_outside_workspace),
+        allowOutsideWorkspace: getAgentAllowOutsideWorkspace(row),
         llmCallTimeoutMs: row.llm_call_timeout_ms ?? null,
         classicMaxModelSteps: row.classic_max_model_steps ?? null,
         contextSessionGapMs: row.context_session_gap_ms ?? null,
         emitAuditEvents: Boolean(row.emit_audit_events ?? 1),
-        memoryContextMode: row.memory_context_mode ?? "PER_CHANNEL_CROSS_CHANNEL",
+        memoryContextMode: getAgentMemoryContextMode(row),
         mode: row.mode ?? "CLASSIC",
+        wrappedConfig: parseJsonRecordSafe(row.wrapped_config_json) ?? {},
         assignedRunnerId: row.assigned_runner_id ?? null,
         desiredState: row.desired_state,
         runtimeState: row.runtime_state,
@@ -320,7 +370,8 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     const sanitizedAlwaysPreloadedSkills = enabledSkills.filter((name: string) =>
       alwaysPreloadedSkillsSet.has(name)
     );
-    const allowOutsideWorkspace = Boolean(body.allowOutsideWorkspace);
+    const mode = normalizeAgentMode(body.mode);
+    const allowOutsideWorkspace = mode === "WRAPPED" ? false : Boolean(body.allowOutsideWorkspace);
     const llmCallTimeoutParsed = parseOptionalPositiveInt(body.llmCallTimeoutMs);
     if (!llmCallTimeoutParsed.ok) {
       return jsonResponse(c, { error: `llmCallTimeoutMs ${llmCallTimeoutParsed.error}` }, 400);
@@ -347,6 +398,10 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     );
     if (!memoryContextModeParsed.ok) {
       return jsonResponse(c, { error: memoryContextModeParsed.error }, 400);
+    }
+    const wrappedConfigParsed = parseWrappedConfigInput(body.wrappedConfig);
+    if (!wrappedConfigParsed.ok) {
+      return jsonResponse(c, { error: wrappedConfigParsed.error }, 400);
     }
     const emitAuditEvents =
       body.emitAuditEvents === undefined ? true : Boolean(body.emitAuditEvents);
@@ -383,11 +438,9 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         classic_max_model_steps: classicMaxModelStepsParsed.value,
         context_session_gap_ms: contextSessionGapParsed.value,
         emit_audit_events: emitAuditEvents ? 1 : 0,
-        memory_context_mode: memoryContextModeParsed.value,
-        mode:
-          typeof body.mode === "string" && body.mode.trim()
-            ? body.mode.trim()
-            : "CLASSIC",
+        memory_context_mode: mode === "WRAPPED" ? "OFF" : memoryContextModeParsed.value,
+        mode,
+        wrapped_config_json: JSON.stringify(wrappedConfigParsed.value),
         visibility,
         owner_human_id: ownerHumanId,
         assigned_runner_id: assignedRunnerId,
@@ -423,13 +476,14 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       enabledSkills: parseStringArraySafe(row.enabled_skills_json),
       alwaysPreloadedSkills: parseStringArraySafe(row.always_preloaded_skills_json),
       workspacePath: row.workspace_path,
-      allowOutsideWorkspace: Boolean(row.allow_outside_workspace),
+      allowOutsideWorkspace: getAgentAllowOutsideWorkspace(row),
       llmCallTimeoutMs: row.llm_call_timeout_ms ?? null,
       classicMaxModelSteps: row.classic_max_model_steps ?? null,
       contextSessionGapMs: row.context_session_gap_ms ?? null,
       emitAuditEvents: Boolean(row.emit_audit_events ?? 1),
-      memoryContextMode: row.memory_context_mode ?? "PER_CHANNEL_CROSS_CHANNEL",
+      memoryContextMode: getAgentMemoryContextMode(row),
       mode: row.mode ?? "CLASSIC",
+      wrappedConfig: parseJsonRecordSafe(row.wrapped_config_json) ?? {},
       assignedRunnerId: row.assigned_runner_id ?? null,
       desiredState: row.desired_state,
       runtimeState: row.runtime_state,
@@ -522,6 +576,15 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     if (memoryContextModeParsed && !memoryContextModeParsed.ok) {
       return jsonResponse(c, { error: memoryContextModeParsed.error }, 400);
     }
+    const existingWrappedConfig = parseJsonRecordSafe(existing.wrapped_config_json) ?? {};
+    const wrappedConfigParsed =
+      body.wrappedConfig !== undefined
+        ? parseWrappedConfigInput(body.wrappedConfig, existingWrappedConfig)
+        : null;
+    if (wrappedConfigParsed && !wrappedConfigParsed.ok) {
+      return jsonResponse(c, { error: wrappedConfigParsed.error }, 400);
+    }
+    const mode = normalizeAgentMode(body.mode, existing.mode ?? "CLASSIC");
     const emitAuditEvents =
       body.emitAuditEvents !== undefined ? (body.emitAuditEvents ? 1 : 0) : null;
     const assignedRunnerId =
@@ -555,7 +618,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
             : existing.soul_contents,
         workspace_path: workspacePath,
         allow_outside_workspace:
-          allowOutsideWorkspace ?? existing.allow_outside_workspace,
+          mode === "WRAPPED" ? 0 : allowOutsideWorkspace ?? existing.allow_outside_workspace,
         llm_call_timeout_ms:
           llmCallTimeoutParsed ? llmCallTimeoutParsed.value : existing.llm_call_timeout_ms,
         classic_max_model_steps:
@@ -568,13 +631,15 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
             : existing.context_session_gap_ms,
         emit_audit_events: emitAuditEvents ?? existing.emit_audit_events,
         memory_context_mode:
-          memoryContextModeParsed
-            ? memoryContextModeParsed.value
-            : existing.memory_context_mode,
-        mode:
-          typeof body.mode === "string" && body.mode.trim()
-            ? body.mode.trim()
-            : existing.mode,
+          mode === "WRAPPED"
+            ? "OFF"
+            : memoryContextModeParsed
+              ? memoryContextModeParsed.value
+              : existing.memory_context_mode,
+        mode,
+        wrapped_config_json: wrappedConfigParsed
+          ? JSON.stringify(wrappedConfigParsed.value)
+          : existing.wrapped_config_json,
         visibility:
           visibility !== undefined
             ? visibility
@@ -731,7 +796,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       }
 
       const resolvedWorkspacePath = resolveWorkspacePath(workspacePath);
-      if (resolvedWorkspacePath === resolve("/") || resolvedWorkspacePath === resolve(PROJECT_ROOT)) {
+      if (isUnsafeWorkspaceCleanupPath(resolvedWorkspacePath)) {
         return jsonResponse(c, { error: "Refusing to clean unsafe workspace path" }, 400);
       }
 

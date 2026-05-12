@@ -16,7 +16,8 @@ export type Agent = {
     | "PER_CHANNEL_CROSS_CHANNEL"
     | "FULL_CHANNEL_EVENTS"
     | "OFF";
-  mode?: "CLASSIC" | "RLM_REPL";
+  mode?: "CLASSIC" | "RLM_REPL" | "WRAPPED";
+  wrappedConfig?: Record<string, unknown>;
   modelId: string;
   desiredState: string;
   runtimeState: string;

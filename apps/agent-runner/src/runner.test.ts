@@ -42,6 +42,8 @@ describe("agent runner", () => {
     expect(Object.keys(tools)).toContain("memory_cross_full_get");
     expect(Object.keys(tools)).toContain("memory_channel_full_update");
     expect(Object.keys(tools)).toContain("memory_cross_recent_update");
+    expect(Object.keys(tools)).toContain("agents_create");
+    expect(Object.keys(tools)).toContain("agents_search");
   });
 
   it("builds model messages from all channel events", async () => {
@@ -1977,7 +1979,7 @@ describe("agent runner", () => {
     expect(first.payloadExample).toEqual({ text: "hi" });
   });
 
-  it("lists/filter agents via events_agents_search", async () => {
+  it("lists/filter agents via agents_search", async () => {
     const requests: Array<string> = [];
     const ctx = {
       agent: {
@@ -2016,13 +2018,76 @@ describe("agent runner", () => {
       emitAudit: async () => {},
     };
 
-    const result = (await executeTool(ctx, "events_agents_search", {
+    const result = (await executeTool(ctx, "agents_search", {
       runtimeState: "RUNNING",
     })) as { agents: Array<{ name: string }>; totalMatched: number };
 
     expect(requests).toEqual(["/api/agents"]);
     expect(result.totalMatched).toBe(1);
     expect(result.agents[0]?.name).toBe("worker-a");
+  });
+
+  it("creates agents via agents_create with runner and channel defaults", async () => {
+    const requests: Array<{ path: string; init?: RequestInit; body?: any }> = [];
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        soulContents: "role prompt",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+        assignedRunnerId: "runner-1",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async (path: string, init?: RequestInit) => {
+        const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+        requests.push({ path, init, body });
+        return new Response(JSON.stringify(path === "/api/agents" ? { id: "agent-id" } : { ok: true }), {
+          status: path === "/api/agents" ? 201 : 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+    };
+
+    const result = (await executeTool(ctx, "agents_create", {
+      name: "worker-c",
+      description: "Does delegated work",
+      joinCurrentChannel: true,
+    })) as { ok?: boolean; agentName?: string; joinedChannel?: { channelId?: string } };
+
+    expect(result.ok).toBe(true);
+    expect(result.agentName).toBe("worker-c");
+    expect(result.joinedChannel?.channelId).toBe("chan-1");
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.path).toBe("/api/agents");
+    expect(requests[0]?.body).toMatchObject({
+      name: "worker-c",
+      modelId: "openai:gpt-4o-mini",
+      workspacePath: ".orgops-data/workspaces/worker-c",
+      assignedRunnerId: "runner-1",
+      mode: "CLASSIC",
+      runtimeState: "STOPPED",
+      desiredState: "RUNNING",
+      description: "Does delegated work",
+    });
+    expect(requests[1]?.path).toBe("/api/channels/chan-1/subscribe");
+    expect(requests[1]?.body).toEqual({
+      subscriberType: "AGENT",
+      subscriberId: "worker-c",
+    });
   });
 
   it("lists channels via events_channels_list", async () => {

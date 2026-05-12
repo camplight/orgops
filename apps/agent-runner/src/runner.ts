@@ -24,6 +24,11 @@ import {
   resolveAgentLlmCallTimeoutMs,
   resolveAgentMemoryContextMode,
 } from "./turn-executor";
+import {
+  ensureWrappedAgentReady,
+  stopAllWrappedRuntimes,
+  stopWrappedAgentRuntime,
+} from "./wrapped-runtime";
 import { buildModelMessages, selectRecentDeltaEventsForPrompt } from "./prompt-composer";
 import type { Agent, Event } from "./types";
 
@@ -174,8 +179,12 @@ async function pollAgent(agent: Agent) {
   if (agent.desiredState !== "RUNNING") {
     state.heartbeats.delete(agent.name);
     state.bootstrappedAgents.delete(agent.name);
+    state.bootstrappedAgentKeys.delete(agent.name);
     clearAgentIntentWatch(state.intentWatch, agent.name);
     maintenanceLoop.clearAgent(agent.name);
+    if ((agent.mode ?? "CLASSIC") === "WRAPPED") {
+      await stopWrappedAgentRuntime(agent.name);
+    }
     if (agent.runtimeState !== "STOPPED") {
       await api.patchAgentState(agent.name, { runtimeState: "STOPPED" });
     }
@@ -192,15 +201,41 @@ async function pollAgent(agent: Agent) {
     });
     state.heartbeats.set(agent.name, now);
   }
-  if (!state.bootstrappedAgents.has(agent.name)) {
+  const bootstrapKey =
+    (agent.mode ?? "CLASSIC") === "WRAPPED"
+      ? JSON.stringify(agent.wrappedConfig ?? {})
+      : "classic";
+  if (
+    !state.bootstrappedAgents.has(agent.name) ||
+    state.bootstrappedAgentKeys.get(agent.name) !== bootstrapKey
+  ) {
     try {
-      await api.emitStartupEvent(agent);
+      if ((agent.mode ?? "CLASSIC") === "WRAPPED") {
+        await stopWrappedAgentRuntime(agent.name);
+        await ensureWrappedAgentReady(
+          {
+            projectRoot: PROJECT_ROOT,
+            api: {
+              apiFetch: api.apiFetch,
+              emitEvent: api.emitEvent,
+              getPackageSecretsEnv: api.getPackageSecretsEnv,
+            },
+          },
+          agent,
+        );
+      } else {
+        await api.emitStartupEvent(agent);
+      }
       state.bootstrappedAgents.add(agent.name);
+      state.bootstrappedAgentKeys.set(agent.name, bootstrapKey);
     } catch (error) {
       console.error(`failed to emit startup event for ${agent.name}`, error);
     }
   }
-  if (resolveAgentMemoryContextMode(agent) === "PER_CHANNEL_CROSS_CHANNEL") {
+  if (
+    (agent.mode ?? "CLASSIC") !== "WRAPPED" &&
+    resolveAgentMemoryContextMode(agent) === "PER_CHANNEL_CROSS_CHANNEL"
+  ) {
     maintenanceLoop.schedule(agent);
   }
   const channels = await api.listChannels();
@@ -279,6 +314,19 @@ async function pollAgent(agent: Agent) {
   }
 }
 
+async function reconcileRemovedAgents(activeAgents: Agent[]) {
+  const activeNames = new Set(activeAgents.map((agent) => agent.name));
+  for (const agentName of [...state.bootstrappedAgents]) {
+    if (activeNames.has(agentName)) continue;
+    state.heartbeats.delete(agentName);
+    state.bootstrappedAgents.delete(agentName);
+    state.bootstrappedAgentKeys.delete(agentName);
+    clearAgentIntentWatch(state.intentWatch, agentName);
+    maintenanceLoop.clearAgent(agentName);
+    await stopWrappedAgentRuntime(agentName);
+  }
+}
+
 function summarizeError(error: unknown) {
   const err = error as Error | undefined;
   return {
@@ -318,6 +366,7 @@ export async function loop() {
     try {
       await api.sendRunnerHeartbeat();
       const agents = await api.listAgents();
+      await reconcileRemovedAgents(agents);
       const results = await Promise.allSettled(agents.map(async (agent) => pollAgent(agent)));
       for (const result of results) {
         if (result.status === "rejected") {
@@ -334,6 +383,12 @@ export async function loop() {
   process.off("SIGINT", onSigint);
   process.off("SIGTERM", onSigterm);
   await maintenanceLoop.awaitInFlight();
+  const wrappedShutdownSummary = await stopAllWrappedRuntimes();
+  if (wrappedShutdownSummary.stopped > 0) {
+    console.log(
+      `runner shutdown (${shutdownSignal ?? "STOP"}): stopped ${wrappedShutdownSummary.stopped} wrapped sidecar(s)`,
+    );
+  }
   stopAllRlmChildren();
   const processShutdownSummary = await stopAllRunningProcesses();
   if (processShutdownSummary.processCount > 0) {
