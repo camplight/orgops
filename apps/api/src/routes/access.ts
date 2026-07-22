@@ -216,6 +216,22 @@ export function createAccessControl(deps: AccessDeps) {
     return Boolean(agent.ownerHumanId && user.id && agent.ownerHumanId === user.id);
   }
 
+  function canSignOffGuardrail(user: RequestUser | undefined): boolean {
+    throw new Error(
+      `canSignOffGuardrail not implemented (user=${user?.username ?? "unknown"}) — must check ` +
+        "membership in the existing governance team (teams/team_memberships), reusing " +
+        "ticket-classification's canOverrideClassification idiom exactly (US-12 AC4).",
+    );
+  }
+
+  function canManageTrelloIngestion(user: RequestUser | undefined): boolean {
+    throw new Error(
+      `canManageTrelloIngestion not implemented (user=${user?.username ?? "unknown"}) — same ` +
+        "governance-team check as canSignOffGuardrail, reused for board-config and allowlist " +
+        "CRUD (US-11 AC1).",
+    );
+  }
+
   return {
     canViewChannel,
     canManageChannel,
@@ -223,6 +239,8 @@ export function createAccessControl(deps: AccessDeps) {
     listVisibleChannelIds,
     canViewAgent,
     canManageAgent,
+    canSignOffGuardrail,
+    canManageTrelloIngestion,
   };
 }
 

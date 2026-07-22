@@ -1,0 +1,80 @@
+name: CI
+
+# Closes the pre-existing gap: before this workflow, .github/workflows/ only contained
+# release-main.yml (opscli binary release) — no test/lint gate ran on any push or PR. See
+# docs/feature/nwave-ticket-execution-engine/devops/ci-cd-pipeline.md "The Gap This Closes" for
+# full rationale. Additive to release-main.yml, not a replacement — that workflow is unmodified.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check all workspaces
+        run: npm run lint
+
+      - name: Unit + component tests
+        run: npm test
+
+      - name: Migration dry-run (fresh SQLite, catches broken/ordering-dependent migrations)
+        run: npm run ci:check-migrations
+
+      - name: Secrets scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # NOTE: gitleaks-action exits non-zero (fails this step, and therefore the job) when a
+        # leak is detected — intentionally NOT set to continue-on-error. A detected secret must
+        # block the pipeline, not merely warn.
+
+      - name: Dependency vulnerability scan (SCA)
+        run: npm audit --audit-level=high
+
+      - name: Architecture boundary check (dependency-cruiser)
+        run: npx --yes dependency-cruiser apps/agent-runner/src --config .dependency-cruiser.cjs
+        # Config now exists at .dependency-cruiser.cjs (this DEVOPS pass) — this step is
+        # blocking, not a warning-only placeholder. Encodes ADR-0001/0004/0006/0008/0012's
+        # module-boundary rules across all four nwave-* modules.
+
+      - name: Build UI
+        run: npm run build
+
+  external-cli-contract-smoke-tests:
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+
+      - name: nWave CLI invocation contract smoke test
+        # Runs in any workspace that defines this script once implemented during DELIVER
+        # (nwave-invocation-engine's own brief.md flags this as the highest-risk boundary in the
+        # whole feature — the headless-invocation SPIKE was explicitly skipped). --if-present
+        # means this step is a no-op, not a CI failure, until the script exists — it activates
+        # automatically the moment software-crafter adds it, with no further CI change needed.
+        run: npm run test:contract:nwave-cli --workspaces --if-present
+
+      - name: trello-cli invocation contract smoke test
+        # Same guard pattern, for multi-source-ingestion-governance's Release 2 Trello CLI
+        # contract (ADR-0008's async-invocation error contract).
+        run: npm run test:contract:trello-cli --workspaces --if-present
