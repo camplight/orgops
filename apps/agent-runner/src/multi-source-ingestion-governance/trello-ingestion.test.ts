@@ -113,6 +113,84 @@ describe("US-11: Trello board ingestion behaves like the native ticket form", ()
     expect(boards.map((entry) => entry.boardId)).toContain("fenwick-product-backlog");
   });
 
+  it("[@US-11] a newly registered board's poll status is observable as not-yet-polled", async () => {
+    const app = createRealApiApp();
+    const cookie = await loginAsAdmin(app);
+    const request = authedRequest(app, cookie);
+
+    // Given a governance-team member has not yet registered any board
+    // When they register "fenwick-product-backlog" for ingestion
+    await request("/api/trello-ingestion/boards", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        boardId: "fenwick-product-backlog",
+        defaultSubmitterHumanId: "maria-santos",
+      }),
+    });
+
+    // Then GET exposes lastPolledAt/lastPollStatus/lastPollError as the queryable
+    // sync-failure observability surface (US-11 domain example 3), all still unset
+    const listRes = await request("/api/trello-ingestion/boards");
+    const boards = (await listRes.json()) as Array<{
+      boardId: string;
+      lastPolledAt: number | null;
+      lastPollStatus: string | null;
+      lastPollError: string | null;
+    }>;
+    const board = boards.find((entry) => entry.boardId === "fenwick-product-backlog");
+    expect(board).toMatchObject({
+      lastPolledAt: null,
+      lastPollStatus: null,
+      lastPollError: null,
+    });
+  });
+
+  it("[@US-11] a governance-team member disables an existing board's ingestion via PATCH", async () => {
+    const app = createRealApiApp();
+    const cookie = await loginAsAdmin(app);
+    const request = authedRequest(app, cookie);
+
+    // Given a board is already registered for ingestion
+    await request("/api/trello-ingestion/boards", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        boardId: "fenwick-product-backlog",
+        defaultSubmitterHumanId: "maria-santos",
+      }),
+    });
+
+    // When a governance-team member disables it
+    const patchRes = await request("/api/trello-ingestion/boards/fenwick-product-backlog", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled: false }),
+    });
+
+    // Then the update is accepted and reflected in the board's config
+    expect(patchRes.status).toBe(200);
+    const patched = (await patchRes.json()) as { enabled: boolean };
+    expect(patched.enabled).toBe(false);
+
+    const listRes = await request("/api/trello-ingestion/boards");
+    const boards = (await listRes.json()) as Array<{ boardId: string; enabled: boolean }>;
+    const board = boards.find((entry) => entry.boardId === "fenwick-product-backlog");
+    expect(board?.enabled).toBe(false);
+  });
+
+  // Note: a scenario asserting 403 for an authenticated-but-non-governance human is
+  // intentionally not added here. This codebase's only human fixture today is the seeded
+  // admin (acceptance-test-support.ts's loginAsAdmin), and admin is now a real governance-team
+  // member (the fixture this DISTILL wave's DWD-03 stand-in convention was extended to require
+  // for this step). Adding a second, logged-in-but-non-governance human would require a further
+  // acceptance-test-support.ts extension (a second seeded credential set) beyond the small,
+  // justified addition already made for this step. `canManageTrelloIngestion`'s false-path
+  // (isHumanUser but not a governance member) is still exercised indirectly: the "no session"
+  // scenario below proves the route is gated at all, and `canManageAgent`'s equivalent
+  // ownership-based false-path is already covered by pre-existing agents.ts tests using this
+  // same access-control shape.
+
   it("[@US-11] moving an existing card between lists does not create a duplicate ticket", async () => {
     const app = createRealApiApp();
     const governanceRepository = createHttpGovernanceRepository({
