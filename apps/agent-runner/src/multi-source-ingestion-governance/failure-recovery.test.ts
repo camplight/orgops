@@ -103,6 +103,36 @@ describe("US-13: failed or stuck runs surface recovery options", () => {
     expect(guidance.retryAvailable).toBe(false);
   });
 
+  it("[@US-13] retry remains available one attempt before the escalation threshold", () => {
+    // Given TICKET-1046's run has failed and been retried one fewer time than the threshold
+    const eventBelowThreshold = makeFailureEvent({
+      runId: "run-1046",
+      retryCount: MAX_AUTO_RETRY_COUNT - 1,
+    });
+
+    // When the Failure/Recovery Advisor composes guidance
+    const guidance = composeFailureRecoveryGuidance(eventBelowThreshold);
+
+    // Then "Retry" is still offered — the threshold has not yet been reached
+    expect(guidance.suggestedNextStep).toBe("RETRY");
+    expect(guidance.retryAvailable).toBe(true);
+  });
+
+  it("[@US-13] escalation persists for retry counts beyond the threshold, not only exactly at it", () => {
+    // Given TICKET-1046's run has already exceeded the escalation threshold
+    const eventAboveThreshold = makeFailureEvent({
+      runId: "run-1046",
+      retryCount: MAX_AUTO_RETRY_COUNT + 3,
+    });
+
+    // When the Failure/Recovery Advisor composes guidance
+    const guidance = composeFailureRecoveryGuidance(eventAboveThreshold);
+
+    // Then escalation still applies — the rule is "at or above", not "exactly equal to"
+    expect(guidance.suggestedNextStep).toBe("ESCALATE");
+    expect(guidance.retryAvailable).toBe(false);
+  });
+
   it("[@driving_adapter @real-io @US-13] Devon retries a failed run with one action, without re-entering information", async () => {
     const app = createRealApiApp();
     const cookie = await loginAsAdmin(app);
