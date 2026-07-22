@@ -237,4 +237,18 @@ describe("US-12: submitter approve/request-changes governance gate", () => {
     // Then approval becomes available immediately, with no governance step
     expect(decision.approvalStatus).toBe("PENDING");
   });
+
+  it("[@US-12] the guardrail evaluator holds for governance review and names the uncovered path when only some changed paths are covered", () => {
+    // Given a run's changedFilePaths include one path outside every allowlist pattern
+    // When the Guardrail Evaluator processes the completion event directly
+    const decision = evaluateGuardrailForCompletion(
+      { runId: "run-partially-covered", changedFilePaths: ["src/foo.ts", "infra/terraform/main.tf"] },
+      [{ id: "allow-1", pathPattern: "src/**" }],
+    );
+
+    // Then it holds for governance review, naming the specific uncovered path so a reviewer
+    // knows exactly what to check — not merely "some path is uncovered"
+    expect(decision.approvalStatus).toBe("GOVERNANCE_HOLD");
+    expect(decision.governanceHoldReason).toContain("infra/terraform/main.tf");
+  });
 });
