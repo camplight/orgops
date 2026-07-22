@@ -1,0 +1,118 @@
+# Environment Inventory — nWave Ticket Execution Engine
+#
+# This feature installs/modifies persistent state (8 new SQLite tables, new env vars for
+# Trello/notification-seam config, two new background poller/watchdog loops inside the existing
+# agent-runner process). It is NOT a pure-business-logic, no-environments-needed feature.
+# Deployment target: self-hosted / bare-process (no Dockerfile, no container orchestration in
+# this repo). Strategy: Recreate (single instance, no load balancer).
+
+platform_requirements:
+  node: ">=22"
+  database: "SQLite (bundled via better-sqlite3, WAL mode)"
+  python: ">=3.11"   # only for browser-automation skills (Playwright/Lightpanda) — unrelated to
+                      # this feature, unaffected by it, listed for completeness per README.md
+  os_supported:
+    - linux
+    - macos
+    - windows   # opscli builds for all three; api/agent-runner/ui run anywhere Node 22+ runs.
+                # No OS-specific code introduced by this feature (TrelloCliBoardReader uses
+                # node:child_process spawn/execFile, already cross-platform per existing
+                # wrapper-harness/command.ts precedent).
+  external_services:
+    - name: "LLM Provider (Anthropic API / OpenAI / OpenRouter)"
+      required: true
+      note: "Already a project dependency (@orgops/llm). This feature adds no new provider — Classifier, Restatement Composer, and Conflict Assessor all reuse the existing generate() abstraction."
+    - name: "nWave CLI (Claude Code, headless invocation)"
+      required: true
+      note: "Core, unvalidated mechanism per ADR-0001 — see ci-cd-pipeline.md's CLI contract smoke test."
+    - name: "trello-cli / @trello-cli/cli"
+      required: false
+      note: "Only required if Trello ingestion (Release 2, US-11) is enabled for a given deployment."
+
+environments:
+  - name: clean-install
+    description: >
+      A brand-new OrgOps deployment with no prior data. All migrations (existing + this
+      feature's 8 new tables) run from an empty `migrations` tracking table.
+    preconditions:
+      - "No .orgops-data/orgops.sqlite exists, or it is empty"
+      - ".env configured per .env.example, including this feature's new variables (see platform-architecture.md)"
+    migration_behavior: "All migration files apply in filename order, including this feature's new files, in one pass."
+    trello_ingestion: "disabled (no boards registered)"
+    validation:
+      - "POST /api/tickets succeeds and creates a channel"
+      - "GET /api/nwave-runs/:id returns 404 for a nonexistent id (routes registered, no data yet)"
+      - "agent-runner boot-time reconciliation (platform-architecture.md) runs and finds zero RUNNING rows to reconcile (nothing to reconcile on a clean install)"
+
+  - name: existing-instance-pre-feature-migrations-applied
+    description: >
+      An OrgOps instance already running in production before this feature, with its own prior
+      data (existing tickets/channels/agents/processes if any prior feature created them) and
+      its own migration history already recorded in the `migrations` table. This is the primary
+      upgrade scenario this feature must not break.
+    preconditions:
+      - "Existing .orgops-data/orgops.sqlite with prior migrations 001-026 (or later) already applied"
+      - "agent-runner already registered with a persisted .agent-runner-id"
+    migration_behavior: >
+      Only this feature's new migration files apply (idempotent — `migrate()` skips already-applied
+      filenames by primary key in the `migrations` table). Must run BEFORE the new agent-runner
+      process starts (see ci-cd-pipeline.md Deployment Sequence) — never concurrently with the old
+      process still running against the old schema.
+    trello_ingestion: "disabled by default (operator must explicitly register a board)"
+    validation:
+      - "All pre-existing capabilities (WRAPPED/CLASSIC agents, shell_start/shell_tail, intent-watchdog, maintenance-loop) continue to function unchanged post-deploy — see coexistence_matrix below"
+      - "Boot-time reconciliation correctly halts any nwave_run_waves left RUNNING from a prior deploy/crash (only relevant on a second+ deploy of this feature, not the first)"
+      - "No existing table's columns were dropped or renamed (verified: every schema change across all four tracks' ADRs is additive-only)"
+
+  - name: existing-instance-trello-configured
+    description: >
+      An existing instance (post-migration) where a repository owner has registered at least one
+      Trello board via `POST /api/trello-ingestion/boards` and set the required Trello credentials.
+    preconditions:
+      - "existing-instance-pre-feature-migrations-applied, plus:"
+      - "TRELLO_API_KEY / TRELLO_API_TOKEN (or equivalent, per whatever @trello-cli/cli requires) set in .env"
+      - "At least one row in trello_ingestion_boards with enabled = true"
+    migration_behavior: "Same as existing-instance-pre-feature-migrations-applied."
+    trello_ingestion: "enabled"
+    validation:
+      - "First poll after activation performs the baseline snapshot (ADR-0008) — records existing cards as seen WITHOUT creating tickets for them"
+      - "TrelloCliBoardReader's async invocation respects ORGOPS_TRELLO_CLI_TIMEOUT_MS and rejects (never hangs) on CLI failure"
+      - "A Trello API outage during a poll cycle does not lose any card (next successful poll re-diffs fully) — verify via trello_ingestion_boards.last_poll_status"
+      - "On agent-runner shutdown, no orphaned trello-cli child process remains (ADR-0008 Consequences)"
+
+  - name: existing-instance-trello-not-configured
+    description: >
+      An existing instance (post-migration) where Trello ingestion is deliberately not enabled —
+      the majority case for most deployments, and the default state immediately after this
+      feature's migrations run.
+    preconditions:
+      - "existing-instance-pre-feature-migrations-applied"
+      - "No rows in trello_ingestion_boards, or all enabled = false"
+    migration_behavior: "Same as existing-instance-pre-feature-migrations-applied."
+    trello_ingestion: "disabled"
+    validation:
+      - "Trello Ingestion Poller performs zero work (no boards to iterate) — confirmed no CPU/network cost when disabled"
+      - "GET /api/trello-ingestion/boards returns an empty list, not an error"
+
+coexistence_matrix:
+  # Must-not-break list for every environment above — see platform-architecture.md for full detail
+  - existing_capability: "intent-watchdog.ts (WRAPPED agent idle/timeout detection)"
+    risk: "New Run Watchdog uses a structurally similar ingest*/collectDue* pattern but a separate timeout domain (nwave_run_waves, not agent intents)"
+    verification: "No shared state; dependency-cruiser rule (once configured) blocks nwave-invocation/** from importing wrapper-harness/**"
+  - existing_capability: "maintenance-loop.ts (existing scheduled loop)"
+    risk: "Two new scheduled loops added to the same process (Trello poll, stuck-run scan)"
+    verification: "Independently configurable intervals (ORGOPS_TRELLO_POLL_INTERVAL_MS etc.) — confirm no CPU starvation of the existing ~1s poll loop under load"
+  - existing_capability: "WRAPPED / CLASSIC agents, wrapper-harness/"
+    risk: "New modules must never import wrapper-harness/** (ADR-0001's deliberate non-extension boundary)"
+    verification: "dependency-cruiser CI job (ci-cd-pipeline.md) — currently a warning until the config file is added, tracked as a DELIVER-wave item"
+  - existing_capability: "shell_start / shell_stop / shell_tail (existing async process primitive)"
+    risk: "Reused, not modified — TrelloCliBoardReader adds a new async spawn/execFile call pattern"
+    verification: "tools/shell.ts unchanged; only TrelloCliBoardReader may invoke node:child_process among the new modules (ADR-0008 enforcement rule)"
+  - existing_capability: "GET /api/processes?reconcile=1 (existing PID-liveness reconciliation)"
+    risk: "New nwave_run_waves/nwave_runs rows can be orphaned (RUNNING with a dead process) after a Recreate deploy or crash"
+    verification: "Boot-time reconciliation extension (platform-architecture.md) — required validation step in every environment's post-deploy check"
+
+rollback_readiness:
+  database: "All new tables are additive-only; rollback to a pre-feature app version can leave new tables in place unused (no down-migration convention exists in this project — see ci-cd-pipeline.md)"
+  application: "Previous git commit/tag redeployable via the same Recreate sequence"
+  configuration: "New env vars are additive with safe defaults (feature-flagged via ORGOPS_NWAVE_TICKET_ENGINE_ENABLED, see branching-strategy.md) — absence of the flag must not break existing routes/modules"

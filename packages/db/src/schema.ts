@@ -338,6 +338,61 @@ export const crossChannelMemoryFull = sqliteTable(
   })
 );
 
+// --- multi-source-ingestion-governance (owned by this track; see
+// docs/product/architecture/brief.md "Multi-Source Ingestion & Governance" -> "Data Model") ---
+
+export const trelloIngestionBoards = sqliteTable("trello_ingestion_boards", {
+  board_id: text("board_id").primaryKey(),
+  trigger_list_ids: text("trigger_list_ids"),
+  default_submitter_human_id: text("default_submitter_human_id").notNull(),
+  enabled: integer("enabled").notNull().default(1),
+  activated_at: integer("activated_at").notNull(),
+  last_polled_at: integer("last_polled_at"),
+  last_poll_status: text("last_poll_status"),
+  last_poll_error: text("last_poll_error")
+});
+
+export const trelloIngestionSeenCards = sqliteTable(
+  "trello_ingestion_seen_cards",
+  {
+    id: text("id").primaryKey(),
+    board_id: text("board_id").notNull(),
+    card_id: text("card_id").notNull(),
+    first_observed_at: integer("first_observed_at").notNull()
+  },
+  (table) => ({
+    uidxSeenCardsBoardCard: uniqueIndex("uidx_trello_ingestion_seen_cards_board_card").on(
+      table.board_id,
+      table.card_id
+    )
+  })
+);
+
+export const guardrailAllowlistEntries = sqliteTable("guardrail_allowlist_entries", {
+  id: text("id").primaryKey(),
+  path_pattern: text("path_pattern").notNull(),
+  created_by: text("created_by").notNull(),
+  created_at: integer("created_at").notNull()
+});
+
+export const guardrailDecisionAudit = sqliteTable("guardrail_decision_audit", {
+  id: text("id").primaryKey(),
+  run_id: text("run_id").notNull(),
+  event_type: text("event_type").notNull(),
+  actor_type: text("actor_type").notNull(),
+  actor_id: text("actor_id"),
+  note: text("note"),
+  created_at: integer("created_at").notNull()
+});
+
+export const nwaveRunStuckFlags = sqliteTable("nwave_run_stuck_flags", {
+  id: text("id").primaryKey(),
+  run_id: text("run_id").notNull(),
+  wave_sequence: integer("wave_sequence").notNull(),
+  flagged_at: integer("flagged_at").notNull(),
+  cleared_at: integer("cleared_at")
+});
+
 export const schema = {
   migrations,
   agents,
@@ -359,5 +414,10 @@ export const schema = {
   channelMemoryRecent,
   channelMemoryFull,
   crossChannelMemoryRecent,
-  crossChannelMemoryFull
+  crossChannelMemoryFull,
+  trelloIngestionBoards,
+  trelloIngestionSeenCards,
+  guardrailAllowlistEntries,
+  guardrailDecisionAudit,
+  nwaveRunStuckFlags
 };

@@ -1,0 +1,64 @@
+# Product SSOT: Jobs-to-be-Done registry.
+# Bootstrapped by the nwave-ticket-execution-engine DISCUSS wave — no prior jobs.yaml existed.
+# Future features should add their main/supporting job stories here so job coverage across
+# the product is visible in one place, and so new features can check for overlapping jobs
+# before duplicating discovery work.
+
+schema_version: 1
+
+jobs:
+  - id: "job-ticket-to-implementation"
+    originating_feature: "nwave-ticket-execution-engine"
+    main_job_story: >
+      When I have work that needs code written or changed, I want to hand it off as a ticket
+      and trust that it gets implemented correctly without me chasing a developer's calendar,
+      so that I can keep moving on my own priorities and still get reliable delivery.
+    persona: "Ticket submitter (e.g., Maria Santos, Senior Product Manager) at a company using OrgOps internally"
+    validation_status: "UNVALIDATED — analyst-constructed hypothesis from the DISCUSS wave; no DISCOVER-wave customer interviews exist for this job yet. See wave-decisions.md (Decision 2) in the originating feature."
+    supporting_job_stories:
+      - step: "Define"
+        story: >
+          When I notice something is broken or missing in the product, I want to describe it
+          once in the place I already track work, so that I don't have to learn a new tool
+          just to ask for help.
+      - step: "Locate"
+        story: >
+          When I file a ticket, I want the system to tell me quickly whether this is
+          something code-level work will fix, so that I don't wait days only to learn it
+          needed a different kind of help.
+      - step: "Prepare"
+        story: >
+          When my ticket is accepted as development work, I want the system to check whether
+          it has enough detail to start safely, so that the implementation isn't guessing at
+          what I actually meant.
+      - step: "Confirm"
+        story: >
+          When my ticket is about to be implemented, I want a moment to confirm the system
+          understood my intent correctly, so that hours aren't wasted building the wrong
+          thing.
+      - step: "Execute"
+        story: >
+          When implementation starts, I want it to proceed without needing me to babysit
+          every step, so that I can go back to my own work.
+      - step: "Monitor"
+        story: >
+          When implementation is running, I want to check in whenever I want and see real
+          signal about what's happening, so that I never wonder if it's stuck or if anyone is
+          "home."
+      - step: "Modify"
+        story: >
+          When I see the implementation is heading in the wrong direction or I have new
+          information, I want to redirect or pause it, so that it doesn't burn hours on the
+          wrong path.
+      - step: "Conclude"
+        story: >
+          When implementation finishes, I want a clear summary of what changed and where, so
+          that I can verify it before it goes further and close the loop with confidence.
+    forces_ref: "docs/feature/nwave-ticket-execution-engine/discuss/jtbd-four-forces.md"
+    opportunity_scores_ref: "docs/feature/nwave-ticket-execution-engine/discuss/jtbd-opportunity-scores.md"
+    journey_ref: "docs/product/journeys/nwave-ticket-execution-engine.yaml"
+
+changelog:
+  - date: "2026-07-21"
+    feature: "nwave-ticket-execution-engine"
+    change: "SSOT bootstrap — first job recorded. No prior jobs.yaml existed."

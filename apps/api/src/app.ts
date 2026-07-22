@@ -44,6 +44,10 @@ import { registerWsRoutes, type WsServerMessage } from "./routes/ws";
 import { registerHumansRoutes } from "./routes/humans";
 import { registerRunnersRoutes } from "./routes/runners";
 import { createAccessControl } from "./routes/access";
+import { registerTicketsRoutes } from "./routes/tickets";
+import { registerNwaveRunsRoutes } from "./routes/nwave-runs";
+import { registerTrelloIngestionRoutes } from "./routes/trello-ingestion";
+import { registerGuardrailAllowlistRoutes } from "./routes/guardrail-allowlist";
 
 export type AppConfig = {
   db?: OrgOpsDb;
@@ -468,6 +472,14 @@ export function createApp(config: AppConfig = {}) {
     runnerToken: RUNNER_TOKEN,
     runnerApiUrl: RUNNER_API_URL,
   });
+
+  // multi-source-ingestion-governance (US-11/US-12/US-13): tickets.ts and nwave-runs.ts are
+  // prerequisite scaffolds for sibling tracks not yet delivered; trello-ingestion.ts and
+  // guardrail-allowlist.ts are owned by this track. See each route file's module doc comment.
+  registerTicketsRoutes(app as any, { orm, jsonResponse });
+  registerNwaveRunsRoutes(app as any, { orm, jsonResponse, access });
+  registerTrelloIngestionRoutes(app as any, { orm, jsonResponse, access });
+  registerGuardrailAllowlistRoutes(app as any, { orm, jsonResponse, access });
 
   return { app, db, bus, injectWebSocket };
 }
