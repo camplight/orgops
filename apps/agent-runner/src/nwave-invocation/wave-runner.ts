@@ -41,13 +41,23 @@ async function startWaveProcess(
   return deps.shellStart({ cmd, cwd: process.cwd() });
 }
 
+function describeSpawnFailure(waveName: WaveName, error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return `Could not start ${waveName}: the execution environment is unavailable (${message})`;
+}
+
 /**
  * On confirmation: calls `RunRepositoryPort.createRun` (assigning the stable `run_id`
  * immediately, before the first wave process is spawned, so a start-failure notice can still
  * reference it — US-04 AC4/AC5 together), then invokes `shellStart` with the headless nWave CLI
- * command for the first wave (DISCUSS, per ADR-0002). On a `shellStart` spawn failure, must mark
- * the run `START_FAILED` via `RunRepositoryPort` and never emit any wave-progress event (US-04
- * AC5) — that failure path is covered by a subsequent step's own failing acceptance scenario.
+ * command for the first wave (DISCUSS, per ADR-0002). On a `shellStart` spawn failure, the run
+ * is still sitting in `STARTING` (confirmed, but no wave has ever been recorded) — the run is
+ * marked `START_FAILED` via `RunRepositoryPort.haltRun` (the only generic terminate-with-reason
+ * operation the port exposes; the `/halt` route recognizes a `STARTING` run with no wave ever
+ * started as "never got underway" and marks it `START_FAILED` rather than `HALTED`). Because
+ * `recordWaveStarted` is never called on this path, no wave row is ever created and no
+ * wave-progress event is ever emitted (US-04 AC5) — Maria is told clearly the run could not
+ * start, never shown false progress.
  */
 export async function triggerRunForConfirmedIntent(
   input: {
@@ -65,16 +75,24 @@ export async function triggerRunForConfirmedIntent(
 
   const confirmed = await deps.runRepository.confirmRun({ runId: created.id });
 
-  const { processId } = await startWaveProcess(
-    { ticketRef: input.ticketRef, waveName: FIRST_WAVE_NAME },
-    deps,
-  );
+  let startedProcessId: string;
+  try {
+    ({ processId: startedProcessId } = await startWaveProcess(
+      { ticketRef: input.ticketRef, waveName: FIRST_WAVE_NAME },
+      deps,
+    ));
+  } catch (error) {
+    return deps.runRepository.haltRun({
+      runId: confirmed.id,
+      reason: describeSpawnFailure(FIRST_WAVE_NAME, error),
+    });
+  }
 
   await deps.runRepository.recordWaveStarted({
     runId: confirmed.id,
     waveName: FIRST_WAVE_NAME,
     sequence: FIRST_WAVE_SEQUENCE,
-    processId,
+    processId: startedProcessId,
   });
 
   return confirmed;

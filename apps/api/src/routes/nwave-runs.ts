@@ -365,10 +365,17 @@ export function registerNwaveRunsRoutes(app: Hono<any>, deps: NwaveRunsDeps) {
         .run();
     }
 
+    // A run halted while still `STARTING` never got underway at all — no wave was ever
+    // recorded for it (Wave Runner's confirmRun->shellStart sequence hadn't reached
+    // recordWaveStarted). That is a start failure (e.g. a shellStart spawn error), a distinct
+    // terminal state from `HALTED` (which means a run that *was* underway got stopped). This is
+    // the only halt call site the Wave Runner uses on a shellStart spawn failure.
+    const terminalStatus = existingRun.status === "STARTING" ? "START_FAILED" : "HALTED";
+
     orm
       .update(schema.nwaveRuns)
       .set({
-        status: "HALTED",
+        status: terminalStatus,
         ended_at: now,
         current_wave: null,
         failure_reason: reason ?? existingRun.failure_reason,
