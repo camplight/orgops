@@ -169,6 +169,48 @@
       "s": "EXECUTED",
       "d": "PASS",
       "t": "2026-08-03T13:58:07Z"
+    },
+    {
+      "sid": "03-01",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-08-03T13:58:21Z"
+    },
+    {
+      "sid": "03-02",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-08-03T14:02:56Z"
+    },
+    {
+      "sid": "03-02",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-08-03T14:02:58Z"
+    },
+    {
+      "sid": "03-02",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: this is a gated CI-only CLI contract smoke test (@requires_external) with no separate unit-testable domain logic; the scenario's own body is the fixed-input/fixed-expected-shape contract assertion itself, matching multi-source-ingestion-governance's trello-cli contract test convention exactly.",
+      "t": "2026-08-03T14:03:03Z"
+    },
+    {
+      "sid": "03-02",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-08-03T14:03:12Z"
+    },
+    {
+      "sid": "03-02",
+      "p": "COMMIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: verification confirmed the target test file (apps/agent-runner/src/nwave-invocation/nwave-invocation.test.ts) already contains scenario 15 fully and correctly implemented (fixture-gated via existsSync + it.skipIf, @requires_external tag, stub body identical in shape to multi-source-ingestion-governance's trello-cli contract test), committed previously in d411467. git diff on the test file is empty -- no production or test changes were required this step, so no new commit was created (avoiding an empty commit).",
+      "t": "2026-08-03T14:03:21Z"
     }
   ]
 }
