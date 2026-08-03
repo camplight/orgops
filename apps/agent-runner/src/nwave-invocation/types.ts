@@ -3,12 +3,18 @@
 // "Component Architecture". Mirrors the naming/shape convention already used by
 // apps/agent-runner/src/multi-source-ingestion-governance/types.ts (a sibling track's own
 // scaffold types file), not re-derived independently.
+//
+// WaveName/WAVE_SEQUENCE are the single source of truth for the DISCUSS/DESIGN/DISTILL/DELIVER
+// chain order, defined in @orgops/schemas (packages/schemas/src/nwave-lifecycle.ts) since
+// apps/api/src/routes/nwave-runs.ts also needs this exact sequence and both containers already
+// depend on @orgops/schemas — re-exported here so every file in this module keeps importing
+// them from "./types" unchanged.
+import type { WaveName } from "@orgops/schemas";
 
 export const __SCAFFOLD__ = true;
 
-export type WaveName = "DISCUSS" | "DESIGN" | "DISTILL" | "DELIVER";
-
-export const WAVE_SEQUENCE: readonly WaveName[] = ["DISCUSS", "DESIGN", "DISTILL", "DELIVER"];
+export type { WaveName };
+export { WAVE_SEQUENCE } from "@orgops/schemas";
 
 export type RunStatus =
   | "PENDING_CONFIRMATION"

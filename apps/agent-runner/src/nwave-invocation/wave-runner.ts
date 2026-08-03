@@ -1,3 +1,4 @@
+import { nextWaveAfter } from "@orgops/schemas";
 import type { RunRepositoryPort } from "./run-repository-port";
 import { WAVE_SEQUENCE } from "./types";
 import type { NwaveRun, NwaveRunWave, WaveName } from "./types";
@@ -27,10 +28,6 @@ const FIRST_WAVE_SEQUENCE = 1;
 
 function waveSequenceNumber(waveName: WaveName): number {
   return WAVE_SEQUENCE.indexOf(waveName) + 1;
-}
-
-function nextWaveAfter(waveName: WaveName): WaveName | null {
-  return WAVE_SEQUENCE[WAVE_SEQUENCE.indexOf(waveName) + 1] ?? null;
 }
 
 async function startWaveProcess(
@@ -117,6 +114,53 @@ function findRunningWave(
  * wave cannot be found in a RUNNING state for this run (e.g. a stale/duplicate notification for
  * a run that has already moved on), nothing is recorded and null is returned.
  */
+async function recordWaveFailure(
+  input: { runId: string; waveId: string; waveName: WaveName; exitCode: number },
+  deps: WaveRunnerDependencies,
+): Promise<null> {
+  await deps.runRepository.recordWaveFailed({
+    runId: input.runId,
+    waveId: input.waveId,
+    exitCode: input.exitCode,
+    failureReason: `${input.waveName} exited with code ${input.exitCode}`,
+  });
+  return null;
+}
+
+async function recordCompletionAndStartNextWave(
+  input: {
+    runId: string;
+    ticketRef: string;
+    waveId: string;
+    completedWaveName: WaveName;
+    exitCode: number;
+  },
+  deps: WaveRunnerDependencies,
+): Promise<NwaveRunWave | null> {
+  await deps.runRepository.recordWaveCompleted({
+    runId: input.runId,
+    waveId: input.waveId,
+    exitCode: input.exitCode,
+  });
+
+  const nextWaveName = nextWaveAfter(input.completedWaveName);
+  if (nextWaveName === null) {
+    return null;
+  }
+
+  const { processId } = await startWaveProcess(
+    { ticketRef: input.ticketRef, waveName: nextWaveName },
+    deps,
+  );
+
+  return deps.runRepository.recordWaveStarted({
+    runId: input.runId,
+    waveName: nextWaveName,
+    sequence: waveSequenceNumber(nextWaveName),
+    processId,
+  });
+}
+
 export async function advanceToNextWave(
   input: { runId: string; completedWaveName: WaveName; exitCode: number },
   deps: WaveRunnerDependencies,
@@ -132,35 +176,25 @@ export async function advanceToNextWave(
   }
 
   if (input.exitCode !== 0) {
-    await deps.runRepository.recordWaveFailed({
+    return recordWaveFailure(
+      {
+        runId: input.runId,
+        waveId: completedWave.id,
+        waveName: input.completedWaveName,
+        exitCode: input.exitCode,
+      },
+      deps,
+    );
+  }
+
+  return recordCompletionAndStartNextWave(
+    {
       runId: input.runId,
+      ticketRef: run.ticketRef,
       waveId: completedWave.id,
+      completedWaveName: input.completedWaveName,
       exitCode: input.exitCode,
-      failureReason: `${input.completedWaveName} exited with code ${input.exitCode}`,
-    });
-    return null;
-  }
-
-  await deps.runRepository.recordWaveCompleted({
-    runId: input.runId,
-    waveId: completedWave.id,
-    exitCode: input.exitCode,
-  });
-
-  const nextWaveName = nextWaveAfter(input.completedWaveName);
-  if (nextWaveName === null) {
-    return null;
-  }
-
-  const { processId } = await startWaveProcess(
-    { ticketRef: run.ticketRef, waveName: nextWaveName },
+    },
     deps,
   );
-
-  return deps.runRepository.recordWaveStarted({
-    runId: input.runId,
-    waveName: nextWaveName,
-    sequence: waveSequenceNumber(nextWaveName),
-    processId,
-  });
 }

@@ -2,6 +2,7 @@ import type { Hono } from "hono";
 import { randomUUID } from "node:crypto";
 import { and, asc, eq } from "drizzle-orm";
 import { schema, type OrgOpsDrizzleDb } from "@orgops/db";
+import { WAVE_SEQUENCE } from "@orgops/schemas";
 import type { RequestUser } from "./access";
 
 type NwaveRunsDeps = {
@@ -70,6 +71,14 @@ function generateRunId(): string {
   return `RUN-${randomUUID().replace(/-/g, "").slice(0, 8).toUpperCase()}`;
 }
 
+function requireNonEmptyTrimmedString(raw: unknown): string {
+  return typeof raw === "string" ? raw.trim() : "";
+}
+
+function requireNonEmptyString(raw: unknown): string {
+  return typeof raw === "string" ? raw : "";
+}
+
 function notImplemented(label: string) {
   return async () => {
     throw new Error(`${label} not implemented`);
@@ -77,18 +86,24 @@ function notImplemented(label: string) {
 }
 
 /**
- * Mirrors the DISCUSS/DESIGN/DISTILL/DELIVER chain order owned by
- * `apps/agent-runner/src/nwave-invocation/types.ts`'s `WAVE_SEQUENCE` — duplicated here (a
- * small DTO-level constant, not domain logic) because this HTTP layer must not import from the
- * separately-deployed agent-runner container (see brief.md C4 Container diagram: API and Agent
- * Runner are distinct containers, not one importable module graph).
+ * DELIVER-wave refactoring note: this previously duplicated the DISCUSS/DESIGN/DISTILL/DELIVER
+ * chain order as its own local `WAVE_ORDER` array, justified at the time as "API and Agent
+ * Runner are separate deployable containers, so this small constant is intentionally duplicated
+ * rather than cross-imported." That justification conflated two different questions — whether
+ * this container may import agent-runner's *code* (no, correctly) versus whether it may import a
+ * *shared package* both containers already depend on (yes, and both already do: this file's
+ * `@orgops/schemas` import above, and see apps/api/src/routes/events.ts's `EventShapeDefinition`
+ * import). `packages/schemas/src/run-activity.ts` (ADR-0012) already establishes this exact
+ * pattern — a shared pure fact/function neither container needs to hand-keep in sync. `WAVE_SEQUENCE`
+ * now has exactly one source of truth (packages/schemas/src/nwave-lifecycle.ts); only this
+ * string-based, runtime-safe lookup over raw DB/HTTP values (never a validated `WaveName`) stays
+ * local, since it serves a different type-safety need than wave-runner.ts's strongly-typed
+ * `nextWaveAfter(WaveName)` (also sourced from the same shared `WAVE_SEQUENCE`).
  */
-const WAVE_ORDER = ["DISCUSS", "DESIGN", "DISTILL", "DELIVER"] as const;
-
 function nextWaveName(waveName: string): string | null {
-  const currentIndex = WAVE_ORDER.indexOf(waveName as (typeof WAVE_ORDER)[number]);
+  const currentIndex = WAVE_SEQUENCE.indexOf(waveName as (typeof WAVE_SEQUENCE)[number]);
   if (currentIndex === -1) return null;
-  return WAVE_ORDER[currentIndex + 1] ?? null;
+  return WAVE_SEQUENCE[currentIndex + 1] ?? null;
 }
 
 /**
@@ -131,6 +146,68 @@ function stopTrackedProcess(orm: OrgOpsDrizzleDb, processId: string | null): voi
     .run();
 }
 
+function determineWaveOutcome(exitCode: number): "COMPLETED" | "FAILED" {
+  return exitCode === 0 ? "COMPLETED" : "FAILED";
+}
+
+function applyFailedRunTransition(
+  orm: OrgOpsDrizzleDb,
+  input: { runId: string; waveName: string; exitCode: number; failureReason: string | null; now: number },
+): void {
+  orm
+    .update(schema.nwaveRuns)
+    .set({
+      status: "FAILED",
+      ended_at: input.now,
+      failure_reason: input.failureReason ?? `${input.waveName} exited with code ${input.exitCode}`,
+    })
+    .where(eq(schema.nwaveRuns.id, input.runId))
+    .run();
+}
+
+function applyCompletedRunTransition(
+  orm: OrgOpsDrizzleDb,
+  input: { runId: string; waveName: string; now: number },
+): void {
+  const next = nextWaveName(input.waveName);
+  if (next === null) {
+    orm
+      .update(schema.nwaveRuns)
+      .set({ status: "COMPLETED", ended_at: input.now, current_wave: null })
+      .where(eq(schema.nwaveRuns.id, input.runId))
+      .run();
+    return;
+  }
+
+  orm
+    .update(schema.nwaveRuns)
+    .set({ current_wave: next })
+    .where(eq(schema.nwaveRuns.id, input.runId))
+    .run();
+}
+
+function haltActiveWaves(orm: OrgOpsDrizzleDb, activeWaves: NwaveRunWaveRow[], now: number): void {
+  for (const activeWave of activeWaves) {
+    stopTrackedProcess(orm, activeWave.process_id);
+    orm
+      .update(schema.nwaveRunWaves)
+      .set({ status: "HALTED", ended_at: now })
+      .where(eq(schema.nwaveRunWaves.id, activeWave.id))
+      .run();
+  }
+}
+
+/**
+ * A run halted while still `STARTING` never got underway at all — no wave was ever recorded for
+ * it (Wave Runner's confirmRun->shellStart sequence hadn't reached recordWaveStarted). That is a
+ * start failure (e.g. a shellStart spawn error), a distinct terminal state from `HALTED` (which
+ * means a run that *was* underway got stopped). This is the only halt call site the Wave Runner
+ * uses on a shellStart spawn failure.
+ */
+function determineHaltedRunStatus(existingRun: NwaveRunRow): "START_FAILED" | "HALTED" {
+  return existingRun.status === "STARTING" ? "START_FAILED" : "HALTED";
+}
+
 /**
  * Base routes owned by THIS track (nwave-invocation-engine, US-04) — see brief.md "Data
  * Model" -> "New API routes". `createRun`/`confirmRun`/wave-lifecycle routes below are the
@@ -149,9 +226,9 @@ export function registerNwaveRunsRoutes(app: Hono<any>, deps: NwaveRunsDeps) {
 
   app.post("/api/nwave-runs", async (c) => {
     const body = await c.req.json();
-    const ticketRef = typeof body.ticketRef === "string" ? body.ticketRef.trim() : "";
+    const ticketRef = requireNonEmptyTrimmedString(body.ticketRef);
     if (!ticketRef) return jsonResponse(c, { error: "ticketRef is required" }, 400);
-    const channelId = typeof body.channelId === "string" ? body.channelId.trim() : "";
+    const channelId = requireNonEmptyTrimmedString(body.channelId);
     if (!channelId) return jsonResponse(c, { error: "channelId is required" }, 400);
     if (typeof body.restatementText !== "string") {
       return jsonResponse(c, { error: "restatementText is required" }, 400);
@@ -216,11 +293,11 @@ export function registerNwaveRunsRoutes(app: Hono<any>, deps: NwaveRunsDeps) {
     if (!existingRun) return jsonResponse(c, { error: "Run not found" }, 404);
 
     const body = await c.req.json();
-    const waveName = typeof body.waveName === "string" ? body.waveName : "";
+    const waveName = requireNonEmptyString(body.waveName);
     if (!waveName) return jsonResponse(c, { error: "waveName is required" }, 400);
     const sequence = Number.isInteger(body.sequence) ? (body.sequence as number) : null;
     if (sequence === null) return jsonResponse(c, { error: "sequence is required" }, 400);
-    const processId = typeof body.processId === "string" ? body.processId : "";
+    const processId = requireNonEmptyString(body.processId);
     if (!processId) return jsonResponse(c, { error: "processId is required" }, 400);
 
     const waveId = randomUUID();
@@ -291,7 +368,7 @@ export function registerNwaveRunsRoutes(app: Hono<any>, deps: NwaveRunsDeps) {
     const failureReason = typeof body.failureReason === "string" ? body.failureReason : null;
 
     const now = Date.now();
-    const outcome = exitCode === 0 ? "COMPLETED" : "FAILED";
+    const outcome = determineWaveOutcome(exitCode);
 
     orm
       .update(schema.nwaveRunWaves)
@@ -300,31 +377,15 @@ export function registerNwaveRunsRoutes(app: Hono<any>, deps: NwaveRunsDeps) {
       .run();
 
     if (outcome === "FAILED") {
-      orm
-        .update(schema.nwaveRuns)
-        .set({
-          status: "FAILED",
-          ended_at: now,
-          failure_reason:
-            failureReason ?? `${existingWave.wave_name} exited with code ${exitCode}`,
-        })
-        .where(eq(schema.nwaveRuns.id, runId))
-        .run();
+      applyFailedRunTransition(orm, {
+        runId,
+        waveName: existingWave.wave_name,
+        exitCode,
+        failureReason,
+        now,
+      });
     } else {
-      const next = nextWaveName(existingWave.wave_name);
-      if (next === null) {
-        orm
-          .update(schema.nwaveRuns)
-          .set({ status: "COMPLETED", ended_at: now, current_wave: null })
-          .where(eq(schema.nwaveRuns.id, runId))
-          .run();
-      } else {
-        orm
-          .update(schema.nwaveRuns)
-          .set({ current_wave: next })
-          .where(eq(schema.nwaveRuns.id, runId))
-          .run();
-      }
+      applyCompletedRunTransition(orm, { runId, waveName: existingWave.wave_name, now });
     }
 
     const updatedWave = orm
@@ -356,21 +417,9 @@ export function registerNwaveRunsRoutes(app: Hono<any>, deps: NwaveRunsDeps) {
       .all() as NwaveRunWaveRow[];
 
     const now = Date.now();
-    for (const activeWave of activeWaves) {
-      stopTrackedProcess(orm, activeWave.process_id);
-      orm
-        .update(schema.nwaveRunWaves)
-        .set({ status: "HALTED", ended_at: now })
-        .where(eq(schema.nwaveRunWaves.id, activeWave.id))
-        .run();
-    }
+    haltActiveWaves(orm, activeWaves, now);
 
-    // A run halted while still `STARTING` never got underway at all — no wave was ever
-    // recorded for it (Wave Runner's confirmRun->shellStart sequence hadn't reached
-    // recordWaveStarted). That is a start failure (e.g. a shellStart spawn error), a distinct
-    // terminal state from `HALTED` (which means a run that *was* underway got stopped). This is
-    // the only halt call site the Wave Runner uses on a shellStart spawn failure.
-    const terminalStatus = existingRun.status === "STARTING" ? "START_FAILED" : "HALTED";
+    const terminalStatus = determineHaltedRunStatus(existingRun);
 
     orm
       .update(schema.nwaveRuns)
