@@ -1,15 +1,74 @@
 import type { Hono } from "hono";
+import { randomUUID } from "node:crypto";
+import { asc, eq } from "drizzle-orm";
+import { schema, type OrgOpsDrizzleDb } from "@orgops/db";
 import type { RequestUser } from "./access";
 
-export const __SCAFFOLD__ = true;
-
 type NwaveRunsDeps = {
-  orm: unknown;
+  orm: OrgOpsDrizzleDb;
   jsonResponse: (c: unknown, data: unknown, status?: number) => Response;
   access: {
     canSignOffGuardrail: (user: RequestUser | undefined) => boolean;
   };
 };
+
+type NwaveRunRow = {
+  id: string;
+  ticket_ref: string;
+  channel_id: string;
+  status: string;
+  current_wave: string | null;
+  restatement_text: string;
+  confirmed_at: number | null;
+  started_at: number | null;
+  ended_at: number | null;
+  failure_reason: string | null;
+};
+
+type NwaveRunWaveRow = {
+  id: string;
+  run_id: string;
+  wave_name: string;
+  sequence: number;
+  process_id: string | null;
+  status: string;
+  started_at: number | null;
+  ended_at: number | null;
+  exit_code: number | null;
+};
+
+function toRunResponse(row: NwaveRunRow) {
+  return {
+    id: row.id,
+    ticketRef: row.ticket_ref,
+    channelId: row.channel_id,
+    status: row.status,
+    currentWave: row.current_wave,
+    restatementText: row.restatement_text,
+    confirmedAt: row.confirmed_at,
+    startedAt: row.started_at,
+    endedAt: row.ended_at,
+    failureReason: row.failure_reason,
+  };
+}
+
+function toWaveResponse(row: NwaveRunWaveRow) {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    waveName: row.wave_name,
+    sequence: row.sequence,
+    processId: row.process_id,
+    status: row.status,
+    startedAt: row.started_at,
+    endedAt: row.ended_at,
+    exitCode: row.exit_code,
+  };
+}
+
+function generateRunId(): string {
+  return `RUN-${randomUUID().replace(/-/g, "").slice(0, 8).toUpperCase()}`;
+}
 
 function notImplemented(label: string) {
   return async () => {
@@ -30,32 +89,119 @@ function notImplemented(label: string) {
  * (US-12/US-13) — not touched by this track's DISTILL pass beyond this file-level doc comment
  * update, per that track's own distill/wave-decisions.md DWD-02.
  */
-export function registerNwaveRunsRoutes(app: Hono<any>, _deps: NwaveRunsDeps) {
-  app.post(
-    "/api/nwave-runs",
-    notImplemented(
-      "POST /api/nwave-runs — creates a run row in PENDING_CONFIRMATION, assigning the " +
-        "stable run_id immediately (before any wave process is spawned), returns run_id " +
-        "(US-04 AC4)",
-    ),
-  );
+export function registerNwaveRunsRoutes(app: Hono<any>, deps: NwaveRunsDeps) {
+  const { orm, jsonResponse } = deps;
 
-  app.post(
-    "/api/nwave-runs/:id/confirm",
-    notImplemented(
-      "POST /api/nwave-runs/:id/confirm — PENDING_CONFIRMATION -> STARTING, called by Wave " +
-        "Runner immediately after createRun once the submitter's confirmation is observed " +
-        "(US-04 AC2)",
-    ),
-  );
+  app.post("/api/nwave-runs", async (c) => {
+    const body = await c.req.json();
+    const ticketRef = typeof body.ticketRef === "string" ? body.ticketRef.trim() : "";
+    if (!ticketRef) return jsonResponse(c, { error: "ticketRef is required" }, 400);
+    const channelId = typeof body.channelId === "string" ? body.channelId.trim() : "";
+    if (!channelId) return jsonResponse(c, { error: "channelId is required" }, 400);
+    if (typeof body.restatementText !== "string") {
+      return jsonResponse(c, { error: "restatementText is required" }, 400);
+    }
+    const restatementText = body.restatementText;
 
-  app.post(
-    "/api/nwave-runs/:id/waves",
-    notImplemented(
-      "POST /api/nwave-runs/:id/waves — records a new nwave_run_waves row, linking process_id " +
-        "to the shell_start-tracked process for this wave (US-04 core observable contract)",
-    ),
-  );
+    const id = generateRunId();
+    orm
+      .insert(schema.nwaveRuns)
+      .values({
+        id,
+        ticket_ref: ticketRef,
+        channel_id: channelId,
+        status: "PENDING_CONFIRMATION",
+        current_wave: null,
+        restatement_text: restatementText,
+        confirmed_at: null,
+        started_at: null,
+        ended_at: null,
+        failure_reason: null,
+      })
+      .run();
+
+    const row = orm
+      .select()
+      .from(schema.nwaveRuns)
+      .where(eq(schema.nwaveRuns.id, id))
+      .get() as NwaveRunRow;
+    return jsonResponse(c, toRunResponse(row), 201);
+  });
+
+  app.post("/api/nwave-runs/:id/confirm", async (c) => {
+    const runId = c.req.param("id");
+    const existing = orm
+      .select()
+      .from(schema.nwaveRuns)
+      .where(eq(schema.nwaveRuns.id, runId))
+      .get() as NwaveRunRow | undefined;
+    if (!existing) return jsonResponse(c, { error: "Run not found" }, 404);
+
+    orm
+      .update(schema.nwaveRuns)
+      .set({ status: "STARTING", confirmed_at: Date.now() })
+      .where(eq(schema.nwaveRuns.id, runId))
+      .run();
+
+    const row = orm
+      .select()
+      .from(schema.nwaveRuns)
+      .where(eq(schema.nwaveRuns.id, runId))
+      .get() as NwaveRunRow;
+    return jsonResponse(c, toRunResponse(row), 200);
+  });
+
+  app.post("/api/nwave-runs/:id/waves", async (c) => {
+    const runId = c.req.param("id");
+    const existingRun = orm
+      .select()
+      .from(schema.nwaveRuns)
+      .where(eq(schema.nwaveRuns.id, runId))
+      .get() as NwaveRunRow | undefined;
+    if (!existingRun) return jsonResponse(c, { error: "Run not found" }, 404);
+
+    const body = await c.req.json();
+    const waveName = typeof body.waveName === "string" ? body.waveName : "";
+    if (!waveName) return jsonResponse(c, { error: "waveName is required" }, 400);
+    const sequence = Number.isInteger(body.sequence) ? (body.sequence as number) : null;
+    if (sequence === null) return jsonResponse(c, { error: "sequence is required" }, 400);
+    const processId = typeof body.processId === "string" ? body.processId : "";
+    if (!processId) return jsonResponse(c, { error: "processId is required" }, 400);
+
+    const waveId = randomUUID();
+    const now = Date.now();
+    orm
+      .insert(schema.nwaveRunWaves)
+      .values({
+        id: waveId,
+        run_id: runId,
+        wave_name: waveName,
+        sequence,
+        process_id: processId,
+        status: "RUNNING",
+        started_at: now,
+        ended_at: null,
+        exit_code: null,
+      })
+      .run();
+
+    orm
+      .update(schema.nwaveRuns)
+      .set({
+        status: "RUNNING",
+        current_wave: waveName,
+        started_at: existingRun.started_at ?? now,
+      })
+      .where(eq(schema.nwaveRuns.id, runId))
+      .run();
+
+    const row = orm
+      .select()
+      .from(schema.nwaveRunWaves)
+      .where(eq(schema.nwaveRunWaves.id, waveId))
+      .get() as NwaveRunWaveRow;
+    return jsonResponse(c, toWaveResponse(row), 201);
+  });
 
   app.post(
     "/api/nwave-runs/:id/waves/:waveId/complete",
@@ -77,14 +223,27 @@ export function registerNwaveRunsRoutes(app: Hono<any>, _deps: NwaveRunsDeps) {
     ),
   );
 
-  app.get(
-    "/api/nwave-runs/:id",
-    notImplemented(
-      "GET /api/nwave-runs/:id — reads the run plus its wave history, consumed later by " +
-        "progress-trust-ux (US-04 AC4: every progress message references the same stable " +
-        "run_id)",
-    ),
-  );
+  app.get("/api/nwave-runs/:id", async (c) => {
+    const runId = c.req.param("id");
+    const runRow = orm
+      .select()
+      .from(schema.nwaveRuns)
+      .where(eq(schema.nwaveRuns.id, runId))
+      .get() as NwaveRunRow | undefined;
+    if (!runRow) return jsonResponse(c, { error: "Run not found" }, 404);
+
+    const waveRows = orm
+      .select()
+      .from(schema.nwaveRunWaves)
+      .where(eq(schema.nwaveRunWaves.run_id, runId))
+      .orderBy(asc(schema.nwaveRunWaves.sequence))
+      .all() as NwaveRunWaveRow[];
+
+    return jsonResponse(c, {
+      ...toRunResponse(runRow),
+      waves: waveRows.map(toWaveResponse),
+    });
+  });
 
   app.post(
     "/api/nwave-runs/:id/completion-summary/approve",
