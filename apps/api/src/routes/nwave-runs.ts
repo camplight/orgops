@@ -1,6 +1,6 @@
 import type { Hono } from "hono";
 import { randomUUID } from "node:crypto";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { schema, type OrgOpsDrizzleDb } from "@orgops/db";
 import type { RequestUser } from "./access";
 
@@ -74,6 +74,61 @@ function notImplemented(label: string) {
   return async () => {
     throw new Error(`${label} not implemented`);
   };
+}
+
+/**
+ * Mirrors the DISCUSS/DESIGN/DISTILL/DELIVER chain order owned by
+ * `apps/agent-runner/src/nwave-invocation/types.ts`'s `WAVE_SEQUENCE` — duplicated here (a
+ * small DTO-level constant, not domain logic) because this HTTP layer must not import from the
+ * separately-deployed agent-runner container (see brief.md C4 Container diagram: API and Agent
+ * Runner are distinct containers, not one importable module graph).
+ */
+const WAVE_ORDER = ["DISCUSS", "DESIGN", "DISTILL", "DELIVER"] as const;
+
+function nextWaveName(waveName: string): string | null {
+  const currentIndex = WAVE_ORDER.indexOf(waveName as (typeof WAVE_ORDER)[number]);
+  if (currentIndex === -1) return null;
+  return WAVE_ORDER[currentIndex + 1] ?? null;
+}
+
+/**
+ * Best-effort process stop for the wave's tracked `process_id`, mirroring the same
+ * SIGTERM-first approach `DELETE /api/processes/:id` already uses (apps/api/src/routes/
+ * runtime.ts). If no matching `processes` row is tracked (e.g. a lightweight local process
+ * that never registered itself, as this track's walking-skeleton `shellStart` adapter does),
+ * this is a no-op — halting the run must never fail because the underlying process bookkeeping
+ * is incomplete.
+ */
+function stopTrackedProcess(orm: OrgOpsDrizzleDb, processId: string | null): void {
+  if (!processId) return;
+
+  const processRow = orm
+    .select({
+      id: schema.processes.id,
+      pid: schema.processes.pid,
+      state: schema.processes.state,
+    })
+    .from(schema.processes)
+    .where(eq(schema.processes.id, processId))
+    .get() as { id: string; pid: number | null; state: string } | undefined;
+  if (!processRow) return;
+
+  const isActive = processRow.state === "RUNNING" || processRow.state === "STARTING";
+  if (!isActive) return;
+
+  if (processRow.pid !== null && processRow.pid !== undefined) {
+    try {
+      process.kill(processRow.pid, "SIGTERM");
+    } catch {
+      // Best-effort: the OS process may already have exited.
+    }
+  }
+
+  orm
+    .update(schema.processes)
+    .set({ state: "TERMINATED", ended_at: Date.now() })
+    .where(eq(schema.processes.id, processId))
+    .run();
 }
 
 /**
@@ -203,25 +258,131 @@ export function registerNwaveRunsRoutes(app: Hono<any>, deps: NwaveRunsDeps) {
     return jsonResponse(c, toWaveResponse(row), 201);
   });
 
-  app.post(
-    "/api/nwave-runs/:id/waves/:waveId/complete",
-    notImplemented(
-      "POST /api/nwave-runs/:id/waves/:waveId/complete — marks the wave COMPLETED or FAILED " +
-        "depending on exit code, advances or terminates the run (US-04 AC5, ADR-0002); must be " +
-        "idempotent under the platform's at-least-once event redelivery guarantee — a " +
-        "redelivered completion for an already-COMPLETED/FAILED wave must not advance the run " +
-        "a second time",
-    ),
-  );
+  app.post("/api/nwave-runs/:id/waves/:waveId/complete", async (c) => {
+    const runId = c.req.param("id");
+    const waveId = c.req.param("waveId");
 
-  app.post(
-    "/api/nwave-runs/:id/halt",
-    notImplemented(
-      "POST /api/nwave-runs/:id/halt — marks the run (and its active wave) HALTED, called by " +
-        "Run Watchdog after shell_stop on a stale wave (US-04, brief.md Failure/Timeout " +
-        "Handling)",
-    ),
-  );
+    const existingRun = orm
+      .select()
+      .from(schema.nwaveRuns)
+      .where(eq(schema.nwaveRuns.id, runId))
+      .get() as NwaveRunRow | undefined;
+    if (!existingRun) return jsonResponse(c, { error: "Run not found" }, 404);
+
+    const existingWave = orm
+      .select()
+      .from(schema.nwaveRunWaves)
+      .where(eq(schema.nwaveRunWaves.id, waveId))
+      .get() as NwaveRunWaveRow | undefined;
+    if (!existingWave || existingWave.run_id !== runId) {
+      return jsonResponse(c, { error: "Wave not found" }, 404);
+    }
+
+    // Idempotency guard (US-04 AC5, at-least-once redelivery): a wave already recorded as
+    // COMPLETED/FAILED/HALTED is a no-op — keyed off the wave's own recorded status, never a
+    // separate dedup table. The run is never advanced a second time for the same wave.
+    if (existingWave.status !== "RUNNING") {
+      return jsonResponse(c, toWaveResponse(existingWave), 200);
+    }
+
+    const body = await c.req.json();
+    const exitCode = Number.isInteger(body.exitCode) ? (body.exitCode as number) : null;
+    if (exitCode === null) return jsonResponse(c, { error: "exitCode is required" }, 400);
+    const failureReason = typeof body.failureReason === "string" ? body.failureReason : null;
+
+    const now = Date.now();
+    const outcome = exitCode === 0 ? "COMPLETED" : "FAILED";
+
+    orm
+      .update(schema.nwaveRunWaves)
+      .set({ status: outcome, ended_at: now, exit_code: exitCode })
+      .where(eq(schema.nwaveRunWaves.id, waveId))
+      .run();
+
+    if (outcome === "FAILED") {
+      orm
+        .update(schema.nwaveRuns)
+        .set({
+          status: "FAILED",
+          ended_at: now,
+          failure_reason:
+            failureReason ?? `${existingWave.wave_name} exited with code ${exitCode}`,
+        })
+        .where(eq(schema.nwaveRuns.id, runId))
+        .run();
+    } else {
+      const next = nextWaveName(existingWave.wave_name);
+      if (next === null) {
+        orm
+          .update(schema.nwaveRuns)
+          .set({ status: "COMPLETED", ended_at: now, current_wave: null })
+          .where(eq(schema.nwaveRuns.id, runId))
+          .run();
+      } else {
+        orm
+          .update(schema.nwaveRuns)
+          .set({ current_wave: next })
+          .where(eq(schema.nwaveRuns.id, runId))
+          .run();
+      }
+    }
+
+    const updatedWave = orm
+      .select()
+      .from(schema.nwaveRunWaves)
+      .where(eq(schema.nwaveRunWaves.id, waveId))
+      .get() as NwaveRunWaveRow;
+    return jsonResponse(c, toWaveResponse(updatedWave), 200);
+  });
+
+  app.post("/api/nwave-runs/:id/halt", async (c) => {
+    const runId = c.req.param("id");
+    const existingRun = orm
+      .select()
+      .from(schema.nwaveRuns)
+      .where(eq(schema.nwaveRuns.id, runId))
+      .get() as NwaveRunRow | undefined;
+    if (!existingRun) return jsonResponse(c, { error: "Run not found" }, 404);
+
+    const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+    const reason = typeof body.reason === "string" ? body.reason : null;
+
+    const activeWaves = orm
+      .select()
+      .from(schema.nwaveRunWaves)
+      .where(
+        and(eq(schema.nwaveRunWaves.run_id, runId), eq(schema.nwaveRunWaves.status, "RUNNING")),
+      )
+      .all() as NwaveRunWaveRow[];
+
+    const now = Date.now();
+    for (const activeWave of activeWaves) {
+      stopTrackedProcess(orm, activeWave.process_id);
+      orm
+        .update(schema.nwaveRunWaves)
+        .set({ status: "HALTED", ended_at: now })
+        .where(eq(schema.nwaveRunWaves.id, activeWave.id))
+        .run();
+    }
+
+    orm
+      .update(schema.nwaveRuns)
+      .set({
+        status: "HALTED",
+        ended_at: now,
+        current_wave: null,
+        failure_reason: reason ?? existingRun.failure_reason,
+      })
+      .where(eq(schema.nwaveRuns.id, runId))
+      .run();
+
+    const updatedRun = orm
+      .select()
+      .from(schema.nwaveRuns)
+      .where(eq(schema.nwaveRuns.id, runId))
+      .get() as NwaveRunRow;
+    return jsonResponse(c, toRunResponse(updatedRun), 200);
+  });
 
   app.get("/api/nwave-runs/:id", async (c) => {
     const runId = c.req.param("id");

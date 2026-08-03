@@ -2,7 +2,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { openDb, migrate } from "@orgops/db";
+import { openDb, migrate, createDrizzleDb, schema, type OrgOpsDb } from "@orgops/db";
 import { createApp } from "@orgops/api/src/app";
 
 // Shared support for this module's acceptance tests (US-04). Not a test file itself —
@@ -21,9 +21,60 @@ process.env.ORGOPS_PROJECT_ROOT ??= resolve(dirname(fileURLToPath(import.meta.ur
 
 export const TEST_RUNNER_TOKEN = "test-runner-token";
 
+/**
+ * Several scenarios in nwave-invocation.test.ts share a "Given an implementation run has
+ * started for TICKET-1043 with run id RUN-8841" precondition (halt, run-detail view, wave
+ * chaining, redelivered wave-completion). `RUN-8841` cannot be produced through the ordinary
+ * `POST /api/nwave-runs` driving port — that route always assigns a fresh random id
+ * (`generateRunId`) — so this fixed id can only come from seeding the row directly. This is
+ * test-support precondition setup (an already-in-progress run, not any scenario's expected
+ * outcome), not a shortcut around production code: every one of those scenarios still exercises
+ * production code (the real Hono routes, or `advanceToNextWave`) to produce its assertions.
+ */
+export const NWAVE_RUN_FIXTURE_ID = "RUN-8841";
+export const NWAVE_RUN_FIXTURE_FIRST_WAVE_ID = "wave-1";
+
+function seedNwaveRunFixture(db: OrgOpsDb): void {
+  const orm = createDrizzleDb(db);
+  const now = Date.now();
+
+  orm
+    .insert(schema.nwaveRuns)
+    .values({
+      id: NWAVE_RUN_FIXTURE_ID,
+      ticket_ref: "TICKET-1043",
+      channel_id: "channel-ticket-1043",
+      status: "RUNNING",
+      current_wave: "DISCUSS",
+      restatement_text:
+        "Adds a region filter dropdown to the Reports dashboard, defaulting to the viewer's home region.",
+      confirmed_at: now,
+      started_at: now,
+      ended_at: null,
+      failure_reason: null,
+    })
+    .run();
+
+  orm
+    .insert(schema.nwaveRunWaves)
+    .values({
+      id: NWAVE_RUN_FIXTURE_FIRST_WAVE_ID,
+      run_id: NWAVE_RUN_FIXTURE_ID,
+      wave_name: "DISCUSS",
+      sequence: 1,
+      process_id: "proc-fixture-1",
+      status: "RUNNING",
+      started_at: now,
+      ended_at: null,
+      exit_code: null,
+    })
+    .run();
+}
+
 export function createRealApiApp() {
   const db = openDb(":memory:");
   migrate(db);
+  seedNwaveRunFixture(db);
   const { app } = createApp({
     db,
     dataDir: ".orgops-data-test",

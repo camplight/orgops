@@ -80,27 +80,57 @@ export async function triggerRunForConfirmedIntent(
   return confirmed;
 }
 
+function findRunningWave(
+  waves: NwaveRunWave[],
+  waveName: WaveName,
+): NwaveRunWave | undefined {
+  return waves.find((wave) => wave.waveName === waveName && wave.status === "RUNNING");
+}
+
 /**
- * On a wave process's clean exit (exitCode 0), advances to the next wave in
- * `WAVE_SEQUENCE` per ADR-0002, spawning its process via `shellStart`. On DELIVER's clean exit,
- * there is no next wave, so no further wave is started (returns null). On a non-zero exit, the
- * chain stops and no next wave is started (returns null) — never silently proceeds (US-04 AC5).
+ * On a wave process's clean exit (exitCode 0), records the completed wave via
+ * `RunRepositoryPort.recordWaveCompleted` (this also advances the run to the next wave, or
+ * marks it COMPLETED if this was DELIVER — see the `/complete` route's own bookkeeping), then
+ * advances to the next wave in `WAVE_SEQUENCE` per ADR-0002, spawning its process via
+ * `shellStart`. On DELIVER's clean exit, there is no next wave, so no further wave is started
+ * (returns null) and the run has already been marked COMPLETED by `recordWaveCompleted`. On a
+ * non-zero exit, records the wave/run as FAILED via `recordWaveFailed` and the chain stops —
+ * no next wave is started (returns null), never silently proceeding (US-04 AC5). If the named
+ * wave cannot be found in a RUNNING state for this run (e.g. a stale/duplicate notification for
+ * a run that has already moved on), nothing is recorded and null is returned.
  */
 export async function advanceToNextWave(
   input: { runId: string; completedWaveName: WaveName; exitCode: number },
   deps: WaveRunnerDependencies,
 ): Promise<NwaveRunWave | null> {
-  if (input.exitCode !== 0) {
+  const run = await deps.runRepository.getRun({ runId: input.runId });
+  if (!run) {
     return null;
   }
+
+  const completedWave = findRunningWave(run.waves, input.completedWaveName);
+  if (!completedWave) {
+    return null;
+  }
+
+  if (input.exitCode !== 0) {
+    await deps.runRepository.recordWaveFailed({
+      runId: input.runId,
+      waveId: completedWave.id,
+      exitCode: input.exitCode,
+      failureReason: `${input.completedWaveName} exited with code ${input.exitCode}`,
+    });
+    return null;
+  }
+
+  await deps.runRepository.recordWaveCompleted({
+    runId: input.runId,
+    waveId: completedWave.id,
+    exitCode: input.exitCode,
+  });
 
   const nextWaveName = nextWaveAfter(input.completedWaveName);
   if (nextWaveName === null) {
-    return null;
-  }
-
-  const run = await deps.runRepository.getRun({ runId: input.runId });
-  if (!run) {
     return null;
   }
 
