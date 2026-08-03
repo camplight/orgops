@@ -473,9 +473,12 @@ export function createApp(config: AppConfig = {}) {
     runnerApiUrl: RUNNER_API_URL,
   });
 
-  // multi-source-ingestion-governance (US-11/US-12/US-13): tickets.ts and nwave-runs.ts are
-  // prerequisite scaffolds for sibling tracks not yet delivered; trello-ingestion.ts and
-  // guardrail-allowlist.ts are owned by this track. See each route file's module doc comment.
+  // tickets.ts remains a prerequisite scaffold for ticket-classification (not yet delivered).
+  // nwave-runs.ts is now owned by nwave-invocation-engine (US-04 base routes) with a
+  // prerequisite-scaffold extension owned by multi-source-ingestion-governance (US-12/US-13
+  // completion-summary/retry/escalate/close/cycle-history routes). trello-ingestion.ts and
+  // guardrail-allowlist.ts are owned by multi-source-ingestion-governance. See each route
+  // file's module doc comment.
   registerTicketsRoutes(app as any, { orm, jsonResponse });
   registerNwaveRunsRoutes(app as any, { orm, jsonResponse, access });
   registerTrelloIngestionRoutes(app as any, { orm, jsonResponse, access });

@@ -18,16 +18,74 @@ function notImplemented(label: string) {
 }
 
 /**
- * PREREQUISITE SCAFFOLD for the base routes (`nwave_runs`, owned by `nwave-invocation-engine`;
- * `nwave_run_completions`, owned by `progress-trust-ux`) — neither track has reached DELIVER in
- * this codebase yet, so no `/api/nwave-runs/*` route exists at all today. Created here only so
- * multi-source-ingestion-governance's US-12/US-13 acceptance tests have a real HTTP driving
- * port to call. The seven handlers below are the additive EXTENSION this track (US-12/US-13)
- * actually owns (per brief.md "Data Model" -> "New/extended API routes"); no production logic
- * for any of them is implemented here — that is DELIVER-wave, software-crafter's job, driven by
- * these now-RED acceptance tests one at a time.
+ * Base routes owned by THIS track (nwave-invocation-engine, US-04) — see brief.md "Data
+ * Model" -> "New API routes". `createRun`/`confirmRun`/wave-lifecycle routes below are the
+ * real RunRepositoryPort contract this track's Wave Runner/Wave Progress Translator/Run
+ * Watchdog components call through HttpRunRepository (apps/agent-runner/src/nwave-invocation/
+ * http-run-repository.ts). RED scaffold only — every handler throws; DELIVER wave implements
+ * each one behind its own failing acceptance test, one scenario at a time (Mandate 5).
+ *
+ * The seven handlers further below (`completion-summary/*`, `retry`, `escalate`, `close`,
+ * `cycle-history`) remain a PREREQUISITE SCAFFOLD owned by `multi-source-ingestion-governance`
+ * (US-12/US-13) — not touched by this track's DISTILL pass beyond this file-level doc comment
+ * update, per that track's own distill/wave-decisions.md DWD-02.
  */
 export function registerNwaveRunsRoutes(app: Hono<any>, _deps: NwaveRunsDeps) {
+  app.post(
+    "/api/nwave-runs",
+    notImplemented(
+      "POST /api/nwave-runs — creates a run row in PENDING_CONFIRMATION, assigning the " +
+        "stable run_id immediately (before any wave process is spawned), returns run_id " +
+        "(US-04 AC4)",
+    ),
+  );
+
+  app.post(
+    "/api/nwave-runs/:id/confirm",
+    notImplemented(
+      "POST /api/nwave-runs/:id/confirm — PENDING_CONFIRMATION -> STARTING, called by Wave " +
+        "Runner immediately after createRun once the submitter's confirmation is observed " +
+        "(US-04 AC2)",
+    ),
+  );
+
+  app.post(
+    "/api/nwave-runs/:id/waves",
+    notImplemented(
+      "POST /api/nwave-runs/:id/waves — records a new nwave_run_waves row, linking process_id " +
+        "to the shell_start-tracked process for this wave (US-04 core observable contract)",
+    ),
+  );
+
+  app.post(
+    "/api/nwave-runs/:id/waves/:waveId/complete",
+    notImplemented(
+      "POST /api/nwave-runs/:id/waves/:waveId/complete — marks the wave COMPLETED or FAILED " +
+        "depending on exit code, advances or terminates the run (US-04 AC5, ADR-0002); must be " +
+        "idempotent under the platform's at-least-once event redelivery guarantee — a " +
+        "redelivered completion for an already-COMPLETED/FAILED wave must not advance the run " +
+        "a second time",
+    ),
+  );
+
+  app.post(
+    "/api/nwave-runs/:id/halt",
+    notImplemented(
+      "POST /api/nwave-runs/:id/halt — marks the run (and its active wave) HALTED, called by " +
+        "Run Watchdog after shell_stop on a stale wave (US-04, brief.md Failure/Timeout " +
+        "Handling)",
+    ),
+  );
+
+  app.get(
+    "/api/nwave-runs/:id",
+    notImplemented(
+      "GET /api/nwave-runs/:id — reads the run plus its wave history, consumed later by " +
+        "progress-trust-ux (US-04 AC4: every progress message references the same stable " +
+        "run_id)",
+    ),
+  );
+
   app.post(
     "/api/nwave-runs/:id/completion-summary/approve",
     notImplemented(

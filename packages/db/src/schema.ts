@@ -393,6 +393,40 @@ export const nwaveRunStuckFlags = sqliteTable("nwave_run_stuck_flags", {
   cleared_at: integer("cleared_at")
 });
 
+// --- nwave-invocation-engine (owned by this track; see
+// docs/product/architecture/brief.md "Application Architecture" -> "Data Model") ---
+
+export const nwaveRuns = sqliteTable("nwave_runs", {
+  id: text("id").primaryKey(),
+  ticket_ref: text("ticket_ref").notNull(),
+  channel_id: text("channel_id").notNull(),
+  status: text("status").notNull(),
+  current_wave: text("current_wave"),
+  restatement_text: text("restatement_text").notNull(),
+  confirmed_at: integer("confirmed_at"),
+  started_at: integer("started_at"),
+  ended_at: integer("ended_at"),
+  failure_reason: text("failure_reason")
+});
+
+export const nwaveRunWaves = sqliteTable(
+  "nwave_run_waves",
+  {
+    id: text("id").primaryKey(),
+    run_id: text("run_id").notNull(),
+    wave_name: text("wave_name").notNull(),
+    sequence: integer("sequence").notNull(),
+    process_id: text("process_id"),
+    status: text("status").notNull(),
+    started_at: integer("started_at"),
+    ended_at: integer("ended_at"),
+    exit_code: integer("exit_code")
+  },
+  (table) => ({
+    idxNwaveRunWavesRunId: index("idx_nwave_run_waves_run_id").on(table.run_id)
+  })
+);
+
 export const schema = {
   migrations,
   agents,
@@ -419,5 +453,7 @@ export const schema = {
   trelloIngestionSeenCards,
   guardrailAllowlistEntries,
   guardrailDecisionAudit,
-  nwaveRunStuckFlags
+  nwaveRunStuckFlags,
+  nwaveRuns,
+  nwaveRunWaves
 };
