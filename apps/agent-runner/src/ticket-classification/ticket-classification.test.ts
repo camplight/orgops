@@ -124,7 +124,7 @@ describe("US-01/US-02/US-03: ticket classification", () => {
     expect(readBody.classificationRationale).toContain("bug report");
   });
 
-  it.skip("[@walking_skeleton @real-io @driving_port @US-03] Devon overrides a misclassified ticket and implementation becomes unblocked", async () => {
+  it("[@walking_skeleton @real-io @driving_port @US-03] Devon overrides a misclassified ticket and implementation becomes unblocked", async () => {
     const { app } = createRealApiApp();
     const adminCookie = await loginAsAdmin(app);
     const devon = await createHumanFixture(app, adminCookie, { username: "devon-park" });
@@ -451,7 +451,7 @@ describe("US-01/US-02/US-03: ticket classification", () => {
     expect(history.every((entry) => entry.eventType !== "OVERRIDE")).toBe(true);
   });
 
-  it.skip("[@US-03] Priya (a governance-team member who is not the submitter) can override, and the override is audited with her identity", async () => {
+  it("[@US-03] Priya (a governance-team member who is not the submitter) can override, and the override is audited with her identity", async () => {
     const { app, db } = createRealApiApp();
     const adminCookie = await loginAsAdmin(app);
     const devon = await createHumanFixture(app, adminCookie, { username: "devon-park" });

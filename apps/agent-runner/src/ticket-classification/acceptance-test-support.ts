@@ -109,6 +109,17 @@ export async function createHumanFixture(
   });
   const cookie = loginRes.headers.get("set-cookie") ?? "";
 
+  // Invited humans are seeded with must_change_password=1 (humans.ts's invite handler); the real
+  // API blocks every route except /api/auth/me|profile|logout until that's cleared (auth.ts's
+  // password-change gate). A real client completes this immediately after first login, so this
+  // fixture does too — otherwise every other driving port these acceptance tests exercise would
+  // 403 for any human created this way.
+  await app.request("http://localhost/api/auth/profile", {
+    method: "PATCH",
+    headers: { "content-type": "application/json", cookie },
+    body: JSON.stringify({ username: invited.username, newPassword: "fixture-password-1" }),
+  });
+
   return { id: invited.id, username: invited.username, cookie };
 }
 

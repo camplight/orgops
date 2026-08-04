@@ -20,12 +20,6 @@ type TicketClassificationAuditRow = typeof schema.ticketClassificationAudit.$inf
 const NATIVE_FORM_SOURCE = "NATIVE_FORM";
 const TICKET_ID_PATTERN = /^TICKET-(\d+)$/;
 
-function notImplemented(label: string) {
-  return async () => {
-    throw new Error(`${label} not implemented`);
-  };
-}
-
 function ticketRowToApi(row: TicketRow) {
   return {
     id: row.id,
@@ -77,6 +71,27 @@ function normalizeOptionalString(input: unknown): string | null {
   return typeof input === "string" && input.trim() ? input.trim() : null;
 }
 
+const DEVELOPMENT_WORK_RESULT = "DEVELOPMENT_WORK";
+
+/**
+ * Observable contract (brief.md "Observable Contract for nwave-invocation-engine"): emitted
+ * exactly once per ticket, the first time its effective classification_result becomes
+ * DEVELOPMENT_WORK — whether that happens via initial classification or a later governance
+ * override. Both routes defer to this single gate so the emission rule lives in exactly one place.
+ */
+function confirmTicketClassificationIfDevelopmentWork(
+  insertEvent: TicketsDeps["insertEvent"],
+  params: { ticketId: string; channelId: string; classificationResult: string; rationale: string | null },
+): void {
+  if (params.classificationResult !== DEVELOPMENT_WORK_RESULT) return;
+  insertEvent({
+    type: "ticket.classification.confirmed",
+    source: "system",
+    channelId: params.channelId,
+    payload: { ticketId: params.ticketId, channelId: params.channelId, rationale: params.rationale },
+  });
+}
+
 export function computeIsLowDetail(description: string | null): boolean {
   return description === null;
 }
@@ -125,7 +140,7 @@ function getTicketRow(orm: OrgOpsDrizzleDb, ticketId: string): TicketRow | undef
  * by THIS track"). No route path changes for that track's callers.
  */
 export function registerTicketsRoutes(app: Hono<any>, deps: TicketsDeps) {
-  const { orm, jsonResponse, insertEvent } = deps;
+  const { orm, jsonResponse, insertEvent, access } = deps;
 
   app.post("/api/tickets", async (c) => {
     const body = await c.req.json().catch(() => ({}));
@@ -273,17 +288,12 @@ export function registerTicketsRoutes(app: Hono<any>, deps: TicketsDeps) {
       },
     });
 
-    // Observable contract (brief.md "Observable Contract for nwave-invocation-engine"): emitted
-    // exactly once per ticket, the first time its effective classification_result becomes
-    // DEVELOPMENT_WORK. This route is the single place that decides that gate.
-    if (result === "DEVELOPMENT_WORK") {
-      insertEvent({
-        type: "ticket.classification.confirmed",
-        source: "system",
-        channelId: existing.channel_id,
-        payload: { ticketId: id, channelId: existing.channel_id, rationale },
-      });
-    }
+    confirmTicketClassificationIfDevelopmentWork(insertEvent, {
+      ticketId: id,
+      channelId: existing.channel_id,
+      classificationResult: result,
+      rationale,
+    });
 
     const updated = getTicketRow(orm, id);
     return jsonResponse(c, ticketRowToApi(updated as TicketRow), 200);
@@ -347,23 +357,80 @@ export function registerTicketsRoutes(app: Hono<any>, deps: TicketsDeps) {
     return jsonResponse(c, ticketRowToApi(updated as TicketRow), 200);
   });
 
-  app.post(
-    "/api/tickets/:id/override",
-    notImplemented(
-      "POST /api/tickets/:id/override — validates access.canOverrideClassification(user, " +
-        "ticket) server-side before any write (submitter match or governance-team membership, " +
-        "US-03 Technical Notes); unauthorized attempts are rejected with no audit row written. " +
-        "Idempotency guard for redelivered override actions (brief.md Failure/Timeout table): " +
-        "compares the requested toResult against tickets.classification_result BEFORE writing — " +
-        "if they already match, the action is a no-op (no new audit row, no duplicate event). " +
-        "On an authorized, state-changing override: updates tickets.classification_result, " +
-        "appends a ticket_classification_audit row (event_type=OVERRIDE, from_result/to_result/" +
-        "actor_type=HUMAN/actor_id populated — US-03 AC4's who/when/from/to), posts a channel " +
-        "message confirming the change, and — only if toResult===DEVELOPMENT_WORK — emits " +
-        "ticket.classification.confirmed, mirroring the classification route's identical gating " +
-        "rule so the downstream contract has exactly one emission rule regardless of path.",
-    ),
-  );
+  app.post("/api/tickets/:id/override", async (c) => {
+    const id = c.req.param("id");
+    const existing = getTicketRow(orm, id);
+    if (!existing) return jsonResponse(c, { error: "Not found" }, 404);
+
+    const user = c.get("user") as RequestUser | undefined;
+    const isAuthorized = access.canOverrideClassification(user, {
+      submitterHumanId: existing.submitter_human_id,
+    });
+    if (!isAuthorized) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
+
+    const body = await c.req.json().catch(() => ({}));
+    const toResult = typeof body.toResult === "string" ? body.toResult : "";
+    if (!toResult) {
+      return jsonResponse(c, { error: "toResult is required" }, 400);
+    }
+
+    // Idempotency guard (ADR-0004 at-least-once redelivery, brief.md Failure/Timeout table):
+    // mirroring the classification routes' identical guard — a redelivered override that already
+    // matches the ticket's current result is a no-op, never a duplicate audit row or event.
+    if (existing.classification_result === toResult) {
+      return jsonResponse(c, ticketRowToApi(existing), 200);
+    }
+
+    const fromResult = existing.classification_result;
+    const overriddenAt = Date.now();
+
+    orm
+      .update(schema.tickets)
+      .set({
+        classification_result: toResult,
+        classified_at: overriddenAt,
+      })
+      .where(eq(schema.tickets.id, id))
+      .run();
+
+    orm
+      .insert(schema.ticketClassificationAudit)
+      .values({
+        id: randomUUID(),
+        ticket_id: id,
+        event_type: "OVERRIDE",
+        from_result: fromResult,
+        to_result: toResult,
+        rationale: null,
+        actor_type: "HUMAN",
+        actor_id: user?.id ?? null,
+        created_at: overriddenAt,
+      })
+      .run();
+
+    insertEvent({
+      type: "message.created",
+      source: "system",
+      channelId: existing.channel_id,
+      payload: {
+        ticketId: id,
+        classificationResult: toResult,
+        overrideFromResult: fromResult,
+      },
+    });
+
+    confirmTicketClassificationIfDevelopmentWork(insertEvent, {
+      ticketId: id,
+      channelId: existing.channel_id,
+      classificationResult: toResult,
+      rationale: null,
+    });
+
+    const updated = getTicketRow(orm, id);
+    return jsonResponse(c, ticketRowToApi(updated as TicketRow), 200);
+  });
 
   app.get("/api/tickets/:id/classification-history", (c) => {
     const id = c.req.param("id");
