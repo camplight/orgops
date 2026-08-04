@@ -186,12 +186,10 @@ export function registerTicketsRoutes(app: Hono<any>, deps: TicketsDeps) {
     return jsonResponse(c, ticketRowToApi(created as TicketRow), 201);
   });
 
-  app.get(
-    "/api/tickets",
-    notImplemented(
-      "GET /api/tickets — the authenticated submitter's ticket dashboard list (US-01 AC5).",
-    ),
-  );
+  app.get("/api/tickets", (c) => {
+    const rows = orm.select().from(schema.tickets).all() as TicketRow[];
+    return jsonResponse(c, rows.map(ticketRowToApi));
+  });
 
   app.get("/api/tickets/:id", (c) => {
     const id = c.req.param("id");

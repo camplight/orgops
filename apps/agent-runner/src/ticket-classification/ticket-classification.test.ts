@@ -181,7 +181,7 @@ describe("US-01/US-02/US-03: ticket classification", () => {
     expect(created.isLowDetail).toBe(true);
   });
 
-  it.skip("[@US-01] A ticket submission without a title is rejected", async () => {
+  it("[@US-01] A ticket submission without a title is rejected", async () => {
     const { app } = createRealApiApp();
     const cookie = await loginAsAdmin(app);
     const request = authedRequest(app, cookie);
@@ -195,7 +195,7 @@ describe("US-01/US-02/US-03: ticket classification", () => {
     expect(body.error).toBeTruthy();
   });
 
-  it.skip("[@US-01] Duplicate submission with the same idempotency key does not create a second ticket record", async () => {
+  it("[@US-01] Duplicate submission with the same idempotency key does not create a second ticket record", async () => {
     const { app } = createRealApiApp();
     const cookie = await loginAsAdmin(app);
     const request = authedRequest(app, cookie);
