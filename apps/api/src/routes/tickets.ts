@@ -62,6 +62,10 @@ function normalizeOptionalString(input: unknown): string | null {
   return typeof input === "string" && input.trim() ? input.trim() : null;
 }
 
+export function computeIsLowDetail(description: string | null): boolean {
+  return description === null;
+}
+
 function nextTicketId(orm: OrgOpsDrizzleDb): string {
   const rows = orm.select({ id: schema.tickets.id }).from(schema.tickets).all() as Array<{
     id: string;
@@ -128,7 +132,7 @@ export function registerTicketsRoutes(app: Hono<any>, deps: TicketsDeps) {
     }
 
     const description = normalizeDescription(body.description);
-    const isLowDetail = description === null;
+    const isLowDetail = computeIsLowDetail(description);
     const source = normalizeSource(body.source);
     const sourceRef = normalizeOptionalString(body.sourceRef);
 

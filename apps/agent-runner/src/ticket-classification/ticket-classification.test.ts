@@ -168,7 +168,7 @@ describe("US-01/US-02/US-03: ticket classification", () => {
     expect(overrideEntry.actorId).toBe(devon.id);
   });
 
-  it.skip("[@US-01] A ticket with no description is still accepted and flagged as low-detail", async () => {
+  it("[@US-01] A ticket with no description is still accepted and flagged as low-detail", async () => {
     const { app } = createRealApiApp();
     const cookie = await loginAsAdmin(app);
     const request = authedRequest(app, cookie);
@@ -219,7 +219,7 @@ describe("US-01/US-02/US-03: ticket classification", () => {
     expect(list.filter((ticket) => ticket.id === first.body.id)).toHaveLength(1);
   });
 
-  it.skip("[@US-01] Submitted tickets are visible in the submitter's ticket dashboard list", async () => {
+  it("[@US-01] Submitted tickets are visible in the submitter's ticket dashboard list", async () => {
     const { app } = createRealApiApp();
     const cookie = await loginAsAdmin(app);
     const request = authedRequest(app, cookie);
@@ -238,7 +238,7 @@ describe("US-01/US-02/US-03: ticket classification", () => {
     expect(list.map((ticket) => ticket.id)).toContain(created.id);
   });
 
-  it.skip("[@real-io @adapter-integration @US-11] A Trello-sourced ticket reuses the native intake endpoint and is indistinguishable downstream (ADR-0009)", async () => {
+  it("[@real-io @adapter-integration @US-11] A Trello-sourced ticket reuses the native intake endpoint and is indistinguishable downstream (ADR-0009)", async () => {
     const { app } = createRealApiApp();
     const cookie = await loginAsAdmin(app);
     const request = authedRequest(app, cookie);
