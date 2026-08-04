@@ -418,7 +418,7 @@ describe("US-01/US-02/US-03: ticket classification", () => {
     expect((await readTicket(request, created.id)).classificationResult).toBe("DEVELOPMENT_WORK");
   });
 
-  it.skip("[@US-03] Override is rejected for a human who is neither the submitter nor a governance-team member", async () => {
+  it("[@US-03] Override is rejected for a human who is neither the submitter nor a governance-team member", async () => {
     const { app } = createRealApiApp();
     const adminCookie = await loginAsAdmin(app);
     const maria = await createHumanFixture(app, adminCookie, { username: "maria-santos" });
@@ -526,7 +526,7 @@ describe("US-01/US-02/US-03: ticket classification", () => {
     expect(overrideEntry.createdAt).toBeGreaterThan(0);
   });
 
-  it.skip("[@US-03] A redelivered identical override action is a no-op", async () => {
+  it("[@US-03] A redelivered identical override action is a no-op", async () => {
     const { app } = createRealApiApp();
     const adminCookie = await loginAsAdmin(app);
     const devon = await createHumanFixture(app, adminCookie, { username: "devon-park" });
@@ -566,7 +566,7 @@ describe("US-01/US-02/US-03: ticket classification", () => {
     expect(afterHistory).toHaveLength(beforeHistory.length);
   });
 
-  it.skip("[@US-03] A governance override back to NOT DEVELOPMENT WORK is audited without re-triggering implementation", async () => {
+  it("[@US-03] A governance override back to NOT DEVELOPMENT WORK is audited without re-triggering implementation", async () => {
     const { app, db } = createRealApiApp();
     const adminCookie = await loginAsAdmin(app);
     const maria = await createHumanFixture(app, adminCookie, { username: "maria-santos" });

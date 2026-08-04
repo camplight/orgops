@@ -47,4 +47,17 @@ describe("canOverrideClassification", () => {
 
     expect(isAuthorized).toBe(true);
   });
+
+  it("rejects a human who is neither the submitter nor a governance-team member", () => {
+    const orm = createTestOrm();
+    const access = createAccessControl({ orm });
+    addToGovernanceTeam(orm, "human-priya");
+
+    const isAuthorized = access.canOverrideClassification(
+      { id: "human-stranger", username: "unrelated-human" },
+      { submitterHumanId: "human-devon" },
+    );
+
+    expect(isAuthorized).toBe(false);
+  });
 });
