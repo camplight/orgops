@@ -141,6 +141,34 @@
       "s": "EXECUTED",
       "d": "PASS",
       "t": "2026-08-04T08:51:15Z"
+    },
+    {
+      "sid": "03-02",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-08-04T15:48:25Z"
+    },
+    {
+      "sid": "03-02",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-08-04T15:48:28Z"
+    },
+    {
+      "sid": "03-02",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: acceptance scenario was already green on un-skip (Mandate-5 already-implemented outcome) -- the emission gate already lives solely in apps/api/src/routes/tickets.ts's POST /api/tickets/:id/classification handler (if (result === \"DEVELOPMENT_WORK\")), and classification-orchestrator.ts never performs event emission itself, so no gap exists requiring an isolated unit test of gating logic.",
+      "t": "2026-08-04T15:48:35Z"
+    },
+    {
+      "sid": "03-02",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-08-04T15:48:40Z"
     }
   ]
 }

@@ -314,7 +314,7 @@ describe("US-01/US-02/US-03: ticket classification", () => {
     expect(history.every((entry) => entry.eventType !== "CONFIRMED")).toBe(true);
   });
 
-  it.skip("[@property @US-02] LOW CONFIDENCE and NOT DEVELOPMENT WORK results never unblock implementation, regardless of rationale content", async () => {
+  it("[@property @US-02] LOW CONFIDENCE and NOT DEVELOPMENT WORK results never unblock implementation, regardless of rationale content", async () => {
     const nonTriggeringResults: ClassificationResult[] = ["LOW_CONFIDENCE", "NOT_DEVELOPMENT_WORK"];
 
     for (const result of nonTriggeringResults) {
