@@ -230,10 +230,10 @@ export function registerNwaveRunsRoutes(app: Hono<any>, deps: NwaveRunsDeps) {
     if (!ticketRef) return jsonResponse(c, { error: "ticketRef is required" }, 400);
     const channelId = requireNonEmptyTrimmedString(body.channelId);
     if (!channelId) return jsonResponse(c, { error: "channelId is required" }, 400);
-    if (typeof body.restatementText !== "string") {
-      return jsonResponse(c, { error: "restatementText is required" }, 400);
+    const restatementText = requireNonEmptyTrimmedString(body.restatementText);
+    if (!restatementText) {
+      return jsonResponse(c, { error: "restatementText must be a non-empty string" }, 400);
     }
-    const restatementText = body.restatementText;
 
     const id = generateRunId();
     orm

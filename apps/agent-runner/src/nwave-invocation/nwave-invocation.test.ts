@@ -47,11 +47,19 @@ describe("US-04: a confirmed development-work ticket triggers an nWave implement
       { generate: fakeGenerate, modelId: "claude-3-5-sonnet" },
     );
 
+    // ...the composed restatement is posted to the ticket-scoped channel...
     // ...and Maria Santos confirms "Looks right"
     const confirmationOutcome = evaluateConfirmationResponse({
       ticketRef: "TICKET-1043",
       channelId: "channel-ticket-1043",
       events: [
+        {
+          id: "evt-0",
+          type: "message.created",
+          source: "agent:restatement-composer",
+          channelId: "channel-ticket-1043",
+          payload: { text: restatementText },
+        },
         {
           id: "evt-1",
           type: "message.created",
@@ -62,6 +70,12 @@ describe("US-04: a confirmed development-work ticket triggers an nWave implement
       ],
     });
     expect(confirmationOutcome.kind).toBe("CONFIRMED");
+    // The confirmed text must be the actually-posted restatement pulled from the channel's
+    // event history, never an empty default — proving US-04 AC1's "a plain-language
+    // restatement is posted before any run starts and is the text ultimately confirmed".
+    expect(
+      confirmationOutcome.kind === "CONFIRMED" ? confirmationOutcome.confirmedRestatementText : "",
+    ).toBe(restatementText);
 
     const deps: WaveRunnerDependencies = {
       runRepository,
@@ -84,6 +98,10 @@ describe("US-04: a confirmed development-work ticket triggers an nWave implement
 
     expect(run.id).toMatch(/^RUN-/);
     expect(["STARTING", "RUNNING"]).toContain(run.status);
+    // The persisted run must carry the actually-composed restatement text — never the empty
+    // default that flows through when no agent-posted restatement event is found (US-04 AC1).
+    expect(run.restatementText.length).toBeGreaterThan(0);
+    expect(run.restatementText).toBe(restatementText);
   });
 
   it("[@driving_port @US-04] Carlos corrects a misunderstood restatement and the run does not start until re-confirmed", () => {
@@ -383,6 +401,30 @@ describe("US-04: a confirmed development-work ticket triggers an nWave implement
     expect(res.status).toBe(401);
   });
 
+  it("[@driving_adapter @real-io @US-04] a run cannot be created with a blank restatement, since a run must always carry the text Maria actually confirmed", async () => {
+    const app = createRealApiApp();
+    const request = apiFetchAsRunner(app);
+
+    // Given the Restatement Composer has not produced any confirmed restatement text (blank/
+    // whitespace-only, e.g. a wiring bug upstream)
+    // When a run creation is attempted with that blank restatement text
+    const res = await request("/api/nwave-runs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ticketRef: "TICKET-1043",
+        channelId: "channel-ticket-1043",
+        restatementText: "   ",
+      }),
+    });
+
+    // Then the request is rejected — a run must never be created without the plain-language
+    // restatement Maria actually confirmed (US-04 AC1)
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("restatementText must be a non-empty string");
+  });
+
   it("[@US-04] the system composes a plain-language restatement of the ticket's intent before any run starts", async () => {
     const fakeGenerate: GenerateFn = async () => ({
       text: "Adds a Slack notification to the #billing-alerts channel when an invoice payment fails.",
@@ -423,7 +465,21 @@ describe("US-04: a confirmed development-work ticket triggers an nWave implement
       // smoke test named by the architecture brief itself, not part of the fast local
       // acceptance suite. Mirrors multi-source-ingestion-governance's own trello-cli
       // contract-test convention.
-      expect(true).toBe(true);
+      //
+      // ADR-0001 explicitly leaves the real `claude -p ...` invocation's exit-code/output-format
+      // contract unconfirmed ("exact flags to be confirmed on first real implementation
+      // attempt" — see docs/product/architecture/adr-0001-nwave-invocation-mechanism.md). There
+      // is no validated contract shape to assert against yet; fabricating one here (guessing at
+      // exit codes or an `--output-format=stream-json` structure nobody has verified) would be
+      // less honest than refusing to pass. Once the fixture and a confirmed contract exist, this
+      // body must be replaced with a real invocation (mirroring
+      // createRealShellStart()/buildEchoWaveCommand, but spawning the real `claude -p ...`
+      // command per the confirmed contract) that asserts the actual exit code and output shape.
+      throw new Error(
+        "CLI contract test not yet implemented — see docs/product/architecture/brief.md " +
+          "External Integrations Requiring Contract Awareness section and " +
+          "adr-0001-nwave-invocation-mechanism.md (exact CLI contract not yet confirmed)",
+      );
     },
   );
 });
