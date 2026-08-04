@@ -1,0 +1,125 @@
+{
+  "roadmap": {
+    "project_id": "ticket-classification",
+    "created_at": "2026-08-04T08:16:11Z",
+    "total_steps": 10,
+    "phases": 4
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Walking skeleton: ticket submission through automatic classification (US-01 + US-02)",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "Ticket submission triggers automatic classification with a stated rationale (WS-1)",
+          "criteria": "POST /api/tickets accepts a title and description and returns 201 with a real ticket id; running the classification step against a fake LLM response of DEVELOPMENT_WORK causes GET /api/tickets/:id to report classificationResult = DEVELOPMENT_WORK and a classificationRationale that reflects the stated reason; the full path (create ticket, classify, read result) runs through the real Hono app and real SQLite, with only the Classifier's generate() call faked -- deleting the real HTTP/DB adapters would break this test.",
+          "test_file": "apps/agent-runner/src/ticket-classification/ticket-classification.test.ts",
+          "scenario_name": "Maria submits a ticket and sees it classified as development work with a rationale"
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "Ticket intake hardening: validation, idempotency, dashboard, multi-source reuse (US-01, US-11)",
+      "steps": [
+        {
+          "id": "02-01",
+          "name": "Ticket intake validation and duplicate-submission idempotency",
+          "criteria": "POST /api/tickets with a blank title returns 400 with a non-empty error message and creates no ticket row; two POST /api/tickets requests carrying the same idempotencyKey return the same ticket id (first response 201, second response 200) and the dashboard list contains exactly one row for that id, never two.",
+          "test_file": "apps/agent-runner/src/ticket-classification/ticket-classification.test.ts",
+          "scenario_name": "A ticket submission without a title is rejected; Duplicate submission with the same idempotency key does not create a second ticket record"
+        },
+        {
+          "id": "02-02",
+          "name": "Low-detail flagging, dashboard visibility, and multi-source intake reuse",
+          "criteria": "A ticket submitted with only a title (no description) is created successfully (201) with isLowDetail = true; a submitter's previously created ticket appears in the list returned by GET /api/tickets; a ticket submitted with source = TRELLO and a sourceRef reuses the same POST /api/tickets endpoint, returns 201 with an id in the TICKET-{n} format, and is otherwise indistinguishable downstream from a native-form ticket (ADR-0009).",
+          "test_file": "apps/agent-runner/src/ticket-classification/ticket-classification.test.ts",
+          "scenario_name": "A ticket with no description is still accepted and flagged as low-detail; Submitted tickets are visible in the submitter's ticket dashboard list; A Trello-sourced ticket reuses the native intake endpoint and is indistinguishable downstream (ADR-0009)"
+        }
+      ]
+    },
+    {
+      "id": "03",
+      "name": "Classification decision logic: judgment paths, confirmation gate, failure handling (US-02)",
+      "steps": [
+        {
+          "id": "03-01",
+          "name": "Classifier judgment paths: content-only and ambiguous tickets",
+          "criteria": "Given a fake LLM response of NOT_DEVELOPMENT_WORK for a content-only ticket, the ticket's classificationResult becomes NOT_DEVELOPMENT_WORK and its rationale routes the submitter toward the right team; given a fake LLM response of LOW_CONFIDENCE for a genuinely ambiguous ticket, the ticket's classificationResult becomes LOW_CONFIDENCE and no confirming audit entry is ever recorded for it.",
+          "test_file": "apps/agent-runner/src/ticket-classification/ticket-classification.test.ts",
+          "scenario_name": "A content-only ticket is classified away from development work, with a routing suggestion; An ambiguous ticket produces a low-confidence result and does not unblock implementation"
+        },
+        {
+          "id": "03-02",
+          "name": "Structural gate: LOW_CONFIDENCE and NOT_DEVELOPMENT_WORK never unblock implementation",
+          "criteria": "For both LOW_CONFIDENCE and NOT_DEVELOPMENT_WORK classification results, regardless of rationale content, the ticket's classificationResult is never DEVELOPMENT_WORK and ticket.classification.confirmed is never emitted -- the gating rule holds as a structural, provable property of the decision boundary, not an incidental outcome of particular test data, satisfying US-02 AC5 (brief.md's stated #2 quality-attribute priority for this track).",
+          "test_file": "apps/agent-runner/src/ticket-classification/ticket-classification.test.ts",
+          "scenario_name": "LOW CONFIDENCE and NOT DEVELOPMENT WORK results never unblock implementation, regardless of rationale content"
+        },
+        {
+          "id": "03-03",
+          "name": "Classification failure handling: LLM error and unparseable response",
+          "criteria": "When the injected generate() call rejects (an LLM error), the ticket's classificationStatus becomes FAILED and classificationFailureReason names the failure -- never left PENDING; when generate() returns a response that is not valid JSON or not one of the three enum values, the ticket is likewise surfaced as classificationStatus = FAILED, with classificationResult never coerced into one of the three valid guessed values.",
+          "test_file": "apps/agent-runner/src/ticket-classification/ticket-classification.test.ts",
+          "scenario_name": "Classification failure (LLM error) is surfaced, never silently left pending; Classifier returns an unparseable response — treated identically to an LLM failure, never coerced"
+        },
+        {
+          "id": "03-04",
+          "name": "Redelivery no-op and infrastructure-failure handling for classification",
+          "criteria": "Re-running the classification step for an already-classified ticket leaves its audit-history length and classificationResult unchanged (no duplicate audit row is written); HttpTicketRepository's recordClassification call rejects (never silently swallows) when the underlying HTTP call fails with a network error; a generate() call that times out results in classificationStatus = FAILED, never left PENDING.",
+          "test_file": "apps/agent-runner/src/ticket-classification/ticket-classification.test.ts",
+          "scenario_name": "A redelivered ticket.created for an already-classified ticket is a no-op; HttpTicketRepository surfaces a network failure from the classification-recording call, never silently swallowed; A Classifier generate() timeout is treated as a classification failure, not left pending"
+        }
+      ]
+    },
+    {
+      "id": "04",
+      "name": "Governance override and audit trail (US-03)",
+      "steps": [
+        {
+          "id": "04-01",
+          "name": "Governance override unblocks a misclassified ticket (WS-2)",
+          "criteria": "POST /api/tickets/:id/override, called by the ticket's own submitter, updates classificationResult to the requested value and returns 200, with the audit history recording the from/to transition; the same route, called by a human who is a governance-team member but not the submitter, likewise succeeds (200) and the resulting audit entry records that governance member's id as the actor -- covering both authorized-actor paths named in US-03.",
+          "test_file": "apps/agent-runner/src/ticket-classification/ticket-classification.test.ts",
+          "scenario_name": "Devon overrides a misclassified ticket and implementation becomes unblocked; Priya (a governance-team member who is not the submitter) can override, and the override is audited with her identity"
+        },
+        {
+          "id": "04-02",
+          "name": "Override authorization, redelivery idempotency, and reversal",
+          "criteria": "POST /api/tickets/:id/override from a human who is neither the submitter nor a governance-team member returns 403 and writes no audit row; an identical override action submitted a second time leaves the audit-history length unchanged (no duplicate row, no duplicate confirmation event); a governance override back to NOT_DEVELOPMENT_WORK updates classificationResult accordingly and is audited without re-triggering ticket.classification.confirmed.",
+          "test_file": "apps/agent-runner/src/ticket-classification/ticket-classification.test.ts",
+          "scenario_name": "Override is rejected for a human who is neither the submitter nor a governance-team member; A redelivered identical override action is a no-op; A governance override back to NOT DEVELOPMENT WORK is audited without re-triggering implementation"
+        },
+        {
+          "id": "04-03",
+          "name": "Governance audit trail visibility",
+          "criteria": "GET /api/tickets/:id/classification-history returns the ticket's full decision sequence in order (initial classification, then override), with each entry exposing eventType, fromResult, toResult, actorId, and createdAt -- satisfying US-03 AC4's who/when/from/to requirement for governance review.",
+          "test_file": "apps/agent-runner/src/ticket-classification/ticket-classification.test.ts",
+          "scenario_name": "The override audit trail records who, when, from, and to, visible to governance review"
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "apps/agent-runner/src/ticket-classification/",
+      "apps/api/src/routes/tickets.ts",
+      "apps/api/src/routes/access.ts",
+      "packages/db/src/schema.ts"
+    ],
+    "test_directories": [
+      "apps/agent-runner/src/ticket-classification/"
+    ],
+    "excluded_patterns": [
+      "node_modules/**",
+      "dist/**",
+      "**/*.d.ts"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "nw-acceptance-designer-reviewer",
+    "approved_at": "2026-08-04T08:30:00Z"
+  }
+}

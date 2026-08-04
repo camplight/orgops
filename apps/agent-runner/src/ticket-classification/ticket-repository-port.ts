@@ -1,7 +1,5 @@
 import type { ClassificationAuditEntry, ClassificationResult, Ticket } from "./types";
 
-export const __SCAFFOLD__ = true;
-
 /**
  * Port (per brief.md "Architecture Style"): the six operations named in the Classification
  * Orchestrator / Override-Audit Handler component descriptions. Pure orchestration/decision

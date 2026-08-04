@@ -1,10 +1,7 @@
 // Domain types owned by the ticket-classification track (US-01/US-02/US-03).
 // See docs/product/architecture/brief.md "Ticket Classification" -> "Data Model" and
 // "Component Architecture". Mirrors the naming/shape convention already used by
-// apps/agent-runner/src/nwave-invocation/types.ts (the sibling track's own scaffold types
-// file), not re-derived independently.
-
-export const __SCAFFOLD__ = true;
+// apps/agent-runner/src/nwave-invocation/types.ts (the sibling track's own types file).
 
 export type ClassificationStatus = "PENDING" | "CLASSIFIED" | "FAILED";
 

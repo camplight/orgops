@@ -8,6 +8,7 @@ import {
   isChannelKind,
   schema,
   type ChannelKind,
+  type ChannelVisibility,
   type OrgOpsDrizzleDb
 } from "@orgops/db";
 import { and, asc, eq } from "drizzle-orm";
@@ -18,6 +19,63 @@ type CollabDeps = {
   jsonResponse: (c: any, data: unknown, status?: number) => Response;
   access: AccessControl;
 };
+
+/**
+ * Shared channel-creation primitive: inserts a `channels` row exactly the way `POST
+ * /api/channels` below does. Extracted so other tracks that need to create a channel as a side
+ * effect of their own domain action (e.g. ticket-classification's ticket-scoped channel on
+ * ticket intake) reuse this insert logic rather than re-implementing it or calling this route
+ * over HTTP from within the same process.
+ */
+export function createChannelRow(
+  orm: OrgOpsDrizzleDb,
+  input: {
+    name: string;
+    description?: string | null;
+    visibility: ChannelVisibility;
+    ownerHumanId?: string | null;
+    kind: ChannelKind;
+    metadataJson?: string | null;
+  },
+): { id: string } {
+  const id = randomUUID();
+  orm
+    .insert(schema.channels)
+    .values({
+      id,
+      name: input.name,
+      description: input.description ?? null,
+      metadata_json: input.metadataJson ?? null,
+      visibility: input.visibility,
+      owner_human_id: input.ownerHumanId ?? null,
+      kind: input.kind,
+      direct_participant_key: null,
+      created_at: Date.now(),
+    })
+    .run();
+  return { id };
+}
+
+/**
+ * Shared channel-subscription primitive mirroring `POST /api/channels`' own HUMAN-subscription
+ * insert (subscriber_id = the human's username, the same convention every other HUMAN channel
+ * subscription in this file uses).
+ */
+export function subscribeHumanToChannel(
+  orm: OrgOpsDrizzleDb,
+  channelId: string,
+  username: string,
+): void {
+  orm
+    .insert(schema.channelSubscriptions)
+    .values({
+      channel_id: channelId,
+      subscriber_type: "HUMAN",
+      subscriber_id: username,
+    })
+    .onConflictDoNothing()
+    .run();
+}
 
 export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
   const { orm, jsonResponse, access } = deps;
@@ -420,36 +478,19 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
         401,
       );
     }
-    const id = randomUUID();
-    orm
-      .insert(schema.channels)
-      .values({
-        id,
-        name,
-        description: body.description ?? null,
-        metadata_json:
-          parsedMetadata.value === undefined
-            ? null
-            : parsedMetadata.value === null
-              ? null
-              : JSON.stringify(parsedMetadata.value),
-        visibility,
-        owner_human_id: ownerHumanId,
-        kind: requestedKind,
-        direct_participant_key: null,
-        created_at: Date.now(),
-      })
-      .run();
+    const { id } = createChannelRow(orm, {
+      name,
+      description: body.description ?? null,
+      visibility,
+      ownerHumanId,
+      kind: requestedKind,
+      metadataJson:
+        parsedMetadata.value === undefined || parsedMetadata.value === null
+          ? null
+          : JSON.stringify(parsedMetadata.value),
+    });
     if (ownerHumanId && user?.username) {
-      orm
-        .insert(schema.channelSubscriptions)
-        .values({
-          channel_id: id,
-          subscriber_type: "HUMAN",
-          subscriber_id: user.username,
-        })
-        .onConflictDoNothing()
-        .run();
+      subscribeHumanToChannel(orm, id, user.username);
     }
     return jsonResponse(c, { id }, 201);
   });
