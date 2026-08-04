@@ -289,18 +289,63 @@ export function registerTicketsRoutes(app: Hono<any>, deps: TicketsDeps) {
     return jsonResponse(c, ticketRowToApi(updated as TicketRow), 200);
   });
 
-  app.post(
-    "/api/tickets/:id/classification/failed",
-    notImplemented(
-      "POST /api/tickets/:id/classification/failed — called by HttpTicketRepository when the " +
-        "Classifier's generate() call errors, times out, or returns an unparseable/out-of-enum " +
-        "response (all three treated identically, never silently coerced into a valid result). " +
-        "Sets classification_status=FAILED and classification_failure_reason, appends a " +
-        "ticket_classification_audit row (event_type=CLASSIFICATION_FAILED, actor_type=SYSTEM), " +
-        "posts a channel message naming the failure and what happens next — never silent " +
-        "(US-02 AC4).",
-    ),
-  );
+  app.post("/api/tickets/:id/classification/failed", async (c) => {
+    const id = c.req.param("id");
+    const existing = getTicketRow(orm, id);
+    if (!existing) return jsonResponse(c, { error: "Not found" }, 404);
+
+    // Idempotency guard (ADR-0004 at-least-once redelivery), mirroring the classification
+    // route's identical guard: a ticket already CLASSIFIED/FAILED is a no-op response, never a
+    // duplicate audit row or duplicate channel message.
+    if (existing.classification_status !== "PENDING") {
+      return jsonResponse(c, ticketRowToApi(existing), 200);
+    }
+
+    const body = await c.req.json().catch(() => ({}));
+    const reason = typeof body.reason === "string" ? body.reason.trim() : "";
+    if (!reason) {
+      return jsonResponse(c, { error: "reason is required" }, 400);
+    }
+
+    orm
+      .update(schema.tickets)
+      .set({
+        classification_status: "FAILED",
+        classification_failure_reason: reason,
+      })
+      .where(eq(schema.tickets.id, id))
+      .run();
+
+    orm
+      .insert(schema.ticketClassificationAudit)
+      .values({
+        id: randomUUID(),
+        ticket_id: id,
+        event_type: "CLASSIFICATION_FAILED",
+        from_result: null,
+        to_result: null,
+        rationale: reason,
+        actor_type: "SYSTEM",
+        actor_id: null,
+        created_at: Date.now(),
+      })
+      .run();
+
+    // Never silent (US-02 AC4): names the failure and, implicitly, that classification did not
+    // complete — surfaced in the ticket's channel exactly like the success path's channel message.
+    insertEvent({
+      type: "message.created",
+      source: "system",
+      channelId: existing.channel_id,
+      payload: {
+        ticketId: id,
+        classificationFailureReason: reason,
+      },
+    });
+
+    const updated = getTicketRow(orm, id);
+    return jsonResponse(c, ticketRowToApi(updated as TicketRow), 200);
+  });
 
   app.post(
     "/api/tickets/:id/override",

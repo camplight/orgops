@@ -337,7 +337,7 @@ describe("US-01/US-02/US-03: ticket classification", () => {
     }
   });
 
-  it.skip("[@US-02] Classification failure (LLM error) is surfaced, never silently left pending", async () => {
+  it("[@US-02] Classification failure (LLM error) is surfaced, never silently left pending", async () => {
     const { app } = createRealApiApp();
     const cookie = await loginAsAdmin(app);
     const request = authedRequest(app, cookie);
@@ -361,7 +361,7 @@ describe("US-01/US-02/US-03: ticket classification", () => {
     expect(readBody.classificationFailureReason).toContain("timed out");
   });
 
-  it.skip("[@US-02] Classifier returns an unparseable response — treated identically to an LLM failure, never coerced", async () => {
+  it("[@US-02] Classifier returns an unparseable response — treated identically to an LLM failure, never coerced", async () => {
     const { app } = createRealApiApp();
     const cookie = await loginAsAdmin(app);
     const request = authedRequest(app, cookie);
