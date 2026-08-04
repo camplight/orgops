@@ -383,7 +383,7 @@ describe("US-01/US-02/US-03: ticket classification", () => {
     );
   });
 
-  it.skip("[@US-02] A redelivered ticket.created for an already-classified ticket is a no-op", async () => {
+  it("[@US-02] A redelivered ticket.created for an already-classified ticket is a no-op", async () => {
     const { app } = createRealApiApp();
     const cookie = await loginAsAdmin(app);
     const request = authedRequest(app, cookie);
@@ -600,7 +600,7 @@ describe("US-01/US-02/US-03: ticket classification", () => {
     );
   });
 
-  it.skip("[@infrastructure-failure @in-memory @US-02] HttpTicketRepository surfaces a network failure from the classification-recording call, never silently swallowed", async () => {
+  it("[@infrastructure-failure @in-memory @US-02] HttpTicketRepository surfaces a network failure from the classification-recording call, never silently swallowed", async () => {
     const failingApiFetch = async (): Promise<Response> => {
       throw new Error("fetch failed: connection reset");
     };
@@ -615,7 +615,7 @@ describe("US-01/US-02/US-03: ticket classification", () => {
     ).rejects.toThrow(/connection reset/);
   });
 
-  it.skip("[@infrastructure-failure @in-memory @US-02] A Classifier generate() timeout is treated as a classification failure, not left pending", async () => {
+  it("[@infrastructure-failure @in-memory @US-02] A Classifier generate() timeout is treated as a classification failure, not left pending", async () => {
     const { app } = createRealApiApp();
     const cookie = await loginAsAdmin(app);
     const request = authedRequest(app, cookie);
