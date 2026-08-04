@@ -27,6 +27,8 @@
     "deploy:smoke-check": "node --env-file=.env --import tsx scripts/prod-smoke-check.ts"
   },
   "devDependencies": {
+    "@stryker-mutator/core": "^9.6.1",
+    "@stryker-mutator/vitest-runner": "^9.6.1",
     "@types/node": "^24.5.2",
     "concurrently": "^9.0.1",
     "dotenv-cli": "^8.0.0",

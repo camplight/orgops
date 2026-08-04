@@ -1,0 +1,35 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "packageManager": "npm",
+  "testRunner": "vitest",
+  "coverageAnalysis": "perTest",
+  "reporters": ["clear-text", "progress", "html", "json"],
+  "htmlReporter": {
+    "fileName": "docs/feature/nwave-invocation-engine/deliver/mutation/mutation-report.html"
+  },
+  "jsonReporter": {
+    "fileName": "docs/feature/nwave-invocation-engine/deliver/mutation/mutation-report.json"
+  },
+  "mutate": [
+    "apps/agent-runner/src/nwave-invocation/confirmation-gate.ts",
+    "apps/agent-runner/src/nwave-invocation/http-run-repository.ts",
+    "apps/agent-runner/src/nwave-invocation/restatement-composer.ts",
+    "apps/agent-runner/src/nwave-invocation/run-watchdog.ts",
+    "apps/agent-runner/src/nwave-invocation/wave-progress-translator.ts",
+    "apps/agent-runner/src/nwave-invocation/wave-runner.ts",
+    "apps/api/src/routes/nwave-runs.ts"
+  ],
+  "vitest": {
+    "related": false,
+    "configFile": "vitest.stryker.config.ts"
+  },
+  "thresholds": {
+    "high": 80,
+    "low": 70,
+    "break": null
+  },
+  "timeoutMS": 60000,
+  "timeoutFactor": 2,
+  "concurrency": 4,
+  "tempDirName": ".stryker-tmp"
+}

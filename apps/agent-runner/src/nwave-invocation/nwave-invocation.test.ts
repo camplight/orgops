@@ -151,6 +151,10 @@ describe("US-04: a confirmed development-work ticket triggers an nWave implement
     // stable run id created before the spawn attempt, never left implying work is underway
     expect(run.status).toBe("START_FAILED");
     expect(run.id).toMatch(/^RUN-/);
+    // ...and the reason references the actual wave that failed to start and the real spawn
+    // failure detail, never a blank/generic message (US-04 AC5)
+    expect(run.failureReason).toContain("DISCUSS");
+    expect(run.failureReason).toContain("execution environment is unavailable");
   });
 
   it("[@property @US-04] the run id remains stable and is referenced by every wave transition for the life of the run", async () => {
@@ -213,15 +217,24 @@ describe("US-04: a confirmed development-work ticket triggers an nWave implement
       buildWaveCommand: buildEchoWaveCommand,
     };
 
-    // Given DISTILL's wave process for TICKET-1043 has exited with a non-zero code
+    // Given DISCUSS's wave process for TICKET-1043 (RUN-8841's fixture-seeded running wave —
+    // see acceptance-test-support.ts's seedNwaveRunFixture) has exited with a non-zero code.
+    // (Regression note: this scenario previously asserted against a "DISTILL" wave name that
+    // does not exist in the seeded fixture, so `findRunningWave` returned undefined and the
+    // assertion below passed vacuously via the run/wave-not-found guard, never actually
+    // exercising `recordWaveFailure` — a Stryker mutation-testing run surfaced this as multiple
+    // "no coverage" mutants in wave-runner.ts's failure-recording path.)
     // When the Wave Runner processes that exit
     const nextWave = await advanceToNextWave(
-      { runId: "RUN-8841", completedWaveName: "DISTILL", exitCode: 1 },
+      { runId: "RUN-8841", completedWaveName: "DISCUSS", exitCode: 1 },
       deps,
     );
 
     // Then the wave and run are marked FAILED and the DELIVER wave never starts
     expect(nextWave).toBeNull();
+    const run = await runRepository.getRun({ runId: "RUN-8841" });
+    expect(run?.status).toBe("FAILED");
+    expect(run?.failureReason).toContain("DISCUSS");
   });
 
   it("[@US-04] a wave that produces no output for longer than the configured threshold is halted with a clear \"no progress\" signal", () => {
@@ -359,6 +372,117 @@ describe("US-04: a confirmed development-work ticket triggers an nWave implement
     expect(outcome.kind).toBe("PENDING");
   });
 
+  it("[@US-04] a submitter's reply is recognized as confirmation even with incidental surrounding whitespace", () => {
+    // Given the submitter's reply to the restatement carries incidental leading/trailing
+    // whitespace (e.g. a client that pads message text)
+    const outcome = evaluateConfirmationResponse({
+      ticketRef: "TICKET-1043",
+      channelId: "channel-ticket-1043",
+      events: [
+        {
+          id: "evt-1",
+          type: "message.created",
+          source: "human:maria-santos",
+          channelId: "channel-ticket-1043",
+          payload: { text: "  Looks right  " },
+        },
+      ],
+    });
+
+    // Then the surrounding whitespace never prevents recognizing the confirmation
+    expect(outcome.kind).toBe("CONFIRMED");
+  });
+
+  it("[@US-04] a message with no usable text — missing text field, a non-string text value, or no payload at all — is never mistaken for a reply", () => {
+    // Given the ticket channel contains message events whose payload carries no usable text
+    // (malformed upstream events, never a valid submitter reply)
+    const outcomeNoTextField = evaluateConfirmationResponse({
+      ticketRef: "TICKET-1043",
+      channelId: "channel-ticket-1043",
+      events: [
+        {
+          id: "evt-1",
+          type: "message.created",
+          source: "human:maria-santos",
+          channelId: "channel-ticket-1043",
+          payload: { unrelatedField: true },
+        },
+      ],
+    });
+    const outcomeNonStringText = evaluateConfirmationResponse({
+      ticketRef: "TICKET-1043",
+      channelId: "channel-ticket-1043",
+      events: [
+        {
+          id: "evt-2",
+          type: "message.created",
+          source: "human:maria-santos",
+          channelId: "channel-ticket-1043",
+          payload: { text: 12345 },
+        },
+      ],
+    });
+    const outcomeNullPayload = evaluateConfirmationResponse({
+      ticketRef: "TICKET-1043",
+      channelId: "channel-ticket-1043",
+      events: [
+        {
+          id: "evt-3",
+          type: "message.created",
+          source: "human:maria-santos",
+          channelId: "channel-ticket-1043",
+          payload: null,
+        },
+      ],
+    });
+
+    // Then none of them is ever mistaken for confirmation or correction — the outcome stays
+    // PENDING in every case
+    expect(outcomeNoTextField.kind).toBe("PENDING");
+    expect(outcomeNonStringText.kind).toBe("PENDING");
+    expect(outcomeNullPayload.kind).toBe("PENDING");
+  });
+
+  it("[@US-04] the latest submitter reply is chosen by when it actually happened, not by its position in the event batch, and an agent's own message is never mistaken for the submitter's reply even when it is the most recent event overall", () => {
+    // Given the submitter corrected the restatement, then later confirmed it ("Looks right") —
+    // but the events arrive out of chronological order, and the agent posts again afterward
+    // (an even later event that must never count as the submitter's reply)
+    const outcome = evaluateConfirmationResponse({
+      ticketRef: "TICKET-1043",
+      channelId: "channel-ticket-1043",
+      events: [
+        {
+          id: "evt-agent-followup",
+          type: "message.created",
+          source: "agent:restatement-composer",
+          channelId: "channel-ticket-1043",
+          payload: { text: "Starting implementation shortly." },
+          createdAt: 3000,
+        },
+        {
+          id: "evt-confirm",
+          type: "message.created",
+          source: "human:maria-santos",
+          channelId: "channel-ticket-1043",
+          payload: { text: "Looks right" },
+          createdAt: 2000,
+        },
+        {
+          id: "evt-correction",
+          type: "message.created",
+          source: "human:maria-santos",
+          channelId: "channel-ticket-1043",
+          payload: { text: "Not quite" },
+          createdAt: 1000,
+        },
+      ],
+    });
+
+    // Then the outcome reflects the chronologically-latest submitter reply (CONFIRMED) — never
+    // the earlier correction, and never the agent's later, unrelated message
+    expect(outcome.kind).toBe("CONFIRMED");
+  });
+
   it("[@US-04] wave chaining follows DISCUSS, DESIGN, DISTILL, DELIVER in order, and the run completes once DELIVER exits cleanly", async () => {
     const app = createRealApiApp();
     const runRepository = createHttpRunRepository({ apiFetch: apiFetchAsRunner(app) });
@@ -384,6 +508,15 @@ describe("US-04: a confirmed development-work ticket triggers an nWave implement
     expect(afterDeliver).toBeNull();
     const run = await runRepository.getRun({ runId: "RUN-8841" });
     expect(run?.status).toBe("COMPLETED");
+    // ...and each recorded wave carries its correct 1-based position in the chain — DISCUSS
+    // first, DELIVER last — never an out-of-order or default sequence number
+    expect(run?.waves.map((wave) => wave.waveName)).toEqual([
+      "DISCUSS",
+      "DESIGN",
+      "DISTILL",
+      "DELIVER",
+    ]);
+    expect(run?.waves.map((wave) => wave.sequence)).toEqual([1, 2, 3, 4]);
   });
 
   it("[@US-04] someone with no authenticated session cannot halt or inspect an implementation run", async () => {
@@ -445,6 +578,250 @@ describe("US-04: a confirmed development-work ticket triggers an nWave implement
     // Then a plain-language restatement is produced, ready to post to the ticket-scoped
     // channel before any run starts (US-04 AC1)
     expect(restatementText.length).toBeGreaterThan(0);
+  });
+
+  it("[@US-04] the composed prompt instructs the model to restate for confirm-or-correct without adding commentary, carries the ticket's actual details, and the model's response is trimmed before becoming the confirmed text", async () => {
+    const receivedCalls: Array<{
+      modelId: string;
+      messages: Array<{ role: string; content: string }>;
+    }> = [];
+    const spyGenerate: GenerateFn = async (modelId, messages) => {
+      receivedCalls.push({ modelId, messages });
+      return { text: "  Adds a region filter to the Reports dashboard.  " };
+    };
+
+    // When the Restatement Composer composes intent for a ticket
+    const { restatementText } = await composeRestatement(
+      {
+        ticketRef: "TICKET-1043",
+        ticketTitle: "Add a region filter to the Reports dashboard",
+        ticketDescription: "Maria wants to filter the Reports dashboard by region.",
+      },
+      { generate: spyGenerate, modelId: "claude-3-5-sonnet" },
+    );
+
+    // Then it calls the LLM with the confirmed model id and exactly a system + user message pair
+    expect(receivedCalls).toHaveLength(1);
+    expect(receivedCalls[0]?.modelId).toBe("claude-3-5-sonnet");
+    const messages = receivedCalls[0]?.messages ?? [];
+    expect(messages).toHaveLength(2);
+
+    // ...the system message instructs the model to restate for confirm-or-correct, without
+    // implementation detail — the actual business instruction given to the model, not just its
+    // wiring (US-04 AC1)
+    expect(messages[0]?.role).toBe("system");
+    expect(messages[0]?.content).toContain("restate");
+    expect(messages[0]?.content).toContain("confirm or correct");
+    expect(messages[0]?.content).toContain("no implementation detail");
+
+    // ...the user message carries the actual ticket reference, title, and description — never
+    // a placeholder or empty prompt
+    expect(messages[1]?.role).toBe("user");
+    expect(messages[1]?.content).toContain("TICKET-1043");
+    expect(messages[1]?.content).toContain("Add a region filter to the Reports dashboard");
+    expect(messages[1]?.content).toContain(
+      "Maria wants to filter the Reports dashboard by region.",
+    );
+
+    // ...and the model's response is trimmed before becoming the confirmed restatement text
+    expect(restatementText).toBe("Adds a region filter to the Reports dashboard.");
+  });
+
+  it("[@US-04] only RUNNING waves that have exceeded the idle timeout are flagged stale — waves that are not running, have not yet produced output, or are still within the timeout, are left alone", () => {
+    const now = Date.now();
+    const idleTimeoutMs = 10 * 60 * 1000;
+
+    const staleFlags = collectStaleWaves({
+      waves: [
+        // Stale: RUNNING, idle well beyond the timeout
+        {
+          runId: "RUN-8841",
+          waveId: "wave-stale",
+          waveName: "DESIGN",
+          status: "RUNNING",
+          lastOutputAt: now - 20 * 60 * 1000,
+        },
+        // Not stale: RUNNING, but still within the timeout
+        {
+          runId: "RUN-8841",
+          waveId: "wave-fresh",
+          waveName: "DISCUSS",
+          status: "RUNNING",
+          lastOutputAt: now - 60 * 1000,
+        },
+        // Not stale: RUNNING, exactly at the timeout boundary — must be strictly greater than
+        {
+          runId: "RUN-8841",
+          waveId: "wave-boundary",
+          waveName: "DISTILL",
+          status: "RUNNING",
+          lastOutputAt: now - idleTimeoutMs,
+        },
+        // Not stale: RUNNING but has not produced any output yet
+        {
+          runId: "RUN-8841",
+          waveId: "wave-no-output-yet",
+          waveName: "DELIVER",
+          status: "RUNNING",
+          lastOutputAt: null,
+        },
+        // Not stale: already finished, even though its last recorded output looks very old
+        {
+          runId: "RUN-8841",
+          waveId: "wave-completed",
+          waveName: "DESIGN",
+          status: "COMPLETED",
+          lastOutputAt: now - 60 * 60 * 1000,
+        },
+      ],
+      nowMs: now,
+      idleTimeoutMs,
+    });
+
+    // Then only the genuinely stale wave is flagged — every other wave is left alone
+    expect(staleFlags).toEqual([{ runId: "RUN-8841", waveId: "wave-stale", waveName: "DESIGN" }]);
+  });
+
+  it("[@US-04] a wave process's non-zero exit derives a wave-failed event (never wave-completed), and non-terminal or unmatched lifecycle events produce no event at all", () => {
+    const events = deriveWaveProgressEvents({
+      events: [
+        { type: "process.started", processId: "proc-1" },
+        // A non-terminal lifecycle event must never itself produce a progress event
+        { type: "process.output", processId: "proc-1" },
+        // An event for a process that belongs to no tracked wave must be silently ignored
+        { type: "process.exited", processId: "proc-unknown", exitCode: 0 },
+        { type: "process.exited", processId: "proc-1", exitCode: 1 },
+      ],
+      waves: [
+        {
+          id: "wave-1",
+          runId: "RUN-8841",
+          waveName: "DESIGN",
+          sequence: 2,
+          processId: "proc-1",
+          status: "RUNNING",
+          startedAt: Date.now(),
+          endedAt: null,
+          exitCode: null,
+        },
+      ],
+    });
+
+    // Then only the started and failed events are derived, in that order, carrying the actual
+    // exit code — never a wave-completed event for a non-zero exit, and never an event for the
+    // output or unmatched-process notifications
+    expect(events).toEqual([
+      { type: "nwave.run.wave_started", runId: "RUN-8841", waveName: "DESIGN" },
+      { type: "nwave.run.wave_failed", runId: "RUN-8841", waveName: "DESIGN", exitCode: 1 },
+    ]);
+  });
+
+  it("[@US-04] lifecycle events are translated in true chronological order, not array position, and each is attributed to the wave whose process actually produced it", () => {
+    const events = deriveWaveProgressEvents({
+      events: [
+        // Deliberately out of chronological order
+        { type: "process.exited", processId: "proc-design", exitCode: 0, createdAt: 4000 },
+        { type: "process.started", processId: "proc-discuss", createdAt: 1000 },
+        { type: "process.started", processId: "proc-design", createdAt: 3000 },
+        { type: "process.exited", processId: "proc-discuss", exitCode: 0, createdAt: 2000 },
+      ],
+      waves: [
+        {
+          id: "wave-1",
+          runId: "RUN-8841",
+          waveName: "DISCUSS",
+          sequence: 1,
+          processId: "proc-discuss",
+          status: "RUNNING",
+          startedAt: Date.now(),
+          endedAt: null,
+          exitCode: null,
+        },
+        {
+          id: "wave-2",
+          runId: "RUN-8841",
+          waveName: "DESIGN",
+          sequence: 2,
+          processId: "proc-design",
+          status: "RUNNING",
+          startedAt: Date.now(),
+          endedAt: null,
+          exitCode: null,
+        },
+      ],
+    });
+
+    // Then events are derived in true chronological order (DISCUSS starts, DISCUSS completes,
+    // DESIGN starts, DESIGN completes) — never the array's original scrambled order — and each
+    // event references the wave that actually matches its process id, never the wrong wave
+    expect(events).toEqual([
+      { type: "nwave.run.wave_started", runId: "RUN-8841", waveName: "DISCUSS" },
+      { type: "nwave.run.wave_completed", runId: "RUN-8841", waveName: "DISCUSS" },
+      { type: "nwave.run.wave_started", runId: "RUN-8841", waveName: "DESIGN" },
+      { type: "nwave.run.wave_completed", runId: "RUN-8841", waveName: "DESIGN" },
+    ]);
+  });
+
+  it("[@US-04] a wave-completion notification for a run that does not exist, or that names a wave which is not currently running for that run, is safely ignored — never crashing and never advancing anything", async () => {
+    const app = createRealApiApp();
+    const runRepository = createHttpRunRepository({ apiFetch: apiFetchAsRunner(app) });
+    const deps: WaveRunnerDependencies = {
+      runRepository,
+      shellStart: createRealShellStart(),
+      buildWaveCommand: buildEchoWaveCommand,
+    };
+
+    // Given a run id that was never created
+    // When a wave-completion notification arrives for it
+    const forUnknownRun = await advanceToNextWave(
+      { runId: "RUN-DOES-NOT-EXIST", completedWaveName: "DISCUSS", exitCode: 0 },
+      deps,
+    );
+
+    // Given RUN-8841's only recorded wave is DISCUSS, currently RUNNING (per the seeded fixture)
+    // When a completion notification arrives for a wave name that is not the one actually
+    // running (e.g. a stale/duplicate notification for a wave that already moved on)
+    const forMismatchedWaveName = await advanceToNextWave(
+      { runId: "RUN-8841", completedWaveName: "DISTILL", exitCode: 0 },
+      deps,
+    );
+
+    // Then neither notification is ever recorded or advances the run — both are silently ignored
+    expect(forUnknownRun).toBeNull();
+    expect(forMismatchedWaveName).toBeNull();
+    const run = await runRepository.getRun({ runId: "RUN-8841" });
+    expect(run?.status).toBe("RUNNING");
+    expect(run?.currentWave).toBe("DISCUSS");
+  });
+
+  it("[@US-04] looking up a run that does not exist returns null rather than throwing", async () => {
+    const app = createRealApiApp();
+    const runRepository = createHttpRunRepository({ apiFetch: apiFetchAsRunner(app) });
+
+    // Given no run has ever been created with this id
+    // When the Wave Runner (or any caller) looks it up
+    const run = await runRepository.getRun({ runId: "RUN-DOES-NOT-EXIST" });
+
+    // Then the repository reports it as absent (null), never throwing or fabricating a run
+    expect(run).toBeNull();
+  });
+
+  it("[@US-04] the repository surfaces the API's error status and body when a request is rejected, rather than silently returning an empty result", async () => {
+    const app = createRealApiApp();
+    const runRepository = createHttpRunRepository({ apiFetch: apiFetchAsRunner(app) });
+
+    // Given no run exists with this id
+    // When the Wave Runner tries to record a wave-started notification against it
+    const attempt = runRepository.recordWaveStarted({
+      runId: "RUN-DOES-NOT-EXIST",
+      waveName: "DISCUSS",
+      sequence: 1,
+      processId: "proc-x",
+    });
+
+    // Then the repository surfaces a clear, actionable error — the failing operation's name and
+    // the actual HTTP status — never silently swallowing the failure or returning an empty result
+    await expect(attempt).rejects.toThrow(/recordWaveStarted failed with status 404/);
   });
 
   const hasNwaveCliContractFixture = existsSync(
