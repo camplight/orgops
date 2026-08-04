@@ -1,6 +1,6 @@
 import type { Hono } from "hono";
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { CHANNEL_KINDS, CHANNEL_VISIBILITY, schema, type OrgOpsDrizzleDb } from "@orgops/db";
 import type { AccessControl, RequestUser } from "./access";
 import { createChannelRow, subscribeHumanToChannel } from "./collab";
@@ -15,6 +15,7 @@ type TicketsDeps = {
 };
 
 type TicketRow = typeof schema.tickets.$inferSelect;
+type TicketClassificationAuditRow = typeof schema.ticketClassificationAudit.$inferSelect;
 
 const NATIVE_FORM_SOURCE = "NATIVE_FORM";
 const TICKET_ID_PATTERN = /^TICKET-(\d+)$/;
@@ -40,6 +41,20 @@ function ticketRowToApi(row: TicketRow) {
     classificationRationale: row.classification_rationale,
     classificationFailureReason: row.classification_failure_reason,
     classifiedAt: row.classified_at,
+    createdAt: row.created_at,
+  };
+}
+
+function auditRowToApi(row: TicketClassificationAuditRow) {
+  return {
+    id: row.id,
+    ticketId: row.ticket_id,
+    eventType: row.event_type,
+    fromResult: row.from_result,
+    toResult: row.to_result,
+    rationale: row.rationale,
+    actorType: row.actor_type,
+    actorId: row.actor_id,
     createdAt: row.created_at,
   };
 }
@@ -305,11 +320,14 @@ export function registerTicketsRoutes(app: Hono<any>, deps: TicketsDeps) {
     ),
   );
 
-  app.get(
-    "/api/tickets/:id/classification-history",
-    notImplemented(
-      "GET /api/tickets/:id/classification-history — full ticket_classification_audit trail " +
-        "for governance review (US-03 AC4), ordered by created_at.",
-    ),
-  );
+  app.get("/api/tickets/:id/classification-history", (c) => {
+    const id = c.req.param("id");
+    const rows = orm
+      .select()
+      .from(schema.ticketClassificationAudit)
+      .where(eq(schema.ticketClassificationAudit.ticket_id, id))
+      .orderBy(asc(schema.ticketClassificationAudit.created_at))
+      .all() as TicketClassificationAuditRow[];
+    return jsonResponse(c, rows.map(auditRowToApi));
+  });
 }

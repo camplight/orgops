@@ -99,6 +99,41 @@
       "s": "EXECUTED",
       "d": "PASS",
       "t": "2026-08-04T08:44:29Z"
+    },
+    {
+      "sid": "02-02",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-08-04T08:45:00Z"
+    },
+    {
+      "sid": "03-01",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-08-04T08:50:38Z"
+    },
+    {
+      "sid": "03-01",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-08-04T08:50:38Z"
+    },
+    {
+      "sid": "03-01",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: no new pure domain logic required -- classifier.ts and classification-orchestrator.ts already handle all three ClassificationResult branches uniformly (proven by unskipping the acceptance scenarios and observing they already exercised the existing generic success path); the only gap was an adapter-layer HTTP route (GET classification-history), which per hexagonal-testing policy is covered by integration/acceptance tests only, not a unit test",
+      "t": "2026-08-04T08:50:38Z"
+    },
+    {
+      "sid": "03-01",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-08-04T08:50:38Z"
     }
   ]
 }

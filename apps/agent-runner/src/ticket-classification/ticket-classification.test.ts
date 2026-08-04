@@ -259,7 +259,7 @@ describe("US-01/US-02/US-03: ticket classification", () => {
     expect(created.source).toBe("TRELLO");
   });
 
-  it.skip("[@US-02] A content-only ticket is classified away from development work, with a routing suggestion", async () => {
+  it("[@US-02] A content-only ticket is classified away from development work, with a routing suggestion", async () => {
     const { app } = createRealApiApp();
     const cookie = await loginAsAdmin(app);
     const request = authedRequest(app, cookie);
@@ -287,7 +287,7 @@ describe("US-01/US-02/US-03: ticket classification", () => {
     expect(readBody.classificationRationale.toLowerCase()).toContain("route");
   });
 
-  it.skip("[@US-02] An ambiguous ticket produces a low-confidence result and does not unblock implementation", async () => {
+  it("[@US-02] An ambiguous ticket produces a low-confidence result and does not unblock implementation", async () => {
     const { app } = createRealApiApp();
     const cookie = await loginAsAdmin(app);
     const request = authedRequest(app, cookie);
