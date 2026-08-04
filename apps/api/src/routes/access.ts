@@ -258,6 +258,27 @@ export function createAccessControl(deps: AccessDeps) {
     return isGovernanceTeamMember(user.id);
   }
 
+  /**
+   * RED scaffold (ticket-classification, US-03 AC4 / brief.md "Access Control for Overrides"):
+   * true if `user.id === ticket.submitterHumanId`, or if `user` is a member of the existing
+   * "governance" team (reusing `isGovernanceTeamMember`, the exact same primitive
+   * `canManageTrelloIngestion` already uses — no new RBAC concept). `canSignOffGuardrail` above
+   * explicitly defers to this function's idiom once implemented. Left throwing per Mandate 7:
+   * DELIVER wave implements this behind its own failing acceptance test, one scenario at a time.
+   */
+  function canOverrideClassification(
+    user: RequestUser | undefined,
+    ticket: { submitterHumanId: string },
+  ): boolean {
+    throw new Error(
+      `canOverrideClassification not implemented (user=${user?.username ?? "unknown"}) — must ` +
+        "return true when user.id === ticket.submitterHumanId, or when user is a member of the " +
+        "existing governance team (teams/team_memberships via isGovernanceTeamMember), false " +
+        "otherwise. Checked server-side in POST /api/tickets/:id/override before any write " +
+        `(US-03 Technical Notes, brief.md "Access Control for Overrides"); ticket=${JSON.stringify(ticket)}.`,
+    );
+  }
+
   return {
     canViewChannel,
     canManageChannel,
@@ -267,6 +288,7 @@ export function createAccessControl(deps: AccessDeps) {
     canManageAgent,
     canSignOffGuardrail,
     canManageTrelloIngestion,
+    canOverrideClassification,
   };
 }
 

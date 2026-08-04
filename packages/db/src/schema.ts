@@ -427,6 +427,63 @@ export const nwaveRunWaves = sqliteTable(
   })
 );
 
+// --- ticket-classification (owned by this track; see
+// docs/product/architecture/brief.md "Ticket Classification" -> "Data Model", ADR-0003
+// (current-state-plus-append-only-audit-log rationale) and ADR-0009 (the (source, source_ref)
+// uniqueness guarantee required for Trello-sourced tickets reusing this same table)) ---
+
+export const tickets = sqliteTable(
+  "tickets",
+  {
+    id: text("id").primaryKey(),
+    title: text("title").notNull(),
+    description: text("description"),
+    source: text("source").notNull().default("NATIVE_FORM"),
+    source_ref: text("source_ref"),
+    channel_id: text("channel_id").notNull(),
+    submitter_human_id: text("submitter_human_id").notNull(),
+    is_low_detail: integer("is_low_detail").notNull().default(0),
+    idempotency_key: text("idempotency_key"),
+    classification_status: text("classification_status").notNull().default("PENDING"),
+    classification_result: text("classification_result"),
+    classification_rationale: text("classification_rationale"),
+    classification_failure_reason: text("classification_failure_reason"),
+    classified_at: integer("classified_at"),
+    created_at: integer("created_at").notNull()
+  },
+  (table) => ({
+    uidxTicketsIdempotency: uniqueIndex("uidx_tickets_idempotency")
+      .on(table.idempotency_key)
+      .where(sql`${table.idempotency_key} IS NOT NULL`),
+    // ADR-0009 Consequences: required so a Trello-sourced ticket (source=TRELLO, source_ref=
+    // <Trello card id>) can never be double-inserted by a redelivered/retried ingestion poll,
+    // mirroring the idempotency_key guard native-form submissions already get.
+    uidxTicketsSourceRef: uniqueIndex("uidx_tickets_source_source_ref")
+      .on(table.source, table.source_ref)
+      .where(sql`${table.source_ref} IS NOT NULL`)
+  })
+);
+
+export const ticketClassificationAudit = sqliteTable(
+  "ticket_classification_audit",
+  {
+    id: text("id").primaryKey(),
+    ticket_id: text("ticket_id").notNull(),
+    event_type: text("event_type").notNull(),
+    from_result: text("from_result"),
+    to_result: text("to_result"),
+    rationale: text("rationale"),
+    actor_type: text("actor_type").notNull(),
+    actor_id: text("actor_id"),
+    created_at: integer("created_at").notNull()
+  },
+  (table) => ({
+    idxTicketClassificationAuditTicketId: index("idx_ticket_classification_audit_ticket_id").on(
+      table.ticket_id
+    )
+  })
+);
+
 export const schema = {
   migrations,
   agents,
@@ -455,5 +512,7 @@ export const schema = {
   guardrailDecisionAudit,
   nwaveRunStuckFlags,
   nwaveRuns,
-  nwaveRunWaves
+  nwaveRunWaves,
+  tickets,
+  ticketClassificationAudit
 };

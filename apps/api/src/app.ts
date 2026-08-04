@@ -473,13 +473,14 @@ export function createApp(config: AppConfig = {}) {
     runnerApiUrl: RUNNER_API_URL,
   });
 
-  // tickets.ts remains a prerequisite scaffold for ticket-classification (not yet delivered).
+  // tickets.ts is now ticket-classification's own RED scaffold (US-01/US-02/US-03, DISTILL
+  // wave — every handler still throws, real GREEN implementation is DELIVER wave's job).
   // nwave-runs.ts is now owned by nwave-invocation-engine (US-04 base routes) with a
   // prerequisite-scaffold extension owned by multi-source-ingestion-governance (US-12/US-13
   // completion-summary/retry/escalate/close/cycle-history routes). trello-ingestion.ts and
   // guardrail-allowlist.ts are owned by multi-source-ingestion-governance. See each route
   // file's module doc comment.
-  registerTicketsRoutes(app as any, { orm, jsonResponse });
+  registerTicketsRoutes(app as any, { orm, jsonResponse, access, insertEvent });
   registerNwaveRunsRoutes(app as any, { orm, jsonResponse, access });
   registerTrelloIngestionRoutes(app as any, { orm, jsonResponse, access });
   registerGuardrailAllowlistRoutes(app as any, { orm, jsonResponse, access });
