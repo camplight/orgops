@@ -11,3 +11,5 @@ apps/site/playwright-artifacts/
 .release-tmp
 .agent-runner-id
 .opscli-output.log
+.stryker-tmp/
+reports/mutation/

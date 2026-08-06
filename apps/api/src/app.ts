@@ -44,6 +44,10 @@ import { registerWsRoutes, type WsServerMessage } from "./routes/ws";
 import { registerHumansRoutes } from "./routes/humans";
 import { registerRunnersRoutes } from "./routes/runners";
 import { createAccessControl } from "./routes/access";
+import { registerTicketsRoutes } from "./routes/tickets";
+import { registerNwaveRunsRoutes } from "./routes/nwave-runs";
+import { registerTrelloIngestionRoutes } from "./routes/trello-ingestion";
+import { registerGuardrailAllowlistRoutes } from "./routes/guardrail-allowlist";
 
 export type AppConfig = {
   db?: OrgOpsDb;
@@ -468,6 +472,18 @@ export function createApp(config: AppConfig = {}) {
     runnerToken: RUNNER_TOKEN,
     runnerApiUrl: RUNNER_API_URL,
   });
+
+  // tickets.ts is now ticket-classification's own RED scaffold (US-01/US-02/US-03, DISTILL
+  // wave — every handler still throws, real GREEN implementation is DELIVER wave's job).
+  // nwave-runs.ts is now owned by nwave-invocation-engine (US-04 base routes) with a
+  // prerequisite-scaffold extension owned by multi-source-ingestion-governance (US-12/US-13
+  // completion-summary/retry/escalate/close/cycle-history routes). trello-ingestion.ts and
+  // guardrail-allowlist.ts are owned by multi-source-ingestion-governance. See each route
+  // file's module doc comment.
+  registerTicketsRoutes(app as any, { orm, jsonResponse, access, insertEvent });
+  registerNwaveRunsRoutes(app as any, { orm, jsonResponse, access });
+  registerTrelloIngestionRoutes(app as any, { orm, jsonResponse, access });
+  registerGuardrailAllowlistRoutes(app as any, { orm, jsonResponse, access });
 
   return { app, db, bus, injectWebSocket };
 }

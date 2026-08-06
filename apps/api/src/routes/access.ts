@@ -18,6 +18,9 @@ type AccessDeps = {
   orm: OrgOpsDrizzleDb;
 };
 
+export const GOVERNANCE_TEAM_NAME = "governance";
+export const GOVERNANCE_MEMBER_TYPE = "HUMAN";
+
 function isRunnerUser(user: RequestUser | undefined): boolean {
   return user?.username === "runner";
 }
@@ -216,6 +219,61 @@ export function createAccessControl(deps: AccessDeps) {
     return Boolean(agent.ownerHumanId && user.id && agent.ownerHumanId === user.id);
   }
 
+  function getGovernanceTeamId(): string | undefined {
+    const team = orm
+      .select({ id: schema.teams.id })
+      .from(schema.teams)
+      .where(eq(schema.teams.name, GOVERNANCE_TEAM_NAME))
+      .get() as { id: string } | undefined;
+    return team?.id;
+  }
+
+  function isGovernanceTeamMember(humanId: string): boolean {
+    const governanceTeamId = getGovernanceTeamId();
+    if (!governanceTeamId) return false;
+    const membership = orm
+      .select({ teamId: schema.teamMemberships.team_id })
+      .from(schema.teamMemberships)
+      .where(
+        and(
+          eq(schema.teamMemberships.team_id, governanceTeamId),
+          eq(schema.teamMemberships.member_type, GOVERNANCE_MEMBER_TYPE),
+          eq(schema.teamMemberships.member_id, humanId),
+        ),
+      )
+      .get();
+    return Boolean(membership);
+  }
+
+  function canSignOffGuardrail(user: RequestUser | undefined): boolean {
+    throw new Error(
+      `canSignOffGuardrail not implemented (user=${user?.username ?? "unknown"}) — must check ` +
+        "membership in the existing governance team (teams/team_memberships), reusing " +
+        "ticket-classification's canOverrideClassification idiom exactly (US-12 AC4).",
+    );
+  }
+
+  function canManageTrelloIngestion(user: RequestUser | undefined): boolean {
+    if (!isHumanUser(user) || !user.id) return false;
+    return isGovernanceTeamMember(user.id);
+  }
+
+  /**
+   * ticket-classification, US-03 AC4 / brief.md "Access Control for Overrides": true if
+   * `user.id === ticket.submitterHumanId`, or if `user` is a member of the existing
+   * "governance" team (reusing `isGovernanceTeamMember`, the exact same primitive
+   * `canManageTrelloIngestion` already uses — no new RBAC concept). `canSignOffGuardrail` above
+   * defers to this function's idiom.
+   */
+  function canOverrideClassification(
+    user: RequestUser | undefined,
+    ticket: { submitterHumanId: string },
+  ): boolean {
+    if (!isHumanUser(user) || !user.id) return false;
+    if (user.id === ticket.submitterHumanId) return true;
+    return isGovernanceTeamMember(user.id);
+  }
+
   return {
     canViewChannel,
     canManageChannel,
@@ -223,7 +281,18 @@ export function createAccessControl(deps: AccessDeps) {
     listVisibleChannelIds,
     canViewAgent,
     canManageAgent,
+    canSignOffGuardrail,
+    canManageTrelloIngestion,
+    canOverrideClassification,
   };
 }
 
 export type AccessControl = ReturnType<typeof createAccessControl>;
+
+/**
+ * Narrow access-control slice shared by every route file gated on governance-team membership
+ * (trello-ingestion.ts, guardrail-allowlist.ts) — both reuse this exact same check (US-11 AC1,
+ * US-12 AC9), so the dependency shape they declare should be the same type, not two structurally
+ * identical inline copies.
+ */
+export type TrelloIngestionAccess = Pick<AccessControl, "canManageTrelloIngestion">;

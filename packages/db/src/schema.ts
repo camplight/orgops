@@ -338,6 +338,152 @@ export const crossChannelMemoryFull = sqliteTable(
   })
 );
 
+// --- multi-source-ingestion-governance (owned by this track; see
+// docs/product/architecture/brief.md "Multi-Source Ingestion & Governance" -> "Data Model") ---
+
+export const trelloIngestionBoards = sqliteTable("trello_ingestion_boards", {
+  board_id: text("board_id").primaryKey(),
+  trigger_list_ids: text("trigger_list_ids"),
+  default_submitter_human_id: text("default_submitter_human_id").notNull(),
+  enabled: integer("enabled").notNull().default(1),
+  activated_at: integer("activated_at").notNull(),
+  last_polled_at: integer("last_polled_at"),
+  last_poll_status: text("last_poll_status"),
+  last_poll_error: text("last_poll_error")
+});
+
+export const trelloIngestionSeenCards = sqliteTable(
+  "trello_ingestion_seen_cards",
+  {
+    id: text("id").primaryKey(),
+    board_id: text("board_id").notNull(),
+    card_id: text("card_id").notNull(),
+    first_observed_at: integer("first_observed_at").notNull()
+  },
+  (table) => ({
+    uidxSeenCardsBoardCard: uniqueIndex("uidx_trello_ingestion_seen_cards_board_card").on(
+      table.board_id,
+      table.card_id
+    )
+  })
+);
+
+export const guardrailAllowlistEntries = sqliteTable("guardrail_allowlist_entries", {
+  id: text("id").primaryKey(),
+  path_pattern: text("path_pattern").notNull(),
+  created_by: text("created_by").notNull(),
+  created_at: integer("created_at").notNull()
+});
+
+export const guardrailDecisionAudit = sqliteTable("guardrail_decision_audit", {
+  id: text("id").primaryKey(),
+  run_id: text("run_id").notNull(),
+  event_type: text("event_type").notNull(),
+  actor_type: text("actor_type").notNull(),
+  actor_id: text("actor_id"),
+  note: text("note"),
+  created_at: integer("created_at").notNull()
+});
+
+export const nwaveRunStuckFlags = sqliteTable("nwave_run_stuck_flags", {
+  id: text("id").primaryKey(),
+  run_id: text("run_id").notNull(),
+  wave_sequence: integer("wave_sequence").notNull(),
+  flagged_at: integer("flagged_at").notNull(),
+  cleared_at: integer("cleared_at")
+});
+
+// --- nwave-invocation-engine (owned by this track; see
+// docs/product/architecture/brief.md "Application Architecture" -> "Data Model") ---
+
+export const nwaveRuns = sqliteTable("nwave_runs", {
+  id: text("id").primaryKey(),
+  ticket_ref: text("ticket_ref").notNull(),
+  channel_id: text("channel_id").notNull(),
+  status: text("status").notNull(),
+  current_wave: text("current_wave"),
+  restatement_text: text("restatement_text").notNull(),
+  confirmed_at: integer("confirmed_at"),
+  started_at: integer("started_at"),
+  ended_at: integer("ended_at"),
+  failure_reason: text("failure_reason")
+});
+
+export const nwaveRunWaves = sqliteTable(
+  "nwave_run_waves",
+  {
+    id: text("id").primaryKey(),
+    run_id: text("run_id").notNull(),
+    wave_name: text("wave_name").notNull(),
+    sequence: integer("sequence").notNull(),
+    process_id: text("process_id"),
+    status: text("status").notNull(),
+    started_at: integer("started_at"),
+    ended_at: integer("ended_at"),
+    exit_code: integer("exit_code")
+  },
+  (table) => ({
+    idxNwaveRunWavesRunId: index("idx_nwave_run_waves_run_id").on(table.run_id)
+  })
+);
+
+// --- ticket-classification (owned by this track; see
+// docs/product/architecture/brief.md "Ticket Classification" -> "Data Model", ADR-0003
+// (current-state-plus-append-only-audit-log rationale) and ADR-0009 (the (source, source_ref)
+// uniqueness guarantee required for Trello-sourced tickets reusing this same table)) ---
+
+export const tickets = sqliteTable(
+  "tickets",
+  {
+    id: text("id").primaryKey(),
+    title: text("title").notNull(),
+    description: text("description"),
+    source: text("source").notNull().default("NATIVE_FORM"),
+    source_ref: text("source_ref"),
+    channel_id: text("channel_id").notNull(),
+    submitter_human_id: text("submitter_human_id").notNull(),
+    is_low_detail: integer("is_low_detail").notNull().default(0),
+    idempotency_key: text("idempotency_key"),
+    classification_status: text("classification_status").notNull().default("PENDING"),
+    classification_result: text("classification_result"),
+    classification_rationale: text("classification_rationale"),
+    classification_failure_reason: text("classification_failure_reason"),
+    classified_at: integer("classified_at"),
+    created_at: integer("created_at").notNull()
+  },
+  (table) => ({
+    uidxTicketsIdempotency: uniqueIndex("uidx_tickets_idempotency")
+      .on(table.idempotency_key)
+      .where(sql`${table.idempotency_key} IS NOT NULL`),
+    // ADR-0009 Consequences: required so a Trello-sourced ticket (source=TRELLO, source_ref=
+    // <Trello card id>) can never be double-inserted by a redelivered/retried ingestion poll,
+    // mirroring the idempotency_key guard native-form submissions already get.
+    uidxTicketsSourceRef: uniqueIndex("uidx_tickets_source_source_ref")
+      .on(table.source, table.source_ref)
+      .where(sql`${table.source_ref} IS NOT NULL`)
+  })
+);
+
+export const ticketClassificationAudit = sqliteTable(
+  "ticket_classification_audit",
+  {
+    id: text("id").primaryKey(),
+    ticket_id: text("ticket_id").notNull(),
+    event_type: text("event_type").notNull(),
+    from_result: text("from_result"),
+    to_result: text("to_result"),
+    rationale: text("rationale"),
+    actor_type: text("actor_type").notNull(),
+    actor_id: text("actor_id"),
+    created_at: integer("created_at").notNull()
+  },
+  (table) => ({
+    idxTicketClassificationAuditTicketId: index("idx_ticket_classification_audit_ticket_id").on(
+      table.ticket_id
+    )
+  })
+);
+
 export const schema = {
   migrations,
   agents,
@@ -359,5 +505,14 @@ export const schema = {
   channelMemoryRecent,
   channelMemoryFull,
   crossChannelMemoryRecent,
-  crossChannelMemoryFull
+  crossChannelMemoryFull,
+  trelloIngestionBoards,
+  trelloIngestionSeenCards,
+  guardrailAllowlistEntries,
+  guardrailDecisionAudit,
+  nwaveRunStuckFlags,
+  nwaveRuns,
+  nwaveRunWaves,
+  tickets,
+  ticketClassificationAudit
 };

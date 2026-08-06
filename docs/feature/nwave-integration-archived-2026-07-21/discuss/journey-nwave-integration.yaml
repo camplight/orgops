@@ -1,0 +1,223 @@
+schema_version: 1
+
+journey:
+  name: "nWave Integration (SSOT Bootstrap)"
+  goal: "Formalize OrgOps's already-shipped architecture into nWave's SSOT doc model (docs/product/) so future feature work can flow through DISCUSS/DESIGN/DISTILL/DELIVER waves grounded in real architecture instead of re-deriving it from scratch each time."
+  persona: "Priya Raman, OrgOps engineering lead (primary) / solution-architect agent on the next feature's DESIGN wave (secondary, consumer of the SSOT)"
+
+  emotional_arc:
+    start: "Uncertain -- SPEC.md/use-cases.md are accurate but not structured for nWave's per-wave SSOT ownership model"
+    middle: "Methodical -- sorting existing documentation into brief.md narrative vs. ADR-worthy decisions vs. link-don't-duplicate content"
+    end: "Confident / unblocked -- docs/product/ exists, next feature's DESIGN wave passes its reading-enforcement gate on the first pass"
+
+  note: "Process/tooling adoption journey, not a classic end-user product journey. No fabricated end-user delight/frustration; emotional arc tracks process confidence per discovery methodology's requirement for an explicit, coherent arc. See journey-nwave-integration-visual.md Framing Note for full rationale."
+
+steps:
+  - id: 1
+    name: "Recognize the SSOT Gap"
+    command: "/nw-design nwave-integration (or /nw-diverge) -- migration/bootstrap gate check"
+    tui_mockup: |
+      +-- /nw-design nwave-integration ----------------------------+
+      | Reading SSOT architecture...                                |
+      | MISSING docs/product/architecture/brief.md (not found)      |
+      | MISSING docs/product/architecture/adr-*.md (none found)     |
+      | docs/product/ does not exist; docs/feature/ has no prior     |
+      | features -- greenfield from nWave's perspective. Proceeding.|
+      +--------------------------------------------------------------+
+    shared_artifacts:
+      - name: "docs/product/ existence"
+        source: "filesystem state, checked by DESIGN/DIVERGE/DISCUSS migration gates"
+        displayed_as: "${ssot_exists}"
+        consumers: ["nw-discuss migration gate", "nw-diverge migration gate", "nw-design migration gate"]
+    emotional_state:
+      entry: "Neutral -- starting a new feature as usual"
+      exit: "Uncertain -- realizes the SSOT foundation is missing before real feature work can lean on it"
+    integration_checkpoint: |
+      Confirm docs/product/ absence AND docs/feature/ absence together (both true = safe greenfield bootstrap;
+      docs/product/ absent + docs/feature/ non-empty would instead require the migration guide, not this bootstrap).
+    failure_modes:
+      - "docs/feature/ already has prior features under the old flat model -- bootstrap would need the migration guide instead of a fresh SSOT creation"
+    gherkin: |
+      Scenario: Migration gate correctly identifies a greenfield SSOT bootstrap
+        Given docs/product/ does not exist
+        And docs/feature/ has no prior feature directories
+        When Priya runs /nw-design for the first OrgOps feature under nWave
+        Then the gate proceeds with SSOT bootstrap instead of halting for migration
+        And shared artifact "${ssot_exists}" is documented as false at this step
+
+  - id: 2
+    name: "Inventory Existing Architecture Knowledge"
+    command: "Manual review: docs/SPEC.md, docs/use-cases.md, apps/agent-runner/src/*"
+    tui_mockup: |
+      +-- Manual review -----------------------------------------+
+      | docs/SPEC.md         495 lines -- stack, data model,      |
+      |                                    event contract, API     |
+      | docs/use-cases.md     35 lines -- 5 real use cases          |
+      | apps/agent-runner/src/wrapped-runtime.ts -- ground truth    |
+      +----------------------------------------------------------+
+    shared_artifacts:
+      - name: "docs/SPEC.md"
+        source: "docs/SPEC.md (existing, hand-written)"
+        displayed_as: "${spec_md}"
+        consumers: ["brief.md authoring", "ADR authoring", "use-case migration"]
+      - name: "docs/use-cases.md"
+        source: "docs/use-cases.md (existing, hand-written)"
+        displayed_as: "${use_cases_md}"
+        consumers: ["brief.md System Context section"]
+    emotional_state:
+      entry: "Uncertain"
+      exit: "Methodical -- has a concrete inventory to work from"
+    integration_checkpoint: |
+      Every SPEC.md section is triaged into exactly one of: brief.md narrative, ADR candidate, or
+      "stays in SPEC.md, link only" -- no section is silently dropped.
+    failure_modes:
+      - "SPEC.md content is copy-pasted wholesale into brief.md instead of triaged, producing duplication risk"
+    gherkin: |
+      Scenario: Existing documentation is fully triaged before formalization begins
+        Given docs/SPEC.md and docs/use-cases.md are the only existing architecture sources
+        When Priya inventories them section by section
+        Then every section is assigned to brief.md narrative, an ADR candidate, or "link, don't duplicate"
+        And no section is left unclassified
+
+  - id: 3
+    name: "Formalize Architecture SSOT Brief"
+    command: "/nw-design nwave-integration -- solution-architect writes docs/product/architecture/brief.md"
+    tui_mockup: |
+      +-- docs/product/architecture/brief.md (excerpt) ------------+
+      | ## System Context                                            |
+      | OrgOps: Node.js multi-host agent system...                    |
+      | ## Component Architecture                                      |
+      | apps/api | apps/agent-runner | apps/opscli | apps/ui             |
+      | ## Agent Execution Modes                                          |
+      | CLASSIC | RLM_REPL | WRAPPED                                       |
+      +----------------------------------------------------------------------+
+    shared_artifacts:
+      - name: "docs/product/architecture/brief.md"
+        source: "docs/product/architecture/brief.md (created off this feature's requirements, owned going forward by solution-architect + other DESIGN architects, each in their own section)"
+        displayed_as: "${brief_md}"
+        consumers: ["DESIGN wave (all architects)", "DISTILL wave (acceptance-designer, driving ports)", "DELIVER wave (crafters, structural context)"]
+    emotional_state:
+      entry: "Methodical"
+      exit: "Methodical, building confidence -- the architecture now has a canonical home"
+    integration_checkpoint: |
+      brief.md summarizes and links to docs/SPEC.md for implementation detail rather than duplicating it;
+      changing an env var in SPEC.md must not require a brief.md edit.
+    failure_modes:
+      - "brief.md duplicates SPEC.md's 39 environment variables and API surface verbatim, creating two sources of truth that can drift"
+    gherkin: |
+      Scenario: DESIGN wave finds canonical architecture context without re-deriving it from source
+        Given docs/SPEC.md documents the current OrgOps implementation
+        And no docs/product/architecture/brief.md exists yet
+        When solution-architect formalizes docs/product/architecture/brief.md for this feature
+        Then brief.md documents the stack, monorepo layout, and core data model
+        And brief.md links to docs/SPEC.md for implementation-level detail instead of copying it
+
+      Scenario: Brief stays a thin index, not a duplicate of SPEC.md
+        Given docs/SPEC.md documents 39 environment variables and the full HTTP API surface
+        When brief.md is authored
+        Then brief.md summarizes architecture decisions and links to docs/SPEC.md for the exhaustive list
+        And updating an environment variable in SPEC.md does not require a brief.md edit
+
+  - id: 4
+    name: "Capture Undocumented Decisions as ADRs"
+    command: "/nw-design nwave-integration -- ADRs written to docs/product/architecture/adr-*.md"
+    tui_mockup: |
+      +-- docs/product/architecture/adr-001-wrapped-agent-mode.md --+
+      | # ADR-001: WRAPPED Agent Mode Delegates Turn Handling         |
+      | ## Context / ## Decision / ## Consequences                     |
+      +--------------------------------------------------------------+
+    shared_artifacts:
+      - name: "docs/product/architecture/adr-*.md"
+        source: "docs/product/architecture/adr-*.md (created off this feature's requirements)"
+        displayed_as: "${adrs}"
+        consumers: ["DESIGN wave (all architects, future decisions must not silently contradict)", "solution-architect-reviewer"]
+    emotional_state:
+      entry: "Methodical"
+      exit: "Gaining confidence -- decisions that only lived in contributors' heads are now written down"
+    integration_checkpoint: |
+      Every ADR references the SPEC.md section it formalizes, and every SPEC.md statement that reads as a
+      decision ("X instead of Y because Z") has a corresponding ADR or an explicit red-card note that it was
+      deferred.
+    failure_modes:
+      - "A real architectural decision (e.g. in-process event bus vs. external message queue) is never written down because nobody remembers to extract it from tribal knowledge"
+    gherkin: |
+      Scenario: Undocumented mode-of-execution decision becomes a discoverable ADR
+        Given docs/SPEC.md describes CLASSIC, RLM_REPL, and WRAPPED agent modes without explaining why WRAPPED exists
+        When the architectural decision behind WRAPPED mode is captured
+        Then docs/product/architecture/adr-001-wrapped-agent-mode.md documents the context, decision, and consequences
+        And a future contributor adding a fourth agent mode can read the ADR instead of asking in chat
+
+  - id: 5
+    name: "Define Wave-Routing Rules for Future Features"
+    command: "Recorded in docs/feature/nwave-integration/discuss/wave-decisions.md"
+    tui_mockup: |
+      +-- wave-decisions.md -----------------------------------------+
+      | [D4] Future OrgOps features skip DISCOVER by default:          |
+      |      product-market fit already established (working,          |
+      |      in-production system, 5 documented use cases).              |
+      |      Start at DISCUSS or DESIGN.                                  |
+      +--------------------------------------------------------------------+
+    shared_artifacts:
+      - name: "DISCOVER-skip routing rule"
+        source: "docs/feature/nwave-integration/discuss/wave-decisions.md"
+        displayed_as: "${routing_rule}"
+        consumers: ["future nw-discuss invocations", "future nw-diverge invocations", "future nw-design invocations"]
+    emotional_state:
+      entry: "Gaining confidence"
+      exit: "Decisive -- the team has an explicit, written answer instead of re-litigating wave entry point per feature"
+    integration_checkpoint: |
+      The routing rule is written where future wave orchestration will actually look for it, not buried in a
+      chat log or a comment nobody re-reads.
+    failure_modes:
+      - "Routing rule is agreed verbally but never written down, so the next feature re-asks whether DISCOVER is needed"
+    gherkin: |
+      Scenario: Future OrgOps features skip an unnecessary DISCOVER pass
+        Given OrgOps is a working, shipped system with 5 documented use cases in docs/use-cases.md
+        And this feature has recorded the DISCOVER-skip rule in wave-decisions.md
+        When a contributor starts the next real OrgOps feature
+        Then they consult wave-decisions.md and start at DISCUSS or DESIGN, not DISCOVER
+        And the rationale (product-market fit already established) is visible to them without re-deriving it
+
+  - id: 6
+    name: "Validate SSOT Readiness with a Dry Run"
+    command: "/nw-design {next-real-feature-id}"
+    tui_mockup: |
+      +-- /nw-design {next-real-feature-id} ---------------------------+
+      | Reading SSOT architecture...                                     |
+      | OK docs/product/architecture/brief.md                             |
+      | OK docs/product/architecture/adr-001-wrapped-agent-mode.md         |
+      | No missing-file gates.                                              |
+      +----------------------------------------------------------------------+
+    shared_artifacts:
+      - name: "brief.md + adr-*.md readability by DESIGN wave"
+        source: "docs/product/architecture/ (as populated by steps 3-4)"
+        displayed_as: "${design_gate_status}"
+        consumers: ["nw-design reading-enforcement gate"]
+    emotional_state:
+      entry: "Decisive"
+      exit: "Confident / unblocked"
+    integration_checkpoint: |
+      The dry run must be against a REAL next feature (not a synthetic test), because that is the only way to
+      confirm the SSOT is actually usable rather than merely present.
+    failure_modes:
+      - "brief.md exists but is missing a heading solution-architect expects (e.g. no ## Application Architecture section), causing a partial gate failure on first real use"
+    gherkin: |
+      Scenario: Next feature's DESIGN wave passes its reading-enforcement gate on the first try
+        Given docs/product/architecture/brief.md and adr-*.md were created by this feature
+        When solution-architect runs the DESIGN wave for the next real OrgOps feature
+        Then the reading-enforcement checklist shows all files as read with zero missing-file markers
+        And solution-architect extends brief.md under a new section instead of recreating system context
+
+integration_validation:
+  shared_artifact_consistency:
+    - artifact: "docs/product/architecture/brief.md"
+      must_match_across: [3, 6]
+      failure_message: "If brief.md's structure at step 3 doesn't match what DESIGN wave expects to read at step 6, the dry run fails and the bootstrap isn't actually done."
+    - artifact: "DISCOVER-skip routing rule"
+      must_match_across: [5, 6]
+      failure_message: "If the routing rule from step 5 isn't actually consulted by the dry-run feature in step 6, the rule exists on paper but doesn't change behavior."
+
+changelog:
+  - date: "2026-07-17"
+    feature: "nwave-integration"
+    change: "Initial SSOT bootstrap journey created -- first feature to formalize OrgOps's shipped architecture into nWave's SSOT doc model. No prior journey existed."
