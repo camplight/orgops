@@ -54,9 +54,7 @@ function makeCard(overrides: Partial<TrelloCardSnapshot> = {}): TrelloCardSnapsh
 }
 
 describe("US-11: Trello board ingestion behaves like the native ticket form", () => {
-  // DEFERRED: needs a real `tickets` row (ticket-classification's POST /api/tickets insert
-  // logic not yet delivered) — see deliver/deferred-scenarios.md
-  it.skip("[@walking_skeleton @real-io @in-memory @driving_port @US-11] Maria adds a Trello card and it becomes a ticket, identical in structure to a native-form submission", async () => {
+  it("[@walking_skeleton @real-io @in-memory @driving_port @US-11] Maria adds a Trello card and it becomes a ticket, identical in structure to a native-form submission", async () => {
     // Given the "Fenwick Product Backlog" Trello board is configured for ingestion
     const app = createRealApiApp();
     const governanceRepository = createHttpGovernanceRepository({
@@ -193,9 +191,7 @@ describe("US-11: Trello board ingestion behaves like the native ticket form", ()
   // ownership-based false-path is already covered by pre-existing agents.ts tests using this
   // same access-control shape.
 
-  // DEFERRED: needs a real `tickets` row (ticket-classification's POST /api/tickets insert
-  // logic not yet delivered) — see deliver/deferred-scenarios.md
-  it.skip("[@US-11] moving an existing card between lists does not create a duplicate ticket", async () => {
+  it("[@US-11] moving an existing card between lists does not create a duplicate ticket", async () => {
     const app = createRealApiApp();
     const governanceRepository = createHttpGovernanceRepository({
       apiFetch: apiFetchAsRunner(app),
@@ -233,9 +229,7 @@ describe("US-11: Trello board ingestion behaves like the native ticket form", ()
     expect(ticket).not.toBeNull();
   });
 
-  // DEFERRED: needs a real `tickets` row (ticket-classification's POST /api/tickets insert
-  // logic not yet delivered) — see deliver/deferred-scenarios.md
-  it.skip("[@US-11] ingestion recovers from a temporary Trello API outage without silently missing the card", async () => {
+  it("[@US-11] ingestion recovers from a temporary Trello API outage without silently missing the card", async () => {
     const app = createRealApiApp();
     const governanceRepository = createHttpGovernanceRepository({
       apiFetch: apiFetchAsRunner(app),
@@ -274,9 +268,7 @@ describe("US-11: Trello board ingestion behaves like the native ticket form", ()
     expect(ticket).not.toBeNull();
   });
 
-  // DEFERRED: needs a real `tickets` row (ticket-classification's POST /api/tickets insert
-  // logic not yet delivered) — see deliver/deferred-scenarios.md
-  it.skip("[@property @US-11] two near-simultaneous syncs of the same card never create two ticket records", async () => {
+  it("[@property @US-11] two near-simultaneous syncs of the same card never create two ticket records", async () => {
     const app = createRealApiApp();
     const governanceRepository = createHttpGovernanceRepository({
       apiFetch: apiFetchAsRunner(app),
@@ -305,9 +297,7 @@ describe("US-11: Trello board ingestion behaves like the native ticket form", ()
     expect(ticket).not.toBeNull();
   });
 
-  // DEFERRED: needs a real `tickets` row (ticket-classification's POST /api/tickets insert
-  // logic not yet delivered) — see deliver/deferred-scenarios.md
-  it.skip("[@US-11] ingested tickets are created the same way a native-form submission is created", async () => {
+  it("[@US-11] ingested tickets are created the same way a native-form submission is created", async () => {
     const app = createRealApiApp();
     const cookie = await loginAsAdmin(app);
     const request = authedRequest(app, cookie);

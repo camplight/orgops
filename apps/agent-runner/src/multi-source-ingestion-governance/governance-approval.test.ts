@@ -21,9 +21,7 @@ import { evaluateGuardrailForCompletion } from "./guardrail-evaluator";
 // does not provide yet).
 
 describe("US-12: submitter approve/request-changes governance gate", () => {
-  // DEFERRED: needs a real, queryable `nwave_runs`/`nwave_run_completions` row for `run-1043`
-  // (nwave-invocation-engine/progress-trust-ux not yet delivered) — see deliver/deferred-scenarios.md
-  it.skip("[@walking_skeleton @real-io @driving_port @US-12] Maria approves a completed implementation and the ticket is marked resolved", async () => {
+  it("[@walking_skeleton @real-io @driving_port @US-12] Maria approves a completed implementation and the ticket is marked resolved", async () => {
     const app = createRealApiApp();
     const cookie = await loginAsAdmin(app);
     const request = authedRequest(app, cookie);
@@ -40,9 +38,7 @@ describe("US-12: submitter approve/request-changes governance gate", () => {
     expect(body.ticketResolutionStatus).toBe("RESOLVED");
   });
 
-  // DEFERRED: needs a real, queryable `nwave_runs`/`nwave_run_completions` row for `run-1042`
-  // (nwave-invocation-engine/progress-trust-ux not yet delivered) — see deliver/deferred-scenarios.md
-  it.skip("[@US-12] Devon requests changes with specific feedback and the original context is preserved", async () => {
+  it("[@US-12] Devon requests changes with specific feedback and the original context is preserved", async () => {
     const app = createRealApiApp();
     const cookie = await loginAsAdmin(app);
     const request = authedRequest(app, cookie);
@@ -62,9 +58,7 @@ describe("US-12: submitter approve/request-changes governance gate", () => {
     expect(body.newRunId).toBeTruthy();
   });
 
-  // DEFERRED: needs a real, queryable `nwave_runs`/`nwave_run_completions` row for `run-held`
-  // (nwave-invocation-engine/progress-trust-ux not yet delivered) — see deliver/deferred-scenarios.md
-  it.skip("[@US-12] a run that touched a file outside the guardrail allowlist requires governance sign-off before Maria can approve", async () => {
+  it("[@US-12] a run that touched a file outside the guardrail allowlist requires governance sign-off before Maria can approve", async () => {
     const app = createRealApiApp();
     const cookie = await loginAsAdmin(app);
     const request = authedRequest(app, cookie);
@@ -96,9 +90,7 @@ describe("US-12: submitter approve/request-changes governance gate", () => {
     expect(approveAfterSignoffRes.status).toBe(200);
   });
 
-  // DEFERRED: needs a real, queryable `nwave_runs`/`nwave_run_completions` row for `run-1043`
-  // (nwave-invocation-engine/progress-trust-ux not yet delivered) — see deliver/deferred-scenarios.md
-  it.skip("[@US-12] anyone with governance access can see who approved TICKET-1043 and when", async () => {
+  it("[@US-12] anyone with governance access can see who approved TICKET-1043 and when", async () => {
     const app = createRealApiApp();
     const cookie = await loginAsAdmin(app);
     const request = authedRequest(app, cookie);
@@ -119,10 +111,7 @@ describe("US-12: submitter approve/request-changes governance gate", () => {
     expect(history.some((entry) => entry.eventType === "APPROVED" && entry.actorId)).toBe(true);
   });
 
-  // DEFERRED: needs a real, queryable `nwave_runs`/`nwave_run_completions` row for
-  // `run-no-file-data` (nwave-invocation-engine/progress-trust-ux not yet delivered) — see
-  // deliver/deferred-scenarios.md
-  it.skip("[@US-12] guardrail evaluation fails closed to governance hold when changed-file data is unavailable", async () => {
+  it("[@US-12] guardrail evaluation fails closed to governance hold when changed-file data is unavailable", async () => {
     const app = createRealApiApp();
     const cookie = await loginAsAdmin(app);
     const request = authedRequest(app, cookie);
@@ -139,10 +128,7 @@ describe("US-12: submitter approve/request-changes governance gate", () => {
     expect(approveRes.status).toBe(403);
   });
 
-  // DEFERRED: needs a real, queryable `nwave_runs`/`nwave_run_completions` row for
-  // `run-held-for-anyone` (nwave-invocation-engine/progress-trust-ux not yet delivered) — see
-  // deliver/deferred-scenarios.md
-  it.skip("[@property @US-12] Approve is never available while a run is on governance hold, regardless of who requests it", async () => {
+  it("[@property @US-12] Approve is never available while a run is on governance hold, regardless of who requests it", async () => {
     const app = createRealApiApp();
     const cookie = await loginAsAdmin(app);
     const request = authedRequest(app, cookie);
@@ -181,9 +167,7 @@ describe("US-12: submitter approve/request-changes governance gate", () => {
     expect(res.status).toBe(401);
   });
 
-  // DEFERRED: needs a real, queryable `nwave_runs`/`nwave_run_completions` row for `run-1043`
-  // (nwave-invocation-engine/progress-trust-ux not yet delivered) — see deliver/deferred-scenarios.md
-  it.skip("[@US-12] a redelivered approval action is a no-op, not a second decision", async () => {
+  it("[@US-12] a redelivered approval action is a no-op, not a second decision", async () => {
     const app = createRealApiApp();
     const cookie = await loginAsAdmin(app);
     const request = authedRequest(app, cookie);
