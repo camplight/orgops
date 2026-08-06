@@ -1,6 +1,5 @@
 import { z } from "zod";
 export * from "./event-shapes";
-export * from "./run-activity";
 
 export const EventStatusSchema = z.enum([
   "PENDING",
