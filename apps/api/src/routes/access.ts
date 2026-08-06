@@ -18,9 +18,6 @@ type AccessDeps = {
   orm: OrgOpsDrizzleDb;
 };
 
-export const GOVERNANCE_TEAM_NAME = "governance";
-export const GOVERNANCE_MEMBER_TYPE = "HUMAN";
-
 function isRunnerUser(user: RequestUser | undefined): boolean {
   return user?.username === "runner";
 }
@@ -219,32 +216,6 @@ export function createAccessControl(deps: AccessDeps) {
     return Boolean(agent.ownerHumanId && user.id && agent.ownerHumanId === user.id);
   }
 
-  function getGovernanceTeamId(): string | undefined {
-    const team = orm
-      .select({ id: schema.teams.id })
-      .from(schema.teams)
-      .where(eq(schema.teams.name, GOVERNANCE_TEAM_NAME))
-      .get() as { id: string } | undefined;
-    return team?.id;
-  }
-
-  function isGovernanceTeamMember(humanId: string): boolean {
-    const governanceTeamId = getGovernanceTeamId();
-    if (!governanceTeamId) return false;
-    const membership = orm
-      .select({ teamId: schema.teamMemberships.team_id })
-      .from(schema.teamMemberships)
-      .where(
-        and(
-          eq(schema.teamMemberships.team_id, governanceTeamId),
-          eq(schema.teamMemberships.member_type, GOVERNANCE_MEMBER_TYPE),
-          eq(schema.teamMemberships.member_id, humanId),
-        ),
-      )
-      .get();
-    return Boolean(membership);
-  }
-
   function canSignOffGuardrail(user: RequestUser | undefined): boolean {
     throw new Error(
       `canSignOffGuardrail not implemented (user=${user?.username ?? "unknown"}) — must check ` +
@@ -254,8 +225,11 @@ export function createAccessControl(deps: AccessDeps) {
   }
 
   function canManageTrelloIngestion(user: RequestUser | undefined): boolean {
-    if (!isHumanUser(user) || !user.id) return false;
-    return isGovernanceTeamMember(user.id);
+    throw new Error(
+      `canManageTrelloIngestion not implemented (user=${user?.username ?? "unknown"}) — same ` +
+        "governance-team check as canSignOffGuardrail, reused for board-config and allowlist " +
+        "CRUD (US-11 AC1).",
+    );
   }
 
   return {
