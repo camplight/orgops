@@ -2,12 +2,14 @@ import type { Hono } from "hono";
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { schema, type OrgOpsDrizzleDb } from "@orgops/db";
-import type { RequestUser, TrelloIngestionAccess } from "./access";
+import type { RequestUser } from "./access";
 
 type GuardrailAllowlistDeps = {
   orm: OrgOpsDrizzleDb;
   jsonResponse: (c: unknown, data: unknown, status?: number) => Response;
-  access: TrelloIngestionAccess;
+  access: {
+    canManageTrelloIngestion: (user: RequestUser | undefined) => boolean;
+  };
 };
 
 type GuardrailAllowlistEntryRow = {

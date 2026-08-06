@@ -271,11 +271,3 @@ export function createAccessControl(deps: AccessDeps) {
 }
 
 export type AccessControl = ReturnType<typeof createAccessControl>;
-
-/**
- * Narrow access-control slice shared by every route file gated on governance-team membership
- * (trello-ingestion.ts, guardrail-allowlist.ts) — both reuse this exact same check (US-11 AC1,
- * US-12 AC9), so the dependency shape they declare should be the same type, not two structurally
- * identical inline copies.
- */
-export type TrelloIngestionAccess = Pick<AccessControl, "canManageTrelloIngestion">;
