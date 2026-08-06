@@ -4,7 +4,7 @@
   "type": "module",
   "main": "src/server.ts",
   "scripts": {
-    "dev": "node --watch --import tsx src/server.ts",
+    "dev": "tsx watch src/server.ts",
     "start": "node --import tsx src/server.ts",
     "lint": "tsc -p tsconfig.json --noEmit"
   },

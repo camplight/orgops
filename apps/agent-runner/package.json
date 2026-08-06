@@ -4,7 +4,7 @@
   "type": "module",
   "main": "src/index.ts",
   "scripts": {
-    "dev": "node --watch --import tsx src/index.ts",
+    "dev": "tsx watch src/index.ts",
     "start": "node --import tsx src/index.ts",
     "test": "vitest run",
     "lint": "tsc -p tsconfig.json --noEmit"
