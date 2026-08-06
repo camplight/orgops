@@ -215,18 +215,6 @@ describe("US-12: submitter approve/request-changes governance gate", () => {
     expect(deleteRes.status).toBe(204);
   });
 
-  // Note (step 02-02): a scenario asserting 403 for an authenticated-but-non-governance human
-  // is intentionally not added here, for the same reason trello-ingestion.test.ts's equivalent
-  // note documents: this codebase's only human fixture today is the seeded admin
-  // (acceptance-test-support.ts's loginAsAdmin), and admin is now a real governance-team
-  // member. Adding a second, logged-in-but-non-governance human would require a further
-  // acceptance-test-support.ts extension beyond this step's scope.
-  // `canManageTrelloIngestion`'s false-path is still exercised indirectly here: the
-  // "unauthorized governance sign-off attempt" scenario above proves this feature's routes are
-  // gated at all (global auth gate, no session -> 401 before any handler runs), and
-  // trello-ingestion.test.ts already documents the equivalent gap for the same access-control
-  // function reused by this route file.
-
   it("[@US-12] the guardrail evaluator itself holds every completion for governance review while file-change data is unavailable", () => {
     // Given a run completes and its changedFilePaths data is unavailable (true for every run
     // today, per ADR-0010)
