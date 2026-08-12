@@ -1,11 +1,11 @@
-# OrgOps UI
+# OrgOps Admin UI
 
-React + Tailwind SPA for OrgOps.
+React + Tailwind admin SPA for OrgOps.
 
 ## Run
 
 ```bash
-npm run dev --workspace @orgops/ui
+npm run dev --workspace @orgops/admin-ui
 ```
 
 The UI proxies `/api` and `/ws` to the API server.
