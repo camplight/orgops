@@ -338,12 +338,6 @@ export default function App() {
       </section>
 
       <aside className="activity-panel">
-        <div>
-          <span>Live Status</span>
-          <strong>{activeAgents.length} active agents</strong>
-          <p>{channels.length} channels available</p>
-        </div>
-
         <section>
           <h2>Recent Activity</h2>
           <div className="activity-list">
