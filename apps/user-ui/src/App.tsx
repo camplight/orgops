@@ -264,7 +264,7 @@ export default function App() {
                 {channel.participants?.length ? <em>{channel.participants.length}</em> : null}
               </button>
             ))}
-            {filteredChannels.length === 0 ? (
+            {!loading && channelQuery.trim() && filteredChannels.length === 0 ? (
               <p className="channel-empty">No channels match "{channelQuery.trim()}".</p>
             ) : null}
           </div>
