@@ -16,6 +16,7 @@ body {
 }
 
 button,
+input,
 textarea {
   font: inherit;
 }
@@ -57,6 +58,15 @@ button {
   font-size: 13px;
   font-weight: 900;
   letter-spacing: -0.06em;
+}
+
+.brand-mark.large {
+  width: 74px;
+  height: 74px;
+  border-radius: 24px;
+  background: #0f172a;
+  color: #fff;
+  font-size: 16px;
 }
 
 .brand strong,
@@ -136,6 +146,18 @@ button {
   line-height: 1.5;
 }
 
+.logout-button {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(203, 213, 225, 0.24);
+  border-radius: 14px;
+  background: transparent;
+  color: #cbd5e1;
+  font-size: 13px;
+  font-weight: 800;
+  text-align: left;
+}
+
 .agent-pill {
   display: flex;
   gap: 9px;
@@ -210,6 +232,109 @@ button {
 .notice.error {
   background: #fff1f2;
   color: #be123c;
+}
+
+.loading-screen {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  color: #0f172a;
+  font-size: 20px;
+  font-weight: 900;
+}
+
+.login-screen {
+  display: grid;
+  grid-template-columns: 1fr 420px;
+  gap: 48px;
+  min-height: 100vh;
+  align-items: center;
+  padding: 64px;
+  background:
+    radial-gradient(circle at 18% 18%, rgba(45, 212, 191, 0.18), transparent 30rem),
+    linear-gradient(135deg, #edf6f7, #dce8ef);
+}
+
+.login-copy {
+  max-width: 720px;
+}
+
+.login-copy p {
+  margin: 28px 0 12px;
+  color: #0f766e;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.login-copy h1 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 76px;
+  line-height: 0.95;
+  letter-spacing: -0.05em;
+}
+
+.login-copy span {
+  display: block;
+  max-width: 520px;
+  margin-top: 22px;
+  color: #475569;
+  font-size: 24px;
+  line-height: 1.35;
+}
+
+.login-card {
+  display: grid;
+  gap: 18px;
+  padding: 28px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 32px;
+  background: rgba(255, 255, 255, 0.84);
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.14);
+}
+
+.login-card > div:first-child span {
+  display: block;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.login-card > div:first-child strong {
+  display: block;
+  margin-top: 6px;
+  color: #0f172a;
+  font-size: 28px;
+}
+
+.login-card label {
+  display: grid;
+  gap: 8px;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.login-card input {
+  width: 100%;
+  padding: 15px 16px;
+  border: 1px solid #dbe6ef;
+  border-radius: 16px;
+  background: #f8fafc;
+  color: #0f172a;
+}
+
+.login-card button {
+  padding: 16px;
+  border: 0;
+  border-radius: 18px;
+  background: #0f766e;
+  color: #fff;
+  font-weight: 900;
 }
 
 .messages-panel {
@@ -403,6 +528,16 @@ button {
     height: auto;
     min-height: 100vh;
     overflow: visible;
+  }
+
+  .login-screen {
+    grid-template-columns: 1fr;
+    gap: 28px;
+    padding: 32px;
+  }
+
+  .login-copy h1 {
+    font-size: 56px;
   }
 
   .workspace-header,

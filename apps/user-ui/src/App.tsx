@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { apiFetch, apiJson, getApiHeaders } from "./api";
-import type { Agent, Channel, EventRow } from "./types";
+import type { Agent, AuthMe, Channel, EventRow } from "./types";
 
 function formatTime(value?: number) {
   if (!value) return "";
@@ -40,6 +40,11 @@ export default function App() {
   const [events, setEvents] = useState<EventRow[]>([]);
   const [activeChannelId, setActiveChannelId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [username, setUsername] = useState("");
+  const [loginUsername, setLoginUsername] = useState("admin");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [authenticated, setAuthenticated] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -63,7 +68,25 @@ export default function App() {
     [agents]
   );
 
+  async function loadSession() {
+    setAuthLoading(true);
+    setError(null);
+    try {
+      const me = await apiJson<AuthMe>("/api/auth/me");
+      const nextUsername = me.username ?? "";
+      setUsername(nextUsername);
+      setLoginUsername(nextUsername || "admin");
+      setAuthenticated(Boolean(nextUsername));
+    } catch {
+      setAuthenticated(false);
+      setUsername("");
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
   async function loadShell() {
+    if (!authenticated) return;
     setError(null);
     setLoading(true);
     try {
@@ -94,10 +117,16 @@ export default function App() {
 
   useEffect(() => {
     document.title = "OrgOps User UI";
-    void loadShell();
+    void loadSession();
   }, []);
 
   useEffect(() => {
+    if (!authenticated) return;
+    void loadShell();
+  }, [authenticated]);
+
+  useEffect(() => {
+    if (!authenticated) return;
     if (!activeChannelId) {
       setEvents([]);
       return;
@@ -105,7 +134,39 @@ export default function App() {
     void loadMessages(activeChannelId);
     const interval = window.setInterval(() => void loadMessages(activeChannelId), 5000);
     return () => window.clearInterval(interval);
-  }, [activeChannelId]);
+  }, [activeChannelId, authenticated]);
+
+  async function handleLogin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError(null);
+    setAuthLoading(true);
+    try {
+      await apiFetch("/api/auth/login", {
+        method: "POST",
+        headers: getApiHeaders(),
+        body: JSON.stringify({
+          username: loginUsername.trim(),
+          password: loginPassword
+        })
+      });
+      setLoginPassword("");
+      await loadSession();
+    } catch (loginError) {
+      setError(loginError instanceof Error ? loginError.message : "Unable to sign in");
+      setAuthenticated(false);
+      setAuthLoading(false);
+    }
+  }
+
+  async function handleLogout() {
+    await apiFetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
+    setAuthenticated(false);
+    setUsername("");
+    setChannels([]);
+    setAgents([]);
+    setEvents([]);
+    setActiveChannelId(null);
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -120,7 +181,7 @@ export default function App() {
         body: JSON.stringify({
           type: "message.created",
           payload: { text: draft.trim() },
-          source: "human:user",
+          source: `human:${username || "user"}`,
           channelId: activeChannelId
         })
       });
@@ -131,6 +192,51 @@ export default function App() {
     } finally {
       setSending(false);
     }
+  }
+
+  if (authLoading && !authenticated) {
+    return <main className="loading-screen">Loading OrgOps...</main>;
+  }
+
+  if (!authenticated) {
+    return (
+      <main className="login-screen">
+        <section className="login-copy">
+          <div className="brand-mark large">OO</div>
+          <p>OrgOps User Workspace</p>
+          <h1>Welcome back</h1>
+          <span>Sign in to talk to your team and agents.</span>
+        </section>
+
+        <form className="login-card" onSubmit={handleLogin}>
+          <div>
+            <span>Sign in</span>
+            <strong>OrgOps</strong>
+          </div>
+          {error ? <div className="notice error">{error}</div> : null}
+          <label>
+            Username
+            <input
+              value={loginUsername}
+              onChange={(event) => setLoginUsername(event.target.value)}
+              autoComplete="username"
+            />
+          </label>
+          <label>
+            Password
+            <input
+              value={loginPassword}
+              onChange={(event) => setLoginPassword(event.target.value)}
+              type="password"
+              autoComplete="current-password"
+            />
+          </label>
+          <button disabled={!loginUsername.trim() || !loginPassword || authLoading}>
+            {authLoading ? "Signing in..." : "Continue"}
+          </button>
+        </form>
+      </main>
+    );
   }
 
   return (
@@ -172,6 +278,9 @@ export default function App() {
               </div>
             ))
           )}
+          <button className="logout-button" onClick={() => void handleLogout()}>
+            Sign out {username ? `(${username})` : ""}
+          </button>
         </section>
       </aside>
 

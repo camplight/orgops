@@ -28,3 +28,9 @@ export type EventRow = {
   payload?: unknown;
   status?: string;
 };
+
+export type AuthMe = {
+  id?: string | null;
+  username?: string | null;
+  mustChangePassword?: boolean;
+};
