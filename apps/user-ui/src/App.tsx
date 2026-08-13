@@ -38,6 +38,7 @@ export default function App() {
   const [channels, setChannels] = useState<Channel[]>([]);
   const [events, setEvents] = useState<EventRow[]>([]);
   const [activeChannelId, setActiveChannelId] = useState<string | null>(null);
+  const [channelQuery, setChannelQuery] = useState("");
   const [draft, setDraft] = useState("");
   const [username, setUsername] = useState("");
   const [loginUsername, setLoginUsername] = useState("admin");
@@ -57,6 +58,12 @@ export default function App() {
     () => events.filter((event) => event.type === "message.created"),
     [events]
   );
+
+  const filteredChannels = useMemo(() => {
+    const query = channelQuery.trim().toLowerCase();
+    if (!query) return channels;
+    return channels.filter((channel) => channel.name.toLowerCase().includes(query));
+  }, [channelQuery, channels]);
 
   async function loadSession() {
     setAuthLoading(true);
@@ -151,6 +158,7 @@ export default function App() {
     setChannels([]);
     setEvents([]);
     setActiveChannelId(null);
+    setChannelQuery("");
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -237,8 +245,16 @@ export default function App() {
 
         <section className="sidebar-section">
           <div className="section-label">Channels</div>
+          <label className="channel-search">
+            <span>Search channels</span>
+            <input
+              value={channelQuery}
+              onChange={(event) => setChannelQuery(event.target.value)}
+              placeholder="Search channels..."
+            />
+          </label>
           <div className="channel-list">
-            {channels.map((channel) => (
+            {filteredChannels.map((channel) => (
               <button
                 key={channel.id}
                 className={channel.id === activeChannelId ? "active" : undefined}
@@ -248,6 +264,9 @@ export default function App() {
                 {channel.participants?.length ? <em>{channel.participants.length}</em> : null}
               </button>
             ))}
+            {filteredChannels.length === 0 ? (
+              <p className="channel-empty">No channels match "{channelQuery.trim()}".</p>
+            ) : null}
           </div>
         </section>
 
