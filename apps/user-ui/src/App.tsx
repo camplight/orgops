@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { apiFetch, apiJson, getApiHeaders } from "./api";
-import type { Agent, AuthMe, Channel, EventRow } from "./types";
+import type { AuthMe, Channel, EventRow } from "./types";
 
 function formatTime(value?: number) {
   if (!value) return "";
@@ -36,7 +36,6 @@ function channelLabel(channel?: Channel | null) {
 
 export default function App() {
   const [channels, setChannels] = useState<Channel[]>([]);
-  const [agents, setAgents] = useState<Agent[]>([]);
   const [events, setEvents] = useState<EventRow[]>([]);
   const [activeChannelId, setActiveChannelId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -57,15 +56,6 @@ export default function App() {
   const visibleMessages = useMemo(
     () => events.filter((event) => event.type === "message.created"),
     [events]
-  );
-
-  const activeAgents = useMemo(
-    () =>
-      agents.filter((agent) => {
-        const state = (agent.runtimeState ?? agent.desiredState ?? "").toUpperCase();
-        return state !== "STOPPED";
-      }),
-    [agents]
   );
 
   async function loadSession() {
@@ -90,12 +80,8 @@ export default function App() {
     setError(null);
     setLoading(true);
     try {
-      const [nextChannels, nextAgents] = await Promise.all([
-        apiJson<Channel[]>("/api/channels"),
-        apiJson<Agent[]>("/api/agents")
-      ]);
+      const nextChannels = await apiJson<Channel[]>("/api/channels");
       setChannels(nextChannels);
-      setAgents(nextAgents);
       setActiveChannelId((current) => current ?? nextChannels[0]?.id ?? null);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Unable to load OrgOps");
@@ -163,7 +149,6 @@ export default function App() {
     setAuthenticated(false);
     setUsername("");
     setChannels([]);
-    setAgents([]);
     setEvents([]);
     setActiveChannelId(null);
   }
@@ -266,18 +251,7 @@ export default function App() {
           </div>
         </section>
 
-        <section className="sidebar-section agent-summary">
-          <div className="section-label">Agents</div>
-          {activeAgents.length === 0 ? (
-            <p>No agents are active right now.</p>
-          ) : (
-            activeAgents.slice(0, 5).map((agent) => (
-              <div className="agent-pill" key={agent.name}>
-                <i />
-                <span>{agent.name}</span>
-              </div>
-            ))
-          )}
+        <section className="sidebar-section account-actions">
           <button className="logout-button" onClick={() => void handleLogout()}>
             Sign out {username ? `(${username})` : ""}
           </button>

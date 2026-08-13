@@ -81,8 +81,7 @@ button {
 }
 
 .brand strong,
-.brand span,
-.agent-pill span {
+.brand span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -159,15 +158,8 @@ button {
   font-style: normal;
 }
 
-.agent-summary {
+.account-actions {
   margin-top: auto;
-}
-
-.agent-summary p {
-  margin: 0;
-  color: #94a3b8;
-  font-size: 14px;
-  line-height: 1.5;
 }
 
 .logout-button {
@@ -180,22 +172,6 @@ button {
   font-size: 13px;
   font-weight: 800;
   text-align: left;
-}
-
-.agent-pill {
-  display: flex;
-  gap: 9px;
-  align-items: center;
-  color: #dbeafe;
-  font-size: 14px;
-  font-weight: 800;
-}
-
-.agent-pill i {
-  width: 9px;
-  height: 9px;
-  border-radius: 999px;
-  background: #10b981;
 }
 
 .workspace {
