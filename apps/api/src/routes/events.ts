@@ -15,12 +15,21 @@ import {
   inArray,
   isNull,
   like,
+  lt,
   lte,
   not,
   or,
   sql,
 } from "drizzle-orm";
 import type { AccessControl, RequestUser } from "./access";
+
+// Hard ceiling on a single event-listing response, `all=1` included. The events
+// table grows unbounded (~273k rows on staging) and the API is a single thread
+// over synchronous better-sqlite3: one uncapped read serializes the whole table
+// and blocks every other request — during a live build that starved the runner
+// AND the coder's own event posts. Dashboards wanting totals should call
+// GET /api/events/stats; complete dumps go through /api/events/export.sqlite.
+const MAX_EVENT_ROWS = 10_000;
 
 type EventsDeps = {
   orm: OrgOpsDrizzleDb;
@@ -180,7 +189,8 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       sourcePrefix: params.get("sourcePrefix"),
       status: params.get("status"),
       after: params.get("after"),
-      limit: Number(params.get("limit") ?? 100),
+      before: params.get("before"),
+      limit: Math.min(Number(params.get("limit") ?? 100), MAX_EVENT_ROWS),
       order: params.get("order"),
       descending: params.get("order") === "desc",
       all: params.get("all") === "1",
@@ -202,6 +212,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       sourcePrefix: query.sourcePrefix ?? undefined,
       status: query.status ?? undefined,
       after: query.after ?? undefined,
+      before: query.before ?? undefined,
       scheduled: query.scheduledOnly ? true : undefined,
       order: query.order ?? undefined,
     };
@@ -222,6 +233,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       sourcePrefix,
       status,
       after,
+      before,
       limit,
       descending,
       all,
@@ -233,7 +245,9 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       return [];
     }
     const now = Date.now();
-    const shouldReturnAll = options.includeAll || all;
+    // includeAll (the sqlite export) stays uncapped — it is a deliberate,
+    // rare dump; the client-facing all=1 is capped at MAX_EVENT_ROWS.
+    const rowCap = options.includeAll ? null : all ? MAX_EVENT_ROWS : limit;
 
     const whereClauses: any[] = [];
 
@@ -242,6 +256,9 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     }
     if (after) {
       whereClauses.push(gt(schema.events.created_at, Number(after)));
+    }
+    if (before) {
+      whereClauses.push(lt(schema.events.created_at, Number(before)));
     }
     if (type) {
       whereClauses.push(eq(schema.events.type, type));
@@ -301,6 +318,9 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
         if (after) {
           receiptClauses.push(gt(schema.events.created_at, Number(after)));
         }
+        if (before) {
+          receiptClauses.push(lt(schema.events.created_at, Number(before)));
+        }
         if (type) {
           receiptClauses.push(eq(schema.events.type, type));
         }
@@ -333,7 +353,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
               : asc(schema.events.created_at),
           );
         const joinedRows = (
-          shouldReturnAll ? joinedQuery : joinedQuery.limit(limit)
+          rowCap === null ? joinedQuery : joinedQuery.limit(rowCap)
         ).all() as Array<{
           event: any;
           receiptStatus: string;
@@ -437,7 +457,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
           ? desc(schema.events.created_at)
           : asc(schema.events.created_at),
       );
-    const rows = (shouldReturnAll ? dbQuery : dbQuery.limit(limit)).all() as any[];
+    const rows = (rowCap === null ? dbQuery : dbQuery.limit(rowCap)).all() as any[];
     return isRunnerRequest
       ? rows
       : rows.filter((row) =>
@@ -708,6 +728,42 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
         "content-disposition": `attachment; filename="${filename}"`,
       },
     });
+  });
+
+  // Aggregate counters for dashboards. Replaces the `all=1` full-table dump the
+  // UI used for five numbers: a GROUP BY over ~273k rows is milliseconds in
+  // SQLite, the dump was an ~80 MB serialization that blocked the event loop.
+  // Visibility matches the listing endpoint: events of existing channels the
+  // user cannot view are excluded; channel-less and legacy-channel events count.
+  app.get("/api/events/stats", (c) => {
+    const user = c.get("user") as RequestUser | undefined;
+    const allChannelIds = orm
+      .select({ id: schema.channels.id })
+      .from(schema.channels)
+      .all()
+      .map((row) => row.id);
+    const visibleIds = new Set(access.listVisibleChannelIds(user));
+    const hiddenIds = allChannelIds.filter((id) => !visibleIds.has(id));
+    const grouped = orm
+      .select({ status: schema.events.status, count: sql<number>`count(*)` })
+      .from(schema.events)
+      .where(
+        hiddenIds.length > 0
+          ? or(
+              isNull(schema.events.channel_id),
+              not(inArray(schema.events.channel_id, hiddenIds)),
+            )
+          : undefined,
+      )
+      .groupBy(schema.events.status)
+      .all() as Array<{ status: string; count: number }>;
+    let total = 0;
+    const byStatus: Record<string, number> = {};
+    for (const row of grouped) {
+      byStatus[row.status] = row.count;
+      total += row.count;
+    }
+    return jsonResponse(c, { total, byStatus });
   });
 
   app.get("/api/events/:id", (c) => {
