@@ -29,6 +29,10 @@ type EventsScreenProps = {
   onRefreshEventTypes: () => Promise<void> | void;
   onUpdateScheduledEvent: (eventId: string, input: { deliverAt: number; payload?: unknown }) => Promise<void>;
   onDeleteScheduledEvent: (eventId: string) => Promise<void>;
+  // The explorer holds only the newest page of history; this pulls the next
+  // older page from the server. Absent (e.g. dashboard drawer) → no button.
+  onLoadOlderEvents?: () => Promise<void>;
+  olderEventsExhausted?: boolean;
   focusEventId?: string | null;
   onFocusEventApplied?: () => void;
   drawerOnly?: boolean;
@@ -64,10 +68,13 @@ export function EventsScreen({
   onClearEvents,
   onUpdateScheduledEvent,
   onDeleteScheduledEvent,
+  onLoadOlderEvents,
+  olderEventsExhausted = false,
   focusEventId,
   onFocusEventApplied,
   drawerOnly = false
 }: EventsScreenProps) {
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("createdAt");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const [isPaused, setIsPaused] = useState(false);
@@ -581,7 +588,30 @@ export function EventsScreen({
             <div className="py-6 text-center text-slate-500">No events found.</div>
           )}
         </div>
-        <div className="mt-3 flex items-center justify-end gap-2">
+        <div className="mt-3 flex items-center justify-between gap-2">
+          {onLoadOlderEvents ? (
+            <Button
+              variant="secondary"
+              disabled={loadingOlder || olderEventsExhausted}
+              onClick={async () => {
+                setLoadingOlder(true);
+                try {
+                  await onLoadOlderEvents();
+                } finally {
+                  setLoadingOlder(false);
+                }
+              }}
+            >
+              {olderEventsExhausted
+                ? "All history loaded"
+                : loadingOlder
+                  ? "Loading…"
+                  : "Load older events"}
+            </Button>
+          ) : (
+            <div />
+          )}
+          <div className="flex items-center gap-2">
           <Button
             variant="secondary"
             disabled={currentPage <= 1}
@@ -599,6 +629,7 @@ export function EventsScreen({
           >
             Next
           </Button>
+          </div>
         </div>
       </Card>
         </>

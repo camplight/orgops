@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+
+// Page size for Events Explorer loads (initial page and each "load older" step).
+const EVENTS_PAGE_LIMIT = 1000;
 import type { Screen } from "./types";
 import { apiFetch, apiJson, getApiHeaders } from "./api";
 import { apiUrl } from "./config";
@@ -336,6 +339,11 @@ export default function App() {
     activeProcessId
   });
 
+  // Full-history paging loop — CHAT ONLY (a single channel's transcript is
+  // bounded). The Events Explorer must never use this: unfiltered it replays
+  // the entire events table (~273k rows on staging, one 1000-row request per
+  // second against the single-threaded API) — use fetchLatestExplorerEvents +
+  // handleLoadOlderEvents instead.
   const fetchAllEvents = useCallback(
     async (baseParams: URLSearchParams) => {
       const limit = 1000;
@@ -376,6 +384,46 @@ export default function App() {
     },
     [fetchAllEvents]
   );
+
+  // Events Explorer: one newest-first page per load. Live rows keep arriving
+  // over the WebSocket (handleWsEvent upserts them); older history is pulled
+  // page by page on demand via handleLoadOlderEvents.
+  const explorerParamsRef = useRef(new URLSearchParams());
+  const [olderEventsExhausted, setOlderEventsExhausted] = useState(false);
+
+  const fetchLatestExplorerEvents = useCallback(
+    async (baseParams: URLSearchParams) => {
+      explorerParamsRef.current = baseParams;
+      const params = new URLSearchParams(baseParams);
+      params.set("limit", String(EVENTS_PAGE_LIMIT));
+      params.set("order", "desc");
+      const list = await apiJson<EventRow[]>(`/api/events?${params.toString()}`);
+      setOlderEventsExhausted(list.length < EVENTS_PAGE_LIMIT);
+      return list;
+    },
+    []
+  );
+
+  const handleLoadOlderEvents = useCallback(async () => {
+    const loaded = data.events;
+    if (loaded.length === 0) return;
+    const oldest = loaded.reduce(
+      (min, event) => Math.min(min, event.createdAt ?? min),
+      Number.MAX_SAFE_INTEGER
+    );
+    const params = new URLSearchParams(explorerParamsRef.current);
+    params.set("limit", String(EVENTS_PAGE_LIMIT));
+    params.set("order", "desc");
+    params.set("before", String(oldest));
+    const chunk = await apiJson<EventRow[]>(`/api/events?${params.toString()}`);
+    setOlderEventsExhausted(chunk.length < EVENTS_PAGE_LIMIT);
+    if (chunk.length === 0) return;
+    data.setEvents((prev) => {
+      const seen = new Set(prev.map((event) => event.id));
+      const merged = [...prev, ...chunk.filter((event) => !seen.has(event.id))];
+      return merged.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
+    });
+  }, [data.events, data.setEvents]);
 
   const ensureDirectChannel = useCallback(
     async (agentName: string) => {
@@ -425,12 +473,12 @@ export default function App() {
       if (screen === "humans") data.refreshHumans();
       if (screen === "skills") data.refreshSkills();
       if (screen === "events") {
-        fetchAllEvents(new URLSearchParams()).then(data.setEvents);
+        fetchLatestExplorerEvents(new URLSearchParams()).then(data.setEvents);
         data.refreshChannels();
         data.refreshEventTypes();
       }
     },
-    [activeChatTarget, data, fetchAllEvents, loadChatEventsForTarget]
+    [activeChatTarget, data, fetchLatestExplorerEvents, loadChatEventsForTarget]
   );
 
   const handleSelectChatTarget = useCallback(
@@ -494,14 +542,14 @@ export default function App() {
     const filtersToApply = nextFilters ?? eventFilters;
     setAppliedEventFilters(filtersToApply);
     const params = buildEventQueryParams(filtersToApply);
-    const list = await fetchAllEvents(params);
+    const list = await fetchLatestExplorerEvents(params);
     const now = Date.now();
     data.setEvents(
       list.filter((event) =>
         matchesAppliedEventFilters(event, filtersToApply, data.channels, now)
       )
     );
-  }, [eventFilters, data.channels, data.setEvents, fetchAllEvents]);
+  }, [eventFilters, data.channels, data.setEvents, fetchLatestExplorerEvents]);
 
   const handleExportEvents = useCallback((filtersToExport?: EventFilters) => {
     const params = buildEventQueryParams(filtersToExport ?? appliedEventFilters);
@@ -1066,6 +1114,8 @@ export default function App() {
           onRefreshEventTypes={data.refreshEventTypes}
           onUpdateScheduledEvent={handleUpdateScheduledEvent}
           onDeleteScheduledEvent={handleDeleteScheduledEvent}
+          onLoadOlderEvents={handleLoadOlderEvents}
+          olderEventsExhausted={olderEventsExhausted}
           focusEventId={focusEventId}
           onFocusEventApplied={() => setFocusEventId(null)}
         />
