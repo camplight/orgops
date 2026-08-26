@@ -10,6 +10,7 @@ import type {
   ProcessRow,
   ProcessOutputRow,
   SecretRow,
+  IntegrationKey,
   SkillMeta,
   RunnerNode,
   Team,
@@ -57,6 +58,7 @@ export function useOrgOpsData(authenticated: boolean) {
     Record<string, ProcessOutputRow[]>
   >({});
   const [secrets, setSecrets] = useState<SecretRow[]>([]);
+  const [integrationKeys, setIntegrationKeys] = useState<IntegrationKey[]>([]);
   const [channelEvents, setChannelEvents] = useState<EventRow[]>([]);
   const [channelParticipants, setChannelParticipants] = useState<
     ChannelParticipant[]
@@ -128,6 +130,10 @@ export function useOrgOpsData(authenticated: boolean) {
     () => apiJson<SecretRow[]>("/api/secrets").then(setSecrets),
     [],
   );
+  const refreshIntegrationKeys = useCallback(
+    () => apiJson<IntegrationKey[]>("/api/integration-keys").then(setIntegrationKeys),
+    [],
+  );
 
   useEffect(() => {
     if (!authenticated) return;
@@ -139,6 +145,7 @@ export function useOrgOpsData(authenticated: boolean) {
     refreshRunners();
     refreshProcesses();
     refreshSecrets();
+    refreshIntegrationKeys();
     refreshTeams();
     refreshHumans();
   }, [
@@ -151,6 +158,7 @@ export function useOrgOpsData(authenticated: boolean) {
     refreshRunners,
     refreshProcesses,
     refreshSecrets,
+    refreshIntegrationKeys,
     refreshTeams,
     refreshHumans,
   ]);
@@ -221,6 +229,8 @@ export function useOrgOpsData(authenticated: boolean) {
     setProcessOutput,
     secrets,
     setSecrets,
+    integrationKeys,
+    setIntegrationKeys,
     refreshDashboard,
     refreshSkills,
     refreshEvents,
@@ -233,6 +243,7 @@ export function useOrgOpsData(authenticated: boolean) {
     refreshConversations,
     refreshProcesses,
     refreshSecrets,
+    refreshIntegrationKeys,
     channelEvents,
     channelParticipants,
     dashboardEventStats,

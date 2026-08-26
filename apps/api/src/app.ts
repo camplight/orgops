@@ -43,6 +43,7 @@ import { registerSecretsRoutes } from "./routes/secrets";
 import { registerWsRoutes, type WsServerMessage } from "./routes/ws";
 import { registerHumansRoutes } from "./routes/humans";
 import { registerRunnersRoutes } from "./routes/runners";
+import { registerIntegrationKeysRoutes } from "./routes/integration-keys";
 import { createAccessControl } from "./routes/access";
 
 export type AppConfig = {
@@ -468,6 +469,8 @@ export function createApp(config: AppConfig = {}) {
     runnerToken: RUNNER_TOKEN,
     runnerApiUrl: RUNNER_API_URL,
   });
+
+  registerIntegrationKeysRoutes(app as any, { orm, jsonResponse, access });
 
   return { app, db, bus, injectWebSocket };
 }

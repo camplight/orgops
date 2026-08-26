@@ -4,6 +4,7 @@ export { ChatScreen } from "./ChatScreen";
 export { DashboardScreen } from "./DashboardScreen";
 export { EventsScreen } from "./EventsScreen";
 export { HumansScreen } from "./HumansScreen";
+export { IntegrationKeysScreen } from "./IntegrationKeysScreen";
 export { ProcessesScreen } from "./ProcessesScreen";
 export { ProfileScreen } from "./ProfileScreen";
 export { RunnersScreen } from "./RunnersScreen";

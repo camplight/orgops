@@ -71,6 +71,26 @@ export const teams = sqliteTable("teams", {
   created_at: integer("created_at").notNull()
 });
 
+export const integrationKeys = sqliteTable(
+  "integration_keys",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    agent_name: text("agent_name").notNull(),
+    token_hash: text("token_hash").notNull().unique(),
+    token_prefix: text("token_prefix").notNull(),
+    created_by_human_id: text("created_by_human_id"),
+    created_at: integer("created_at").notNull(),
+    last_used_at: integer("last_used_at"),
+    revoked_at: integer("revoked_at")
+  },
+  (table) => ({
+    idxIntegrationKeysAgentName: index("idx_integration_keys_agent_name").on(
+      table.agent_name
+    )
+  })
+);
+
 export const humans = sqliteTable("humans", {
   id: text("id").primaryKey(),
   username: text("username").notNull().unique(),
@@ -345,6 +365,7 @@ export const schema = {
   runnerNodes,
   teams,
   humans,
+  integrationKeys,
   teamMemberships,
   channels,
   channelSubscriptions,

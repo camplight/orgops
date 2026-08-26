@@ -187,6 +187,18 @@ export type SecretRow = {
   created_at: number;
 };
 
+export type IntegrationKey = {
+  id: string;
+  name: string;
+  agentName: string;
+  tokenPrefix: string;
+  createdByHumanId?: string | null;
+  createdAt: number;
+  lastUsedAt?: number | null;
+  revokedAt?: number | null;
+  token?: string;
+};
+
 export type Screen =
   | "dashboard"
   | "agents"
@@ -198,5 +210,6 @@ export type Screen =
   | "processes"
   | "skills"
   | "secrets"
+  | "api-keys"
   | "humans"
   | "profile";
