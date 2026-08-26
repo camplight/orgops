@@ -23,5 +23,13 @@
     "tailwindcss": "^3.4.10",
     "typescript": "^5.5.4",
     "vite": "^8.0.10"
+  },
+  "optionalDependencies": {
+    "@rolldown/binding-darwin-arm64": "1.2.4",
+    "@rolldown/binding-linux-x64-gnu": "1.2.4",
+    "@rolldown/binding-win32-x64-msvc": "1.2.4",
+    "lightningcss-darwin-arm64": "1.33.0",
+    "lightningcss-linux-x64-gnu": "1.33.0",
+    "lightningcss-win32-x64-msvc": "1.33.0"
   }
 }
