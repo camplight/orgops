@@ -38,7 +38,7 @@
     "wait-on": "^8.0.5"
   },
   "dependencies": {
-    "@cursor/sdk": "^1.0.11",
+    "@cursor/sdk": "^1.0.28",
     "cursor-agent": "^1.0.3"
   },
   "overrides": {
