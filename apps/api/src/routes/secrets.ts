@@ -176,7 +176,8 @@ export function registerSecretsRoutes(app: Hono<any>, deps: SecretsDeps) {
         names: Object.keys(env).sort(),
         ...(requestedByAgent ? { requestedByAgent } : {})
       },
-      source
+      source,
+      status: "DELIVERED"
     });
     return jsonResponse(c, env);
   });

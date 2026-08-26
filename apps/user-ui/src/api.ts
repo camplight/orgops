@@ -1,0 +1,21 @@
+import { apiUrl } from "./config";
+
+const API_HEADERS = { "content-type": "application/json" };
+
+export async function apiFetch(path: string, init?: RequestInit) {
+  const res = await fetch(apiUrl(path), { credentials: "include", ...init });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Request failed: ${res.status}`);
+  }
+  return res;
+}
+
+export async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await apiFetch(path, init);
+  return (await res.json()) as T;
+}
+
+export function getApiHeaders() {
+  return API_HEADERS;
+}

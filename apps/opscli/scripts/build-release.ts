@@ -45,8 +45,8 @@ function outputNameForCurrentPlatform() {
 }
 
 function prebuildFrontendArtifacts() {
-  runCommand("npm", ["run", "--workspace", "@orgops/ui", "build"]);
-  runCommand("npm", ["run", "--workspace", "site", "build"]);
+  runCommand("npm", ["run", "--workspace", "@orgops/admin-ui", "build"]);
+  runCommand("npm", ["run", "--workspace", "@orgops/user-ui", "build"]);
 }
 
 function stageOrgOpsSource() {
@@ -56,8 +56,8 @@ function stageOrgOpsSource() {
   const includePaths = [
     "apps/api",
     "apps/agent-runner",
-    "apps/ui",
-    "apps/site",
+    "apps/admin-ui",
+    "apps/user-ui",
     "packages",
     "docs",
     "skills",

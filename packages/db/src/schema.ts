@@ -104,7 +104,8 @@ export const channels = sqliteTable("channels", {
   owner_human_id: text("owner_human_id"),
   kind: text("kind").notNull().default(CHANNEL_KINDS.GROUP),
   direct_participant_key: text("direct_participant_key"),
-  created_at: integer("created_at").notNull()
+  created_at: integer("created_at").notNull(),
+  archived_at: integer("archived_at")
 }, (table) => ({
   uidxChannelsDirectKey: uniqueIndex("uidx_channels_direct_participant_key")
     .on(table.direct_participant_key)

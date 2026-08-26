@@ -9,7 +9,8 @@ apps/
   api/            Hono HTTP + WebSocket API
   agent-runner/   Agent supervisor and tool executor
   opscli/         Host bootstrap + maintenance CLI agent
-  ui/             React + Tailwind UI
+  admin-ui/       React + Tailwind admin UI
+  user-ui/        Lightweight non-technical user UI
 packages/
   crypto/         Envelope encryption helpers
   db/             SQLite schema + migrations
@@ -33,18 +34,20 @@ files/            Runtime file storage (gitignored)
 ```bash
 npm install
 
-# Dev: API + agent-runner + UI
+# Dev: API + agent-runner + admin UI
 npm run dev:all
 ```
 
-Open `http://localhost:5173` for UI, API on `http://localhost:8787`.
+Open `http://localhost:5173` for admin UI, `http://localhost:5190` for user UI,
+and API on `http://localhost:8787`.
 
 ## Deployment approach
 
 OrgOps is split into three runtime components plus one bootstrap/maintenance CLI:
 
 - `api`: central API/event system
-- `ui`: human control surface
+- `admin-ui`: operator/admin control surface
+- `user-ui`: lightweight non-technical user workspace
 - `agent-runner`: host-local execution runtime
 - `opscli`: host bootstrap + maintenance RLM REPL agent
 
@@ -62,10 +65,10 @@ This guarantees "same agent, same host" behavior without a complex scheduler.
 npm run prod:all
 ```
 
-This builds the UI and runs the API, runner, and UI preview.
+This builds both UIs and runs the API, runner, and admin UI preview.
 
-If you deploy the UI separately, it uses same-origin `/api` and `/ws` paths in production
-builds. Put the UI and API behind the same public origin (or reverse proxy these paths to
+If you deploy the UIs separately, they use same-origin `/api` and `/ws` paths in production
+builds. Put each UI and API behind the same public origin (or reverse proxy these paths to
 the API service) so browser auth cookies and WebSocket traffic work correctly.
 
 ## OpsCLI
@@ -105,7 +108,7 @@ Each release includes:
 
 Each binary bundles:
 
-- OrgOps source snapshot for `api`, `agent-runner`, `ui`, and shared packages
+- OrgOps source snapshot for `api`, `agent-runner`, `admin-ui`, `user-ui`, and shared packages
 - OrgOps docs (README + SPEC + runner README) injected into OpsCLI system prompt
 
 On host launch, `opscli` can prompt for missing provider keys (`OPENAI_API_KEY`,
@@ -174,10 +177,14 @@ chmod +x ./opscli-macos
   - `ORGOPS_OPSCLI_LOG_PATH`
   - `ORGOPS_OPSCLI_DOUBLE_SIGINT_MS`
   - `ORGOPS_EXTRACTED_ROOT` (auto-managed extracted path)
-- UI (`apps/ui`):
+- Admin UI (`apps/admin-ui`):
   - `VITE_API_BASE_URL` (optional; default: `/api`)
   - `VITE_WS_BASE_URL` (optional; default: `/ws`, or derived from `VITE_API_BASE_URL` when absolute)
   - runtime override via `window.__ORGOPS_UI_CONFIG__ = { apiBaseUrl, wsBaseUrl }`
+  - in dev, Vite proxies `/api` and `/ws` to `http://localhost:8787` when using relative paths
+- User UI (`apps/user-ui`):
+  - `VITE_API_BASE_URL` (optional; default: `/api`)
+  - runtime override via `window.__ORGOPS_USER_UI_CONFIG__ = { apiBaseUrl }`
   - in dev, Vite proxies `/api` and `/ws` to `http://localhost:8787` when using relative paths
 
 ## Runner behavior notes

@@ -6,8 +6,6 @@ files/
 .env
 memory/
 .venv-playwright/
-# Playwright artifacts
-apps/site/playwright-artifacts/
 .release-tmp
 .agent-runner-id
 .opscli-output.log

@@ -12,7 +12,7 @@ This document describes the current implementation in this repository.
 - API: Hono + `@hono/node-ws`
 - DB: SQLite + Drizzle ORM
 - Realtime: WebSocket topic pub/sub via in-process event bus
-- UI: React + Tailwind
+- UI: React apps for admin and lightweight user workflows
 - LLM wrapper: `@orgops/llm` (`generate()` abstraction)
 - Schemas/validation: Zod-based event shapes in `@orgops/schemas`
 
@@ -23,7 +23,8 @@ apps/
   api/            Hono HTTP + WS server
   agent-runner/   Agent polling loop + tool/runtime execution
   opscli/         Host bootstrap/maintenance CLI (RLM REPL loop)
-  ui/             React UI
+  admin-ui/       React + Tailwind admin UI
+  user-ui/        Lightweight user UI
 packages/
   crypto/         Secret encryption/decryption helpers
   db/             Drizzle schema + SQLite migrations
@@ -463,10 +464,13 @@ Security note: wrapped `source`, `setup.command`, and `runtime.command` are host
 - `ORGOPS_GIT_BASH_PATH`
 - `ORGOPS_SHELL_PATH`, `ORGOPS_SHELL_ARGS`
 - `ORGOPS_SHELL_TIMEOUT_KILL_GRACE_MS`
-- UI build/runtime config:
+- Admin UI build/runtime config:
   - `VITE_API_BASE_URL`
   - `VITE_WS_BASE_URL`
   - optional runtime override: `window.__ORGOPS_UI_CONFIG__ = { apiBaseUrl, wsBaseUrl }`
+- User UI build/runtime config:
+  - `VITE_API_BASE_URL`
+  - optional runtime override: `window.__ORGOPS_USER_UI_CONFIG__ = { apiBaseUrl }`
 - RLM controls:
   - `ORGOPS_RLM_MAX_STEPS`
   - `ORGOPS_RLM_MAX_OUTPUT_CHARS`

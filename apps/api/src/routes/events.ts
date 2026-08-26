@@ -15,6 +15,7 @@ import {
   inArray,
   isNull,
   like,
+  lt,
   lte,
   not,
   or,
@@ -180,6 +181,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       sourcePrefix: params.get("sourcePrefix"),
       status: params.get("status"),
       after: params.get("after"),
+      before: params.get("before"),
       limit: Number(params.get("limit") ?? 100),
       order: params.get("order"),
       descending: params.get("order") === "desc",
@@ -202,6 +204,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       sourcePrefix: query.sourcePrefix ?? undefined,
       status: query.status ?? undefined,
       after: query.after ?? undefined,
+      before: query.before ?? undefined,
       scheduled: query.scheduledOnly ? true : undefined,
       order: query.order ?? undefined,
     };
@@ -222,6 +225,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       sourcePrefix,
       status,
       after,
+      before,
       limit,
       descending,
       all,
@@ -242,6 +246,9 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     }
     if (after) {
       whereClauses.push(gt(schema.events.created_at, Number(after)));
+    }
+    if (before) {
+      whereClauses.push(lt(schema.events.created_at, Number(before)));
     }
     if (type) {
       whereClauses.push(eq(schema.events.type, type));
@@ -300,6 +307,9 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
         }
         if (after) {
           receiptClauses.push(gt(schema.events.created_at, Number(after)));
+        }
+        if (before) {
+          receiptClauses.push(lt(schema.events.created_at, Number(before)));
         }
         if (type) {
           receiptClauses.push(eq(schema.events.type, type));

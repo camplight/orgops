@@ -6,7 +6,7 @@
 - Uses a plain tool-calling agent loop (prompt + tools, no VM/REPL code execution)
 - Built-in tools include `shell`, `askPassword`, `extractOrgOps`, `getBundledDocs`, and `exitOpscli`
 - Session history is context-capped with rolling summarization
-- Bundled release executable prebuilds and embeds `ui` + `site` artifacts, then extracts full OrgOps source/docs/skills
+- Bundled release executable prebuilds and embeds `admin-ui` + `user-ui` artifacts, then extracts full OrgOps source/docs/skills
 
 ## Run
 
@@ -42,7 +42,7 @@ If Finder still blocks first launch, use right-click -> Open once.
 - `getBundledDocs()`: return bundled OrgOps docs that also feed the system prompt
 
 Extraction always targets `./orgops` from the current working directory; custom extract paths are intentionally unsupported.
-The `extractOrgOps` result includes PM2 startup commands that use env-aware npm scripts, so `orgops/.env` is loaded for API/runner/UI/site on macOS/Linux/Windows.
+The `extractOrgOps` result includes PM2 startup commands that use env-aware npm scripts, so `orgops/.env` is loaded for API, runner, admin UI, and user UI on macOS/Linux/Windows.
 
 ## Environment
 

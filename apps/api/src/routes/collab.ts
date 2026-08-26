@@ -10,7 +10,7 @@ import {
   type ChannelKind,
   type OrgOpsDrizzleDb
 } from "@orgops/db";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, isNull } from "drizzle-orm";
 import type { AccessControl, RequestUser } from "./access";
 
 type CollabDeps = {
@@ -218,6 +218,7 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
         kind,
         direct_participant_key: directParticipantKey,
         created_at: Date.now(),
+        archived_at: null,
       })
       .run();
     orm
@@ -346,7 +347,12 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
 
   app.get("/api/channels", (c) => {
     const user = c.get("user") as RequestUser | undefined;
-    const rows = orm.select().from(schema.channels).all() as any[];
+    const includeArchived =
+      new URL(c.req.url).searchParams.get("includeArchived") === "1";
+    const rows = (includeArchived
+      ? orm.select().from(schema.channels)
+      : orm.select().from(schema.channels).where(isNull(schema.channels.archived_at))
+    ).all() as any[];
     const data = rows.map((channel) => {
       if (!access.canViewChannel(user, channel.id)) return null;
       const participants = orm
@@ -375,6 +381,7 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
         metadata: parseStoredMetadata(channel.metadata_json),
         kind: channel.kind ?? CHANNEL_KINDS.GROUP,
         directParticipantKey: channel.direct_participant_key ?? undefined,
+        archivedAt: channel.archived_at ?? null,
         participants,
       };
     });
@@ -438,6 +445,7 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
         kind: requestedKind,
         direct_participant_key: null,
         created_at: Date.now(),
+        archived_at: null,
       })
       .run();
     if (ownerHumanId && user?.username) {
@@ -514,6 +522,9 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
       return jsonResponse(c, { error: "agentName is required" }, 400);
     if (!agentExists(agentName)) {
       return jsonResponse(c, { error: `AGENT not found: ${agentName}` }, 404);
+    }
+    if (!access.canViewAgent(user, agentName)) {
+      return jsonResponse(c, { error: "AGENT not found" }, 404);
     }
     const direct = ensureDirectChannel(
       normalizeDirectParticipants([
@@ -598,6 +609,30 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
       .run();
     return jsonResponse(c, { ok: true });
   });
+
+  const archiveChannelHandler = (archived: boolean) => (c: any) => {
+    const id = c.req.param("id");
+    const user = c.get("user") as RequestUser | undefined;
+    if (!access.canManageChannel(user, id)) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
+    const existing = orm
+      .select({ id: schema.channels.id })
+      .from(schema.channels)
+      .where(eq(schema.channels.id, id))
+      .get();
+    if (!existing) return jsonResponse(c, { error: "Not found" }, 404);
+    const archivedAt = archived ? Date.now() : null;
+    orm
+      .update(schema.channels)
+      .set({ archived_at: archivedAt })
+      .where(eq(schema.channels.id, id))
+      .run();
+    return jsonResponse(c, { ok: true, id, archivedAt });
+  };
+
+  app.post("/api/channels/:id/archive", archiveChannelHandler(true));
+  app.post("/api/channels/:id/unarchive", archiveChannelHandler(false));
 
   const deleteChannelHandler = (c: any) => {
     const id = c.req.param("id");
