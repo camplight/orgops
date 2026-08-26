@@ -103,7 +103,22 @@ Supported recipe fields:
 - `runtime.parse`: `json-payloads` extracts OpenClaw-style `payloads[].text`; `text` returns stdout; omitted tries JSON payloads and falls back to text.
 - `session.scope`: `per-channel` (default) or `per-agent`.
 
-OpenClaw recipes should configure the target OpenClaw agent's default model during setup rather than relying on OpenClaw package defaults. Runtime `--model` overrides are subject to the target agent's model allowlist and may be rejected unless setup has added that model first.
+OpenClaw is an optional wrapped runtime and is not installed as an OrgOps dependency. A recipe must install it in the agent workspace during `setup` or provide an OpenClaw source checkout. OpenClaw recipes should configure the target agent's default model during setup rather than relying on OpenClaw package defaults. Runtime `--model` overrides are subject to the target agent's model allowlist and may be rejected unless setup has added that model first.
+
+**Breaking-change migration:** existing OpenClaw wrapped agents that relied on OrgOps' root installation must update their stored `wrappedConfig` before upgrading. Add an explicit setup in the same directory used by the sidecar and runtime commands:
+
+```json
+{
+  "setup": {
+    "checkCommand": "test -x node_modules/.bin/openclaw",
+    "command": "npm install --no-save openclaw@<version>",
+    "cwd": ".orgops-data/workspaces/<agent-name>/wrapper",
+    "timeoutMs": 600000
+  }
+}
+```
+
+Replace `<version>` with the OpenClaw version the agent should run. Agents whose recipes already install OpenClaw locally or use an OpenClaw source checkout do not require migration.
 
 Commands run with the agent workspace/source directory as cwd unless overridden and receive environment variables:
 
