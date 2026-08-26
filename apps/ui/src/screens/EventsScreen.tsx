@@ -588,30 +588,7 @@ export function EventsScreen({
             <div className="py-6 text-center text-slate-500">No events found.</div>
           )}
         </div>
-        <div className="mt-3 flex items-center justify-between gap-2">
-          {onLoadOlderEvents ? (
-            <Button
-              variant="secondary"
-              disabled={loadingOlder || olderEventsExhausted}
-              onClick={async () => {
-                setLoadingOlder(true);
-                try {
-                  await onLoadOlderEvents();
-                } finally {
-                  setLoadingOlder(false);
-                }
-              }}
-            >
-              {olderEventsExhausted
-                ? "All history loaded"
-                : loadingOlder
-                  ? "Loading…"
-                  : "Load older events"}
-            </Button>
-          ) : (
-            <div />
-          )}
-          <div className="flex items-center gap-2">
+        <div className="mt-3 flex items-center justify-end gap-2">
           <Button
             variant="secondary"
             disabled={currentPage <= 1}
@@ -624,12 +601,32 @@ export function EventsScreen({
           </div>
           <Button
             variant="secondary"
-            disabled={currentPage >= totalPages}
-            onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+            disabled={
+              loadingOlder ||
+              (currentPage >= totalPages &&
+                (!onLoadOlderEvents || olderEventsExhausted))
+            }
+            onClick={async () => {
+              // Still inside the loaded buffer — just advance a page.
+              if (currentPage < totalPages) {
+                setCurrentPage((prev) => prev + 1);
+                return;
+              }
+              // Ran off the end of loaded history — pull the next older page
+              // from the server, then step onto it. There is no separate
+              // "Load older events" button: Next transparently deepens history.
+              if (!onLoadOlderEvents || olderEventsExhausted) return;
+              setLoadingOlder(true);
+              try {
+                await onLoadOlderEvents();
+                setCurrentPage((prev) => prev + 1);
+              } finally {
+                setLoadingOlder(false);
+              }
+            }}
           >
-            Next
+            {loadingOlder ? "Loading…" : "Next"}
           </Button>
-          </div>
         </div>
       </Card>
         </>
