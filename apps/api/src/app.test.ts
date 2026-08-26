@@ -1748,6 +1748,95 @@ describe("api app", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("archives, restores, and deletes channels", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const createChannelRes = await app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ name: "archivable-channel" }),
+    });
+    expect(createChannelRes.status).toBe(201);
+    const created = (await createChannelRes.json()) as { id: string };
+
+    const archiveRes = await app.request(
+      `http://localhost/api/channels/${created.id}/archive`,
+      {
+        method: "POST",
+        headers: { cookie },
+      },
+    );
+    expect(archiveRes.status).toBe(200);
+
+    const activeChannelsRes = await app.request("http://localhost/api/channels", {
+      headers: { cookie },
+    });
+    const activeChannels = (await activeChannelsRes.json()) as Array<{ id: string }>;
+    expect(activeChannels.some((channel) => channel.id === created.id)).toBe(false);
+
+    const allChannelsRes = await app.request(
+      "http://localhost/api/channels?includeArchived=1",
+      {
+        headers: { cookie },
+      },
+    );
+    const allChannels = (await allChannelsRes.json()) as Array<{
+      id: string;
+      archivedAt?: number | null;
+    }>;
+    expect(allChannels.find((channel) => channel.id === created.id)?.archivedAt).toEqual(
+      expect.any(Number),
+    );
+
+    const unarchiveRes = await app.request(
+      `http://localhost/api/channels/${created.id}/unarchive`,
+      {
+        method: "POST",
+        headers: { cookie },
+      },
+    );
+    expect(unarchiveRes.status).toBe(200);
+
+    const restoredChannelsRes = await app.request("http://localhost/api/channels", {
+      headers: { cookie },
+    });
+    const restoredChannels = (await restoredChannelsRes.json()) as Array<{ id: string }>;
+    expect(restoredChannels.some((channel) => channel.id === created.id)).toBe(true);
+
+    const deleteRes = await app.request(`http://localhost/api/channels/${created.id}`, {
+      method: "DELETE",
+      headers: { cookie },
+    });
+    expect(deleteRes.status).toBe(200);
+
+    const deletedChannelsRes = await app.request(
+      "http://localhost/api/channels?includeArchived=1",
+      {
+        headers: { cookie },
+      },
+    );
+    const deletedChannels = (await deletedChannelsRes.json()) as Array<{ id: string }>;
+    expect(deletedChannels.some((channel) => channel.id === created.id)).toBe(false);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("deletes all channels and clears channel subscriptions", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");

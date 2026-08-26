@@ -11,8 +11,8 @@ export async function apiFetch(path: string, init?: RequestInit) {
   return res;
 }
 
-export async function apiJson<T>(path: string): Promise<T> {
-  const res = await apiFetch(path);
+export async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await apiFetch(path, init);
   return (await res.json()) as T;
 }
 
