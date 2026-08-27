@@ -85,9 +85,10 @@ Example `agents_create` arguments:
     "harness": "command",
     "session": { "scope": "per-channel" },
     "setup": {
-      "command": "npm install",
+      "checkCommand": "test -x node_modules/.bin/openclaw",
+      "command": "npm install --no-save openclaw",
       "cwd": ".orgops-data/workspaces/OrgOpsCoordinator/wrapper",
-      "timeoutMs": 120000
+      "timeoutMs": 600000
     },
     "sidecars": [
       {
@@ -112,6 +113,9 @@ Example `agents_create` arguments:
 
 OpenClaw setup notes:
 
+- OpenClaw is optional and is not installed with OrgOps. Install it in the wrapped agent's workspace during `setup`, or configure `source` to use an OpenClaw checkout.
+- Before upgrading an existing OpenClaw agent that relied on OrgOps' root installation, add an explicit local install to its stored `wrappedConfig.setup`; otherwise `npx openclaw` may fail or download an unpinned version.
+- Pin the `openclaw` version in production recipes when reproducible setup is required.
 - Store wrapper source in the agent workspace or configure `source` if it comes from a repo.
 - Put secrets in OrgOps package secrets, not in `wrappedConfig`; setup, sidecars, and runtime receive package secrets as env.
 - Use `ORGOPS_WRAPPED_SESSION_ID` to keep OpenClaw state stable per channel or per agent.
