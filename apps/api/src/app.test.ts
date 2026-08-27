@@ -4116,4 +4116,140 @@ describe("api app", () => {
 
     rmSync(dataDir, { recursive: true, force: true });
   });
+
+  it("creates embed conversations and waits for chat completions", async () => {
+    const previousTimeout = process.env.ORGOPS_EMBED_TURN_TIMEOUT_MS;
+    process.env.ORGOPS_EMBED_TURN_TIMEOUT_MS = "2000";
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+    const orm = createDrizzleDb(db);
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+    await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "invoice-receiver",
+        modelId: "openai:gpt-4o-mini",
+        workspacePath: ".orgops-data/workspaces/invoice-receiver",
+      }),
+    });
+    const keyRes = await app.request("http://localhost/api/integration-keys", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "acme-invoicing",
+        agentName: "invoice-receiver",
+      }),
+    });
+    const key = (await keyRes.json()) as { token: string };
+    const auth = { authorization: `Bearer ${key.token}`, "content-type": "application/json" };
+
+    const missingConv = await app.request("http://localhost/v1/chat/completions", {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        model: "invoice-receiver",
+        messages: [{ role: "user", content: "hello" }],
+      }),
+    });
+    expect(missingConv.status).toBe(400);
+
+    const createConv = await app.request("http://localhost/v1/conversations", {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        idempotency_key: "invoice:INV-1042",
+        metadata: { invoiceId: "INV-1042" },
+      }),
+    });
+    expect(createConv.status).toBe(201);
+    const conversation = (await createConv.json()) as {
+      id: string;
+      agent: string;
+      metadata: { invoiceId?: string };
+    };
+    expect(conversation.id.startsWith("conv_")).toBe(true);
+    expect(conversation.agent).toBe("invoice-receiver");
+    expect(conversation.metadata.invoiceId).toBe("INV-1042");
+
+    const replay = await app.request("http://localhost/v1/conversations", {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ idempotency_key: "invoice:INV-1042" }),
+    });
+    expect(replay.status).toBe(200);
+    const replayed = (await replay.json()) as { id: string };
+    expect(replayed.id).toBe(conversation.id);
+
+    const unknownConv = await app.request("http://localhost/v1/chat/completions", {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        conversation: "conv_missing",
+        messages: [{ role: "user", content: "hello" }],
+      }),
+    });
+    expect(unknownConv.status).toBe(404);
+
+    const stored = orm
+      .select({ channelId: schema.embedConversations.channel_id })
+      .from(schema.embedConversations)
+      .where(eq(schema.embedConversations.id, conversation.id))
+      .get() as { channelId: string };
+
+    const pending = app.request("http://localhost/v1/chat/completions", {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        model: "invoice-receiver",
+        conversation: conversation.id,
+        messages: [{ role: "user", content: "Extract the vendor" }],
+      }),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    const agentReply = await app.request("http://localhost/api/events", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orgops-runner-token": "test-token",
+      },
+      body: JSON.stringify({
+        type: "message.created",
+        source: "agent:invoice-receiver",
+        channelId: stored.channelId,
+        payload: { text: "Vendor is Acme" },
+      }),
+    });
+    expect(agentReply.status).toBe(201);
+    const completionRes = await pending;
+    expect(completionRes.status).toBe(200);
+    const completion = (await completionRes.json()) as {
+      object: string;
+      model: string;
+      choices: Array<{ message: { role: string; content: string } }>;
+    };
+    expect(completion.object).toBe("chat.completion");
+    expect(completion.model).toBe("invoice-receiver");
+    expect(completion.choices[0].message).toEqual({
+      role: "assistant",
+      content: "Vendor is Acme",
+    });
+
+    if (previousTimeout === undefined) delete process.env.ORGOPS_EMBED_TURN_TIMEOUT_MS;
+    else process.env.ORGOPS_EMBED_TURN_TIMEOUT_MS = previousTimeout;
+    rmSync(dataDir, { recursive: true, force: true });
+  });
 });

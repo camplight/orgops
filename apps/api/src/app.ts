@@ -44,6 +44,7 @@ import { registerWsRoutes, type WsServerMessage } from "./routes/ws";
 import { registerHumansRoutes } from "./routes/humans";
 import { registerRunnersRoutes } from "./routes/runners";
 import { registerIntegrationKeysRoutes } from "./routes/integration-keys";
+import { registerEmbedRoutes } from "./routes/embed";
 import { createAccessControl } from "./routes/access";
 
 export type AppConfig = {
@@ -471,6 +472,7 @@ export function createApp(config: AppConfig = {}) {
   });
 
   registerIntegrationKeysRoutes(app as any, { orm, jsonResponse, access });
+  registerEmbedRoutes(app as any, { orm, jsonResponse, insertEvent });
 
   return { app, db, bus, injectWebSocket };
 }

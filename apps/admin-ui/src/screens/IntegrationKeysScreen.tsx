@@ -1,7 +1,9 @@
 import { useMemo, useState } from "react";
-import { Button, Card, Input, Label, Select } from "../components/ui";
+import { Button, Card, Input, Label, Select, Textarea } from "../components/ui";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 import { formatTimestamp } from "../utils/formatTimestamp";
+import { embedApiOrigin } from "../config";
+import { buildEmbedAgentPrompt } from "../embedAgentPrompt";
 import type { Agent, IntegrationKey } from "../types";
 
 type IntegrationKeysScreenProps = {
@@ -46,7 +48,9 @@ export function IntegrationKeysScreen({
     token: string;
   } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [promptCopied, setPromptCopied] = useState(false);
   const [revoking, setRevoking] = useState(false);
+  const [promptAgentName, setPromptAgentName] = useState("");
   const sortedKeys = useMemo(
     () =>
       [...keys].sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0)),
@@ -117,6 +121,23 @@ export function IntegrationKeysScreen({
     }
   };
 
+  const resolvedPromptAgent =
+    promptAgentName || selectedKey?.agentName || sortedAgents[0]?.name || "your-agent-name";
+  const embedPrompt = buildEmbedAgentPrompt({
+    baseUrl: embedApiOrigin(),
+    agentName: resolvedPromptAgent,
+  });
+
+  const handleCopyPrompt = async () => {
+    try {
+      await navigator.clipboard.writeText(embedPrompt);
+      setPromptCopied(true);
+    } catch {
+      setPromptCopied(false);
+      setStatus("Could not copy prompt. Select the text and copy manually.");
+    }
+  };
+
   const revealedToken =
     createdSecret && createdSecret.id === selectedKey?.id ? createdSecret.token : null;
 
@@ -181,6 +202,54 @@ export function IntegrationKeysScreen({
             <div className="py-8 text-center text-slate-500">No API keys yet.</div>
           )}
         </div>
+      </Card>
+
+      <Card title="Embed prompt">
+        <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="text-xs text-slate-500">
+              Copy this into a coding agent in the embedding app. It is filled with this
+              OrgOps API origin and the selected agent. The secret key is not included —
+              paste the org_sk_ token separately.
+            </div>
+            <Label className="mt-3 block max-w-xs">
+              Agent
+              <Select
+                className="mt-1"
+                value={resolvedPromptAgent === "your-agent-name" ? "" : resolvedPromptAgent}
+                onChange={(event) => {
+                  setPromptAgentName(event.target.value);
+                  setPromptCopied(false);
+                }}
+              >
+                {sortedAgents.length === 0 ? (
+                  <option value="">your-agent-name</option>
+                ) : (
+                  sortedAgents.map((agent) => (
+                    <option key={agent.name} value={agent.name}>
+                      {agent.name}
+                    </option>
+                  ))
+                )}
+              </Select>
+            </Label>
+          </div>
+          <Button
+            type="button"
+            variant="secondary"
+            className="shrink-0 px-3 py-1 text-xs"
+            onClick={() => void handleCopyPrompt()}
+          >
+            {promptCopied ? "Copied" : "Copy prompt"}
+          </Button>
+        </div>
+        <Textarea
+          readOnly
+          rows={14}
+          className="font-mono text-xs leading-5"
+          value={embedPrompt}
+          onFocus={(event) => event.currentTarget.select()}
+        />
       </Card>
 
       <div

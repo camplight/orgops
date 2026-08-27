@@ -119,3 +119,15 @@ export function runnerApiUrlHint(): string {
   return window.location.origin;
 }
 
+/** API origin for embed clients (`/v1`), not the admin-ui origin. */
+export function embedApiOrigin(): string {
+  if (isAbsoluteHttpUrl(configuredApiBase)) {
+    return runnerApiUrlHint();
+  }
+  const port = window.location.port;
+  if (port === "5173" || port === "4173") {
+    return `${window.location.protocol}//${window.location.hostname}:8787`;
+  }
+  return window.location.origin;
+}
+

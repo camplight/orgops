@@ -252,6 +252,15 @@ Published topics include:
 - `GET /api/humans`
 - `POST /api/humans/invite`
 
+### Embed / v1 (integration API keys)
+
+- `GET /v1/me` (Bearer integration key)
+- `POST /v1/conversations`
+- `GET /v1/conversations/:id`
+- `POST /v1/chat/completions` (`conversation` required; waits for the agent reply)
+- Admin key management: `GET/POST /api/integration-keys`, `POST /api/integration-keys/:id/revoke`
+- Integrator prompt: copy from admin UI → API keys
+
 ### Models
 
 - `GET /api/models`

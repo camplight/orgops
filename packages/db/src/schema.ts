@@ -359,6 +359,27 @@ export const crossChannelMemoryFull = sqliteTable(
   })
 );
 
+export const embedConversations = sqliteTable(
+  "embed_conversations",
+  {
+    id: text("id").primaryKey(),
+    channel_id: text("channel_id").notNull().unique(),
+    agent_name: text("agent_name").notNull(),
+    integration_key_id: text("integration_key_id").notNull(),
+    idempotency_key: text("idempotency_key"),
+    metadata_json: text("metadata_json"),
+    created_at: integer("created_at").notNull(),
+    archived_at: integer("archived_at")
+  },
+  (table) => ({
+    uidxEmbedConversationsKeyIdempotency: uniqueIndex(
+      "uidx_embed_conversations_key_idempotency"
+    )
+      .on(table.integration_key_id, table.idempotency_key)
+      .where(sql`${table.idempotency_key} IS NOT NULL`)
+  })
+);
+
 export const schema = {
   migrations,
   agents,
@@ -381,5 +402,6 @@ export const schema = {
   channelMemoryRecent,
   channelMemoryFull,
   crossChannelMemoryRecent,
-  crossChannelMemoryFull
+  crossChannelMemoryFull,
+  embedConversations
 };

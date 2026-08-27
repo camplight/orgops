@@ -29,6 +29,12 @@ describe("db", () => {
       )
       .get();
     expect(keysRow).toBeTruthy();
+    const embedRow = db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='embed_conversations'",
+      )
+      .get();
+    expect(embedRow).toBeTruthy();
     db.close();
     rmSync(dbPath);
   });
