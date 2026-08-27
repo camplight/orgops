@@ -25,19 +25,16 @@ type DashboardEventStats = {
   scheduled: number;
 };
 
-function getDashboardEventStats(events: EventRow[]): DashboardEventStats {
-  const statusCounts = events.reduce<Record<string, number>>((acc, event) => {
-    const status = (event.status ?? "UNKNOWN").toUpperCase();
-    acc[status] = (acc[status] ?? 0) + 1;
-    return acc;
-  }, {});
-
+function toDashboardEventStats(stats: {
+  total: number;
+  byStatus: Record<string, number>;
+}): DashboardEventStats {
   return {
-    total: events.length,
-    processed: (statusCounts.DELIVERED ?? 0) + (statusCounts.PROCESSED ?? 0),
-    failed: (statusCounts.FAILED ?? 0) + (statusCounts.DEAD ?? 0),
-    pending: statusCounts.PENDING ?? 0,
-    scheduled: statusCounts.SCHEDULED ?? 0,
+    total: stats.total,
+    processed: (stats.byStatus.DELIVERED ?? 0) + (stats.byStatus.PROCESSED ?? 0),
+    failed: (stats.byStatus.FAILED ?? 0) + (stats.byStatus.DEAD ?? 0),
+    pending: stats.byStatus.PENDING ?? 0,
+    scheduled: stats.byStatus.SCHEDULED ?? 0,
   };
 }
 
@@ -83,13 +80,19 @@ export function useOrgOpsData(authenticated: boolean) {
       apiJson<EventRow[]>(query).then(setEvents),
     [],
   );
+  // Counters come from the aggregate endpoint — never from an event dump. The
+  // previous `all=1` fetch pulled the ENTIRE events table (~273k rows) up to
+  // 4×/s during a live build, saturating the single-threaded API so hard that
+  // agents' own event posts (step.status, orgops-report) timed out.
   const refreshDashboardEvents = useCallback(async () => {
-    const [recentEvents, allEvents] = await Promise.all([
+    const [recentEvents, stats] = await Promise.all([
       apiJson<EventRow[]>("/api/events?limit=50&order=desc"),
-      apiJson<EventRow[]>("/api/events?all=1&order=desc"),
+      apiJson<{ total: number; byStatus: Record<string, number> }>(
+        "/api/events/stats",
+      ),
     ]);
     setEvents(recentEvents);
-    setDashboardEventStats(getDashboardEventStats(allEvents));
+    setDashboardEventStats(toDashboardEventStats(stats));
   }, []);
 
   const refreshTeams = useCallback(

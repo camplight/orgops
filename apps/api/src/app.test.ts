@@ -2725,6 +2725,131 @@ describe("api app", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("returns aggregate event stats from /api/events/stats", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const insert = db.prepare(
+      "INSERT INTO events (id, type, payload_json, source, channel_id, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    );
+    insert.run("stats-1", "message.created", "{}", "human:admin", null, 1000, "DELIVERED");
+    insert.run("stats-2", "message.created", "{}", "human:admin", null, 1001, "PENDING");
+    insert.run("stats-3", "message.created", "{}", "human:admin", null, 1002, "PENDING");
+    insert.run("stats-4", "message.created", "{}", "human:admin", null, 1003, "FAILED");
+
+    const statsRes = await app.request("http://localhost/api/events/stats", {
+      headers: { cookie },
+    });
+    expect(statsRes.status).toBe(200);
+    const stats = (await statsRes.json()) as {
+      total: number;
+      byStatus: Record<string, number>;
+    };
+    expect(stats.total).toBe(4);
+    expect(stats.byStatus.PENDING).toBe(2);
+    expect(stats.byStatus.DELIVERED).toBe(1);
+    expect(stats.byStatus.FAILED).toBe(1);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("caps all=1 event listings at 10000 rows", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const insert = db.prepare(
+      "INSERT INTO events (id, type, payload_json, source, channel_id, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    );
+    const insertMany = db.transaction((count: number) => {
+      for (let index = 0; index < count; index += 1) {
+        insert.run(`cap-${index}`, "message.created", "{}", "human:admin", null, index, "DELIVERED");
+      }
+    });
+    insertMany(10_050);
+
+    const allListRes = await app.request(
+      "http://localhost/api/events?all=1&order=desc",
+      {
+        headers: { cookie },
+      },
+    );
+    expect(allListRes.status).toBe(200);
+    const allList = (await allListRes.json()) as Array<{ id: string }>;
+    expect(allList.length).toBe(10_000);
+    expect(allList[0]?.id).toBe("cap-10049");
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("pages older events with before", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const insert = db.prepare(
+      "INSERT INTO events (id, type, payload_json, source, channel_id, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    );
+    insert.run("before-1", "message.created", "{}", "human:admin", null, 1000, "DELIVERED");
+    insert.run("before-2", "message.created", "{}", "human:admin", null, 2000, "DELIVERED");
+    insert.run("before-3", "message.created", "{}", "human:admin", null, 3000, "DELIVERED");
+
+    const olderRes = await app.request(
+      "http://localhost/api/events?order=desc&before=3000",
+      {
+        headers: { cookie },
+      },
+    );
+    expect(olderRes.status).toBe(200);
+    const older = (await olderRes.json()) as Array<{ id: string }>;
+    expect(older.map((row) => row.id)).toEqual(["before-2", "before-1"]);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("hides future scheduled events from non-runner event feeds", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");
