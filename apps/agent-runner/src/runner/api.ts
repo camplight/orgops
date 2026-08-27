@@ -91,10 +91,16 @@ export function createRunnerApi(deps: RunnerApiDeps) {
           elapsedMs,
           responseBodyPreview: text.slice(0, 1000),
         });
-        throw new Error(`API ${path} failed: ${res.status} ${text}`);
+        const httpError = new Error(`API ${path} failed: ${res.status} ${text}`) as Error & {
+          status?: number;
+        };
+        httpError.status = res.status;
+        throw httpError;
       }
       return res;
     } catch (error) {
+      // HTTP failures are already logged above; only report transport-level faults here.
+      if (typeof (error as { status?: number } | null)?.status === "number") throw error;
       const elapsedMs = Date.now() - startedAt;
       console.error("runner.apiFetch.transport_error", {
         requestId,

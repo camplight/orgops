@@ -525,6 +525,23 @@ const coreEventShapes: EventShapeDefinition[] = [
     source: "core",
     payloadSchema: z.record(z.string(), z.unknown()),
   },
+  ...(
+    [
+      "audit.memory.channel.recent.tool_refresh",
+      "audit.memory.channel.recent.tool_update",
+      "audit.memory.channel.full.tool_refresh",
+      "audit.memory.channel.full.tool_update",
+      "audit.memory.cross.recent.tool_refresh",
+      "audit.memory.cross.recent.tool_update",
+      "audit.memory.cross.full.tool_refresh",
+      "audit.memory.cross.full.tool_update",
+    ] as const
+  ).map((type) => ({
+    type,
+    description: "Audit record for agent memory tool usage.",
+    source: "core" as const,
+    payloadSchema: z.record(z.string(), z.unknown()),
+  })),
   {
     type: "audit.workspace.cleaned",
     description: "Audit record for workspace cleanup.",

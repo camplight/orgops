@@ -106,6 +106,7 @@ const handleTurn = createTurnExecutor({
     getChannelRecord: api.getChannelRecord,
     getChannelParticipationValidationError: api.getChannelParticipationValidationError,
     getPackageSecretsEnv: api.getPackageSecretsEnv,
+    ensureLifecycleChannel: api.ensureLifecycleChannel,
   },
 });
 const maintenanceLoop = createMaintenanceLoop({
