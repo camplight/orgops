@@ -41,6 +41,12 @@ npm run dev:all
 Open `http://localhost:5173` for admin UI, `http://localhost:5190` for user UI,
 and API on `http://localhost:8787`.
 
+## Embed an agent in another product
+
+External apps authenticate with an **API key** and call `/v1/conversations` +
+`/v1/chat/completions`. In admin UI → **API keys**, use **Copy prompt** and
+paste it into the embedding app’s coding agent.
+
 ## Deployment approach
 
 OrgOps is split into three runtime components plus one bootstrap/maintenance CLI:

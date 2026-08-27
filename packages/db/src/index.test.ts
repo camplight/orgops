@@ -23,6 +23,18 @@ describe("db", () => {
       .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='events'")
       .get();
     expect(row).toBeTruthy();
+    const keysRow = db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='integration_keys'",
+      )
+      .get();
+    expect(keysRow).toBeTruthy();
+    const embedRow = db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='embed_conversations'",
+      )
+      .get();
+    expect(embedRow).toBeTruthy();
     db.close();
     rmSync(dbPath);
   });
