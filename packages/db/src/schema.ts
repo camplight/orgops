@@ -71,6 +71,26 @@ export const teams = sqliteTable("teams", {
   created_at: integer("created_at").notNull()
 });
 
+export const integrationKeys = sqliteTable(
+  "integration_keys",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    agent_name: text("agent_name").notNull(),
+    token_hash: text("token_hash").notNull().unique(),
+    token_prefix: text("token_prefix").notNull(),
+    created_by_human_id: text("created_by_human_id"),
+    created_at: integer("created_at").notNull(),
+    last_used_at: integer("last_used_at"),
+    revoked_at: integer("revoked_at")
+  },
+  (table) => ({
+    idxIntegrationKeysAgentName: index("idx_integration_keys_agent_name").on(
+      table.agent_name
+    )
+  })
+);
+
 export const humans = sqliteTable("humans", {
   id: text("id").primaryKey(),
   username: text("username").notNull().unique(),
@@ -339,12 +359,34 @@ export const crossChannelMemoryFull = sqliteTable(
   })
 );
 
+export const embedConversations = sqliteTable(
+  "embed_conversations",
+  {
+    id: text("id").primaryKey(),
+    channel_id: text("channel_id").notNull().unique(),
+    agent_name: text("agent_name").notNull(),
+    integration_key_id: text("integration_key_id").notNull(),
+    idempotency_key: text("idempotency_key"),
+    metadata_json: text("metadata_json"),
+    created_at: integer("created_at").notNull(),
+    archived_at: integer("archived_at")
+  },
+  (table) => ({
+    uidxEmbedConversationsKeyIdempotency: uniqueIndex(
+      "uidx_embed_conversations_key_idempotency"
+    )
+      .on(table.integration_key_id, table.idempotency_key)
+      .where(sql`${table.idempotency_key} IS NOT NULL`)
+  })
+);
+
 export const schema = {
   migrations,
   agents,
   runnerNodes,
   teams,
   humans,
+  integrationKeys,
   teamMemberships,
   channels,
   channelSubscriptions,
@@ -360,5 +402,6 @@ export const schema = {
   channelMemoryRecent,
   channelMemoryFull,
   crossChannelMemoryRecent,
-  crossChannelMemoryFull
+  crossChannelMemoryFull,
+  embedConversations
 };

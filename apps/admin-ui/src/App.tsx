@@ -19,6 +19,7 @@ import {
   RunnersScreen,
   SkillsScreen,
   SecretsScreen,
+  IntegrationKeysScreen,
   HumansScreen,
   ProfileScreen
 } from "./screens";
@@ -28,6 +29,7 @@ import type {
   AgentWorkspaceListResponse,
   Channel,
   EventRow,
+  IntegrationKey,
   ProcessOutputRow,
   RunnerSetupConfig,
   TeamMember
@@ -470,6 +472,10 @@ export default function App() {
       }
       if (screen === "processes") data.refreshProcesses();
       if (screen === "secrets") data.refreshSecrets();
+      if (screen === "api-keys") {
+        data.refreshIntegrationKeys();
+        data.refreshDashboard();
+      }
       if (screen === "humans") data.refreshHumans();
       if (screen === "skills") data.refreshSkills();
       if (screen === "events") {
@@ -1182,6 +1188,31 @@ export default function App() {
           onDeleteSecret={async (id) => {
             await data.apiFetch(`/api/secrets/${id}`, { method: "DELETE" });
             await data.refreshSecrets();
+          }}
+        />
+      )}
+      {activeScreen === "api-keys" && (
+        <IntegrationKeysScreen
+          keys={data.integrationKeys}
+          agents={data.agents}
+          onCreateKey={async (input) => {
+            const res = await data.apiFetch("/api/integration-keys", {
+              method: "POST",
+              headers: data.getApiHeaders(),
+              body: JSON.stringify(input)
+            });
+            const body = (await res.json()) as IntegrationKey;
+            await data.refreshIntegrationKeys();
+            return body;
+          }}
+          onRevokeKey={async (id) => {
+            await data.apiFetch(`/api/integration-keys/${id}/revoke`, {
+              method: "POST"
+            });
+            await data.refreshIntegrationKeys();
+          }}
+          onRefresh={async () => {
+            await data.refreshIntegrationKeys();
           }}
         />
       )}
