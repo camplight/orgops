@@ -118,6 +118,29 @@ async function upsertChannelMemoryRecord(
   return payload.record;
 }
 
+function isVersionConflict(error: unknown): boolean {
+  const status = (error as { status?: number } | null)?.status;
+  if (status === 409) return true;
+  return error instanceof Error && error.message.includes("failed: 409");
+}
+
+/**
+ * Background maintenance holds an optimistic version across a slow summarization
+ * call, so an agent memory tool writing the same record mid-pass legitimately wins.
+ * Losing the race is a no-op for this pass: keep whatever is stored now.
+ */
+async function upsertOrKeepNewer<T>(
+  upsert: () => Promise<T>,
+  reread: () => Promise<T | null>,
+): Promise<T | null> {
+  try {
+    return await upsert();
+  } catch (error) {
+    if (!isVersionConflict(error)) throw error;
+    return await reread();
+  }
+}
+
 async function getCrossMemoryRecord(
   apiFetch: ApiFetch,
   mode: CrossMemoryMode,
@@ -251,16 +274,20 @@ export async function refreshChannelRecentMemory(input: {
     ].join("\n"),
   );
   const summaryText = summary || existing?.summaryText || "";
-  const nextRecord = await upsertChannelMemoryRecord(input.apiFetch, "recent", {
-    agentName: input.agent.name,
-    channelId: input.channelId,
-    summaryText,
-    windowStartAt,
-    lastProcessedAt: nextLastProcessedAt,
-    ...(getLastEventId(events) ? { lastProcessedEventId: getLastEventId(events) } : {}),
-    ...(existing?.version !== undefined ? { expectedVersion: existing.version } : {}),
-  });
-  return nextRecord;
+  return await upsertOrKeepNewer(
+    () =>
+      upsertChannelMemoryRecord(input.apiFetch, "recent", {
+        agentName: input.agent.name,
+        channelId: input.channelId,
+        summaryText,
+        windowStartAt,
+        lastProcessedAt: nextLastProcessedAt,
+        ...(getLastEventId(events) ? { lastProcessedEventId: getLastEventId(events) } : {}),
+        ...(existing?.version !== undefined ? { expectedVersion: existing.version } : {}),
+      }),
+    () =>
+      getChannelMemoryRecord(input.apiFetch, "recent", input.agent.name, input.channelId),
+  );
 }
 
 function chunkEvents<T>(items: T[], chunkSize: number): T[][] {
@@ -326,15 +353,20 @@ export async function refreshChannelFullMemory(input: {
     maxEventTimestamp(newEvents),
     normalizeTimestamp(existing?.lastProcessedAt),
   );
-  const nextRecord = await upsertChannelMemoryRecord(input.apiFetch, "full", {
-    agentName: input.agent.name,
-    channelId: input.channelId,
-    summaryText,
-    lastProcessedAt: nextLastProcessedAt,
-    ...(getLastEventId(newEvents) ? { lastProcessedEventId: getLastEventId(newEvents) } : {}),
-    ...(existing?.version !== undefined ? { expectedVersion: existing.version } : {}),
-  });
-  return nextRecord;
+  return await upsertOrKeepNewer(
+    () =>
+      upsertChannelMemoryRecord(input.apiFetch, "full", {
+        agentName: input.agent.name,
+        channelId: input.channelId,
+        summaryText,
+        lastProcessedAt: nextLastProcessedAt,
+        ...(getLastEventId(newEvents)
+          ? { lastProcessedEventId: getLastEventId(newEvents) }
+          : {}),
+        ...(existing?.version !== undefined ? { expectedVersion: existing.version } : {}),
+      }),
+    () => getChannelMemoryRecord(input.apiFetch, "full", input.agent.name, input.channelId),
+  );
 }
 
 function compactChannelMemoryInput(record: ChannelMemoryRecord) {
@@ -413,19 +445,22 @@ async function refreshCrossChannelMemory(input: {
     ].join("\n"),
   );
   const finalSummary = summaryText || existing?.summaryText || "";
-  const nextRecord = await upsertCrossMemoryRecord(input.apiFetch, input.mode, {
-    agentName: input.agent.name,
-    summaryText: finalSummary,
-    ...(input.mode === "recent"
-      ? { windowStartAt: Date.now() - RECENT_MEMORY_WINDOW_MS }
-      : {}),
-    lastProcessedAt: maxProcessedAt,
-    ...(usable[usable.length - 1]?.lastProcessedEventId
-      ? { lastProcessedEventId: usable[usable.length - 1]?.lastProcessedEventId }
-      : {}),
-    ...(existing?.version !== undefined ? { expectedVersion: existing.version } : {}),
-  });
-  return nextRecord;
+  return await upsertOrKeepNewer(
+    () =>
+      upsertCrossMemoryRecord(input.apiFetch, input.mode, {
+        agentName: input.agent.name,
+        summaryText: finalSummary,
+        ...(input.mode === "recent"
+          ? { windowStartAt: Date.now() - RECENT_MEMORY_WINDOW_MS }
+          : {}),
+        lastProcessedAt: maxProcessedAt,
+        ...(usable[usable.length - 1]?.lastProcessedEventId
+          ? { lastProcessedEventId: usable[usable.length - 1]?.lastProcessedEventId }
+          : {}),
+        ...(existing?.version !== undefined ? { expectedVersion: existing.version } : {}),
+      }),
+    () => getCrossMemoryRecord(input.apiFetch, input.mode, input.agent.name),
+  );
 }
 
 export async function refreshCrossChannelRecentMemory(input: {
