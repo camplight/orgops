@@ -7,6 +7,8 @@ type ApiFetch = (path: string, init?: RequestInit) => Promise<Response>;
 export const RECENT_MEMORY_WINDOW_MS = 600_000;
 const MAX_EVENTS_PER_PROMPT = 120;
 const MAX_CROSS_CHANNEL_INPUTS = 80;
+const DEFAULT_MEMORY_SUMMARY_MAX_CHARS = 24_000;
+const DEFAULT_MEMORY_PROMPT_SUMMARY_MAX_CHARS = 16_000;
 
 function normalizeTimestamp(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : 0;
@@ -35,6 +37,27 @@ function compactEvent(event: Event) {
 
 function trimText(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function readPositiveIntEnv(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+const MEMORY_SUMMARY_MAX_CHARS = readPositiveIntEnv(
+  process.env.ORGOPS_MEMORY_SUMMARY_MAX_CHARS,
+  DEFAULT_MEMORY_SUMMARY_MAX_CHARS,
+);
+const MEMORY_PROMPT_SUMMARY_MAX_CHARS = readPositiveIntEnv(
+  process.env.ORGOPS_MEMORY_PROMPT_SUMMARY_MAX_CHARS,
+  DEFAULT_MEMORY_PROMPT_SUMMARY_MAX_CHARS,
+);
+
+function clampSummaryText(text: string, maxChars: number): string {
+  const normalized = trimText(text);
+  if (normalized.length <= maxChars) return normalized;
+  const omitted = normalized.length - maxChars;
+  return `${normalized.slice(0, maxChars)}\n...[truncated ${omitted} chars]`;
 }
 
 type ChannelMemoryRecord = {
@@ -273,7 +296,10 @@ export async function refreshChannelRecentMemory(input: {
       ),
     ].join("\n"),
   );
-  const summaryText = summary || existing?.summaryText || "";
+  const summaryText = clampSummaryText(
+    summary || existing?.summaryText || "",
+    MEMORY_SUMMARY_MAX_CHARS,
+  );
   return await upsertOrKeepNewer(
     () =>
       upsertChannelMemoryRecord(input.apiFetch, "recent", {
@@ -322,7 +348,7 @@ export async function refreshChannelFullMemory(input: {
     return existing;
   }
   const chunks = chunkEvents(meaningfulNewEvents, MAX_EVENTS_PER_PROMPT);
-  let summaryText = existing?.summaryText ?? "";
+  let summaryText = clampSummaryText(existing?.summaryText ?? "", MEMORY_SUMMARY_MAX_CHARS);
   for (const chunk of chunks) {
     const nextSummary = await summarizeText(
       input.agent,
@@ -346,7 +372,7 @@ export async function refreshChannelFullMemory(input: {
       ].join("\n"),
     );
     if (nextSummary) {
-      summaryText = nextSummary;
+      summaryText = clampSummaryText(nextSummary, MEMORY_SUMMARY_MAX_CHARS);
     }
   }
   const nextLastProcessedAt = Math.max(
@@ -372,7 +398,7 @@ export async function refreshChannelFullMemory(input: {
 function compactChannelMemoryInput(record: ChannelMemoryRecord) {
   return {
     channelId: record.channelId,
-    summaryText: trimText(record.summaryText),
+    summaryText: clampSummaryText(record.summaryText, MEMORY_PROMPT_SUMMARY_MAX_CHARS),
     lastProcessedAt: normalizeTimestamp(record.lastProcessedAt),
     updatedAt: normalizeTimestamp(record.updatedAt),
   };
@@ -444,7 +470,10 @@ async function refreshCrossChannelMemory(input: {
       ),
     ].join("\n"),
   );
-  const finalSummary = summaryText || existing?.summaryText || "";
+  const finalSummary = clampSummaryText(
+    summaryText || existing?.summaryText || "",
+    MEMORY_SUMMARY_MAX_CHARS,
+  );
   return await upsertOrKeepNewer(
     () =>
       upsertCrossMemoryRecord(input.apiFetch, input.mode, {
@@ -530,7 +559,7 @@ export function getMeaningfulEvents(events: Event[]): Event[] {
 }
 
 export function buildSystemMemoryMessage(title: string, summaryText: string): string {
-  return `${title}\n${summaryText.trim()}`;
+  return `${title}\n${clampSummaryText(summaryText, MEMORY_PROMPT_SUMMARY_MAX_CHARS)}`;
 }
 
 export function buildChannelRecentDeltaSystemMessage(input: {

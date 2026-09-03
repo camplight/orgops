@@ -12,6 +12,7 @@ type MemoryDeps = {
 
 type ChannelMode = "recent" | "full";
 type CrossMode = "recent" | "full";
+const DEFAULT_MEMORY_SUMMARY_MAX_CHARS = 24_000;
 
 function asNonEmptyString(value: unknown): string | null {
   if (typeof value !== "string") return null;
@@ -21,6 +22,23 @@ function asNonEmptyString(value: unknown): string | null {
 
 function asInt(value: unknown, fallback = 0): number {
   return typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : fallback;
+}
+
+function readPositiveIntEnv(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+const MEMORY_SUMMARY_MAX_CHARS = readPositiveIntEnv(
+  process.env.ORGOPS_MEMORY_SUMMARY_MAX_CHARS,
+  DEFAULT_MEMORY_SUMMARY_MAX_CHARS,
+);
+
+function clampSummaryText(value: unknown): string {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (text.length <= MEMORY_SUMMARY_MAX_CHARS) return text;
+  const omitted = text.length - MEMORY_SUMMARY_MAX_CHARS;
+  return `${text.slice(0, MEMORY_SUMMARY_MAX_CHARS)}\n...[truncated ${omitted} chars]`;
 }
 
 export function registerMemoryRoutes(app: Hono<any>, deps: MemoryDeps) {
@@ -157,7 +175,7 @@ export function registerMemoryRoutes(app: Hono<any>, deps: MemoryDeps) {
 
       const now = Date.now();
       const patch = {
-        summary_text: typeof body.summaryText === "string" ? body.summaryText : "",
+        summary_text: clampSummaryText(body.summaryText),
         ...(mode === "recent" ? { window_start_at: asInt(body.windowStartAt, 0) } : {}),
         last_processed_at: asInt(body.lastProcessedAt, 0),
         last_processed_event_id: asNonEmptyString(body.lastProcessedEventId),
@@ -244,7 +262,7 @@ export function registerMemoryRoutes(app: Hono<any>, deps: MemoryDeps) {
       }
       const now = Date.now();
       const patch = {
-        summary_text: typeof body.summaryText === "string" ? body.summaryText : "",
+        summary_text: clampSummaryText(body.summaryText),
         ...(mode === "recent" ? { window_start_at: asInt(body.windowStartAt, 0) } : {}),
         last_processed_at: asInt(body.lastProcessedAt, 0),
         last_processed_event_id: asNonEmptyString(body.lastProcessedEventId),

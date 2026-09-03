@@ -1,7 +1,13 @@
 import { arch, hostname, release } from "node:os";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
-import { generate, type GenerateResult, type LlmUsage } from "@orgops/llm";
+import {
+  generate,
+  type GenerateResult,
+  type LlmMessage,
+  type LlmMessageContent,
+  type LlmUsage,
+} from "@orgops/llm";
 import { getModel } from "models-dev-db";
 import { listSkills, loadSkillEventShapes } from "@orgops/skills";
 import {
@@ -43,6 +49,7 @@ const DEFAULT_CLASSIC_MAX_MODEL_STEPS = 100;
 const MAX_EVENT_DISPATCH_ATTEMPTS = 3;
 const DEFAULT_MEMORY_CONTEXT_MODE = "PER_CHANNEL_CROSS_CHANNEL" as const;
 const FALLBACK_MODEL_CONTEXT_WINDOW_TOKENS = 128_000;
+const DEFAULT_MAX_LLM_MESSAGE_CHARS = 200_000;
 
 type MemoryContextMode = "PER_CHANNEL_CROSS_CHANNEL" | "FULL_CHANNEL_EVENTS" | "OFF";
 
@@ -93,6 +100,34 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string) {
 function readPositiveIntEnv(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+const MAX_LLM_MESSAGE_CHARS = readPositiveIntEnv(
+  process.env.ORGOPS_MAX_LLM_MESSAGE_CHARS,
+  DEFAULT_MAX_LLM_MESSAGE_CHARS,
+);
+
+function truncateOversizedText(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  const omitted = value.length - maxChars;
+  return `${value.slice(0, maxChars)}\n...[truncated ${omitted} chars]`;
+}
+
+function clampMessageContent(content: LlmMessageContent, maxChars: number): LlmMessageContent {
+  if (typeof content === "string") {
+    return truncateOversizedText(content, maxChars);
+  }
+  return content.map((part) => {
+    if (part.type !== "text") return part;
+    return { ...part, text: truncateOversizedText(part.text, maxChars) };
+  });
+}
+
+function clampMessagesForProviderLimit(messages: LlmMessage[]): LlmMessage[] {
+  return messages.map((message) => ({
+    ...message,
+    content: clampMessageContent(message.content, MAX_LLM_MESSAGE_CHARS),
+  }));
 }
 
 function queryEventTypes(
@@ -729,7 +764,10 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       let result: GenerateResult;
       try {
         result = await withTimeout(
-          generate(agent.modelId, [...invokeMessages, ...retryMessages], {
+          generate(
+            agent.modelId,
+            clampMessagesForProviderLimit([...invokeMessages, ...retryMessages]),
+            {
             tools,
             maxSteps: classicMaxModelSteps,
             env: injectionEnv,
@@ -743,7 +781,8 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
               });
               return injected?.messages ?? [];
             },
-          }),
+          },
+          ),
           llmCallTimeoutMs,
           `LLM generate (attempt ${attempt})`,
         );
