@@ -588,9 +588,18 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       });
       insertTypeCounts(typeCounts);
 
-      const createdAtValues = rows
-        .map((row) => row.created_at)
-        .filter((value): value is number => typeof value === "number");
+      let earliestCreatedAt: number | null = null;
+      let latestCreatedAt: number | null = null;
+      for (const row of rows) {
+        const createdAt = row.created_at;
+        if (typeof createdAt !== "number") continue;
+        if (earliestCreatedAt === null || createdAt < earliestCreatedAt) {
+          earliestCreatedAt = createdAt;
+        }
+        if (latestCreatedAt === null || createdAt > latestCreatedAt) {
+          latestCreatedAt = createdAt;
+        }
+      }
       const metadata: Record<string, string> = {
         schema_version: "orgops.event-export.sqlite.v1",
         exported_at: timestamp,
@@ -599,10 +608,8 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
         event_count: String(rows.length),
         channel_count: String(channels.length),
         event_type_count: String(typeCounts.size),
-        earliest_created_at:
-          createdAtValues.length > 0 ? String(Math.min(...createdAtValues)) : "",
-        latest_created_at:
-          createdAtValues.length > 0 ? String(Math.max(...createdAtValues)) : "",
+        earliest_created_at: earliestCreatedAt === null ? "" : String(earliestCreatedAt),
+        latest_created_at: latestCreatedAt === null ? "" : String(latestCreatedAt),
       };
       const insertMetadata = exportDb.prepare(
         "INSERT INTO export_metadata (key, value) VALUES (?, ?)",
