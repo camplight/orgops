@@ -148,23 +148,22 @@ function traceDetail(event: EventRow) {
   return shortJson(event.payload);
 }
 
-function traceChipLabel(event: EventRow) {
+function traceChipCode(event: EventRow) {
   const payload = event.payload && typeof event.payload === "object" ? (event.payload as Record<string, unknown>) : {};
-  if (event.type === "agent.turn.started") return "Thinking";
-  if (event.type === "agent.turn.completed") return "Done";
-  if (event.type === "agent.turn.failed") return "Failed";
+  if (event.type === "agent.turn.started") return "T";
+  if (event.type === "agent.turn.completed") return "D";
+  if (event.type === "agent.turn.failed") return "F";
   if (event.type === "agent.turn.phase") {
     const phase = typeof payload.phase === "string" ? payload.phase : "phase";
-    return phase;
+    return phase.slice(0, 1).toUpperCase() || "P";
   }
-  if (event.type === "telemetry.context.window.updated") return "Context";
+  if (event.type === "telemetry.context.window.updated") return "C";
   if (event.type.startsWith("tool.")) {
-    const toolName = typeof payload.tool === "string" && payload.tool ? payload.tool : "tool";
-    if (event.type === "tool.started") return `${toolName}...`;
-    if (event.type === "tool.executed") return toolName;
-    return `${toolName}!`;
+    if (event.type === "tool.started") return "R";
+    if (event.type === "tool.executed") return "E";
+    return "F";
   }
-  return event.type;
+  return "?";
 }
 
 function traceChipTone(event: EventRow) {
@@ -1446,8 +1445,9 @@ export default function App() {
                           onClick={() =>
                             setExpandedTraceEventId((current) => (current === event.id ? null : event.id))
                           }
+                          aria-label={summary}
                         >
-                          <span>{traceChipLabel(event)}</span>
+                          <span>{traceChipCode(event)}</span>
                         </button>
                       );
                     })}
