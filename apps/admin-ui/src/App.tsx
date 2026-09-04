@@ -463,6 +463,7 @@ export default function App() {
       if (screen === "teams") {
         data.refreshTeams();
         data.refreshHumans();
+        data.refreshChannels();
       }
       if (screen === "chat") {
         data.refreshChannels();
@@ -946,6 +947,7 @@ export default function App() {
           teams={data.teams}
           agents={data.agents}
           humans={data.humans}
+          channels={data.channels}
           onCreateTeam={async (team) => {
             const res = await data.apiFetch("/api/teams", {
               method: "POST",
@@ -979,6 +981,7 @@ export default function App() {
               headers: data.getApiHeaders(),
               body: JSON.stringify({ memberType, memberId })
             });
+            await data.refreshTeams();
           }}
           onRemoveMember={async (teamId, memberType, memberId) => {
             await data.apiFetch(
@@ -988,6 +991,23 @@ export default function App() {
                 headers: data.getApiHeaders()
               }
             );
+            await data.refreshTeams();
+          }}
+          onAddChannel={async (teamId, channelId) => {
+            await data.apiFetch(`/api/channels/${encodeURIComponent(channelId)}/subscribe`, {
+              method: "POST",
+              headers: data.getApiHeaders(),
+              body: JSON.stringify({ subscriberType: "TEAM", subscriberId: teamId })
+            });
+            await data.refreshChannels();
+          }}
+          onRemoveChannel={async (teamId, channelId) => {
+            await data.apiFetch(`/api/channels/${encodeURIComponent(channelId)}/unsubscribe`, {
+              method: "POST",
+              headers: data.getApiHeaders(),
+              body: JSON.stringify({ subscriberType: "TEAM", subscriberId: teamId })
+            });
+            await data.refreshChannels();
           }}
         />
       )}
@@ -996,6 +1016,7 @@ export default function App() {
         <ChannelsScreen
           agents={data.agents}
           humans={data.humans}
+          teams={data.teams}
           channels={data.channels}
           channelEvents={data.channelEvents}
           channelParticipants={data.channelParticipants}
@@ -1029,26 +1050,31 @@ export default function App() {
             data.setChannels([]);
             await data.refreshChannels();
           }}
-          onSubscribe={async (channelId, agentName) => {
+          onSubscribe={async (channelId, subscriberType, subscriberId) => {
             await data.apiFetch(`/api/channels/${channelId}/subscribe`, {
               method: "POST",
               headers: data.getApiHeaders(),
-              body: JSON.stringify({ subscriberType: "AGENT", subscriberId: agentName })
+              body: JSON.stringify({ subscriberType, subscriberId })
             });
           }}
-          onInviteHuman={async (channelId, username) => {
-            await data.apiFetch(`/api/channels/${channelId}/subscribe`, {
-              method: "POST",
-              headers: data.getApiHeaders(),
-              body: JSON.stringify({ subscriberType: "HUMAN", subscriberId: username })
-            });
-          }}
-          onUnsubscribe={async (channelId, agentName) => {
+          onUnsubscribe={async (channelId, subscriberType, subscriberId) => {
             await data.apiFetch(`/api/channels/${channelId}/unsubscribe`, {
               method: "POST",
               headers: data.getApiHeaders(),
-              body: JSON.stringify({ subscriberType: "AGENT", subscriberId: agentName })
+              body: JSON.stringify({ subscriberType, subscriberId })
             });
+          }}
+          onUpdateChannel={async (channelId, patch) => {
+            await data.apiFetch(`/api/channels/${channelId}`, {
+              method: "PATCH",
+              headers: data.getApiHeaders(),
+              body: JSON.stringify(patch)
+            });
+            await data.refreshChannels();
+            if (activeChannelId === channelId) {
+              await data.loadChannelParticipants(channelId);
+              await data.loadChannelEvents(channelId);
+            }
           }}
         />
       )}
@@ -1225,6 +1251,23 @@ export default function App() {
               headers: data.getApiHeaders(),
               body: JSON.stringify(input)
             });
+            const body = (await res.json()) as {
+              id: string;
+              username: string;
+              temporaryPassword: string;
+            };
+            await data.refreshHumans();
+            return body;
+          }}
+          onResetTempPassword={async (input) => {
+            const res = await data.apiFetch(
+              `/api/humans/${encodeURIComponent(input.id)}/reset-temp-password`,
+              {
+                method: "POST",
+                headers: data.getApiHeaders(),
+                body: JSON.stringify({ tempPassword: input.tempPassword })
+              }
+            );
             const body = (await res.json()) as {
               id: string;
               username: string;

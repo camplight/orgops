@@ -10,7 +10,7 @@ import {
   type ChannelKind,
   type OrgOpsDrizzleDb
 } from "@orgops/db";
-import { and, asc, eq, isNull } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import type { AccessControl, RequestUser } from "./access";
 
 type CollabDeps = {
@@ -150,6 +150,15 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
     return Boolean(row);
   }
 
+  function teamExists(teamId: string) {
+    const row = orm
+      .select({ id: schema.teams.id })
+      .from(schema.teams)
+      .where(eq(schema.teams.id, teamId))
+      .get();
+    return Boolean(row);
+  }
+
   function findMissingParticipant(
     participants: Array<{ subscriberType: string; subscriberId: string }>,
   ) {
@@ -237,6 +246,29 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
 
   app.get("/api/teams", (c) => {
     const rows = orm.select().from(schema.teams).all() as any[];
+    return jsonResponse(c, rows);
+  });
+
+  app.get("/api/teams/me", (c) => {
+    const user = c.get("user") as RequestUser | undefined;
+    if (!user?.username || user.username === "runner") return jsonResponse(c, []);
+    const teamIds = orm
+      .select({ teamId: schema.teamMemberships.team_id })
+      .from(schema.teamMemberships)
+      .where(
+        and(
+          eq(schema.teamMemberships.member_type, "HUMAN"),
+          eq(schema.teamMemberships.member_id, user.username),
+        ),
+      )
+      .all()
+      .map((row) => row.teamId);
+    if (teamIds.length === 0) return jsonResponse(c, []);
+    const rows = orm
+      .select({ id: schema.teams.id, name: schema.teams.name })
+      .from(schema.teams)
+      .where(inArray(schema.teams.id, teamIds))
+      .all();
     return jsonResponse(c, rows);
   });
 
@@ -593,6 +625,23 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
     const nextValues: Record<string, unknown> = {};
     if (typeof body.name === "string") nextValues.name = body.name;
     if ("description" in body) nextValues.description = body.description ?? null;
+    if ("visibility" in body) {
+      const visibilityRaw =
+        typeof body.visibility === "string" ? body.visibility.trim().toUpperCase() : "";
+      if (!isChannelVisibility(visibilityRaw)) {
+        return jsonResponse(c, { error: "Invalid visibility. Expected PUBLIC or PRIVATE" }, 400);
+      }
+      if (visibilityRaw === CHANNEL_VISIBILITY.PRIVATE) {
+        if (!user?.username || user.username === "runner" || !user.id) {
+          return jsonResponse(c, { error: "Authenticated human user required for private channels" }, 401);
+        }
+        nextValues.visibility = CHANNEL_VISIBILITY.PRIVATE;
+        nextValues.owner_human_id = user.id;
+      } else {
+        nextValues.visibility = CHANNEL_VISIBILITY.PUBLIC;
+        nextValues.owner_human_id = null;
+      }
+    }
     if (parsedMetadata.value !== undefined) {
       nextValues.metadata_json =
         parsedMetadata.value === null
@@ -686,10 +735,10 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
     const body = await c.req.json();
     const subscriberType = String(body.subscriberType ?? "").trim().toUpperCase();
     const subscriberId = String(body.subscriberId ?? "").trim();
-    if (!subscriberId || (subscriberType !== "AGENT" && subscriberType !== "HUMAN")) {
+    if (!subscriberId || (subscriberType !== "AGENT" && subscriberType !== "HUMAN" && subscriberType !== "TEAM")) {
       return jsonResponse(
         c,
-        { error: "Only AGENT and HUMAN channel subscriptions are supported" },
+        { error: "Only AGENT, HUMAN, and TEAM channel subscriptions are supported" },
         400,
       );
     }
@@ -698,6 +747,9 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
     }
     if (subscriberType === "HUMAN" && !humanExists(subscriberId)) {
       return jsonResponse(c, { error: `HUMAN not found: ${subscriberId}` }, 404);
+    }
+    if (subscriberType === "TEAM" && !teamExists(subscriberId)) {
+      return jsonResponse(c, { error: `TEAM not found: ${subscriberId}` }, 404);
     }
     orm
       .insert(schema.channelSubscriptions)
@@ -718,13 +770,18 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
       return jsonResponse(c, { error: "Forbidden" }, 403);
     }
     const body = await c.req.json();
+    const subscriberType = String(body.subscriberType ?? "").trim().toUpperCase();
+    const subscriberId = String(body.subscriberId ?? "").trim();
+    if (!subscriberType || !subscriberId) {
+      return jsonResponse(c, { error: "subscriberType and subscriberId are required" }, 400);
+    }
     orm
       .delete(schema.channelSubscriptions)
       .where(
         and(
           eq(schema.channelSubscriptions.channel_id, id),
-          eq(schema.channelSubscriptions.subscriber_type, body.subscriberType),
-          eq(schema.channelSubscriptions.subscriber_id, body.subscriberId),
+          eq(schema.channelSubscriptions.subscriber_type, subscriberType),
+          eq(schema.channelSubscriptions.subscriber_id, subscriberId),
         ),
       )
       .run();

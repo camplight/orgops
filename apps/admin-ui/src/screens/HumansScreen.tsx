@@ -9,6 +9,10 @@ type HumansScreenProps = {
     username: string;
     tempPassword?: string;
   }) => Promise<{ id: string; username: string; temporaryPassword: string }>;
+  onResetTempPassword: (input: {
+    id: string;
+    tempPassword?: string;
+  }) => Promise<{ id: string; username: string; temporaryPassword: string }>;
   onRefresh: () => Promise<void> | void;
 };
 
@@ -17,10 +21,12 @@ function formatDate(value: number) {
   return new Date(value).toLocaleString();
 }
 
-export function HumansScreen({ humans, onInviteHuman, onRefresh }: HumansScreenProps) {
+export function HumansScreen({ humans, onInviteHuman, onResetTempPassword, onRefresh }: HumansScreenProps) {
   const [newHuman, setNewHuman] = useState({ username: "", tempPassword: "" });
+  const [resetTempPasswordInput, setResetTempPasswordInput] = useState("");
   const [activeHumanId, setActiveHumanId] = useState<string | null>(null);
   const [createDrawerOpen, setCreateDrawerOpen] = useState(false);
+  const [resettingPassword, setResettingPassword] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [inviteResult, setInviteResult] = useState<{
     username: string;
@@ -63,6 +69,29 @@ export function HumansScreen({ humans, onInviteHuman, onRefresh }: HumansScreenP
       await onRefresh();
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Failed to invite user");
+    }
+  };
+
+  const handleResetTempPassword = async () => {
+    if (!selectedHuman) return;
+    setStatus(null);
+    setResettingPassword(true);
+    try {
+      const updated = await onResetTempPassword({
+        id: selectedHuman.id,
+        tempPassword: resetTempPasswordInput.trim() || undefined
+      });
+      setInviteResult({
+        username: updated.username,
+        temporaryPassword: updated.temporaryPassword
+      });
+      setResetTempPasswordInput("");
+      setStatus(`Temporary password reset for "${updated.username}".`);
+      await onRefresh();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Failed to reset temporary password");
+    } finally {
+      setResettingPassword(false);
     }
   };
 
@@ -230,6 +259,20 @@ export function HumansScreen({ humans, onInviteHuman, onRefresh }: HumansScreenP
                   >
                     {selectedHuman.mustChangePassword ? "Password reset pending" : "Active"}
                   </div>
+                </div>
+                <div className="space-y-2 border-t border-slate-800 pt-3">
+                  <h4 className="text-xs uppercase tracking-wide text-slate-400">
+                    Set New Temporary Password
+                  </h4>
+                  <Input
+                    placeholder="temporary password (optional)"
+                    type="password"
+                    value={resetTempPasswordInput}
+                    onChange={(event) => setResetTempPasswordInput(event.target.value)}
+                  />
+                  <Button onClick={handleResetTempPassword} disabled={resettingPassword}>
+                    {resettingPassword ? "Resetting..." : "Reset Temporary Password"}
+                  </Button>
                 </div>
               </div>
             ) : (

@@ -52,6 +52,21 @@ function normalizeAgentVisibility(value: unknown): AgentVisibility {
 export function createAccessControl(deps: AccessDeps) {
   const { orm } = deps;
 
+  function listViewerTeamIds(user: RequestUser | undefined): string[] {
+    if (!isHumanUser(user)) return [];
+    return orm
+      .select({ teamId: schema.teamMemberships.team_id })
+      .from(schema.teamMemberships)
+      .where(
+        and(
+          eq(schema.teamMemberships.member_type, "HUMAN"),
+          eq(schema.teamMemberships.member_id, user.username),
+        ),
+      )
+      .all()
+      .map((row) => row.teamId);
+  }
+
   function getChannel(channelId: string): ChannelAccessRow | undefined {
     return orm
       .select({
@@ -98,7 +113,21 @@ export function createAccessControl(deps: AccessDeps) {
         ),
       )
       .get();
-    return Boolean(member);
+    if (member) return true;
+    const teamIds = listViewerTeamIds(user);
+    if (teamIds.length === 0) return false;
+    const teamMember = orm
+      .select({ channelId: schema.channelSubscriptions.channel_id })
+      .from(schema.channelSubscriptions)
+      .where(
+        and(
+          eq(schema.channelSubscriptions.channel_id, channelId),
+          eq(schema.channelSubscriptions.subscriber_type, "TEAM"),
+          inArray(schema.channelSubscriptions.subscriber_id, teamIds),
+        ),
+      )
+      .get();
+    return Boolean(teamMember);
   }
 
   function canManageChannel(user: RequestUser | undefined, channelId: string): boolean {
@@ -152,7 +181,7 @@ export function createAccessControl(deps: AccessDeps) {
       }
     }
     if (privateIds.length > 0) {
-      const subs = orm
+      const humanSubs = orm
         .select({ channelId: schema.channelSubscriptions.channel_id })
         .from(schema.channelSubscriptions)
         .where(
@@ -163,7 +192,28 @@ export function createAccessControl(deps: AccessDeps) {
           ),
         )
         .all();
-      for (const row of subs) visible.add(row.channelId);
+      for (const row of humanSubs) visible.add(row.channelId);
+
+      const viewerTeamIds = listViewerTeamIds(user);
+      if (viewerTeamIds.length > 0) {
+        const teamSubs = orm
+          .select({
+            channelId: schema.channelSubscriptions.channel_id,
+            teamId: schema.channelSubscriptions.subscriber_id,
+          })
+          .from(schema.channelSubscriptions)
+          .where(
+            and(
+              eq(schema.channelSubscriptions.subscriber_type, "TEAM"),
+              inArray(schema.channelSubscriptions.channel_id, privateIds),
+            ),
+          )
+          .all();
+        const teamSet = new Set(viewerTeamIds);
+        for (const row of teamSubs) {
+          if (teamSet.has(row.teamId)) visible.add(row.channelId);
+        }
+      }
     }
     return [...visible];
   }
@@ -202,7 +252,21 @@ export function createAccessControl(deps: AccessDeps) {
         ),
       )
       .get();
-    return Boolean(humanSub);
+    if (humanSub) return true;
+    const viewerTeamIds = listViewerTeamIds(user);
+    if (viewerTeamIds.length === 0) return false;
+    const teamSub = orm
+      .select({ channelId: schema.channelSubscriptions.channel_id })
+      .from(schema.channelSubscriptions)
+      .where(
+        and(
+          eq(schema.channelSubscriptions.subscriber_type, "TEAM"),
+          inArray(schema.channelSubscriptions.subscriber_id, viewerTeamIds),
+          inArray(schema.channelSubscriptions.channel_id, shared),
+        ),
+      )
+      .get();
+    return Boolean(teamSub);
   }
 
   function canManageAgent(user: RequestUser | undefined, agentName: string): boolean {
