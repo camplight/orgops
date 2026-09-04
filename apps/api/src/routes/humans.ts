@@ -94,4 +94,43 @@ export function registerHumansRoutes(app: Hono<any>, deps: HumansDeps) {
       201
     );
   });
+
+  app.post("/api/humans/:id/reset-temp-password", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req.json().catch(() => ({}));
+    const suppliedTempPassword =
+      typeof body.tempPassword === "string" ? body.tempPassword.trim() : "";
+    const tempPassword = suppliedTempPassword || generateTemporaryPassword();
+    if (tempPassword.length < 8) {
+      return jsonResponse(c, { error: "Temporary password must be at least 8 characters" }, 400);
+    }
+
+    const existing = orm
+      .select({
+        id: humanSchema.id,
+        username: humanSchema.username
+      })
+      .from(humanSchema)
+      .where(eq(humanSchema.id, id))
+      .get() as { id: string; username: string } | undefined;
+    if (!existing) return jsonResponse(c, { error: "Human not found" }, 404);
+
+    const now = Date.now();
+    orm
+      .update(humanSchema)
+      .set({
+        password_hash: hashPassword(tempPassword),
+        must_change_password: 1,
+        updated_at: now
+      })
+      .where(eq(humanSchema.id, id))
+      .run();
+
+    return jsonResponse(c, {
+      id: existing.id,
+      username: existing.username,
+      mustChangePassword: true,
+      temporaryPassword: tempPassword
+    });
+  });
 }

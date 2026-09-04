@@ -39,3 +39,8 @@ export type AuthMe = {
   username?: string | null;
   mustChangePassword?: boolean;
 };
+
+export type Team = {
+  id: string;
+  name: string;
+};

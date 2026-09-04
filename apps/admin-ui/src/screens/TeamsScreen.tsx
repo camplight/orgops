@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Agent, Human, Team, TeamMember } from "../types";
+import type { Agent, Channel, Human, Team, TeamMember } from "../types";
 import { Button, Card, Input, Select } from "../components/ui";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 
@@ -7,25 +7,33 @@ type TeamsScreenProps = {
   teams: Team[];
   agents: Agent[];
   humans: Human[];
+  channels: Channel[];
   onCreateTeam: (team: { name: string }) => Promise<string>;
   onRenameTeam: (teamId: string, name: string) => Promise<void>;
   onDeleteTeam: (teamId: string) => Promise<void>;
   onLoadMembers: (teamId: string) => Promise<TeamMember[]>;
   onAddMember: (teamId: string, memberType: string, memberId: string) => Promise<void>;
   onRemoveMember: (teamId: string, memberType: string, memberId: string) => Promise<void>;
+  onAddChannel: (teamId: string, channelId: string) => Promise<void>;
+  onRemoveChannel: (teamId: string, channelId: string) => Promise<void>;
 };
 
 export function TeamsScreen({
   teams,
   agents,
   humans,
+  channels,
   onCreateTeam,
   onRenameTeam,
   onDeleteTeam,
   onLoadMembers,
   onAddMember,
-  onRemoveMember
+  onRemoveMember,
+  onAddChannel,
+  onRemoveChannel
 }: TeamsScreenProps) {
+  const isTeamAssignableChannel = (channel: Channel) =>
+    !channel.directParticipantKey && !channel.name.startsWith("agent.lifecycle.");
   const [newTeamName, setNewTeamName] = useState("");
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const [members, setMembers] = useState<TeamMember[]>([]);
@@ -39,6 +47,9 @@ export function TeamsScreen({
   const [addingMember, setAddingMember] = useState(false);
   const [removingMemberKey, setRemovingMemberKey] = useState<string | null>(null);
   const [deletingTeamId, setDeletingTeamId] = useState<string | null>(null);
+  const [selectedChannelId, setSelectedChannelId] = useState("");
+  const [addingChannel, setAddingChannel] = useState(false);
+  const [removingChannelId, setRemovingChannelId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedTeamSnapshot, setSelectedTeamSnapshot] = useState<Team | null>(null);
   const loadMembersRef = useRef(onLoadMembers);
@@ -75,6 +86,20 @@ export function TeamsScreen({
   const availableMemberOptions = selectedMemberType === "AGENT" ? availableAgents : availableHumans;
   const noMembersMessage =
     selectedMemberType === "AGENT" ? "All agents already added" : "All humans already added";
+  const teamChannels = useMemo(() => {
+    if (!selectedTeamId) return [];
+    return channels.filter((channel) =>
+      isTeamAssignableChannel(channel) &&
+      (channel.participants ?? []).some(
+        (participant) =>
+          participant.subscriberType === "TEAM" && participant.subscriberId === selectedTeamId
+      )
+    );
+  }, [channels, selectedTeamId]);
+  const availableChannels = useMemo(() => {
+    const assigned = new Set(teamChannels.map((channel) => channel.id));
+    return channels.filter((channel) => isTeamAssignableChannel(channel) && !assigned.has(channel.id));
+  }, [channels, teamChannels]);
 
   useEscapeKey(createDrawerOpen || isDetailsOpen, () => {
     if (isDetailsOpen) {
@@ -252,6 +277,35 @@ export function TeamsScreen({
       setError(message);
     } finally {
       setDeletingTeamId(null);
+    }
+  };
+
+  const handleAddTeamChannel = async () => {
+    setError(null);
+    if (!selectedTeam || !selectedChannelId) return;
+    setAddingChannel(true);
+    try {
+      await onAddChannel(selectedTeam.id, selectedChannelId);
+      setSelectedChannelId("");
+    } catch (addError) {
+      const message = addError instanceof Error ? addError.message : "Failed to add channel to team.";
+      setError(message);
+    } finally {
+      setAddingChannel(false);
+    }
+  };
+
+  const handleRemoveTeamChannel = async (channelId: string) => {
+    setError(null);
+    if (!selectedTeam) return;
+    setRemovingChannelId(channelId);
+    try {
+      await onRemoveChannel(selectedTeam.id, channelId);
+    } catch (removeError) {
+      const message = removeError instanceof Error ? removeError.message : "Failed to remove channel from team.";
+      setError(message);
+    } finally {
+      setRemovingChannelId(null);
     }
   };
 
@@ -461,6 +515,36 @@ export function TeamsScreen({
               </div>
 
               <div className="space-y-2 rounded border border-slate-800 bg-slate-950 p-3">
+                <div className="text-sm text-slate-300">Add channels to team</div>
+                <div className="flex gap-2">
+                  <Select
+                    value={selectedChannelId}
+                    onChange={(event) => setSelectedChannelId(event.target.value)}
+                    disabled={addingChannel || availableChannels.length === 0}
+                  >
+                    {availableChannels.length === 0 ? (
+                      <option value="">All channels already assigned</option>
+                    ) : (
+                      <>
+                        <option value="">Select channel</option>
+                        {availableChannels.map((channel) => (
+                          <option key={channel.id} value={channel.id}>
+                            {channel.name}
+                          </option>
+                        ))}
+                      </>
+                    )}
+                  </Select>
+                  <Button
+                    onClick={handleAddTeamChannel}
+                    disabled={addingChannel || !selectedChannelId || availableChannels.length === 0}
+                  >
+                    Add Channel
+                  </Button>
+                </div>
+              </div>
+
+              <div className="space-y-2 rounded border border-slate-800 bg-slate-950 p-3">
                 <div className="text-sm text-slate-300">Team members</div>
                 {isLoadingMembers ? (
                   <div className="text-sm text-slate-500">Loading members...</div>
@@ -491,6 +575,39 @@ export function TeamsScreen({
                           }
                           aria-label={`Remove ${member.memberId} from team`}
                           title={`Remove ${member.memberId}`}
+                        >
+                          x
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-2 rounded border border-slate-800 bg-slate-950 p-3">
+                <div className="text-sm text-slate-300">Team channels</div>
+                {teamChannels.length === 0 ? (
+                  <div className="text-sm text-slate-500">No channels assigned yet.</div>
+                ) : (
+                  <div className="space-y-2 text-sm">
+                    {teamChannels.map((channel) => (
+                      <div
+                        key={channel.id}
+                        className="flex items-center justify-between rounded border border-slate-800 px-3 py-2 text-slate-300"
+                      >
+                        <div>
+                          {channel.name}
+                          <span className="ml-2 text-xs uppercase text-slate-500">
+                            {channel.visibility === "PRIVATE" ? "PRIVATE" : "PUBLIC"}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          className="rounded px-2 text-rose-300 hover:bg-slate-800 hover:text-rose-200 disabled:opacity-50"
+                          onClick={() => handleRemoveTeamChannel(channel.id)}
+                          disabled={removingChannelId === channel.id}
+                          aria-label={`Remove ${channel.name} from team`}
+                          title={`Remove ${channel.name}`}
                         >
                           x
                         </button>

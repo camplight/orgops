@@ -1209,6 +1209,83 @@ describe("api app", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("resets an existing human to a new temporary password", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const adminLoginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(adminLoginRes.status).toBe(200);
+    const adminCookie = adminLoginRes.headers.get("set-cookie") ?? "";
+
+    const inviteRes = await app.request("http://localhost/api/humans/invite", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({
+        username: "reset-target",
+        tempPassword: "first-temp-pass",
+      }),
+    });
+    expect(inviteRes.status).toBe(201);
+    const invited = (await inviteRes.json()) as { id: string; temporaryPassword: string };
+    expect(invited.temporaryPassword).toBe("first-temp-pass");
+
+    const profileRes = await app.request("http://localhost/api/humans/reset-target/reset-temp-password", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ tempPassword: "second-temp-pass" }),
+    });
+    expect(profileRes.status).toBe(404);
+
+    const resetRes = await app.request(
+      `http://localhost/api/humans/${invited.id}/reset-temp-password`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: adminCookie },
+        body: JSON.stringify({ tempPassword: "second-temp-pass" }),
+      },
+    );
+    expect(resetRes.status).toBe(200);
+    const resetBody = (await resetRes.json()) as {
+      id: string;
+      username: string;
+      mustChangePassword: boolean;
+      temporaryPassword: string;
+    };
+    expect(resetBody.id).toBe(invited.id);
+    expect(resetBody.username).toBe("reset-target");
+    expect(resetBody.mustChangePassword).toBe(true);
+    expect(resetBody.temporaryPassword).toBe("second-temp-pass");
+
+    const oldLoginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "reset-target", password: "first-temp-pass" }),
+    });
+    expect(oldLoginRes.status).toBe(401);
+
+    const newLoginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "reset-target", password: "second-temp-pass" }),
+    });
+    expect(newLoginRes.status).toBe(200);
+    const newLoginBody = (await newLoginRes.json()) as { mustChangePassword?: boolean };
+    expect(newLoginBody.mustChangePassword).toBe(true);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("updates agent runtime state on start and stop actions", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");
@@ -1564,7 +1641,7 @@ describe("api app", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  it("rejects TEAM channel subscriptions", async () => {
+  it("allows TEAM channel subscriptions", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");
     const { app } = createApp({
@@ -1594,6 +1671,14 @@ describe("api app", () => {
     expect(createChannelRes.status).toBe(201);
     const createChannelBody = (await createChannelRes.json()) as { id: string };
 
+    const createTeamRes = await app.request("http://localhost/api/teams", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ name: "team-1" }),
+    });
+    expect(createTeamRes.status).toBe(201);
+    const teamBody = (await createTeamRes.json()) as { id: string };
+
     const subscribeRes = await app.request(
       `http://localhost/api/channels/${createChannelBody.id}/subscribe`,
       {
@@ -1601,11 +1686,11 @@ describe("api app", () => {
         headers: { "content-type": "application/json", cookie },
         body: JSON.stringify({
           subscriberType: "TEAM",
-          subscriberId: "team-1",
+          subscriberId: teamBody.id,
         }),
       },
     );
-    expect(subscribeRes.status).toBe(400);
+    expect(subscribeRes.status).toBe(200);
 
     const participantsRes = await app.request(
       `http://localhost/api/channels/${createChannelBody.id}/participants`,
@@ -1614,7 +1699,12 @@ describe("api app", () => {
       },
     );
     const participants = await participantsRes.json();
-    expect(participants).toEqual([]);
+    expect(participants).toEqual([
+      {
+        subscriberType: "TEAM",
+        subscriberId: teamBody.id,
+      },
+    ]);
 
     rmSync(dataDir, { recursive: true, force: true });
   });
@@ -2115,6 +2205,80 @@ describe("api app", () => {
     expect(patchRes.status).toBe(409);
     const patchBody = (await patchRes.json()) as { error?: string };
     expect(patchBody.error).toBe("Channel name already exists");
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("updates channel visibility between public and private", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const createRes = await app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "visibility-update-channel",
+        kind: "INTEGRATION_BRIDGE",
+        visibility: "PUBLIC",
+      }),
+    });
+    expect(createRes.status).toBe(201);
+    const created = (await createRes.json()) as { id: string };
+
+    const makePrivateRes = await app.request(
+      `http://localhost/api/channels/${created.id}`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ visibility: "PRIVATE" }),
+      },
+    );
+    expect(makePrivateRes.status).toBe(200);
+
+    const listAfterPrivateRes = await app.request("http://localhost/api/channels", {
+      headers: { cookie },
+    });
+    expect(listAfterPrivateRes.status).toBe(200);
+    const listAfterPrivate = (await listAfterPrivateRes.json()) as Array<{
+      id: string;
+      visibility?: string;
+    }>;
+    expect(listAfterPrivate.find((channel) => channel.id === created.id)?.visibility).toBe("PRIVATE");
+
+    const makePublicRes = await app.request(
+      `http://localhost/api/channels/${created.id}`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ visibility: "PUBLIC" }),
+      },
+    );
+    expect(makePublicRes.status).toBe(200);
+
+    const listAfterPublicRes = await app.request("http://localhost/api/channels", {
+      headers: { cookie },
+    });
+    expect(listAfterPublicRes.status).toBe(200);
+    const listAfterPublic = (await listAfterPublicRes.json()) as Array<{
+      id: string;
+      visibility?: string;
+    }>;
+    expect(listAfterPublic.find((channel) => channel.id === created.id)?.visibility).toBe("PUBLIC");
 
     rmSync(dataDir, { recursive: true, force: true });
   });
@@ -3928,6 +4092,184 @@ describe("api app", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("shows private channels to humans who inherit access through team membership", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const adminLoginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(adminLoginRes.status).toBe(200);
+    const adminCookie = adminLoginRes.headers.get("set-cookie") ?? "";
+
+    const inviteRes = await app.request("http://localhost/api/humans/invite", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ username: "dana" }),
+    });
+    expect(inviteRes.status).toBe(201);
+    const inviteBody = (await inviteRes.json()) as { temporaryPassword: string };
+
+    const danaLoginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        username: "dana",
+        password: inviteBody.temporaryPassword,
+      }),
+    });
+    expect(danaLoginRes.status).toBe(200);
+    const danaCookie = danaLoginRes.headers.get("set-cookie") ?? "";
+    const danaProfileRes = await app.request("http://localhost/api/auth/profile", {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie: danaCookie },
+      body: JSON.stringify({
+        username: "dana",
+        newPassword: "dana-password-123",
+      }),
+    });
+    expect(danaProfileRes.status).toBe(200);
+
+    const createPrivateChannelRes = await app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({
+        name: "team-private-channel",
+        visibility: "PRIVATE",
+      }),
+    });
+    expect(createPrivateChannelRes.status).toBe(201);
+    const channel = (await createPrivateChannelRes.json()) as { id: string };
+
+    const danaBeforeTeamRes = await app.request("http://localhost/api/channels", {
+      headers: { cookie: danaCookie },
+    });
+    expect(danaBeforeTeamRes.status).toBe(200);
+    const danaBeforeTeam = (await danaBeforeTeamRes.json()) as Array<{ id: string }>;
+    expect(danaBeforeTeam.some((row) => row.id === channel.id)).toBe(false);
+
+    const createTeamRes = await app.request("http://localhost/api/teams", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ name: "Ops Team Visibility" }),
+    });
+    expect(createTeamRes.status).toBe(201);
+    const team = (await createTeamRes.json()) as { id: string };
+
+    const addTeamMemberRes = await app.request(
+      `http://localhost/api/teams/${team.id}/members`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: adminCookie },
+        body: JSON.stringify({ memberType: "HUMAN", memberId: "dana" }),
+      },
+    );
+    expect(addTeamMemberRes.status).toBe(200);
+
+    const subscribeTeamRes = await app.request(
+      `http://localhost/api/channels/${channel.id}/subscribe`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: adminCookie },
+        body: JSON.stringify({
+          subscriberType: "TEAM",
+          subscriberId: team.id,
+        }),
+      },
+    );
+    expect(subscribeTeamRes.status).toBe(200);
+
+    const danaAfterTeamRes = await app.request("http://localhost/api/channels", {
+      headers: { cookie: danaCookie },
+    });
+    expect(danaAfterTeamRes.status).toBe(200);
+    const danaAfterTeam = (await danaAfterTeamRes.json()) as Array<{ id: string }>;
+    expect(danaAfterTeam.some((row) => row.id === channel.id)).toBe(true);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("returns current user's team memberships from /api/teams/me", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const adminLoginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(adminLoginRes.status).toBe(200);
+    const adminCookie = adminLoginRes.headers.get("set-cookie") ?? "";
+
+    const inviteRes = await app.request("http://localhost/api/humans/invite", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ username: "erin" }),
+    });
+    expect(inviteRes.status).toBe(201);
+    const inviteBody = (await inviteRes.json()) as { temporaryPassword: string };
+
+    const erinLoginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        username: "erin",
+        password: inviteBody.temporaryPassword,
+      }),
+    });
+    expect(erinLoginRes.status).toBe(200);
+    const erinCookie = erinLoginRes.headers.get("set-cookie") ?? "";
+    const erinProfileRes = await app.request("http://localhost/api/auth/profile", {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie: erinCookie },
+      body: JSON.stringify({
+        username: "erin",
+        newPassword: "erin-password-123",
+      }),
+    });
+    expect(erinProfileRes.status).toBe(200);
+
+    const createTeamRes = await app.request("http://localhost/api/teams", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ name: "User Team Endpoint" }),
+    });
+    expect(createTeamRes.status).toBe(201);
+    const team = (await createTeamRes.json()) as { id: string };
+
+    const addMemberRes = await app.request(`http://localhost/api/teams/${team.id}/members`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ memberType: "HUMAN", memberId: "erin" }),
+    });
+    expect(addMemberRes.status).toBe(200);
+
+    const myTeamsRes = await app.request("http://localhost/api/teams/me", {
+      headers: { cookie: erinCookie },
+    });
+    expect(myTeamsRes.status).toBe(200);
+    const myTeams = (await myTeamsRes.json()) as Array<{ id: string; name: string }>;
+    expect(myTeams.some((row) => row.id === team.id)).toBe(true);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("creates human-agent direct channels as private by default", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");
@@ -4087,6 +4429,127 @@ describe("api app", () => {
     expect(charlieAfterShareRes.status).toBe(200);
     const charlieAfterShare = (await charlieAfterShareRes.json()) as Array<{ name: string }>;
     expect(charlieAfterShare.some((agent) => agent.name === "owner-private-agent")).toBe(true);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("allows private agent discoverability through team-linked channels", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const adminLoginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(adminLoginRes.status).toBe(200);
+    const adminCookie = adminLoginRes.headers.get("set-cookie") ?? "";
+
+    const createPrivateAgentRes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({
+        name: "team-private-agent",
+        modelId: "openai:gpt-4o-mini",
+        workspacePath: ".orgops-data/workspaces/team-private-agent",
+        visibility: "PRIVATE",
+      }),
+    });
+    expect(createPrivateAgentRes.status).toBe(201);
+
+    const inviteRes = await app.request("http://localhost/api/humans/invite", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ username: "frank" }),
+    });
+    expect(inviteRes.status).toBe(201);
+    const inviteBody = (await inviteRes.json()) as { temporaryPassword: string };
+
+    const frankLoginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        username: "frank",
+        password: inviteBody.temporaryPassword,
+      }),
+    });
+    expect(frankLoginRes.status).toBe(200);
+    const frankCookie = frankLoginRes.headers.get("set-cookie") ?? "";
+    const frankProfileRes = await app.request("http://localhost/api/auth/profile", {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie: frankCookie },
+      body: JSON.stringify({
+        username: "frank",
+        newPassword: "frank-password-123",
+      }),
+    });
+    expect(frankProfileRes.status).toBe(200);
+
+    const createPrivateChannelRes = await app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({
+        name: "team-shared-agent-channel",
+        visibility: "PRIVATE",
+      }),
+    });
+    expect(createPrivateChannelRes.status).toBe(201);
+    const channel = (await createPrivateChannelRes.json()) as { id: string };
+
+    const createTeamRes = await app.request("http://localhost/api/teams", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ name: "Agent visibility team" }),
+    });
+    expect(createTeamRes.status).toBe(201);
+    const team = (await createTeamRes.json()) as { id: string };
+
+    const addTeamMemberRes = await app.request(`http://localhost/api/teams/${team.id}/members`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ memberType: "HUMAN", memberId: "frank" }),
+    });
+    expect(addTeamMemberRes.status).toBe(200);
+
+    const addTeamToChannelRes = await app.request(
+      `http://localhost/api/channels/${channel.id}/subscribe`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: adminCookie },
+        body: JSON.stringify({
+          subscriberType: "TEAM",
+          subscriberId: team.id,
+        }),
+      },
+    );
+    expect(addTeamToChannelRes.status).toBe(200);
+
+    const addPrivateAgentRes = await app.request(
+      `http://localhost/api/channels/${channel.id}/subscribe`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: adminCookie },
+        body: JSON.stringify({
+          subscriberType: "AGENT",
+          subscriberId: "team-private-agent",
+        }),
+      },
+    );
+    expect(addPrivateAgentRes.status).toBe(200);
+
+    const frankAgentsRes = await app.request("http://localhost/api/agents", {
+      headers: { cookie: frankCookie },
+    });
+    expect(frankAgentsRes.status).toBe(200);
+    const frankAgents = (await frankAgentsRes.json()) as Array<{ name: string }>;
+    expect(frankAgents.some((agent) => agent.name === "team-private-agent")).toBe(true);
 
     rmSync(dataDir, { recursive: true, force: true });
   });

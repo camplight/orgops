@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch, apiJson, getApiHeaders } from "./api";
-import type { Agent, AuthMe, Channel, ChannelParticipant, EventRow } from "./types";
+import type { Agent, AuthMe, Channel, ChannelParticipant, EventRow, Team } from "./types";
 
 function formatTime(value?: number) {
   if (!value) return "";
@@ -49,8 +49,7 @@ function messageRole(source: string) {
 const DIRECT_CHANNEL_KINDS = new Set(["HUMAN_AGENT_DM", "AGENT_AGENT_DM", "DIRECT_GROUP"]);
 const CHANNEL_GROUPS = [
   { id: "direct", label: "Direct messages" },
-  { id: "channels", label: "Channels" },
-  { id: "lifecycle", label: "Lifecycle" }
+  { id: "channels", label: "Channels" }
 ] as const;
 
 type ChannelGroupId = (typeof CHANNEL_GROUPS)[number]["id"];
@@ -63,6 +62,17 @@ function isDirectChannel(channel?: Channel | null) {
   return Boolean(channel?.kind && DIRECT_CHANNEL_KINDS.has(channel.kind.toUpperCase()));
 }
 
+function isHumanAgentDirectChannel(channel?: Channel | null) {
+  return channel?.kind?.toUpperCase() === "HUMAN_AGENT_DM";
+}
+
+function channelHasHumanParticipant(channel: Channel, humanId: string) {
+  return (channel.participants ?? []).some(
+    (participant) =>
+      normalizedSubscriberType(participant) === "HUMAN" && participant.subscriberId === humanId
+  );
+}
+
 function isLifecycleChannel(channel: Channel) {
   return channel.name.toLowerCase().startsWith("agent.lifecycle.");
 }
@@ -72,9 +82,70 @@ function lifecycleAgentName(channel: Channel) {
 }
 
 function channelGroupId(channel: Channel): ChannelGroupId {
-  if (isLifecycleChannel(channel)) return "lifecycle";
   if (isDirectChannel(channel)) return "direct";
   return "channels";
+}
+
+function isTraceEvent(event: EventRow) {
+  return (
+    event.type === "agent.turn.started" ||
+    event.type === "agent.turn.phase" ||
+    event.type === "agent.turn.completed" ||
+    event.type === "agent.turn.failed" ||
+    event.type === "tool.started" ||
+    event.type === "tool.executed" ||
+    event.type === "tool.failed" ||
+    event.type === "telemetry.context.window.updated"
+  );
+}
+
+function shortJson(value: unknown) {
+  if (value === undefined) return "";
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function traceTitle(event: EventRow) {
+  const payload = event.payload && typeof event.payload === "object" ? (event.payload as Record<string, unknown>) : {};
+  if (event.type.startsWith("tool.")) {
+    const toolName = typeof payload.tool === "string" ? payload.tool : "tool";
+    const action = event.type === "tool.started" ? "started" : event.type === "tool.executed" ? "completed" : "failed";
+    return `${toolName} ${action}`;
+  }
+  if (event.type === "agent.turn.started") return "Agent is thinking";
+  if (event.type === "agent.turn.completed") return "Agent finished turn";
+  if (event.type === "agent.turn.failed") return "Agent turn failed";
+  if (event.type === "agent.turn.phase") {
+    const phase = typeof payload.phase === "string" ? payload.phase : "progress";
+    return `Agent phase: ${phase}`;
+  }
+  if (event.type === "telemetry.context.window.updated") {
+    const used = typeof payload.estimatedUsedTokens === "number" ? payload.estimatedUsedTokens : null;
+    const total = typeof payload.contextWindowTokens === "number" ? payload.contextWindowTokens : null;
+    return used !== null && total !== null ? `Context usage: ${used}/${total} tokens` : "Context usage updated";
+  }
+  return event.type.replaceAll(".", " ");
+}
+
+function traceDetail(event: EventRow) {
+  const payload = event.payload && typeof event.payload === "object" ? (event.payload as Record<string, unknown>) : {};
+  if (event.type.startsWith("tool.")) {
+    const args = shortJson(payload.args);
+    const output = shortJson(payload.output);
+    const error = typeof payload.error === "string" ? payload.error : "";
+    return [args ? `args: ${args}` : "", output ? `output: ${output}` : "", error ? `error: ${error}` : ""]
+      .filter(Boolean)
+      .join("\n");
+  }
+  if (event.type === "agent.turn.failed") {
+    const error = typeof payload.error === "string" ? payload.error : "";
+    return error || "No failure details";
+  }
+  return shortJson(event.payload);
 }
 
 function participantDisplayName(participant: ChannelParticipant, currentUsername?: string) {
@@ -142,6 +213,37 @@ function canManageUserChannel(channel: Channel | null, userId: string | null) {
   return true;
 }
 
+function channelHasTeamParticipant(channel: Channel, teamIds: Set<string>) {
+  return (channel.participants ?? []).some(
+    (participant) =>
+      normalizedSubscriberType(participant) === "TEAM" && teamIds.has(participant.subscriberId)
+  );
+}
+
+function channelVisibleToUserUi(
+  channel: Channel,
+  userId: string | null,
+  username: string,
+  viewerTeamIds: Set<string>
+) {
+  if (isLifecycleChannel(channel)) return false;
+  if (isHumanAgentDirectChannel(channel)) return channelHasHumanParticipant(channel, username);
+  if (isDirectChannel(channel)) return false;
+  if (channel.visibility !== "PRIVATE") return true;
+  if (Boolean(userId && channel.ownerHumanId === userId)) return true;
+  return channelHasTeamParticipant(channel, viewerTeamIds);
+}
+
+function agentVisibleToUserUi(
+  agent: Agent,
+  visibleChannelAgentNames: Set<string>,
+  userId: string | null
+) {
+  if (agent.visibility !== "PRIVATE") return true;
+  if (Boolean(userId && agent.ownerHumanId === userId)) return true;
+  return visibleChannelAgentNames.has(agent.name);
+}
+
 function readLinkedChannelId() {
   return new URL(window.location.href).searchParams.get("channel");
 }
@@ -189,13 +291,14 @@ export default function App() {
   const messageFetchSeqRef = useRef(0);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [teams, setTeams] = useState<Team[]>([]);
+  const [humans, setHumans] = useState<Array<{ username: string }>>([]);
   const [events, setEvents] = useState<EventRow[]>([]);
   const [activeChannelId, setActiveChannelId] = useState<string | null>(null);
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const [collapsedChannelGroups, setCollapsedChannelGroups] = useState<Record<ChannelGroupId, boolean>>({
     channels: false,
-    direct: false,
-    lifecycle: true
+    direct: false
   });
   const [hasNewMessagesBelow, setHasNewMessagesBelow] = useState(false);
   const [channelQuery, setChannelQuery] = useState("");
@@ -206,6 +309,8 @@ export default function App() {
   const [agentSearchQuery, setAgentSearchQuery] = useState("");
   const [showArchivedChannels, setShowArchivedChannels] = useState(false);
   const [showConversationDialog, setShowConversationDialog] = useState(false);
+  const [showParticipantsDialog, setShowParticipantsDialog] = useState(false);
+  const [showChannelManageDialog, setShowChannelManageDialog] = useState(false);
   const [draft, setDraft] = useState("");
   const [username, setUsername] = useState("");
   const [userId, setUserId] = useState<string | null>(null);
@@ -222,25 +327,65 @@ export default function App() {
   const [hasOlderMessages, setHasOlderMessages] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [participantKind, setParticipantKind] = useState<"HUMAN" | "AGENT">("AGENT");
+  const [participantValue, setParticipantValue] = useState("");
+  const [participantSubmitting, setParticipantSubmitting] = useState(false);
+  const [participantRemovingKey, setParticipantRemovingKey] = useState<string | null>(null);
+  const [channelVisibilityDraft, setChannelVisibilityDraft] = useState<"PUBLIC" | "PRIVATE">("PRIVATE");
+  const [updatingChannelVisibility, setUpdatingChannelVisibility] = useState(false);
+  const [archiveDraft, setArchiveDraft] = useState(false);
 
   const activeChannel = useMemo(
     () => channels.find((channel) => channel.id === activeChannelId) ?? null,
     [activeChannelId, channels]
   );
 
-  const visibleMessages = useMemo(
-    () => events.filter((event) => event.type === "message.created" || event.type === "agent.turn.failed"),
+  const visibleTimelineEvents = useMemo(
+    () => events.filter((event) => event.type === "message.created" || isTraceEvent(event)),
     [events]
   );
 
-  const activeChannels = useMemo(
-    () => channels.filter((channel) => !channel.archivedAt),
-    [channels]
-  );
+  const agentIsThinking = useMemo(() => {
+    let activeTurns = 0;
+    for (const event of events) {
+      if (event.type === "agent.turn.started") activeTurns += 1;
+      if (event.type === "agent.turn.completed" || event.type === "agent.turn.failed") {
+        activeTurns = Math.max(0, activeTurns - 1);
+      }
+    }
+    return activeTurns > 0;
+  }, [events]);
 
+  const viewerTeamIds = useMemo(() => new Set(teams.map((team) => team.id)), [teams]);
+  const visibleChannels = useMemo(
+    () =>
+      channels.filter((channel) =>
+        channelVisibleToUserUi(channel, userId, username, viewerTeamIds)
+      ),
+    [channels, userId, username, viewerTeamIds]
+  );
+  const activeChannels = useMemo(
+    () => visibleChannels.filter((channel) => !channel.archivedAt),
+    [visibleChannels]
+  );
   const archivedChannels = useMemo(
-    () => channels.filter((channel) => channel.archivedAt),
-    [channels]
+    () => visibleChannels.filter((channel) => Boolean(channel.archivedAt)),
+    [visibleChannels]
+  );
+  const visibleChannelAgentNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const channel of visibleChannels) {
+      for (const participant of channel.participants ?? []) {
+        if (normalizedSubscriberType(participant) === "AGENT" && participant.subscriberId) {
+          names.add(participant.subscriberId);
+        }
+      }
+    }
+    return names;
+  }, [visibleChannels]);
+  const visibleAgents = useMemo(
+    () => agents.filter((agent) => agentVisibleToUserUi(agent, visibleChannelAgentNames, userId)),
+    [agents, visibleChannelAgentNames, userId]
   );
 
   const filteredChannels = useMemo(() => {
@@ -259,9 +404,14 @@ export default function App() {
     () =>
       CHANNEL_GROUPS.map((group) => ({
         ...group,
-        channels: filteredChannels.filter((channel) => channelGroupId(channel) === group.id)
+        channels: filteredChannels.filter((channel) => {
+          if (channelGroupId(channel) !== group.id) return false;
+          if (group.id !== "direct") return true;
+          if (!username) return false;
+          return isHumanAgentDirectChannel(channel) && channelHasHumanParticipant(channel, username);
+        })
       })).filter((group) => group.channels.length > 0),
-    [filteredChannels]
+    [filteredChannels, username]
   );
 
   const isSearchingChannels = Boolean(channelQuery.trim());
@@ -270,16 +420,22 @@ export default function App() {
     Boolean(conversationName.trim()) || selectedConversationAgents.length === 1;
   const selectedConversationAgentRecords = useMemo(
     () =>
-      selectedConversationAgents.map((agentName) => agents.find((agent) => agent.name === agentName) ?? { name: agentName }),
-    [agents, selectedConversationAgents]
+      selectedConversationAgents.map((agentName) => visibleAgents.find((agent) => agent.name === agentName) ?? { name: agentName }),
+    [visibleAgents, selectedConversationAgents]
   );
   const agentSuggestions = useMemo(() => {
     const query = agentSearchQuery.trim().toLowerCase();
-    return agents
+    return visibleAgents
       .filter((agent) => !selectedConversationAgents.includes(agent.name))
       .filter((agent) => !query || agent.name.toLowerCase().includes(query))
       .slice(0, 8);
-  }, [agentSearchQuery, agents, selectedConversationAgents]);
+  }, [agentSearchQuery, visibleAgents, selectedConversationAgents]);
+
+  useEffect(() => {
+    if (!activeChannel) return;
+    setChannelVisibilityDraft(activeChannel.visibility === "PUBLIC" ? "PUBLIC" : "PRIVATE");
+    setArchiveDraft(Boolean(activeChannel.archivedAt));
+  }, [activeChannel?.id, activeChannel?.visibility, activeChannel?.archivedAt]);
 
   function selectChannel(channelId: string | null, options?: { replace?: boolean }) {
     setActiveChannelId(channelId);
@@ -312,22 +468,41 @@ export default function App() {
     setError(null);
     setLoading(true);
     try {
-      const [nextChannels, nextAgents] = await Promise.all([
+      const [nextChannels, nextAgents, nextHumans, nextTeams] = await Promise.all([
         apiJson<Channel[]>("/api/channels?includeArchived=1"),
-        apiJson<Agent[]>("/api/agents")
+        apiJson<Agent[]>("/api/agents"),
+        apiJson<Array<{ username: string }>>("/api/humans").catch(() => []),
+        apiJson<Team[]>("/api/teams/me").catch(() => [])
       ]);
       setChannels(nextChannels);
       setAgents(nextAgents);
+      setHumans(nextHumans);
+      setTeams(nextTeams);
+      const nextViewerTeamIds = new Set(nextTeams.map((team) => team.id));
+      const visibleChannels = nextChannels.filter((channel) =>
+        channelVisibleToUserUi(channel, userId, username, nextViewerTeamIds)
+      );
+      const nextVisibleChannelAgentNames = new Set<string>();
+      for (const channel of visibleChannels) {
+        for (const participant of channel.participants ?? []) {
+          if (normalizedSubscriberType(participant) === "AGENT" && participant.subscriberId) {
+            nextVisibleChannelAgentNames.add(participant.subscriberId);
+          }
+        }
+      }
+      const nextVisibleAgents = nextAgents.filter((agent) =>
+        agentVisibleToUserUi(agent, nextVisibleChannelAgentNames, userId)
+      );
       setSelectedConversationAgents((current) =>
-        current.filter((agentName) => nextAgents.some((agent) => agent.name === agentName))
+        current.filter((agentName) => nextVisibleAgents.some((agent) => agent.name === agentName))
       );
       const linkedChannelId = readLinkedChannelId();
-      const linkedChannel = nextChannels.find((channel) => channel.id === linkedChannelId);
+      const linkedChannel = visibleChannels.find((channel) => channel.id === linkedChannelId);
       const nextActiveChannelId =
         linkedChannel?.id ??
-        (activeChannelId && nextChannels.some((channel) => channel.id === activeChannelId && !channel.archivedAt)
+        (activeChannelId && visibleChannels.some((channel) => channel.id === activeChannelId && !channel.archivedAt)
           ? activeChannelId
-          : nextChannels.find((channel) => !channel.archivedAt)?.id ?? null);
+          : visibleChannels.find((channel) => !channel.archivedAt)?.id ?? null);
       if (linkedChannel?.archivedAt) setShowArchivedChannels(true);
       selectChannel(nextActiveChannelId, { replace: true });
       await loadMessageNotifications({ initialize: true });
@@ -384,18 +559,30 @@ export default function App() {
     const limit = adaptiveMessageBatchSize();
     if (options?.showLoading) setMessagesLoading(true);
     try {
-      const [messageEvents, failureEvents] = await Promise.all([
+      const [messageEvents, failureEvents, turnEvents, toolEvents, contextEvents] = await Promise.all([
         apiJson<EventRow[]>(
           `/api/events?channelId=${encodeURIComponent(channelId)}&type=message.created&limit=${limit}&order=desc`
         ),
         apiJson<EventRow[]>(
           `/api/events?channelId=${encodeURIComponent(channelId)}&type=agent.turn.failed&limit=${limit}&order=desc`
+        ),
+        apiJson<EventRow[]>(
+          `/api/events?channelId=${encodeURIComponent(channelId)}&typePrefix=agent.turn.&limit=${limit}&order=desc`
+        ),
+        apiJson<EventRow[]>(
+          `/api/events?channelId=${encodeURIComponent(channelId)}&typePrefix=tool.&limit=${limit}&order=desc`
+        ),
+        apiJson<EventRow[]>(
+          `/api/events?channelId=${encodeURIComponent(channelId)}&type=telemetry.context.window.updated&limit=${limit}&order=desc`
         )
       ]);
       if (fetchSeq !== messageFetchSeqRef.current || channelId !== activeChannelIdRef.current) {
         return;
       }
-      const nextEvents = mergeEventsChronologically(messageEvents, failureEvents).reverse();
+      const nextEvents = mergeEventsChronologically(
+        mergeEventsChronologically(mergeEventsChronologically(messageEvents, failureEvents), turnEvents),
+        mergeEventsChronologically(toolEvents, contextEvents)
+      ).reverse();
       const chronologicalEvents = [...nextEvents].reverse();
       const previousNewestMessageAt = lastLoadedMessageAtByChannelRef.current[channelId] ?? 0;
       const nextNewestMessageAt = newestMessageTime(nextEvents);
@@ -447,8 +634,20 @@ export default function App() {
     setLoadingOlderMessages(true);
     setError(null);
     try {
-      const olderEvents = await apiJson<EventRow[]>(
-        `/api/events?channelId=${encodeURIComponent(channelId)}&type=message.created&limit=${limit}&order=desc&before=${oldestEventAt}`
+      const [olderMessages, olderTurns, olderTools] = await Promise.all([
+        apiJson<EventRow[]>(
+          `/api/events?channelId=${encodeURIComponent(channelId)}&type=message.created&limit=${limit}&order=desc&before=${oldestEventAt}`
+        ),
+        apiJson<EventRow[]>(
+          `/api/events?channelId=${encodeURIComponent(channelId)}&typePrefix=agent.turn.&limit=${limit}&order=desc&before=${oldestEventAt}`
+        ),
+        apiJson<EventRow[]>(
+          `/api/events?channelId=${encodeURIComponent(channelId)}&typePrefix=tool.&limit=${limit}&order=desc&before=${oldestEventAt}`
+        )
+      ]);
+      const olderEvents = mergeEventsChronologically(
+        mergeEventsChronologically(olderMessages, olderTurns),
+        olderTools
       );
       if (channelId !== activeChannelIdRef.current) return;
       const chronologicalOlderEvents = [...olderEvents].reverse();
@@ -459,7 +658,7 @@ export default function App() {
           ...current
         ];
       });
-      setHasOlderMessages(olderEvents.length === limit);
+      setHasOlderMessages(olderMessages.length === limit || olderTurns.length === limit || olderTools.length === limit);
       window.requestAnimationFrame(() => {
         const currentPanel = messagesPanelRef.current;
         if (!currentPanel) return;
@@ -523,6 +722,8 @@ export default function App() {
     setLoadingOlderMessages(false);
     setHasOlderMessages(false);
     setHasNewMessagesBelow(false);
+    setShowParticipantsDialog(false);
+    setShowChannelManageDialog(false);
   }, [activeChannelId]);
 
   useEffect(() => {
@@ -566,13 +767,17 @@ export default function App() {
     if (!authenticated || mustChangePassword) return;
     function handlePopState() {
       const linkedChannelId = readLinkedChannelId();
-      const linkedChannel = channels.find((channel) => channel.id === linkedChannelId);
+      const linkedChannel = channels.find(
+        (channel) =>
+          channel.id === linkedChannelId &&
+          channelVisibleToUserUi(channel, userId, username, viewerTeamIds)
+      );
       if (linkedChannel?.archivedAt) setShowArchivedChannels(true);
       setActiveChannelId(linkedChannel?.id ?? null);
     }
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
-  }, [authenticated, channels, mustChangePassword]);
+  }, [authenticated, channels, mustChangePassword, userId, username, viewerTeamIds]);
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -606,6 +811,7 @@ export default function App() {
     setConfirmPassword("");
     setChannels([]);
     setAgents([]);
+    setTeams([]);
     setEvents([]);
     setActiveChannelId(null);
     updateChannelDeepLink(null, true);
@@ -696,12 +902,16 @@ export default function App() {
   async function refreshChannels(nextActiveChannelId?: string | null) {
     const nextChannels = await apiJson<Channel[]>("/api/channels?includeArchived=1");
     setChannels(nextChannels);
+    const visibleChannels = nextChannels.filter((channel) =>
+      channelVisibleToUserUi(channel, userId, username, viewerTeamIds)
+    );
     const nextSelectedChannelId =
       nextActiveChannelId !== undefined
         ? nextActiveChannelId
-        : activeChannelId && nextChannels.some((channel) => channel.id === activeChannelId && !channel.archivedAt)
+        : activeChannelId &&
+            visibleChannels.some((channel) => channel.id === activeChannelId && !channel.archivedAt)
           ? activeChannelId
-          : nextChannels.find((channel) => !channel.archivedAt)?.id ?? null;
+          : visibleChannels.find((channel) => !channel.archivedAt)?.id ?? null;
     selectChannel(nextSelectedChannelId, { replace: true });
     return nextChannels;
   }
@@ -775,35 +985,6 @@ export default function App() {
     }
   }
 
-  async function handleArchiveChannel(channel: Channel) {
-    if (!window.confirm(`Archive ${channelLabel(channel, username)}?`)) return;
-    setError(null);
-    setLoading(true);
-    try {
-      await apiFetch(`/api/channels/${encodeURIComponent(channel.id)}/archive`, { method: "POST" });
-      setShowArchivedChannels(true);
-      await refreshChannels(activeChannelId === channel.id ? null : undefined);
-    } catch (archiveError) {
-      setError(archiveError instanceof Error ? archiveError.message : "Unable to archive channel");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleUnarchiveChannel(channel: Channel) {
-    setError(null);
-    setLoading(true);
-    try {
-      await apiFetch(`/api/channels/${encodeURIComponent(channel.id)}/unarchive`, { method: "POST" });
-      setShowArchivedChannels(true);
-      await refreshChannels(channel.id);
-    } catch (unarchiveError) {
-      setError(unarchiveError instanceof Error ? unarchiveError.message : "Unable to restore channel");
-    } finally {
-      setLoading(false);
-    }
-  }
-
   async function handleDeleteChannel(channel: Channel) {
     if (!window.confirm(`Permanently delete ${channelLabel(channel, username)}?`)) return;
     setError(null);
@@ -815,6 +996,81 @@ export default function App() {
       setError(deleteError instanceof Error ? deleteError.message : "Unable to delete channel");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleSaveChannelSettings() {
+    if (!activeChannel) return;
+    setUpdatingChannelVisibility(true);
+    setError(null);
+    try {
+      const currentVisibility = activeChannel.visibility === "PUBLIC" ? "PUBLIC" : "PRIVATE";
+      if (channelVisibilityDraft !== currentVisibility) {
+        await apiFetch(`/api/channels/${encodeURIComponent(activeChannel.id)}`, {
+          method: "PATCH",
+          headers: getApiHeaders(),
+          body: JSON.stringify({ visibility: channelVisibilityDraft })
+        });
+      }
+      const currentlyArchived = Boolean(activeChannel.archivedAt);
+      if (archiveDraft !== currentlyArchived) {
+        await apiFetch(
+          `/api/channels/${encodeURIComponent(activeChannel.id)}/${archiveDraft ? "archive" : "unarchive"}`,
+          { method: "POST" }
+        );
+        if (archiveDraft) setShowArchivedChannels(true);
+      }
+      await refreshChannels(activeChannel.id);
+      setShowChannelManageDialog(false);
+    } catch (updateError) {
+      setError(updateError instanceof Error ? updateError.message : "Unable to update channel settings");
+    } finally {
+      setUpdatingChannelVisibility(false);
+    }
+  }
+
+  async function handleAddParticipant(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!activeChannelId || !participantValue.trim()) return;
+    setParticipantSubmitting(true);
+    setError(null);
+    try {
+      await apiFetch(`/api/channels/${encodeURIComponent(activeChannelId)}/subscribe`, {
+        method: "POST",
+        headers: getApiHeaders(),
+        body: JSON.stringify({
+          subscriberType: participantKind,
+          subscriberId: participantValue.trim()
+        })
+      });
+      await refreshChannels(activeChannelId);
+      setParticipantValue("");
+    } catch (addError) {
+      setError(addError instanceof Error ? addError.message : "Unable to add participant");
+    } finally {
+      setParticipantSubmitting(false);
+    }
+  }
+
+  async function handleRemoveParticipant(participant: ChannelParticipant) {
+    if (!activeChannelId) return;
+    const participantKey = `${participant.subscriberType}:${participant.subscriberId}`;
+    setParticipantRemovingKey(participantKey);
+    setError(null);
+    try {
+      await apiFetch(`/api/channels/${encodeURIComponent(activeChannelId)}/unsubscribe`, {
+        method: "POST",
+        headers: getApiHeaders(),
+        body: JSON.stringify({
+          subscriberType: participant.subscriberType,
+          subscriberId: participant.subscriberId
+        })
+      });
+      await refreshChannels(activeChannelId);
+    } catch (removeError) {
+      setError(removeError instanceof Error ? removeError.message : "Unable to remove participant");
+    } finally {
+      setParticipantRemovingKey(null);
     }
   }
 
@@ -1036,7 +1292,9 @@ export default function App() {
         <header className="workspace-header">
           <div>
             <span>Workspace</span>
-            <h1>{channelLabel(activeChannel, username)}</h1>
+            <div className="workspace-title-row">
+              <h1>{channelLabel(activeChannel, username)}</h1>
+            </div>
             <p>
               {activeChannel?.archivedAt
                 ? "Archived channel"
@@ -1045,19 +1303,7 @@ export default function App() {
           </div>
           {activeChannel && activeChannelManageable ? (
             <div className="channel-actions">
-              {activeChannel?.archivedAt ? (
-                <>
-                  <button onClick={() => void handleUnarchiveChannel(activeChannel)}>Restore</button>
-                  <button
-                    className="danger"
-                    onClick={() => void handleDeleteChannel(activeChannel)}
-                  >
-                    Delete
-                  </button>
-                </>
-              ) : (
-                <button onClick={() => void handleArchiveChannel(activeChannel)}>Archive</button>
-              )}
+              <button onClick={() => setShowChannelManageDialog(true)}>Manage channel</button>
             </div>
           ) : null}
         </header>
@@ -1080,22 +1326,36 @@ export default function App() {
               <strong>Loading messages...</strong>
               <p>Fetching the latest channel activity.</p>
             </div>
-          ) : visibleMessages.length === 0 ? (
+          ) : visibleTimelineEvents.length === 0 ? (
             <div className="empty-state">
               <strong>No messages yet</strong>
               <p>Send a short update or request to start the conversation.</p>
             </div>
           ) : (
-            visibleMessages.map((event) => {
-              const role = event.type === "agent.turn.failed" ? "system" : messageRole(event.source);
+            visibleTimelineEvents.map((event) => {
+              if (event.type === "message.created") {
+                const role = messageRole(event.source);
+                return (
+                  <article className={`message message-${role}`} key={event.id}>
+                    <div className="message-meta">
+                      <strong>{sourceLabel(event.source)}</strong>
+                      <span>{formatTime(event.createdAt)}</span>
+                    </div>
+                    <p>{messageText(event)}</p>
+                  </article>
+                );
+              }
+              const role = event.type === "agent.turn.failed" || event.type === "tool.failed" ? "system" : "agent";
+              const detail = traceDetail(event);
+              const summary = traceTitle(event);
               return (
-                <article className={`message message-${role}`} key={event.id}>
-                  <div className="message-meta">
-                    <strong>{sourceLabel(event.source)}</strong>
+                <details className={`trace trace-${role}`} key={event.id}>
+                  <summary>
+                    <strong>{summary}</strong>
                     <span>{formatTime(event.createdAt)}</span>
-                  </div>
-                  <p>{messageText(event)}</p>
-                </article>
+                  </summary>
+                  {detail ? <pre>{detail}</pre> : <p>No additional details.</p>}
+                </details>
               );
             })
           )}
@@ -1141,7 +1401,18 @@ export default function App() {
 
       <aside className="activity-panel">
         <section className="participants-card">
-          <h2>Participants</h2>
+          <div className="participants-header-row">
+            <h2>Participants</h2>
+            {activeChannel && activeChannelManageable ? (
+              <button
+                className="manage-participants-button"
+                onClick={() => setShowParticipantsDialog(true)}
+                type="button"
+              >
+                Manage
+              </button>
+            ) : null}
+          </div>
           <div className="participant-list">
             {activeChannel?.participants?.map((participant, index) => {
               const agentStatus = participantAgentStatus(participant, agents);
@@ -1171,6 +1442,7 @@ export default function App() {
 
         <section>
           <h2>Recent Activity</h2>
+          {agentIsThinking ? <p className="thinking-indicator">Agent is thinking...</p> : null}
           <div className="activity-list">
             {events.slice(-6).reverse().map((event) => (
               <article key={event.id}>
@@ -1260,7 +1532,7 @@ export default function App() {
                     placeholder="Type an agent name..."
                   />
                 </label>
-                {agents.length === 0 ? (
+                {visibleAgents.length === 0 ? (
                   <p className="sidebar-note">No available agents.</p>
                 ) : agentSuggestions.length > 0 ? (
                   <div className="agent-suggestions">
@@ -1281,6 +1553,171 @@ export default function App() {
               </div>
               <button disabled={loading || !canStartConversation}>Start</button>
             </form>
+          </section>
+        </div>
+      ) : null}
+
+      {showParticipantsDialog && activeChannel && activeChannelManageable ? (
+        <div
+          className="dialog-backdrop"
+          role="presentation"
+          onMouseDown={() => setShowParticipantsDialog(false)}
+        >
+          <section
+            aria-modal="true"
+            className="conversation-dialog participants-dialog"
+            role="dialog"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <header>
+              <div>
+                <span>Channel controls</span>
+                <h2>Manage participants</h2>
+              </div>
+              <button
+                aria-label="Close dialog"
+                className="dialog-close"
+                onClick={() => setShowParticipantsDialog(false)}
+                type="button"
+              >
+                Close
+              </button>
+            </header>
+
+            <form className="participant-form" onSubmit={handleAddParticipant}>
+              <select
+                value={participantKind}
+                onChange={(event) => setParticipantKind(event.target.value === "HUMAN" ? "HUMAN" : "AGENT")}
+                disabled={participantSubmitting}
+              >
+                <option value="AGENT">Agent</option>
+                <option value="HUMAN">Human</option>
+              </select>
+              <input
+                list={participantKind === "AGENT" ? "agent-participant-options" : "human-participant-options"}
+                placeholder={participantKind === "AGENT" ? "agent name" : "username"}
+                value={participantValue}
+                onChange={(event) => setParticipantValue(event.target.value)}
+                disabled={participantSubmitting}
+              />
+              <button type="submit" disabled={participantSubmitting || !participantValue.trim()}>
+                {participantSubmitting ? "Adding..." : "Add"}
+              </button>
+              <datalist id="agent-participant-options">
+                {visibleAgents.map((agent) => (
+                  <option key={agent.name} value={agent.name} />
+                ))}
+              </datalist>
+              <datalist id="human-participant-options">
+                {humans.map((human) => (
+                  <option key={human.username} value={human.username} />
+                ))}
+              </datalist>
+            </form>
+
+            <div className="participants-dialog-list">
+              {(activeChannel.participants ?? []).map((participant, index) => {
+                const participantKey = `${participant.subscriberType}:${participant.subscriberId}`;
+                return (
+                  <article key={`${participant.subscriberType}:${participant.subscriberId}:${index}`}>
+                    <div>
+                      <strong>{participantName(participant)}</strong>
+                      <span>{participantType(participant)}</span>
+                    </div>
+                    <button
+                      className="participant-remove-button"
+                      onClick={() => void handleRemoveParticipant(participant)}
+                      disabled={participantRemovingKey === participantKey}
+                      title={`Remove ${participantName(participant)}`}
+                      type="button"
+                    >
+                      {participantRemovingKey === participantKey ? "Removing..." : "Remove"}
+                    </button>
+                  </article>
+                );
+              })}
+              {(activeChannel.participants ?? []).length === 0 ? (
+                <p>No participants yet.</p>
+              ) : null}
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {showChannelManageDialog && activeChannel && activeChannelManageable ? (
+        <div
+          className="dialog-backdrop"
+          role="presentation"
+          onMouseDown={() => setShowChannelManageDialog(false)}
+        >
+          <section
+            aria-modal="true"
+            className="conversation-dialog participants-dialog"
+            role="dialog"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <header>
+              <div>
+                <span>Channel settings</span>
+                <h2>Manage channel</h2>
+              </div>
+              <button
+                aria-label="Close dialog"
+                className="dialog-close"
+                onClick={() => setShowChannelManageDialog(false)}
+                type="button"
+              >
+                Close
+              </button>
+            </header>
+
+            <div className="channel-manage-grid">
+              <label>
+                <span>Visibility</span>
+                <select
+                  value={channelVisibilityDraft}
+                  onChange={(event) =>
+                    setChannelVisibilityDraft(event.target.value === "PUBLIC" ? "PUBLIC" : "PRIVATE")
+                  }
+                  disabled={updatingChannelVisibility}
+                >
+                  <option value="PRIVATE">Private</option>
+                  <option value="PUBLIC">Public</option>
+                </select>
+              </label>
+
+              <label className="archive-checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={archiveDraft}
+                  onChange={(event) => setArchiveDraft(event.target.checked)}
+                  disabled={updatingChannelVisibility}
+                />
+                <span>Archived</span>
+              </label>
+            </div>
+
+            <button
+              className="channel-manage-save-button"
+              type="button"
+              onClick={() => void handleSaveChannelSettings()}
+              disabled={
+                updatingChannelVisibility ||
+                (channelVisibilityDraft === (activeChannel.visibility === "PUBLIC" ? "PUBLIC" : "PRIVATE") &&
+                  archiveDraft === Boolean(activeChannel.archivedAt))
+              }
+            >
+              {updatingChannelVisibility ? "Saving..." : "Save"}
+            </button>
+
+            <button
+              className="channel-manage-delete-button"
+              type="button"
+              onClick={() => void handleDeleteChannel(activeChannel)}
+              disabled={updatingChannelVisibility}
+            >
+              Delete channel
+            </button>
           </section>
         </div>
       ) : null}

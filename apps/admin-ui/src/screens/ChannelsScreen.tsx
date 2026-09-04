@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { Agent, Channel, ChannelParticipant, EventRow, Human } from "../types";
+import type { Agent, Channel, ChannelParticipant, EventRow, Human, Team } from "../types";
 import { Button, Card, Input, Select } from "../components/ui";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 import { formatTimestamp } from "../utils/formatTimestamp";
@@ -7,6 +7,7 @@ import { formatTimestamp } from "../utils/formatTimestamp";
 type ChannelsScreenProps = {
   agents: Agent[];
   humans: Human[];
+  teams: Team[];
   channels: Channel[];
   channelEvents: EventRow[];
   channelParticipants: ChannelParticipant[];
@@ -21,14 +22,15 @@ type ChannelsScreenProps = {
   }) => Promise<void>;
   onDeleteChannel: (id: string) => Promise<void>;
   onDeleteAllChannels: () => Promise<void>;
-  onSubscribe: (channelId: string, agentName: string) => Promise<void>;
-  onInviteHuman: (channelId: string, username: string) => Promise<void>;
-  onUnsubscribe: (channelId: string, agentName: string) => Promise<void>;
+  onSubscribe: (channelId: string, subscriberType: "AGENT" | "HUMAN", subscriberId: string) => Promise<void>;
+  onUnsubscribe: (channelId: string, subscriberType: string, subscriberId: string) => Promise<void>;
+  onUpdateChannel: (channelId: string, patch: { visibility?: "PUBLIC" | "PRIVATE" }) => Promise<void>;
 };
 
 export function ChannelsScreen({
   agents,
   humans,
+  teams,
   channels,
   channelEvents,
   channelParticipants,
@@ -40,21 +42,23 @@ export function ChannelsScreen({
   onDeleteChannel,
   onDeleteAllChannels,
   onSubscribe,
-  onInviteHuman,
-  onUnsubscribe
+  onUnsubscribe,
+  onUpdateChannel
 }: ChannelsScreenProps) {
   const [newChannel, setNewChannel] = useState<{
     name: string;
     description: string;
     visibility: "PUBLIC" | "PRIVATE";
   }>({ name: "", description: "", visibility: "PUBLIC" });
-  const [newSubscription, setNewSubscription] = useState({ agentName: "" });
-  const [newHumanInvite, setNewHumanInvite] = useState({ username: "" });
+  const [newSubscription, setNewSubscription] = useState<{
+    subscriberType: "AGENT" | "HUMAN";
+    subscriberId: string;
+  }>({ subscriberType: "AGENT", subscriberId: "" });
   const [deletingChannelId, setDeletingChannelId] = useState<string | null>(null);
   const [deletingAllChannels, setDeletingAllChannels] = useState(false);
   const [subscribing, setSubscribing] = useState(false);
-  const [invitingHuman, setInvitingHuman] = useState(false);
-  const [unsubscribingAgent, setUnsubscribingAgent] = useState<string | null>(null);
+  const [unsubscribingParticipant, setUnsubscribingParticipant] = useState<string | null>(null);
+  const [updatingVisibility, setUpdatingVisibility] = useState(false);
   const [createDrawerOpen, setCreateDrawerOpen] = useState(false);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -81,6 +85,7 @@ export function ChannelsScreen({
   useEffect(() => {
     setSelectedEventId(null);
   }, [activeChannelId]);
+
   const formatParticipantLabel = (participant: ChannelParticipant) => {
     if (participant.subscriberType === "HUMAN") {
       return `${participant.subscriberId} (human)`;
@@ -109,50 +114,44 @@ export function ChannelsScreen({
 
   const handleSubscribe = async () => {
     setError(null);
-    if (!activeChannelId || !newSubscription.agentName.trim()) {
-      setError("Select a channel and agent.");
+    if (!activeChannelId || !newSubscription.subscriberId.trim()) {
+      setError("Select a channel and participant.");
       return;
     }
     setSubscribing(true);
     try {
-      await onSubscribe(activeChannelId, newSubscription.agentName);
+      await onSubscribe(
+        activeChannelId,
+        newSubscription.subscriberType,
+        newSubscription.subscriberId.trim()
+      );
       await loadChannelParticipants(activeChannelId);
-      setNewSubscription({ agentName: "" });
+      setNewSubscription((current) => ({ ...current, subscriberId: "" }));
     } finally {
       setSubscribing(false);
     }
   };
 
-  const handleInviteHuman = async () => {
-    setError(null);
-    if (!activeChannelId || !newHumanInvite.username.trim()) {
-      setError("Select a channel and human.");
-      return;
-    }
-    setInvitingHuman(true);
-    try {
-      await onInviteHuman(activeChannelId, newHumanInvite.username);
-      await loadChannelParticipants(activeChannelId);
-      setNewHumanInvite({ username: "" });
-    } finally {
-      setInvitingHuman(false);
-    }
-  };
-
-  const handleUnsubscribeAgent = async (agentName: string) => {
+  const handleUnsubscribeParticipant = async (participant: ChannelParticipant) => {
     setError(null);
     if (!activeChannelId) {
       setError("Select a channel.");
       return;
     }
-    setUnsubscribingAgent(agentName);
+    const key = `${participant.subscriberType}:${participant.subscriberId}`;
+    setUnsubscribingParticipant(key);
     try {
-      await onUnsubscribe(activeChannelId, agentName);
+      await onUnsubscribe(activeChannelId, participant.subscriberType, participant.subscriberId);
       await loadChannelParticipants(activeChannelId);
     } finally {
-      setUnsubscribingAgent(null);
+      setUnsubscribingParticipant(null);
     }
   };
+  const subscriptionOptions: Record<"AGENT" | "HUMAN", string[]> = {
+    AGENT: agents.map((agent) => agent.name),
+    HUMAN: humans.map((human) => human.username)
+  };
+
 
   const handleDeleteChannel = async (id: string, name: string) => {
     setError(null);
@@ -194,6 +193,21 @@ export function ChannelsScreen({
       setError(message);
     } finally {
       setDeletingAllChannels(false);
+    }
+  };
+
+  const handleUpdateVisibility = async (visibility: "PUBLIC" | "PRIVATE") => {
+    if (!selectedChannel) return;
+    setUpdatingVisibility(true);
+    setError(null);
+    try {
+      await onUpdateChannel(selectedChannel.id, { visibility });
+    } catch (updateError) {
+      const message =
+        updateError instanceof Error ? updateError.message : "Failed to update channel visibility.";
+      setError(message);
+    } finally {
+      setUpdatingVisibility(false);
     }
   };
 
@@ -414,12 +428,39 @@ export function ChannelsScreen({
         >
           <div className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-800 px-4 py-3">
             <div>
-              <h3 className="text-sm font-semibold text-slate-100">
-                {selectedChannel ? selectedChannel.name : "No channel selected"}
-              </h3>
-              {selectedChannel ? (
-                <div className="mt-1">{renderVisibilityBadge(selectedChannel)}</div>
-              ) : null}
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-semibold text-slate-100">
+                  {selectedChannel ? selectedChannel.name : "No channel selected"}
+                </h3>
+                {selectedChannel ? (
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      className={`rounded border px-2 py-0.5 text-[11px] ${
+                        selectedChannel.visibility === "PUBLIC"
+                          ? "border-emerald-700 bg-emerald-950/40 text-emerald-200"
+                          : "border-slate-700 bg-slate-900 text-slate-400"
+                      }`}
+                      disabled={updatingVisibility || selectedChannel.visibility === "PUBLIC"}
+                      onClick={() => void handleUpdateVisibility("PUBLIC")}
+                    >
+                      Public
+                    </button>
+                    <button
+                      type="button"
+                      className={`rounded border px-2 py-0.5 text-[11px] ${
+                        selectedChannel.visibility === "PRIVATE"
+                          ? "border-violet-700 bg-violet-950/40 text-violet-200"
+                          : "border-slate-700 bg-slate-900 text-slate-400"
+                      }`}
+                      disabled={updatingVisibility || selectedChannel.visibility === "PRIVATE"}
+                      onClick={() => void handleUpdateVisibility("PRIVATE")}
+                    >
+                      Private
+                    </button>
+                  </div>
+                ) : null}
+              </div>
               <p className="text-sm text-slate-500">
                 {selectedChannel
                   ? channelSubtitle(selectedChannel) ?? "No description"
@@ -468,59 +509,47 @@ export function ChannelsScreen({
           <div className="grid min-h-0 flex-1 gap-4 overflow-auto px-4 py-4 lg:grid-cols-2">
             <div className="space-y-4">
               <div className="space-y-3 rounded border border-slate-800 bg-slate-950 p-3">
-                <h3 className="text-sm text-slate-300">Add Agent Participant</h3>
+                <h3 className="text-sm text-slate-300">Add Participant</h3>
                 <div className="grid gap-3 md:grid-cols-[1fr_auto]">
-                  <Select
-                    value={newSubscription.agentName}
-                    onChange={(e) =>
-                      setNewSubscription({
-                        agentName: e.target.value
-                      })
-                    }
-                    disabled={!activeChannelId || subscribing}
-                  >
-                    <option value="">Select agent</option>
-                    {agents.map((agent) => (
-                      <option key={agent.name} value={agent.name}>
-                        {agent.name}
+                  <div className="grid gap-2 sm:grid-cols-[140px_minmax(0,1fr)]">
+                    <Select
+                      value={newSubscription.subscriberType}
+                      onChange={(e) =>
+                        setNewSubscription({
+                          subscriberType: e.target.value === "HUMAN" ? "HUMAN" : "AGENT",
+                          subscriberId: ""
+                        })
+                      }
+                      disabled={!activeChannelId || subscribing}
+                    >
+                      <option value="AGENT">Agent</option>
+                      <option value="HUMAN">Human</option>
+                    </Select>
+                    <Select
+                      value={newSubscription.subscriberId}
+                      onChange={(e) =>
+                        setNewSubscription((current) => ({
+                          ...current,
+                          subscriberId: e.target.value
+                        }))
+                      }
+                      disabled={!activeChannelId || subscribing}
+                    >
+                      <option value="">
+                        Select participant
                       </option>
-                    ))}
-                  </Select>
+                      {subscriptionOptions[newSubscription.subscriberType].map((value) => (
+                        <option key={value} value={value}>
+                          {value}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
                   <Button onClick={handleSubscribe} disabled={!activeChannelId || subscribing}>
                     Add
                   </Button>
                 </div>
               </div>
-
-              {selectedChannel?.visibility === "PRIVATE" ? (
-                <div className="space-y-3 rounded border border-violet-900/60 bg-violet-950/20 p-3">
-                  <h3 className="text-sm text-violet-200">Invite Human</h3>
-                  <div className="grid gap-3 md:grid-cols-[1fr_auto]">
-                    <Select
-                      value={newHumanInvite.username}
-                      onChange={(e) =>
-                        setNewHumanInvite({
-                          username: e.target.value
-                        })
-                      }
-                      disabled={!activeChannelId || invitingHuman}
-                    >
-                      <option value="">Select human</option>
-                      {humans.map((human) => (
-                        <option key={human.username} value={human.username}>
-                          {human.username}
-                        </option>
-                      ))}
-                    </Select>
-                    <Button
-                      onClick={handleInviteHuman}
-                      disabled={!activeChannelId || invitingHuman}
-                    >
-                      Invite
-                    </Button>
-                  </div>
-                </div>
-              ) : null}
 
               <div className="space-y-2 rounded border border-slate-800 bg-slate-950 p-3">
                 <h3 className="text-sm text-slate-300">Current Participants</h3>
@@ -532,12 +561,15 @@ export function ChannelsScreen({
                         className="flex items-center justify-between rounded border border-slate-800 bg-slate-950 px-2 py-1 text-slate-300"
                       >
                         <span>{formatParticipantLabel(participant)}</span>
-                        {participant.subscriberType === "AGENT" ? (
+                        {["AGENT", "HUMAN"].includes(participant.subscriberType) ? (
                           <button
                             type="button"
                             className="rounded px-2 text-rose-300 hover:bg-slate-800 hover:text-rose-200 disabled:opacity-50"
-                            onClick={() => handleUnsubscribeAgent(participant.subscriberId)}
-                            disabled={unsubscribingAgent === participant.subscriberId}
+                            onClick={() => handleUnsubscribeParticipant(participant)}
+                            disabled={
+                              unsubscribingParticipant ===
+                              `${participant.subscriberType}:${participant.subscriberId}`
+                            }
                             aria-label={`Unsubscribe ${participant.subscriberId}`}
                             title={`Unsubscribe ${participant.subscriberId}`}
                           >

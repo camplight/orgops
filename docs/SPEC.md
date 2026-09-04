@@ -164,7 +164,7 @@ Runner IDs are stable across restarts by persisting local `.agent-runner-id`.
 - `humans`: login users, password hash, `must_change_password`, inviter metadata
 - `teams`, `team_memberships`
 - `channels`: includes `kind`, optional `metadata_json`, optional `direct_participant_key`
-- `channel_subscriptions`: channel participants/subscribers
+- `channel_subscriptions`: channel participants/subscribers (`AGENT`, `HUMAN`, `TEAM`)
 - `conversations`, `threads`
 
 ### Events and Delivery
@@ -208,6 +208,14 @@ Validation is dynamic and composed from:
 - Profile/password update: `PATCH /api/auth/profile`
 - Logout/me endpoints supported
 - Invited humans must rotate temporary password before accessing most API routes
+
+### Channel Visibility Rules
+
+- `PUBLIC` channels are visible to all authenticated humans.
+- `PRIVATE` channels are visible to:
+  - the owner (`channels.owner_human_id`)
+  - explicitly subscribed humans (`channel_subscriptions` with `subscriber_type=HUMAN`)
+  - humans who belong to a subscribed team (`channel_subscriptions` with `subscriber_type=TEAM` + `team_memberships`)
 
 ### Runner Auth
 
@@ -266,6 +274,7 @@ Published topics include:
 - `PATCH /api/auth/profile`
 - `GET /api/humans`
 - `POST /api/humans/invite`
+- `POST /api/humans/:id/reset-temp-password`
 
 ### Embed / v1 (integration API keys)
 
@@ -306,10 +315,12 @@ Published topics include:
 - teams:
   - `GET /api/teams`, `POST /api/teams`, `PATCH /api/teams/:id`, `DELETE /api/teams/:id`
   - `POST /api/teams/:id/delete` (compat)
+  - `GET /api/teams/me` (returns current authenticated human's teams)
   - membership: list/add/remove endpoints
 - channels:
   - CRUD/list/clear: `GET/POST/PATCH/DELETE /api/channels...`
-  - participant management via subscribe/unsubscribe endpoints
+  - `PATCH /api/channels/:id` supports `name`, `description`, `metadata`, and `visibility` (`PUBLIC`/`PRIVATE`)
+  - participant management via subscribe/unsubscribe endpoints (`AGENT`, `HUMAN`, `TEAM`)
   - direct channel creation:
     - `POST /api/channels/direct`
     - `POST /api/channels/direct/human-agent`
