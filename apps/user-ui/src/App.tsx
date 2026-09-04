@@ -148,6 +148,32 @@ function traceDetail(event: EventRow) {
   return shortJson(event.payload);
 }
 
+function traceChipLabel(event: EventRow) {
+  const payload = event.payload && typeof event.payload === "object" ? (event.payload as Record<string, unknown>) : {};
+  if (event.type === "agent.turn.started") return "Thinking";
+  if (event.type === "agent.turn.completed") return "Done";
+  if (event.type === "agent.turn.failed") return "Failed";
+  if (event.type === "agent.turn.phase") {
+    const phase = typeof payload.phase === "string" ? payload.phase : "phase";
+    return phase;
+  }
+  if (event.type === "telemetry.context.window.updated") return "Context";
+  if (event.type.startsWith("tool.")) {
+    const toolName = typeof payload.tool === "string" && payload.tool ? payload.tool : "tool";
+    if (event.type === "tool.started") return `${toolName}...`;
+    if (event.type === "tool.executed") return toolName;
+    return `${toolName}!`;
+  }
+  return event.type;
+}
+
+function traceChipTone(event: EventRow) {
+  if (event.type === "tool.failed" || event.type === "agent.turn.failed") return "danger";
+  if (event.type === "tool.executed" || event.type === "agent.turn.completed") return "success";
+  if (event.type === "telemetry.context.window.updated") return "muted";
+  return "neutral";
+}
+
 function participantDisplayName(participant: ChannelParticipant, currentUsername?: string) {
   if (
     normalizedSubscriberType(participant) === "HUMAN" &&
@@ -288,6 +314,7 @@ export default function App() {
   const activeChannelIdRef = useRef<string | null>(null);
   const lastSeenByChannelRef = useRef<Record<string, number>>({});
   const lastLoadedMessageAtByChannelRef = useRef<Record<string, number>>({});
+  const lastLoadedTimelineAtByChannelRef = useRef<Record<string, number>>({});
   const messageFetchSeqRef = useRef(0);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -334,6 +361,7 @@ export default function App() {
   const [channelVisibilityDraft, setChannelVisibilityDraft] = useState<"PUBLIC" | "PRIVATE">("PRIVATE");
   const [updatingChannelVisibility, setUpdatingChannelVisibility] = useState(false);
   const [archiveDraft, setArchiveDraft] = useState(false);
+  const [expandedTraceEventId, setExpandedTraceEventId] = useState<string | null>(null);
 
   const activeChannel = useMemo(
     () => channels.find((channel) => channel.id === activeChannelId) ?? null,
@@ -344,6 +372,43 @@ export default function App() {
     () => events.filter((event) => event.type === "message.created" || isTraceEvent(event)),
     [events]
   );
+
+  const timelineItems = useMemo(() => {
+    const items: Array<
+      | { kind: "message"; id: string; event: EventRow }
+      | { kind: "trace-group"; id: string; traceEvents: EventRow[]; tone: "agent" | "system" }
+    > = [];
+    let traceBuffer: EventRow[] = [];
+    let groupCounter = 0;
+
+    const flushTraceBuffer = () => {
+      if (traceBuffer.length === 0) return;
+      const tone: "agent" | "system" = traceBuffer.some(
+        (entry) => entry.type === "agent.turn.failed" || entry.type === "tool.failed"
+      )
+        ? "system"
+        : "agent";
+      items.push({
+        kind: "trace-group",
+        id: `trace-group-${traceBuffer[0]?.id ?? groupCounter}`,
+        traceEvents: traceBuffer,
+        tone
+      });
+      traceBuffer = [];
+      groupCounter += 1;
+    };
+
+    for (const event of visibleTimelineEvents) {
+      if (event.type === "message.created") {
+        flushTraceBuffer();
+        items.push({ kind: "message", id: event.id, event });
+      } else {
+        traceBuffer.push(event);
+      }
+    }
+    flushTraceBuffer();
+    return items;
+  }, [visibleTimelineEvents]);
 
   const agentIsThinking = useMemo(() => {
     let activeTurns = 0;
@@ -534,6 +599,13 @@ export default function App() {
     }, 0);
   }
 
+  function newestTimelineEventTime(channelEvents: EventRow[]) {
+    return channelEvents.reduce((newest, event) => {
+      if (event.type !== "message.created" && !isTraceEvent(event)) return newest;
+      return Math.max(newest, event.createdAt ?? 0);
+    }, 0);
+  }
+
   function markChannelSeen(channelId: string, channelEvents: EventRow[]) {
     const newestMessageAt = newestMessageTime(channelEvents);
     if (newestMessageAt > 0) {
@@ -586,7 +658,10 @@ export default function App() {
       const chronologicalEvents = [...nextEvents].reverse();
       const previousNewestMessageAt = lastLoadedMessageAtByChannelRef.current[channelId] ?? 0;
       const nextNewestMessageAt = newestMessageTime(nextEvents);
-      const hasNewMessages = previousNewestMessageAt > 0 && nextNewestMessageAt > previousNewestMessageAt;
+      const previousNewestTimelineAt = lastLoadedTimelineAtByChannelRef.current[channelId] ?? 0;
+      const nextNewestTimelineAt = newestTimelineEventTime(nextEvents);
+      const hasNewTimelineEvents =
+        previousNewestTimelineAt > 0 && nextNewestTimelineAt > previousNewestTimelineAt;
 
       setEvents((current) =>
         options?.showLoading ? chronologicalEvents : mergeEventsChronologically(current, chronologicalEvents)
@@ -599,11 +674,15 @@ export default function App() {
         previousNewestMessageAt,
         nextNewestMessageAt
       );
+      lastLoadedTimelineAtByChannelRef.current[channelId] = Math.max(
+        previousNewestTimelineAt,
+        nextNewestTimelineAt
+      );
       if (options?.scrollToBottom) {
         setHasNewMessagesBelow(false);
         scrollMessagesToBottom(options.scrollBehavior);
       }
-      if (!options?.scrollToBottom && hasNewMessages && channelId === activeChannelIdRef.current) {
+      if (!options?.scrollToBottom && hasNewTimelineEvents && channelId === activeChannelIdRef.current) {
         if (isMessagesPanelNearBottom()) {
           setHasNewMessagesBelow(false);
           scrollMessagesToBottom();
@@ -722,6 +801,7 @@ export default function App() {
     setLoadingOlderMessages(false);
     setHasOlderMessages(false);
     setHasNewMessagesBelow(false);
+    setExpandedTraceEventId(null);
     setShowParticipantsDialog(false);
     setShowChannelManageDialog(false);
   }, [activeChannelId]);
@@ -825,8 +905,10 @@ export default function App() {
     setShowConversationDialog(false);
     setUnreadCounts({});
     setHasNewMessagesBelow(false);
+    setExpandedTraceEventId(null);
     lastSeenByChannelRef.current = {};
     lastLoadedMessageAtByChannelRef.current = {};
+    lastLoadedTimelineAtByChannelRef.current = {};
   }
 
   async function handlePasswordUpdate(event: FormEvent<HTMLFormElement>) {
@@ -1326,17 +1408,18 @@ export default function App() {
               <strong>Loading messages...</strong>
               <p>Fetching the latest channel activity.</p>
             </div>
-          ) : visibleTimelineEvents.length === 0 ? (
+          ) : timelineItems.length === 0 ? (
             <div className="empty-state">
               <strong>No messages yet</strong>
               <p>Send a short update or request to start the conversation.</p>
             </div>
           ) : (
-            visibleTimelineEvents.map((event) => {
-              if (event.type === "message.created") {
+            timelineItems.map((item) => {
+              if (item.kind === "message") {
+                const event = item.event;
                 const role = messageRole(event.source);
                 return (
-                  <article className={`message message-${role}`} key={event.id}>
+                  <article className={`message message-${role}`} key={item.id}>
                     <div className="message-meta">
                       <strong>{sourceLabel(event.source)}</strong>
                       <span>{formatTime(event.createdAt)}</span>
@@ -1345,17 +1428,44 @@ export default function App() {
                   </article>
                 );
               }
-              const role = event.type === "agent.turn.failed" || event.type === "tool.failed" ? "system" : "agent";
-              const detail = traceDetail(event);
-              const summary = traceTitle(event);
+              const selectedEvent = item.traceEvents.find((event) => event.id === expandedTraceEventId) ?? null;
               return (
-                <details className={`trace trace-${role}`} key={event.id}>
-                  <summary>
-                    <strong>{summary}</strong>
-                    <span>{formatTime(event.createdAt)}</span>
-                  </summary>
-                  {detail ? <pre>{detail}</pre> : <p>No additional details.</p>}
-                </details>
+                <article className={`trace-group trace-group-${item.tone}`} key={item.id}>
+                  <div className="trace-chips" role="list" aria-label="Agent activity trace">
+                    {item.traceEvents.map((event) => {
+                      const selected = event.id === expandedTraceEventId;
+                      const summary = traceTitle(event);
+                      return (
+                        <button
+                          key={event.id}
+                          className={`trace-chip trace-chip-${traceChipTone(event)} ${
+                            selected ? "trace-chip-active" : ""
+                          }`}
+                          title={`${summary}${event.createdAt ? ` • ${formatTime(event.createdAt)}` : ""}`}
+                          type="button"
+                          onClick={() =>
+                            setExpandedTraceEventId((current) => (current === event.id ? null : event.id))
+                          }
+                        >
+                          <span>{traceChipLabel(event)}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {selectedEvent ? (
+                    <div className="trace-detail-card">
+                      <div className="trace-detail-meta">
+                        <strong>{traceTitle(selectedEvent)}</strong>
+                        <span>{formatTime(selectedEvent.createdAt)}</span>
+                      </div>
+                      {traceDetail(selectedEvent) ? (
+                        <pre>{traceDetail(selectedEvent)}</pre>
+                      ) : (
+                        <p>No additional details.</p>
+                      )}
+                    </div>
+                  ) : null}
+                </article>
               );
             })
           )}

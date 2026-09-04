@@ -682,7 +682,7 @@ button {
 .messages-panel {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 10px;
   min-height: 0;
   margin-top: 18px;
   padding: 6px;
@@ -698,57 +698,107 @@ button {
   box-shadow: 0 12px 32px rgba(15, 23, 42, 0.06);
 }
 
-.trace {
+.trace-group {
   max-width: 760px;
-  border: 1px solid #dbe6ef;
-  border-radius: 16px;
-  background: #f8fafc;
+  display: grid;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 14px;
 }
 
-.trace summary {
+.trace-group-agent {
+  background: rgba(240, 253, 250, 0.65);
+}
+
+.trace-group-system {
+  background: rgba(255, 251, 235, 0.7);
+}
+
+.trace-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.trace-chip {
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #fff;
+  color: #334155;
+  padding: 5px 9px;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.15;
+  transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+}
+
+.trace-chip:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.12);
+}
+
+.trace-chip-neutral {
+  border-color: #99f6e4;
+  background: #f0fdfa;
+}
+
+.trace-chip-success {
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+
+.trace-chip-danger {
+  border-color: #fecdd3;
+  background: #fff1f2;
+  color: #9f1239;
+}
+
+.trace-chip-muted {
+  border-color: #dbe6ef;
+  background: #f8fafc;
+  color: #64748b;
+}
+
+.trace-chip-active {
+  border-color: #0f766e;
+  box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.14);
+}
+
+.trace-detail-card {
+  border: 1px solid #dbe6ef;
+  border-radius: 12px;
+  background: #ffffffd9;
+  padding: 10px;
+}
+
+.trace-detail-meta {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
   align-items: center;
-  padding: 10px 12px;
-  cursor: pointer;
   color: #334155;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 800;
 }
 
-.trace summary strong {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.trace-detail-meta strong {
+  margin: 0;
+  font-size: 12px;
 }
 
-.trace summary span {
-  flex: 0 0 auto;
+.trace-detail-meta span {
   color: #64748b;
   font-size: 11px;
 }
 
-.trace pre,
-.trace p {
-  margin: 0;
-  padding: 0 12px 12px;
+.trace-detail-card pre,
+.trace-detail-card p {
+  margin: 8px 0 0;
   color: #475569;
   font-size: 12px;
   line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;
-}
-
-.trace-agent {
-  border-color: #99f6e4;
-  background: #f0fdfa;
-}
-
-.trace-system {
-  border-color: #fde68a;
-  background: #fffbeb;
 }
 
 .load-older-button {
