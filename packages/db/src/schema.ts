@@ -91,6 +91,63 @@ export const integrationKeys = sqliteTable(
   })
 );
 
+export const agentInvites = sqliteTable(
+  "agent_invites",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    agent_name: text("agent_name").notNull(),
+    token_hash: text("token_hash").notNull().unique(),
+    token_prefix: text("token_prefix").notNull(),
+    channel_ids_json: text("channel_ids_json").notNull().default("[]"),
+    wrapped_config_json: text("wrapped_config_json").notNull().default("{}"),
+    max_uses: integer("max_uses").notNull().default(1),
+    use_count: integer("use_count").notNull().default(0),
+    created_by_human_id: text("created_by_human_id"),
+    created_at: integer("created_at").notNull(),
+    expires_at: integer("expires_at"),
+    revoked_at: integer("revoked_at"),
+    last_redeemed_at: integer("last_redeemed_at"),
+  },
+  (table) => ({
+    idxAgentInvitesAgentName: index("idx_agent_invites_agent_name").on(
+      table.agent_name,
+    ),
+    idxAgentInvitesCreatedAt: index("idx_agent_invites_created_at").on(
+      table.created_at,
+    ),
+  }),
+);
+
+export const runnerTokens = sqliteTable(
+  "runner_tokens",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    token_hash: text("token_hash").notNull().unique(),
+    token_prefix: text("token_prefix").notNull(),
+    allowed_agent_name: text("allowed_agent_name"),
+    allowed_runner_id: text("allowed_runner_id"),
+    allowed_channel_ids_json: text("allowed_channel_ids_json")
+      .notNull()
+      .default("[]"),
+    invite_id: text("invite_id"),
+    created_by_human_id: text("created_by_human_id"),
+    created_at: integer("created_at").notNull(),
+    expires_at: integer("expires_at"),
+    last_used_at: integer("last_used_at"),
+    revoked_at: integer("revoked_at"),
+  },
+  (table) => ({
+    idxRunnerTokensAllowedAgent: index("idx_runner_tokens_allowed_agent").on(
+      table.allowed_agent_name,
+    ),
+    idxRunnerTokensAllowedRunner: index("idx_runner_tokens_allowed_runner").on(
+      table.allowed_runner_id,
+    ),
+  }),
+);
+
 export const humans = sqliteTable("humans", {
   id: text("id").primaryKey(),
   username: text("username").notNull().unique(),
@@ -387,6 +444,8 @@ export const schema = {
   teams,
   humans,
   integrationKeys,
+  agentInvites,
+  runnerTokens,
   teamMemberships,
   channels,
   channelSubscriptions,

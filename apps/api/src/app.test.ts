@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { createDrizzleDb, migrate, openDb, schema } from "@orgops/db";
 import { createApp } from "./app";
 
@@ -4798,16 +4798,61 @@ describe("api app", () => {
       .where(eq(schema.embedConversations.id, conversation.id))
       .get() as { channelId: string };
 
+    const uploadBody = new FormData();
+    uploadBody.append(
+      "file",
+      new File([new Uint8Array([137, 80, 78, 71])], "invoice.png", {
+        type: "image/png",
+      }),
+    );
+    const uploadRes = await app.request("http://localhost/api/files", {
+      method: "POST",
+      headers: { cookie },
+      body: uploadBody,
+    });
+    expect(uploadRes.status).toBe(201);
+    const uploaded = (await uploadRes.json()) as { id: string };
+    expect(uploaded.id.length).toBeGreaterThan(0);
+
     const pending = app.request("http://localhost/v1/chat/completions", {
       method: "POST",
       headers: auth,
       body: JSON.stringify({
         model: "invoice-receiver",
         conversation: conversation.id,
-        messages: [{ role: "user", content: "Extract the vendor" }],
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Extract the vendor" },
+              { type: "image_url", image_url: { url: `orgops://file/${uploaded.id}` } },
+            ],
+          },
+        ],
       }),
     });
     await new Promise((resolve) => setTimeout(resolve, 80));
+
+    const triggerEvent = orm
+      .select({ payload: schema.events.payload_json })
+      .from(schema.events)
+      .where(
+        and(
+          eq(schema.events.channel_id, stored.channelId),
+          eq(schema.events.type, "message.created"),
+          eq(schema.events.source, "integration:acme-invoicing"),
+        ),
+      )
+      .get() as { payload: string };
+    const triggerPayload = JSON.parse(triggerEvent.payload) as {
+      text?: string;
+      attachments?: Array<{ fileId?: string; name?: string; mime?: string }>;
+    };
+    expect(triggerPayload.text).toBe("Extract the vendor");
+    expect(triggerPayload.attachments?.[0]?.fileId).toBe(uploaded.id);
+    expect(triggerPayload.attachments?.[0]?.name).toBe("invoice.png");
+    expect(triggerPayload.attachments?.[0]?.mime).toBe("image/png");
+
     const agentReply = await app.request("http://localhost/api/events", {
       method: "POST",
       headers: {
@@ -4838,6 +4883,150 @@ describe("api app", () => {
 
     if (previousTimeout === undefined) delete process.env.ORGOPS_EMBED_TURN_TIMEOUT_MS;
     else process.env.ORGOPS_EMBED_TURN_TIMEOUT_MS = previousTimeout;
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("creates wrapped agent invites and enforces scoped runner tokens", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+      runnerApiUrl: "http://localhost:8787",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const createChannelRes = await app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "external-agents",
+        kind: "GROUP",
+      }),
+    });
+    expect(createChannelRes.status).toBe(201);
+    const createdChannel = (await createChannelRes.json()) as { id: string };
+
+    const createInviteRes = await app.request("http://localhost/api/agent-invites", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "claude-bootstrap",
+        agentName: "claude-bridge",
+        channelIds: [createdChannel.id],
+      }),
+    });
+    expect(createInviteRes.status).toBe(201);
+    const invite = (await createInviteRes.json()) as {
+      id: string;
+      inviteLink?: string;
+      agentName: string;
+      channelIds: string[];
+    };
+    expect(invite.agentName).toBe("claude-bridge");
+    expect(invite.channelIds).toEqual([createdChannel.id]);
+    expect(typeof invite.inviteLink).toBe("string");
+
+    const inviteLink = invite.inviteLink ?? "";
+    const token = decodeURIComponent(inviteLink.split("/public/")[1] ?? "");
+    expect(token.startsWith("org_inv_")).toBe(true);
+
+    const reissueRes = await app.request(
+      `http://localhost/api/agent-invites/${encodeURIComponent(invite.id)}/reissue`,
+      {
+        method: "POST",
+        headers: { cookie },
+      },
+    );
+    expect(reissueRes.status).toBe(200);
+    const reissued = (await reissueRes.json()) as { inviteLink?: string; useCount: number };
+    expect(reissued.useCount).toBe(0);
+    const reissuedToken = decodeURIComponent(
+      (reissued.inviteLink ?? "").split("/public/")[1] ?? "",
+    );
+    expect(reissuedToken.startsWith("org_inv_")).toBe(true);
+    expect(reissuedToken).not.toBe(token);
+
+    const oldLinkInfoRes = await app.request(
+      `http://localhost/api/agent-invites/public/${encodeURIComponent(token)}`,
+    );
+    expect(oldLinkInfoRes.status).toBe(404);
+
+    const inviteInfoRes = await app.request(
+      `http://localhost/api/agent-invites/public/${encodeURIComponent(reissuedToken)}`,
+    );
+    expect(inviteInfoRes.status).toBe(200);
+
+    const redeemRes = await app.request(
+      `http://localhost/api/agent-invites/public/${encodeURIComponent(reissuedToken)}/redeem`,
+      { method: "POST" },
+    );
+    expect(redeemRes.status).toBe(200);
+    const redeemed = (await redeemRes.json()) as {
+      runner: { token: string; runnerId: string };
+      agent: { name: string; assignedRunnerId: string };
+    };
+    expect(redeemed.runner.token.startsWith("org_rt_")).toBe(true);
+    expect(redeemed.agent.name).toBe("claude-bridge");
+    expect(redeemed.agent.assignedRunnerId).toBe(redeemed.runner.runnerId);
+
+    const wrongRunnerRegister = await app.request("http://localhost/api/runners/register", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orgops-runner-token": redeemed.runner.token,
+      },
+      body: JSON.stringify({
+        existingRunnerId: "not-allowed-runner-id",
+        displayName: "scoped-runner",
+      }),
+    });
+    expect(wrongRunnerRegister.status).toBe(403);
+
+    const scopedRegister = await app.request("http://localhost/api/runners/register", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orgops-runner-token": redeemed.runner.token,
+      },
+      body: JSON.stringify({
+        displayName: "scoped-runner",
+      }),
+    });
+    expect(scopedRegister.status).toBe(201);
+    const scopedRunner = (await scopedRegister.json()) as { runner: { id: string } };
+    expect(scopedRunner.runner.id).toBe(redeemed.runner.runnerId);
+
+    const scopedCreateOtherAgent = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orgops-runner-token": redeemed.runner.token,
+      },
+      body: JSON.stringify({
+        name: "another-agent",
+        modelId: "openai:gpt-4o-mini",
+      }),
+    });
+    expect(scopedCreateOtherAgent.status).toBe(403);
+
+    const scopedEventsWithoutAgent = await app.request("http://localhost/api/events", {
+      headers: { "x-orgops-runner-token": redeemed.runner.token },
+    });
+    expect(scopedEventsWithoutAgent.status).toBe(200);
+    const scopedEventsRows = (await scopedEventsWithoutAgent.json()) as unknown[];
+    expect(scopedEventsRows).toEqual([]);
+
     rmSync(dataDir, { recursive: true, force: true });
   });
 });

@@ -68,10 +68,17 @@ function eventText(event: Event) {
   return readString(payload.text) ?? "";
 }
 
+function isSimpleTextEvent(event: Event) {
+  const payload = asRecord(event.payload);
+  const keys = Object.keys(payload).filter((key) => payload[key] !== undefined);
+  return keys.length <= 1 && (keys.length === 0 || keys[0] === "text");
+}
+
 export function buildWrapperMessage(events: Event[]) {
   if (events.length === 1) {
-    const text = eventText(events[0]!);
-    if (text) return text;
+    const event = events[0]!;
+    const text = eventText(event);
+    if (text && isSimpleTextEvent(event)) return text;
   }
   return JSON.stringify(
     {

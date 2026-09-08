@@ -1,6 +1,6 @@
 import type { Hono } from "hono";
 import { randomUUID } from "node:crypto";
-import { and, eq, gt } from "drizzle-orm";
+import { and, eq, gt, inArray } from "drizzle-orm";
 import {
   CHANNEL_KINDS,
   CHANNEL_VISIBILITY,
@@ -30,6 +30,24 @@ type EmbedConversationRow = {
   archived_at: number | null;
 };
 
+type RequestedAttachment = {
+  fileId: string;
+  name?: string;
+  mime?: string;
+  size?: number;
+  sha256?: string;
+  tempPath?: string;
+};
+
+type StoredFileRow = {
+  id: string;
+  original_name: string;
+  mime: string;
+  size: number;
+  sha256: string;
+  storage_path: string;
+};
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -57,32 +75,169 @@ function toConversationApi(row: EmbedConversationRow) {
   };
 }
 
-function extractUserText(messages: unknown): string | null {
-  if (!Array.isArray(messages) || messages.length === 0) return null;
+function normalizeAttachment(input: unknown): RequestedAttachment | null {
+  if (!input || typeof input !== "object") return null;
+  const record = input as Record<string, unknown>;
+  const fileIdRaw =
+    typeof record.fileId === "string"
+      ? record.fileId
+      : typeof record.file_id === "string"
+        ? record.file_id
+        : typeof record.id === "string"
+          ? record.id
+          : "";
+  const fileId = fileIdRaw.trim();
+  if (!fileId) return null;
+  const name = typeof record.name === "string" && record.name.trim() ? record.name.trim() : undefined;
+  const mime = typeof record.mime === "string" && record.mime.trim() ? record.mime.trim() : undefined;
+  const size =
+    typeof record.size === "number" && Number.isFinite(record.size)
+      ? Math.max(0, record.size)
+      : undefined;
+  const sha256 = typeof record.sha256 === "string" && record.sha256.trim() ? record.sha256.trim() : undefined;
+  const tempPath =
+    typeof record.tempPath === "string" && record.tempPath.trim() ? record.tempPath.trim() : undefined;
+  return { fileId, name, mime, size, sha256, tempPath };
+}
+
+function parseFileIdFromUrl(rawUrl: string): string | null {
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return null;
+  const orgopsScheme = trimmed.match(/^orgops:\/\/file\/([^/?#]+)$/i);
+  if (orgopsScheme?.[1]) return decodeURIComponent(orgopsScheme[1]);
+  const relativeMatch = trimmed.match(/\/api\/files\/([^/?#]+)/);
+  if (relativeMatch?.[1]) return decodeURIComponent(relativeMatch[1]);
+  try {
+    const parsed = new URL(trimmed);
+    const absoluteMatch = parsed.pathname.match(/\/api\/files\/([^/?#]+)/);
+    if (absoluteMatch?.[1]) return decodeURIComponent(absoluteMatch[1]);
+  } catch {
+    // ignore malformed URLs
+  }
+  return null;
+}
+
+function extractUserInput(messages: unknown): {
+  text: string | null;
+  attachments: RequestedAttachment[];
+} {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return { text: null, attachments: [] };
+  }
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index] as { role?: unknown; content?: unknown };
     if (message?.role !== "user") continue;
     const content = message.content;
-    if (typeof content === "string" && content.trim()) return content.trim();
-    if (Array.isArray(content)) {
-      const parts = content
-        .map((part) => {
-          if (typeof part === "string") return part;
-          if (
-            part &&
-            typeof part === "object" &&
-            (part as { type?: unknown }).type === "text" &&
-            typeof (part as { text?: unknown }).text === "string"
-          ) {
-            return (part as { text: string }).text;
+    if (typeof content === "string") {
+      const text = content.trim();
+      return { text: text || null, attachments: [] };
+    }
+    if (!Array.isArray(content)) {
+      return { text: null, attachments: [] };
+    }
+    const textParts: string[] = [];
+    const attachments: RequestedAttachment[] = [];
+    for (const part of content) {
+      if (typeof part === "string") {
+        textParts.push(part);
+        continue;
+      }
+      if (!part || typeof part !== "object") continue;
+      const record = part as Record<string, unknown>;
+      const type = typeof record.type === "string" ? record.type : "";
+      if (type === "text" && typeof record.text === "string") {
+        textParts.push(record.text);
+        continue;
+      }
+      if (type === "image_url" || type === "input_image") {
+        const imageUrl =
+          typeof record.image_url === "string"
+            ? record.image_url
+            : record.image_url && typeof record.image_url === "object"
+              ? (record.image_url as { url?: unknown }).url
+              : undefined;
+        if (typeof imageUrl === "string") {
+          const fileId = parseFileIdFromUrl(imageUrl);
+          if (fileId) {
+            attachments.push({
+              fileId,
+              ...(typeof record.mime === "string" && record.mime.trim()
+                ? { mime: record.mime.trim() }
+                : {}),
+            });
           }
-          return "";
-        })
-        .join("");
-      if (parts.trim()) return parts.trim();
+        }
+        continue;
+      }
+      if (
+        type === "file" ||
+        type === "input_file" ||
+        type === "attachment" ||
+        type === "image"
+      ) {
+        const normalized = normalizeAttachment(record);
+        if (normalized) attachments.push(normalized);
+      }
+    }
+    const text = textParts.join("").trim();
+    return { text: text || null, attachments };
+  }
+  return { text: null, attachments: [] };
+}
+
+function parseRequestedAttachments(raw: unknown): RequestedAttachment[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((entry) => normalizeAttachment(entry))
+    .filter((entry): entry is RequestedAttachment => Boolean(entry));
+}
+
+function resolveAttachments(orm: any, requested: RequestedAttachment[]) {
+  if (requested.length === 0) return { attachments: [] as RequestedAttachment[] };
+  const dedupedById = new Map<string, RequestedAttachment>();
+  for (const attachment of requested) {
+    if (!dedupedById.has(attachment.fileId)) {
+      dedupedById.set(attachment.fileId, attachment);
     }
   }
-  return null;
+  const fileIds = [...dedupedById.keys()];
+  const rows = orm
+    .select({
+      id: schema.files.id,
+      original_name: schema.files.original_name,
+      mime: schema.files.mime,
+      size: schema.files.size,
+      sha256: schema.files.sha256,
+      storage_path: schema.files.storage_path,
+    })
+    .from(schema.files)
+    .where(inArray(schema.files.id, fileIds))
+    .all() as StoredFileRow[];
+  const rowById = new Map(rows.map((row) => [row.id, row]));
+  const missing = fileIds.filter((id) => !rowById.has(id));
+  if (missing.length > 0) {
+    return {
+      error: {
+        message:
+          missing.length === 1
+            ? `Attachment not found: ${missing[0]}`
+            : `Attachments not found: ${missing.join(", ")}`
+      }
+    };
+  }
+  const attachments = fileIds.map((fileId) => {
+    const request = dedupedById.get(fileId) as RequestedAttachment;
+    const row = rowById.get(fileId) as StoredFileRow;
+    return {
+      fileId,
+      name: row.original_name || request.name || fileId,
+      mime: row.mime || request.mime || "application/octet-stream",
+      size: row.size,
+      tempPath: row.storage_path,
+      sha256: row.sha256 || request.sha256,
+    };
+  });
+  return { attachments };
 }
 
 function eventPayloadText(payloadJson: string): string {
@@ -242,16 +397,36 @@ export function registerEmbedRoutes(app: Hono<any>, deps: EmbedDeps) {
         400,
       );
     }
-    const text = extractUserText(body.messages);
-    if (!text) {
-      return jsonResponse(c, { error: "messages must include a user message" }, 400);
+    const parsedUser = extractUserInput(body.messages);
+    const requestedAttachments = [
+      ...parsedUser.attachments,
+      ...parseRequestedAttachments(body.attachments),
+    ];
+    const resolved = resolveAttachments(orm, requestedAttachments);
+    if ("error" in resolved) {
+      return jsonResponse(c, { error: resolved.error.message }, 400);
     }
+    if (!parsedUser.text && resolved.attachments.length === 0) {
+      return jsonResponse(
+        c,
+        { error: "messages must include a user text message or attachments" },
+        400,
+      );
+    }
+    const text =
+      parsedUser.text ??
+      `Attached ${resolved.attachments.length} file${resolved.attachments.length === 1 ? "" : "s"} for reference.`;
 
     const trigger = insertEvent({
       type: "message.created",
       source: `integration:${auth.key.name}`,
       channelId: conversation.channel_id,
-      payload: { text },
+      payload: {
+        text,
+        ...(resolved.attachments.length > 0
+          ? { attachments: resolved.attachments }
+          : {}),
+      },
     });
 
     const deadline = Date.now() + embedTurnTimeoutMs();

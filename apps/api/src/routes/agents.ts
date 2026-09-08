@@ -343,10 +343,29 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
   app.post("/api/agents", async (c) => {
     const body = await c.req.json();
     const user = c.get("user") as RequestUser | undefined;
+    const scopedRunner =
+      user?.username === "runner" && user.runnerScope?.mode === "SCOPED"
+        ? user.runnerScope
+        : null;
+    if (user?.username === "runner" && user.runnerScope?.mode === "SCOPED") {
+      const allowedAgentName = user.runnerScope.allowedAgentName ?? "";
+      if ((body?.name ?? "").trim() !== allowedAgentName) {
+        return jsonResponse(c, { error: "Forbidden" }, 403);
+      }
+    }
     const assignedRunnerId =
       typeof body.assignedRunnerId === "string" && body.assignedRunnerId.trim()
         ? body.assignedRunnerId.trim()
         : null;
+    if (
+      scopedRunner?.allowedRunnerId &&
+      assignedRunnerId &&
+      assignedRunnerId !== scopedRunner.allowedRunnerId
+    ) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
+    const effectiveAssignedRunnerId =
+      scopedRunner?.allowedRunnerId ?? assignedRunnerId;
     const id = randomUUID();
     const now = Date.now();
     const soulPath =
@@ -443,7 +462,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         wrapped_config_json: JSON.stringify(wrappedConfigParsed.value),
         visibility,
         owner_human_id: ownerHumanId,
-        assigned_runner_id: assignedRunnerId,
+        assigned_runner_id: effectiveAssignedRunnerId,
         enabled_skills_json: JSON.stringify(enabledSkills),
         always_preloaded_skills_json: JSON.stringify(sanitizedAlwaysPreloadedSkills),
         desired_state: body.desiredState ?? "RUNNING",
@@ -501,6 +520,13 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
   app.patch("/api/agents/:name", async (c) => {
     const name = c.req.param("name");
     const user = c.get("user") as RequestUser | undefined;
+    const scopedRunner =
+      user?.username === "runner" && user.runnerScope?.mode === "SCOPED"
+        ? user.runnerScope
+        : null;
+    if (scopedRunner?.allowedAgentName && scopedRunner.allowedAgentName !== name) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
     if (!access.canManageAgent(user, name)) {
       return jsonResponse(c, { error: "Forbidden" }, 403);
     }
@@ -593,6 +619,17 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
           ? body.assignedRunnerId.trim()
           : null
         : undefined;
+    if (
+      scopedRunner?.allowedRunnerId &&
+      assignedRunnerId !== undefined &&
+      assignedRunnerId !== scopedRunner.allowedRunnerId
+    ) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
+    const effectiveAssignedRunnerId =
+      scopedRunner?.allowedRunnerId !== undefined
+        ? scopedRunner.allowedRunnerId
+        : assignedRunnerId;
     const visibilityRaw =
       body.visibility !== undefined ? String(body.visibility).trim().toUpperCase() : "";
     const visibility =
@@ -651,8 +688,8 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
               ? null
               : existing.owner_human_id,
         assigned_runner_id:
-          assignedRunnerId !== undefined
-            ? assignedRunnerId
+          effectiveAssignedRunnerId !== undefined
+            ? effectiveAssignedRunnerId
             : existing.assigned_runner_id,
         enabled_skills_json: enabledSkillsJson ?? existing.enabled_skills_json,
         always_preloaded_skills_json: sanitizedAlwaysPreloadedSkillsJson,

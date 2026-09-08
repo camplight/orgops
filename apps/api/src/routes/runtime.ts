@@ -5,6 +5,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 import { schema, type OrgOpsDrizzleDb } from "@orgops/db";
 import { and, asc, desc, eq, gt, inArray, sql } from "drizzle-orm";
+import type { AccessControl, RequestUser } from "./access";
 
 type RuntimeDeps = {
   orm: OrgOpsDrizzleDb;
@@ -12,6 +13,7 @@ type RuntimeDeps = {
   jsonResponse: (c: any, data: unknown, status?: number) => Response;
   publishProcessOutput: (processId: string, payload: any) => void;
   insertEvent: (input: any) => any;
+  access: AccessControl;
 };
 
 function isPidAlive(pid: number): boolean {
@@ -38,7 +40,7 @@ async function waitForPidExit(pid: number, timeoutMs: number): Promise<boolean> 
 }
 
 export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
-  const { orm, FILES_DIR, jsonResponse, publishProcessOutput, insertEvent } = deps;
+  const { orm, FILES_DIR, jsonResponse, publishProcessOutput, insertEvent, access } = deps;
   const PROCESS_EVENT_SOURCE = "system:process-runner";
   const processContextById = (processId: string) =>
     orm
@@ -92,6 +94,7 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
   });
 
   app.get("/api/processes", (c) => {
+    const user = c.get("user") as RequestUser | undefined;
     const url = new URL(c.req.url);
     const params = url.searchParams;
     const agentName = params.get("agentName");
@@ -99,7 +102,12 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
     const state = params.get("state");
     const reconcile = params.get("reconcile") === "1";
     const clauses: any[] = [];
-    if (agentName) clauses.push(eq(schema.processes.agent_name, agentName));
+    if (agentName) {
+      if (!access.canViewAgent(user, agentName)) {
+        return jsonResponse(c, []);
+      }
+      clauses.push(eq(schema.processes.agent_name, agentName));
+    }
     if (channelId) clauses.push(eq(schema.processes.channel_id, channelId));
     if (state) clauses.push(eq(schema.processes.state, state));
     const queryWhere = clauses.length > 0 ? and(...clauses) : undefined;
@@ -146,7 +154,8 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
     const statsByProcess = new Map(
       outputStats.map((row) => [row.process_id, row]),
     );
-    const enrichedRows = rows.map((row) => {
+    const visibleRows = rows.filter((row) => access.canViewAgent(user, row.agent_name));
+    const enrichedRows = visibleRows.map((row) => {
       const stats = statsByProcess.get(row.id);
       return {
         ...row,
@@ -161,13 +170,26 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
   });
 
   app.post("/api/processes", async (c) => {
+    const user = c.get("user") as RequestUser | undefined;
     const body = await c.req.json();
+    const agentName = String(body.agentName ?? "").trim();
+    const channelId =
+      typeof body.channelId === "string" && body.channelId.trim()
+        ? body.channelId.trim()
+        : null;
+    if (!agentName) return jsonResponse(c, { error: "agentName is required" }, 400);
+    if (!access.canManageAgent(user, agentName)) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
+    if (channelId && !access.canPostToChannel(user, channelId)) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
     orm
       .insert(schema.processes)
       .values({
         id: body.id,
-        agent_name: body.agentName,
-        channel_id: body.channelId ?? null,
+        agent_name: agentName,
+        channel_id: channelId,
         cmd: body.cmd,
         cwd: body.cwd,
         pid: body.pid ?? null,
@@ -182,17 +204,22 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
   });
 
   app.delete("/api/processes/:id", async (c) => {
+    const user = c.get("user") as RequestUser | undefined;
     const processId = c.req.param("id");
     const row = orm
       .select({
         id: schema.processes.id,
         pid: schema.processes.pid,
         state: schema.processes.state,
+        agentName: schema.processes.agent_name,
       })
       .from(schema.processes)
       .where(eq(schema.processes.id, processId))
       .get();
     if (!row) return jsonResponse(c, { error: "Process not found" }, 404);
+    if (!access.canManageAgent(user, row.agentName)) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
 
     const isActiveState = row.state === "RUNNING" || row.state === "STARTING";
     let signaled = false;
@@ -239,12 +266,14 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
   });
 
   app.delete("/api/processes", (c) => {
+    const user = c.get("user") as RequestUser | undefined;
     const url = new URL(c.req.url);
     const scope = url.searchParams.get("scope");
     const clearExitedOnly = scope === "exited";
     const rows = orm
       .select({
         id: schema.processes.id,
+        agent_name: schema.processes.agent_name,
         pid: schema.processes.pid,
         state: schema.processes.state,
       })
@@ -253,8 +282,11 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
     const rowsToClear = clearExitedOnly
       ? rows.filter((row) => row.state !== "RUNNING" && row.state !== "STARTING")
       : rows;
+    const authorizedRows = rowsToClear.filter((row) =>
+      access.canManageAgent(user, row.agent_name),
+    );
     let terminatedCount = 0;
-    for (const row of rowsToClear) {
+    for (const row of authorizedRows) {
       if (
         row.pid !== null &&
         row.pid !== undefined &&
@@ -268,14 +300,14 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
         }
       }
     }
-    if (rowsToClear.length > 0) {
+    if (authorizedRows.length > 0) {
       orm
         .delete(schema.processOutput)
-        .where(inArray(schema.processOutput.process_id, rowsToClear.map((row) => row.id)))
+        .where(inArray(schema.processOutput.process_id, authorizedRows.map((row) => row.id)))
         .run();
       orm
         .delete(schema.processes)
-        .where(inArray(schema.processes.id, rowsToClear.map((row) => row.id)))
+        .where(inArray(schema.processes.id, authorizedRows.map((row) => row.id)))
         .run();
     }
     insertEvent({
@@ -283,22 +315,32 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
       payload: {
         scope: clearExitedOnly ? "exited" : "all",
         terminatedCount,
-        clearedCount: rowsToClear.length,
+        clearedCount: authorizedRows.length,
       },
       source: "system",
     });
     return jsonResponse(c, {
       ok: true,
       scope: clearExitedOnly ? "exited" : "all",
-      clearedCount: rowsToClear.length,
+      clearedCount: authorizedRows.length,
       terminatedCount,
     });
   });
 
   app.post("/api/processes/:id/output", async (c) => {
+    const user = c.get("user") as RequestUser | undefined;
     const processId = c.req.param("id");
     const body = await c.req.json();
     const processContext = processContextById(processId);
+    if (
+      processContext?.agentName &&
+      !access.canManageAgent(user, processContext.agentName)
+    ) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
+    if (processContext?.channelId && !access.canPostToChannel(user, processContext.channelId)) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
     orm
       .insert(schema.processOutput)
       .values({
@@ -333,9 +375,19 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
   });
 
   app.post("/api/processes/:id/exit", async (c) => {
+    const user = c.get("user") as RequestUser | undefined;
     const processId = c.req.param("id");
     const body = await c.req.json();
     const processContext = processContextById(processId);
+    if (
+      processContext?.agentName &&
+      !access.canManageAgent(user, processContext.agentName)
+    ) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
+    if (processContext?.channelId && !access.canPostToChannel(user, processContext.channelId)) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
     orm
       .update(schema.processes)
       .set({
@@ -365,7 +417,19 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
   });
 
   app.get("/api/processes/:id/output", (c) => {
+    const user = c.get("user") as RequestUser | undefined;
     const processId = c.req.param("id");
+    const processRow = orm
+      .select({
+        agentName: schema.processes.agent_name,
+      })
+      .from(schema.processes)
+      .where(eq(schema.processes.id, processId))
+      .get() as { agentName: string } | undefined;
+    if (!processRow) return jsonResponse(c, { error: "Process not found" }, 404);
+    if (!access.canViewAgent(user, processRow.agentName)) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
     const url = new URL(c.req.url);
     const params = url.searchParams;
     const afterSeqParam = params.get("afterSeq");

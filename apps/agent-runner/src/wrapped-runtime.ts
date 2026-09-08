@@ -1,8 +1,12 @@
+import { mkdirSync, writeFileSync } from "node:fs";
+import { basename, extname, join } from "node:path";
 import type { Agent, Event } from "./types";
 import {
+  asRecord,
   buildWrapperMessage,
   buildWrapperSessionId,
   normalizeWrappedConfig,
+  readString,
 } from "./wrapper-harness/config";
 import { emitWrapperEvent } from "./wrapper-harness/events";
 import { getWrapperHarness } from "./wrapper-harness/registry";
@@ -68,7 +72,13 @@ export async function runWrappedAgentTurn(
   const config = normalizeWrappedConfig(agent);
   const harness = getWrapperHarness(config);
   await ensureWrappedAgentReady(ctx, agent);
-  const message = buildWrapperMessage(events);
+  const eventsWithAttachmentPaths = await hydrateAttachmentPaths(
+    ctx,
+    agent,
+    channelId,
+    events,
+  );
+  const message = buildWrapperMessage(eventsWithAttachmentPaths);
   const sessionId = buildWrapperSessionId(agent, channelId, config.sessionScope);
   await emitWrapperEvent(ctx, agent, "wrapper.turn.started", {
     kind: config.kind,
@@ -82,7 +92,7 @@ export async function runWrappedAgentTurn(
       ctx,
       agent,
       config,
-      events,
+      events: eventsWithAttachmentPaths,
       triggerEvent,
       channelId,
       message,
@@ -119,4 +129,90 @@ export async function runWrappedAgentTurn(
     triggerEventId: triggerEvent.id,
     emittedMessage: Boolean(text),
   }, channelId);
+}
+
+function extFromMime(mime: string | undefined): string {
+  if (!mime) return "";
+  if (mime === "image/png") return ".png";
+  if (mime === "image/jpeg") return ".jpg";
+  if (mime === "image/webp") return ".webp";
+  if (mime === "image/gif") return ".gif";
+  if (mime === "application/pdf") return ".pdf";
+  return "";
+}
+
+function sanitizeAttachmentName(name: string | undefined, fileId: string): string {
+  const fallback = `attachment-${fileId}`;
+  const base = basename(name ?? fallback).replace(/[^a-zA-Z0-9._-]/g, "-");
+  return base || fallback;
+}
+
+async function hydrateAttachmentPaths(
+  ctx: WrapperRuntimeContext,
+  agent: Agent,
+  channelId: string,
+  events: Event[],
+): Promise<Event[]> {
+  if (!ctx.api.apiFetch) return events;
+  const out: Event[] = [];
+  for (const event of events) {
+    const payload = asRecord(event.payload);
+    const attachmentsRaw = Array.isArray(payload.attachments)
+      ? payload.attachments
+      : null;
+    if (!attachmentsRaw || attachmentsRaw.length === 0) {
+      out.push(event);
+      continue;
+    }
+    const hydratedAttachments: unknown[] = [];
+    for (const entry of attachmentsRaw) {
+      const record = asRecord(entry);
+      const fileId = readString(record.fileId);
+      const existingTempPath = readString(record.tempPath);
+      if (!fileId || existingTempPath) {
+        hydratedAttachments.push(entry);
+        continue;
+      }
+      const name = readString(record.name);
+      const mime = readString(record.mime);
+      const extension = extname(name ?? "") || extFromMime(mime);
+      const fileBaseName = sanitizeAttachmentName(name, fileId);
+      const fileName =
+        extension && !fileBaseName.endsWith(extension)
+          ? `${fileBaseName}${extension}`
+          : fileBaseName;
+      const attachmentDir = join(
+        agent.workspacePath,
+        ".orgops-wrapped-attachments",
+        channelId,
+        event.id,
+      );
+      const localPath = join(attachmentDir, fileName);
+      try {
+        const response = await ctx.api.apiFetch(`/api/files/${encodeURIComponent(fileId)}`);
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        mkdirSync(attachmentDir, { recursive: true });
+        writeFileSync(localPath, bytes);
+        hydratedAttachments.push({
+          ...record,
+          tempPath: localPath,
+          downloadedByRunner: true,
+        });
+      } catch (error) {
+        hydratedAttachments.push({
+          ...record,
+          attachmentError:
+            error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    out.push({
+      ...event,
+      payload: {
+        ...payload,
+        attachments: hydratedAttachments,
+      },
+    });
+  }
+  return out;
 }

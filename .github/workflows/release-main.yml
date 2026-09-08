@@ -16,10 +16,14 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
+            node_version: 22
             artifact_name: opscli-linux
           - os: macos-latest
+            node_version: 22
             artifact_name: opscli-macos
-          - os: windows-latest
+          # Pin Windows + Node for native module stability (better-sqlite3/node-gyp).
+          - os: windows-2022
+            node_version: 20
             artifact_name: opscli-windows
     runs-on: ${{ matrix.os }}
     steps:
@@ -29,7 +33,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ matrix.node_version }}
           cache: npm
 
       - name: Install dependencies

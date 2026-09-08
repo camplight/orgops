@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { decryptSecret, encryptSecret, parseMasterKey } from "@orgops/crypto";
 import { schema, type OrgOpsDrizzleDb } from "@orgops/db";
 import { and, eq, isNull } from "drizzle-orm";
+import type { AccessControl, RequestUser } from "./access";
 
 type SecretsDeps = {
   orm: OrgOpsDrizzleDb;
@@ -11,10 +12,11 @@ type SecretsDeps = {
   requireAuth: (c: any, next: any) => Response | Promise<Response | void> | void;
   requireRunnerAuth: (c: any, next: any) => Response | Promise<Response | void> | void;
   insertEvent: (input: any) => any;
+  access: AccessControl;
 };
 
 export function registerSecretsRoutes(app: Hono<any>, deps: SecretsDeps) {
-  const { orm, jsonResponse, requireAuth, requireRunnerAuth, insertEvent } = deps;
+  const { orm, jsonResponse, requireAuth, requireRunnerAuth, insertEvent, access } = deps;
   const PACKAGE_SCOPE = "package";
 
   app.get("/api/secrets", requireAuth, (c) => {
@@ -149,10 +151,17 @@ export function registerSecretsRoutes(app: Hono<any>, deps: SecretsDeps) {
     const masterKey = parseMasterKey(process.env.ORGOPS_MASTER_KEY ?? "");
     const requestedByAgent = (c.req.header("x-orgops-agent-name") ?? "").trim();
     const requestedChannelId = (c.req.header("x-orgops-channel-id") ?? "").trim();
+    const user = c.get("user") as RequestUser | undefined;
+    if (requestedByAgent && !access.canManageAgent(user, requestedByAgent)) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
     const channelId =
       requestedChannelId && /^[a-zA-Z0-9._-]+$/.test(requestedChannelId)
         ? requestedChannelId
         : undefined;
+    if (channelId && !access.canPostToChannel(user, channelId)) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
     const source = requestedByAgent && /^[a-zA-Z0-9._-]+$/.test(requestedByAgent) ? `agent:${requestedByAgent}` : "system";
     const rows = orm
       .select({ name: schema.secrets.name, ciphertext_b64: schema.secrets.ciphertext_b64 })

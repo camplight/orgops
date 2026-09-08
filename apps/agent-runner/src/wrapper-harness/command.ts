@@ -124,6 +124,11 @@ function normalizeSidecar(
 async function runCommand(
   commandConfig: NormalizedCommand,
   env: Record<string, string>,
+  hooks?: {
+    onSpawn?: (input: { pid: number | undefined }) => void;
+    onStdout?: (chunk: Buffer | string) => void;
+    onStderr?: (chunk: Buffer | string) => void;
+  },
 ): Promise<CommandResult> {
   const mergedEnv = mergeEnv(process.env, env, commandConfig.env);
   if (commandConfig.cwd) {
@@ -139,6 +144,7 @@ async function runCommand(
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });
+    hooks?.onSpawn?.({ pid: child.pid });
     const timeout = setTimeout(() => {
       child.kill("SIGTERM");
       rejectPromise(new Error(`Wrapped command timed out after ${commandConfig.timeoutMs}ms`));
@@ -146,10 +152,12 @@ async function runCommand(
     child.stdout?.on("data", (chunk) => {
       stdout += String(chunk);
       if (stdout.length > 1_000_000) stdout = stdout.slice(-1_000_000);
+      hooks?.onStdout?.(chunk);
     });
     child.stderr?.on("data", (chunk) => {
       stderr += String(chunk);
       if (stderr.length > 1_000_000) stderr = stderr.slice(-1_000_000);
+      hooks?.onStderr?.(chunk);
     });
     child.on("error", (error) => {
       clearTimeout(timeout);
@@ -655,18 +663,93 @@ export const commandWrapperHarness: WrapperHarness = {
       throw new Error(`Wrapped agent ${agent.name} is missing wrappedConfig.runtime.command.`);
     }
     const secretsEnv = await ctx.api.getPackageSecretsEnv(agent.name, channelId);
-    const result = await runCommand(runtime, {
-      ...secretsEnv,
-      ORGOPS_PROJECT_ROOT: ctx.projectRoot,
-      ORGOPS_WRAPPED_AGENT_NAME: agent.name,
-      ORGOPS_WRAPPED_KIND: config.kind,
-      ORGOPS_WRAPPED_WORKSPACE_PATH: agent.workspacePath,
-      ORGOPS_WRAPPED_CHANNEL_ID: channelId,
-      ORGOPS_WRAPPED_SESSION_ID: sessionId,
-      ORGOPS_WRAPPED_MESSAGE: message,
-      ORGOPS_WRAPPED_TRIGGER_EVENT_ID: triggerEvent.id,
-      ...(sourceDir ? { ORGOPS_WRAPPED_SOURCE_DIR: sourceDir } : {}),
-    });
+    const runtimeProcessId = ctx.api.apiFetch ? randomUUID() : undefined;
+    let runtimeOutputSeq = 0;
+    const streamRuntimeOutput = (stream: "STDOUT" | "STDERR", chunk: Buffer | string) => {
+      if (!ctx.api.apiFetch || !runtimeProcessId) return;
+      runtimeOutputSeq += 1;
+      void ctx.api
+        .apiFetch(`/api/processes/${runtimeProcessId}/output`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            id: randomUUID(),
+            seq: runtimeOutputSeq,
+            stream,
+            text: String(chunk),
+            ts: Date.now(),
+            source: "system:process-runner",
+            status: "DELIVERED",
+          }),
+        })
+        .catch(() => {
+          // Process rows can disappear if operator clears runtime tables.
+        });
+    };
+    if (ctx.api.apiFetch && runtimeProcessId) {
+      await ctx.api.apiFetch("/api/processes", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          id: runtimeProcessId,
+          agentName: agent.name,
+          channelId,
+          cmd: runtime.command,
+          cwd: runtime.cwd,
+          state: "RUNNING",
+          startedAt: Date.now(),
+          executionMode: "SYNC",
+        }),
+      });
+    }
+    let result: CommandResult | null = null;
+    try {
+      result = await runCommand(
+        runtime,
+        {
+          ...secretsEnv,
+          ORGOPS_PROJECT_ROOT: ctx.projectRoot,
+          ORGOPS_WRAPPED_AGENT_NAME: agent.name,
+          ORGOPS_WRAPPED_KIND: config.kind,
+          ORGOPS_WRAPPED_WORKSPACE_PATH: agent.workspacePath,
+          ORGOPS_WRAPPED_CHANNEL_ID: channelId,
+          ORGOPS_WRAPPED_SESSION_ID: sessionId,
+          ORGOPS_WRAPPED_MESSAGE: message,
+          ORGOPS_WRAPPED_TRIGGER_EVENT_ID: triggerEvent.id,
+          ...(sourceDir ? { ORGOPS_WRAPPED_SOURCE_DIR: sourceDir } : {}),
+        },
+        {
+          onStdout: (chunk) => streamRuntimeOutput("STDOUT", chunk),
+          onStderr: (chunk) => streamRuntimeOutput("STDERR", chunk),
+        },
+      );
+    } finally {
+      if (ctx.api.apiFetch && runtimeProcessId) {
+        await ctx.api
+          .apiFetch(`/api/processes/${runtimeProcessId}/exit`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              exitCode: result?.exitCode ?? null,
+              state:
+                result === null
+                  ? "TERMINATED"
+                  : result.exitCode === 0
+                    ? "EXITED"
+                    : "FAILED",
+              endedAt: Date.now(),
+              source: "system:process-runner",
+              status: "DELIVERED",
+            }),
+          })
+          .catch(() => {
+            // Process rows can disappear if operator clears runtime tables.
+          });
+      }
+    }
+    if (!result) {
+      throw new Error(`Wrapped runtime terminated unexpectedly for ${agent.name}.`);
+    }
     if (result.exitCode !== 0) {
       throw Object.assign(
         new Error(`Wrapped runtime failed for ${agent.name}: ${result.stderr || result.stdout}`),

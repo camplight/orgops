@@ -199,6 +199,22 @@ export type IntegrationKey = {
   token?: string;
 };
 
+export type AgentInvite = {
+  id: string;
+  name: string;
+  agentName: string;
+  tokenPrefix: string;
+  channelIds: string[];
+  maxUses: number;
+  useCount: number;
+  createdByHumanId?: string | null;
+  createdAt: number;
+  expiresAt?: number | null;
+  revokedAt?: number | null;
+  lastRedeemedAt?: number | null;
+  inviteLink?: string;
+};
+
 export type Screen =
   | "dashboard"
   | "agents"
@@ -211,5 +227,6 @@ export type Screen =
   | "skills"
   | "secrets"
   | "api-keys"
+  | "agent-invites"
   | "humans"
   | "profile";

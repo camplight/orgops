@@ -1,4 +1,12 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  FormEvent,
+  type ChangeEvent,
+  type ClipboardEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from "react";
 import { apiFetch, apiJson, getApiHeaders } from "./api";
 import type { Agent, AuthMe, Channel, ChannelParticipant, EventRow, Team } from "./types";
 
@@ -54,6 +62,32 @@ const CHANNEL_GROUPS = [
 
 type ChannelGroupId = (typeof CHANNEL_GROUPS)[number]["id"];
 
+type UploadedAttachment = {
+  localId: string;
+  fileId: string;
+  name: string;
+  mime: string;
+  size: number;
+  sha256?: string;
+};
+
+type PendingAttachment = {
+  localId: string;
+  name: string;
+  mime: string;
+  size: number;
+  status: "uploading" | "ready" | "error";
+  uploaded?: UploadedAttachment;
+  error?: string;
+};
+
+type MessageAttachment = {
+  fileId: string;
+  name: string;
+  mime?: string;
+  size?: number;
+};
+
 function normalizedSubscriberType(participant: ChannelParticipant) {
   return participant.subscriberType.trim().toUpperCase();
 }
@@ -92,6 +126,12 @@ function isTraceEvent(event: EventRow) {
     event.type === "agent.turn.phase" ||
     event.type === "agent.turn.completed" ||
     event.type === "agent.turn.failed" ||
+    event.type === "wrapper.turn.started" ||
+    event.type === "wrapper.turn.completed" ||
+    event.type === "wrapper.turn.failed" ||
+    event.type === "process.started" ||
+    event.type === "process.output" ||
+    event.type === "process.exited" ||
     event.type === "tool.started" ||
     event.type === "tool.executed" ||
     event.type === "tool.failed" ||
@@ -111,6 +151,23 @@ function shortJson(value: unknown) {
 
 function traceTitle(event: EventRow) {
   const payload = event.payload && typeof event.payload === "object" ? (event.payload as Record<string, unknown>) : {};
+  if (event.type.startsWith("process.")) {
+    if (event.type === "process.started") return "Wrapped process started";
+    if (event.type === "process.exited") {
+      const exitCode = typeof payload.exitCode === "number" ? payload.exitCode : null;
+      return exitCode === null ? "Wrapped process exited" : `Wrapped process exited (${exitCode})`;
+    }
+    if (event.type === "process.output") {
+      const stream = typeof payload.stream === "string" ? payload.stream : "STDOUT";
+      const seq = typeof payload.seq === "number" ? payload.seq : null;
+      return seq === null ? `Wrapped output (${stream})` : `Wrapped output #${seq} (${stream})`;
+    }
+  }
+  if (event.type.startsWith("wrapper.turn.")) {
+    if (event.type === "wrapper.turn.started") return "Wrapped turn started";
+    if (event.type === "wrapper.turn.completed") return "Wrapped turn completed";
+    if (event.type === "wrapper.turn.failed") return "Wrapped turn failed";
+  }
   if (event.type.startsWith("tool.")) {
     const toolName = typeof payload.tool === "string" ? payload.tool : "tool";
     const action = event.type === "tool.started" ? "started" : event.type === "tool.executed" ? "completed" : "failed";
@@ -133,6 +190,14 @@ function traceTitle(event: EventRow) {
 
 function traceDetail(event: EventRow) {
   const payload = event.payload && typeof event.payload === "object" ? (event.payload as Record<string, unknown>) : {};
+  if (event.type === "process.output") {
+    const text = typeof payload.text === "string" ? payload.text : "";
+    return text || shortJson(event.payload);
+  }
+  if (event.type === "process.exited") {
+    const exitCode = typeof payload.exitCode === "number" ? payload.exitCode : null;
+    return exitCode === null ? shortJson(event.payload) : `exitCode: ${exitCode}`;
+  }
   if (event.type.startsWith("tool.")) {
     const args = shortJson(payload.args);
     const output = shortJson(payload.output);
@@ -153,6 +218,19 @@ function traceChipCode(event: EventRow) {
   if (event.type === "agent.turn.started") return "T";
   if (event.type === "agent.turn.completed") return "D";
   if (event.type === "agent.turn.failed") return "F";
+  if (event.type.startsWith("wrapper.turn.")) {
+    if (event.type === "wrapper.turn.started") return "W";
+    if (event.type === "wrapper.turn.completed") return "D";
+    return "F";
+  }
+  if (event.type.startsWith("process.")) {
+    if (event.type === "process.started") return "P";
+    if (event.type === "process.output") {
+      const stream = typeof payload.stream === "string" ? payload.stream : "";
+      return stream === "STDERR" ? "!" : "O";
+    }
+    return "X";
+  }
   if (event.type === "agent.turn.phase") {
     const phase = typeof payload.phase === "string" ? payload.phase : "phase";
     return phase.slice(0, 1).toUpperCase() || "P";
@@ -167,8 +245,25 @@ function traceChipCode(event: EventRow) {
 }
 
 function traceChipTone(event: EventRow) {
-  if (event.type === "tool.failed" || event.type === "agent.turn.failed") return "danger";
-  if (event.type === "tool.executed" || event.type === "agent.turn.completed") return "success";
+  if (
+    event.type === "tool.failed" ||
+    event.type === "agent.turn.failed" ||
+    event.type === "wrapper.turn.failed"
+  ) {
+    return "danger";
+  }
+  if (event.type === "process.exited") {
+    const payload = event.payload && typeof event.payload === "object" ? (event.payload as Record<string, unknown>) : {};
+    const exitCode = typeof payload.exitCode === "number" ? payload.exitCode : null;
+    return exitCode === 0 ? "success" : "danger";
+  }
+  if (
+    event.type === "tool.executed" ||
+    event.type === "agent.turn.completed" ||
+    event.type === "wrapper.turn.completed"
+  ) {
+    return "success";
+  }
   if (event.type === "telemetry.context.window.updated") return "muted";
   return "neutral";
 }
@@ -308,8 +403,44 @@ function mergeEventsChronologically(current: EventRow[], incoming: EventRow[]) {
   return [...byId.values()].sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0));
 }
 
+function createLocalAttachmentId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function parseMessageAttachments(payload: unknown): MessageAttachment[] {
+  if (!payload || typeof payload !== "object") return [];
+  const payloadRecord = payload as { attachments?: unknown };
+  if (!Array.isArray(payloadRecord.attachments)) return [];
+  const attachments: MessageAttachment[] = [];
+  for (const entry of payloadRecord.attachments) {
+    if (!entry || typeof entry !== "object") continue;
+    const record = entry as Record<string, unknown>;
+    const fileId = typeof record.fileId === "string" ? record.fileId.trim() : "";
+    if (!fileId) continue;
+    const name = typeof record.name === "string" && record.name.trim() ? record.name.trim() : fileId;
+    const mime = typeof record.mime === "string" && record.mime.trim() ? record.mime.trim() : undefined;
+    const size = typeof record.size === "number" && Number.isFinite(record.size) ? Math.max(0, record.size) : undefined;
+    attachments.push({ fileId, name, mime, size });
+  }
+  return attachments;
+}
+
+function formatAttachmentSize(size?: number) {
+  if (typeof size !== "number" || !Number.isFinite(size) || size <= 0) return null;
+  if (size < 1024) return `${size} B`;
+  const kb = size / 1024;
+  if (kb < 1024) return `${kb.toFixed(kb >= 100 ? 0 : 1)} KB`;
+  const mb = kb / 1024;
+  return `${mb.toFixed(mb >= 100 ? 0 : 1)} MB`;
+}
+
 export default function App() {
   const messagesPanelRef = useRef<HTMLElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const activeChannelIdRef = useRef<string | null>(null);
   const lastSeenByChannelRef = useRef<Record<string, number>>({});
   const lastLoadedMessageAtByChannelRef = useRef<Record<string, number>>({});
@@ -361,6 +492,7 @@ export default function App() {
   const [updatingChannelVisibility, setUpdatingChannelVisibility] = useState(false);
   const [archiveDraft, setArchiveDraft] = useState(false);
   const [expandedTraceEventId, setExpandedTraceEventId] = useState<string | null>(null);
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
 
   const activeChannel = useMemo(
     () => channels.find((channel) => channel.id === activeChannelId) ?? null,
@@ -479,6 +611,11 @@ export default function App() {
   );
 
   const isSearchingChannels = Boolean(channelQuery.trim());
+  const uploadingAttachmentCount = pendingAttachments.filter((item) => item.status === "uploading").length;
+  const readyAttachments = pendingAttachments
+    .filter((item) => item.status === "ready" && item.uploaded)
+    .map((item) => item.uploaded as UploadedAttachment);
+  const hasAttachmentErrors = pendingAttachments.some((item) => item.status === "error");
   const activeChannelManageable = canManageUserChannel(activeChannel, userId);
   const canStartConversation =
     Boolean(conversationName.trim()) || selectedConversationAgents.length === 1;
@@ -630,7 +767,8 @@ export default function App() {
     const limit = adaptiveMessageBatchSize();
     if (options?.showLoading) setMessagesLoading(true);
     try {
-      const [messageEvents, failureEvents, turnEvents, toolEvents, contextEvents] = await Promise.all([
+      const [messageEvents, failureEvents, turnEvents, toolEvents, contextEvents, wrapperEvents, processEvents] =
+        await Promise.all([
         apiJson<EventRow[]>(
           `/api/events?channelId=${encodeURIComponent(channelId)}&type=message.created&limit=${limit}&order=desc`
         ),
@@ -645,14 +783,26 @@ export default function App() {
         ),
         apiJson<EventRow[]>(
           `/api/events?channelId=${encodeURIComponent(channelId)}&type=telemetry.context.window.updated&limit=${limit}&order=desc`
+        ),
+        apiJson<EventRow[]>(
+          `/api/events?channelId=${encodeURIComponent(channelId)}&typePrefix=wrapper.turn.&limit=${limit}&order=desc`
+        ),
+        apiJson<EventRow[]>(
+          `/api/events?channelId=${encodeURIComponent(channelId)}&typePrefix=process.&limit=${limit}&order=desc`
         )
       ]);
       if (fetchSeq !== messageFetchSeqRef.current || channelId !== activeChannelIdRef.current) {
         return;
       }
       const nextEvents = mergeEventsChronologically(
-        mergeEventsChronologically(mergeEventsChronologically(messageEvents, failureEvents), turnEvents),
-        mergeEventsChronologically(toolEvents, contextEvents)
+        mergeEventsChronologically(
+          mergeEventsChronologically(
+            mergeEventsChronologically(mergeEventsChronologically(messageEvents, failureEvents), turnEvents),
+            mergeEventsChronologically(toolEvents, contextEvents)
+          ),
+          wrapperEvents
+        ),
+        processEvents
       ).reverse();
       const chronologicalEvents = [...nextEvents].reverse();
       const previousNewestMessageAt = lastLoadedMessageAtByChannelRef.current[channelId] ?? 0;
@@ -712,7 +862,7 @@ export default function App() {
     setLoadingOlderMessages(true);
     setError(null);
     try {
-      const [olderMessages, olderTurns, olderTools] = await Promise.all([
+      const [olderMessages, olderTurns, olderTools, olderWrappers, olderProcesses] = await Promise.all([
         apiJson<EventRow[]>(
           `/api/events?channelId=${encodeURIComponent(channelId)}&type=message.created&limit=${limit}&order=desc&before=${oldestEventAt}`
         ),
@@ -721,11 +871,20 @@ export default function App() {
         ),
         apiJson<EventRow[]>(
           `/api/events?channelId=${encodeURIComponent(channelId)}&typePrefix=tool.&limit=${limit}&order=desc&before=${oldestEventAt}`
+        ),
+        apiJson<EventRow[]>(
+          `/api/events?channelId=${encodeURIComponent(channelId)}&typePrefix=wrapper.turn.&limit=${limit}&order=desc&before=${oldestEventAt}`
+        ),
+        apiJson<EventRow[]>(
+          `/api/events?channelId=${encodeURIComponent(channelId)}&typePrefix=process.&limit=${limit}&order=desc&before=${oldestEventAt}`
         )
       ]);
       const olderEvents = mergeEventsChronologically(
-        mergeEventsChronologically(olderMessages, olderTurns),
-        olderTools
+        mergeEventsChronologically(
+          mergeEventsChronologically(olderMessages, olderTurns),
+          mergeEventsChronologically(olderTools, olderWrappers)
+        ),
+        olderProcesses
       );
       if (channelId !== activeChannelIdRef.current) return;
       const chronologicalOlderEvents = [...olderEvents].reverse();
@@ -736,7 +895,13 @@ export default function App() {
           ...current
         ];
       });
-      setHasOlderMessages(olderMessages.length === limit || olderTurns.length === limit || olderTools.length === limit);
+      setHasOlderMessages(
+        olderMessages.length === limit ||
+          olderTurns.length === limit ||
+          olderTools.length === limit ||
+          olderWrappers.length === limit ||
+          olderProcesses.length === limit
+      );
       window.requestAnimationFrame(() => {
         const currentPanel = messagesPanelRef.current;
         if (!currentPanel) return;
@@ -803,6 +968,7 @@ export default function App() {
     setExpandedTraceEventId(null);
     setShowParticipantsDialog(false);
     setShowChannelManageDialog(false);
+    setPendingAttachments([]);
   }, [activeChannelId]);
 
   useEffect(() => {
@@ -945,22 +1111,32 @@ export default function App() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!activeChannelId || activeChannel?.archivedAt || !draft.trim()) return;
+    if (!activeChannelId || activeChannel?.archivedAt) return;
+    if (uploadingAttachmentCount > 0) return;
+    const trimmedText = draft.trim();
+    if (!trimmedText && readyAttachments.length === 0) return;
 
     setSending(true);
     setError(null);
     try {
+      const effectiveText =
+        trimmedText ||
+        `Attached ${readyAttachments.length} file${readyAttachments.length === 1 ? "" : "s"} for reference.`;
       await apiFetch("/api/events", {
         method: "POST",
         headers: getApiHeaders(),
         body: JSON.stringify({
           type: "message.created",
-          payload: { text: draft.trim() },
+          payload: {
+            text: effectiveText,
+            ...(readyAttachments.length > 0 ? { attachments: readyAttachments } : {})
+          },
           source: `human:${username || "user"}`,
           channelId: activeChannelId
         })
       });
       setDraft("");
+      setPendingAttachments([]);
       await loadMessages(activeChannelId, { scrollToBottom: true });
     } catch (sendError) {
       setError(sendError instanceof Error ? sendError.message : "Unable to send message");
@@ -1160,6 +1336,119 @@ export default function App() {
       setHasNewMessagesBelow(false);
     }
   }
+
+  async function uploadSingleFile(file: File) {
+    const localId = createLocalAttachmentId();
+    const mime = file.type || "application/octet-stream";
+    setPendingAttachments((current) => [
+      ...current,
+      {
+        localId,
+        name: file.name || "upload",
+        mime,
+        size: file.size,
+        status: "uploading"
+      }
+    ]);
+    try {
+      const body = new FormData();
+      body.append("file", file, file.name);
+      const uploadResponse = await apiFetch("/api/files", { method: "POST", body });
+      const uploadPayload = (await uploadResponse.json()) as { id: string };
+      const meta = await apiJson<{
+        id: string;
+        original_name?: string;
+        mime?: string;
+        size?: number;
+        sha256?: string;
+      }>(`/api/files/${encodeURIComponent(uploadPayload.id)}/meta`);
+      const uploaded: UploadedAttachment = {
+        localId,
+        fileId: uploadPayload.id,
+        name: meta.original_name || file.name || "upload",
+        mime: meta.mime || mime,
+        size: typeof meta.size === "number" ? meta.size : file.size,
+        ...(typeof meta.sha256 === "string" && meta.sha256 ? { sha256: meta.sha256 } : {})
+      };
+      setPendingAttachments((current) =>
+        current.map((item) =>
+          item.localId === localId
+            ? {
+                ...item,
+                name: uploaded.name,
+                mime: uploaded.mime,
+                size: uploaded.size,
+                status: "ready",
+                uploaded,
+                error: undefined
+              }
+            : item
+        )
+      );
+    } catch (uploadError) {
+      const message = uploadError instanceof Error ? uploadError.message : "Upload failed";
+      setPendingAttachments((current) =>
+        current.map((item) =>
+          item.localId === localId ? { ...item, status: "error", error: message } : item
+        )
+      );
+    }
+  }
+
+  function uploadFiles(files: File[]) {
+    for (const file of files) {
+      void uploadSingleFile(file);
+    }
+  }
+
+  function handlePickFiles(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+    if (files.length === 0) return;
+    uploadFiles(files);
+    event.currentTarget.value = "";
+  }
+
+  function resizeComposerTextarea(textarea?: HTMLTextAreaElement | null) {
+    const target = textarea ?? composerTextareaRef.current;
+    if (!target) return;
+    const viewportMax = Math.max(120, Math.floor(window.innerHeight / 3));
+    target.style.maxHeight = `${viewportMax}px`;
+    target.style.height = "auto";
+    const nextHeight = Math.min(target.scrollHeight, viewportMax);
+    target.style.height = `${Math.max(56, nextHeight)}px`;
+    target.style.overflowY = target.scrollHeight > viewportMax ? "auto" : "hidden";
+  }
+
+  function handleComposerPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const items = Array.from(event.clipboardData.items ?? []);
+    const imageFiles = items
+      .map((item) => {
+        if (!item.type.startsWith("image/")) return null;
+        return item.getAsFile();
+      })
+      .filter((file): file is File => Boolean(file));
+    if (imageFiles.length === 0) return;
+    event.preventDefault();
+    const filesToUpload = imageFiles.map((image) => {
+      const ext = image.type.includes("/") ? image.type.split("/")[1] : "png";
+      const safeExt = ext.replace(/[^a-zA-Z0-9]/g, "") || "png";
+      const filename = `pasted-${Date.now()}-${Math.random().toString(16).slice(2, 8)}.${safeExt}`;
+      return new File([image], filename, { type: image.type || "image/png" });
+    });
+    uploadFiles(filesToUpload);
+  }
+
+  useEffect(() => {
+    resizeComposerTextarea();
+  }, [draft]);
+
+  useEffect(() => {
+    function handleWindowResize() {
+      resizeComposerTextarea();
+    }
+    window.addEventListener("resize", handleWindowResize);
+    return () => window.removeEventListener("resize", handleWindowResize);
+  }, []);
 
   if (authLoading && !authenticated) {
     return <main className="loading-screen">Loading OrgOps...</main>;
@@ -1417,6 +1706,7 @@ export default function App() {
               if (item.kind === "message") {
                 const event = item.event;
                 const role = messageRole(event.source);
+                const attachments = parseMessageAttachments(event.payload);
                 return (
                   <article className={`message message-${role}`} key={item.id}>
                     <div className="message-meta">
@@ -1424,6 +1714,31 @@ export default function App() {
                       <span>{formatTime(event.createdAt)}</span>
                     </div>
                     <p>{messageText(event)}</p>
+                    {attachments.length > 0 ? (
+                      <div className="message-attachments">
+                        <strong>Attachments</strong>
+                        <ul>
+                          {attachments.map((attachment, index) => {
+                            const sizeLabel = formatAttachmentSize(attachment.size);
+                            const mimeLabel = attachment.mime ? attachment.mime : "";
+                            return (
+                              <li key={`${event.id}-attachment-${index}`}>
+                                <a href={`/api/files/${encodeURIComponent(attachment.fileId)}`} target="_blank" rel="noreferrer">
+                                  {attachment.name}
+                                </a>
+                                {mimeLabel || sizeLabel ? (
+                                  <span>
+                                    {mimeLabel}
+                                    {mimeLabel && sizeLabel ? " • " : ""}
+                                    {sizeLabel || ""}
+                                  </span>
+                                ) : null}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </div>
+                    ) : null}
                   </article>
                 );
               }
@@ -1484,11 +1799,52 @@ export default function App() {
         ) : null}
 
         <form className="composer" onSubmit={handleSubmit}>
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="composer-file-input"
+            onChange={handlePickFiles}
+          />
+          {pendingAttachments.length > 0 ? (
+            <div className="composer-attachments">
+              {pendingAttachments.map((attachment) => (
+                <article key={attachment.localId}>
+                  <div>
+                    <strong>{attachment.name}</strong>
+                    <span>
+                      {attachment.status === "ready"
+                        ? `Ready${formatAttachmentSize(attachment.size) ? ` • ${formatAttachmentSize(attachment.size)}` : ""}`
+                        : attachment.status === "uploading"
+                          ? "Uploading..."
+                          : attachment.error || "Upload failed"}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    className="composer-attachment-remove"
+                    onClick={() =>
+                      setPendingAttachments((current) =>
+                        current.filter((item) => item.localId !== attachment.localId)
+                      )
+                    }
+                  >
+                    Remove
+                  </button>
+                </article>
+              ))}
+            </div>
+          ) : null}
           <textarea
+            ref={composerTextareaRef}
             value={draft}
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={(event) => {
+              setDraft(event.target.value);
+              resizeComposerTextarea(event.currentTarget);
+            }}
+            onPaste={handleComposerPaste}
             onKeyDown={(event) => {
-              if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();
                 event.currentTarget.form?.requestSubmit();
               }
@@ -1497,15 +1853,42 @@ export default function App() {
               activeChannel?.archivedAt
                 ? "Restore this channel to send messages"
                 : activeChannel
-                  ? `Message ${channelLabel(activeChannel, username)}`
+                  ? `Message ${channelLabel(activeChannel, username)} (Enter to send, Shift+Enter for newline)`
                   : "Select a channel first"
             }
             disabled={!activeChannel || Boolean(activeChannel.archivedAt) || sending}
             rows={3}
           />
-          <button disabled={!activeChannel || Boolean(activeChannel.archivedAt) || !draft.trim() || sending}>
-            {sending ? "Sending..." : "Send"}
-          </button>
+          <div className="composer-actions">
+            <button
+              type="button"
+              className="composer-secondary"
+              disabled={!activeChannel || Boolean(activeChannel.archivedAt) || sending}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              Attach files
+            </button>
+            <button
+              disabled={
+                !activeChannel ||
+                Boolean(activeChannel.archivedAt) ||
+                sending ||
+                uploadingAttachmentCount > 0 ||
+                (!draft.trim() && readyAttachments.length === 0)
+              }
+            >
+              {uploadingAttachmentCount > 0
+                ? `Uploading ${uploadingAttachmentCount}...`
+                : sending
+                  ? "Sending..."
+                  : "Send"}
+            </button>
+          </div>
+          {hasAttachmentErrors ? (
+            <p className="composer-attachment-error">
+              One or more attachments failed to upload. Remove them or retry.
+            </p>
+          ) : null}
         </form>
       </section>
 

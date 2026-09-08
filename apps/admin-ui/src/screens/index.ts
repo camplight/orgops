@@ -1,4 +1,5 @@
 export { AgentsScreen } from "./AgentsScreen";
+export { AgentInvitesScreen } from "./AgentInvitesScreen";
 export { ChannelsScreen } from "./ChannelsScreen";
 export { ChatScreen } from "./ChatScreen";
 export { DashboardScreen } from "./DashboardScreen";

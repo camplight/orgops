@@ -10,6 +10,7 @@ import { LoginForm } from "./components/auth";
 import { DashboardDrawers } from "./components/drawers/DashboardDrawers";
 import {
   DashboardScreen,
+  AgentInvitesScreen,
   AgentsScreen,
   TeamsScreen,
   ChannelsScreen,
@@ -29,6 +30,7 @@ import type {
   AgentWorkspaceListResponse,
   Channel,
   EventRow,
+  AgentInvite,
   IntegrationKey,
   ProcessOutputRow,
   RunnerSetupConfig,
@@ -476,6 +478,10 @@ export default function App() {
       if (screen === "api-keys") {
         data.refreshIntegrationKeys();
         data.refreshDashboard();
+      }
+      if (screen === "agent-invites") {
+        data.refreshAgentInvites();
+        data.refreshChannels();
       }
       if (screen === "humans") data.refreshHumans();
       if (screen === "skills") data.refreshSkills();
@@ -1239,6 +1245,45 @@ export default function App() {
           }}
           onRefresh={async () => {
             await data.refreshIntegrationKeys();
+          }}
+        />
+      )}
+      {activeScreen === "agent-invites" && (
+        <AgentInvitesScreen
+          invites={data.agentInvites}
+          channels={data.channels}
+          onCreateInvite={async (input) => {
+            const res = await data.apiFetch("/api/agent-invites", {
+              method: "POST",
+              headers: data.getApiHeaders(),
+              body: JSON.stringify(input),
+            });
+            const body = (await res.json()) as AgentInvite;
+            await data.refreshAgentInvites();
+            return body;
+          }}
+          onRevokeInvite={async (id) => {
+            await data.apiFetch(`/api/agent-invites/${encodeURIComponent(id)}/revoke`, {
+              method: "POST",
+              headers: data.getApiHeaders(),
+            });
+            await data.refreshAgentInvites();
+          }}
+          onReissueInvite={async (id) => {
+            const res = await data.apiFetch(
+              `/api/agent-invites/${encodeURIComponent(id)}/reissue`,
+              {
+                method: "POST",
+                headers: data.getApiHeaders(),
+              },
+            );
+            const body = (await res.json()) as AgentInvite;
+            await data.refreshAgentInvites();
+            return body;
+          }}
+          onRefresh={async () => {
+            await data.refreshAgentInvites();
+            await data.refreshChannels();
           }}
         />
       )}

@@ -301,7 +301,7 @@ export function registerMemoryRoutes(app: Hono<any>, deps: MemoryDeps) {
 
   app.delete("/api/memory", (c) => {
     const user = c.get("user") as RequestUser | undefined;
-    if (user?.username !== "runner") {
+    if (user?.username !== "runner" || user.runnerScope?.mode === "SCOPED") {
       return jsonResponse(c, { error: "Runner token required" }, 401);
     }
     const countRows = {

@@ -856,6 +856,49 @@ button {
   white-space: pre-wrap;
 }
 
+.message-attachments {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #dbe6ef;
+}
+
+.message-attachments strong {
+  display: block;
+  margin-bottom: 6px;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.message-attachments ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+}
+
+.message-attachments li {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.message-attachments a {
+  color: #0f766e;
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: underline;
+}
+
+.message-attachments li span {
+  color: #64748b;
+  font-size: 12px;
+}
+
 .empty-state {
   display: grid;
   place-items: center;
@@ -889,6 +932,59 @@ button {
   box-shadow: 0 18px 50px rgba(15, 23, 42, 0.08);
 }
 
+.composer-file-input {
+  display: none;
+}
+
+.composer-attachments {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 8px;
+}
+
+.composer-attachments article {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid #dbe6ef;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.composer-attachments strong,
+.composer-attachments span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-attachments strong {
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.composer-attachments span {
+  margin-top: 2px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.composer-attachment-remove {
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: #e2e8f0;
+  color: #334155;
+  font-size: 11px;
+  font-weight: 800;
+}
+
 .new-messages-button {
   justify-self: center;
   margin: 0 0 10px;
@@ -904,14 +1000,21 @@ button {
 
 .composer textarea {
   width: 100%;
-  height: 56px;
-  max-height: 96px;
-  resize: none;
+  min-height: 56px;
+  max-height: 33vh;
+  resize: vertical;
   border: 0;
   outline: none;
   color: #0f172a;
   font-size: 16px;
   line-height: 1.45;
+  overflow-y: hidden;
+}
+
+.composer-actions {
+  display: grid;
+  gap: 8px;
+  align-self: end;
 }
 
 .composer button {
@@ -921,6 +1024,20 @@ button {
 .composer button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+.composer-secondary {
+  border: 1px solid #cbd5e1 !important;
+  background: #fff !important;
+  color: #475569 !important;
+}
+
+.composer-attachment-error {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #be123c;
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .activity-panel {

@@ -240,8 +240,13 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       scheduledOnly,
     } = query;
     const isRunnerRequest = user?.username === "runner";
+    const isScopedRunner =
+      isRunnerRequest && user?.runnerScope?.mode === "SCOPED";
+    if (isScopedRunner && !agentName) {
+      return [];
+    }
     if (channelId && !access.canViewChannel(user, channelId)) return [];
-    if (agentName && !isRunnerRequest && !access.canViewAgent(user, agentName)) {
+    if (agentName && !access.canViewAgent(user, agentName)) {
       return [];
     }
     const now = Date.now();
@@ -458,11 +463,15 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
           : asc(schema.events.created_at),
       );
     const rows = (rowCap === null ? dbQuery : dbQuery.limit(rowCap)).all() as any[];
-    return isRunnerRequest
-      ? rows
-      : rows.filter((row) =>
-          !row.channel_id || access.canViewChannel(user, row.channel_id),
-        );
+    if (!isRunnerRequest) {
+      return rows.filter(
+        (row) => !row.channel_id || access.canViewChannel(user, row.channel_id),
+      );
+    }
+    if (!isScopedRunner) return rows;
+    return rows.filter(
+      (row) => row.channel_id && access.canViewChannel(user, row.channel_id),
+    );
   }
 
   function createEventExportSqlite(query: ReturnType<typeof readEventQuery>, rows: any[]) {

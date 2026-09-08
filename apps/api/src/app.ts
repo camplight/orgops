@@ -45,6 +45,12 @@ import { registerHumansRoutes } from "./routes/humans";
 import { registerRunnersRoutes } from "./routes/runners";
 import { registerIntegrationKeysRoutes } from "./routes/integration-keys";
 import { registerEmbedRoutes } from "./routes/embed";
+import {
+  findActiveRunnerTokenByToken,
+  parseStringArraySafe as parseRunnerScopeChannels,
+  touchRunnerTokenLastUsed,
+} from "./agent-invite-auth";
+import { registerAgentInviteRoutes } from "./routes/agent-invites";
 import { createAccessControl } from "./routes/access";
 
 export type AppConfig = {
@@ -185,10 +191,37 @@ export function createApp(config: AppConfig = {}) {
     return jsonResponse(c, { error: "Internal Server Error" }, 500);
   });
 
+  function resolveRunnerUserFromToken(token: string | undefined) {
+    if (!token) return null;
+    if (RUNNER_TOKEN && token === RUNNER_TOKEN) {
+      return {
+        username: "runner",
+        mustChangePassword: false,
+        runnerScope: { mode: "GLOBAL" as const },
+      };
+    }
+    const scoped = findActiveRunnerTokenByToken(orm, token);
+    if (!scoped) return null;
+    touchRunnerTokenLastUsed(orm, scoped.id);
+    return {
+      username: "runner",
+      mustChangePassword: false,
+      runnerScope: {
+        mode: "SCOPED" as const,
+        tokenId: scoped.id,
+        allowedAgentName: scoped.allowed_agent_name ?? undefined,
+        allowedRunnerId: scoped.allowed_runner_id ?? undefined,
+        allowedChannelIds: parseRunnerScopeChannels(scoped.allowed_channel_ids_json),
+        inviteId: scoped.invite_id ?? undefined,
+      },
+    };
+  }
+
   function requireAuth(c: any, next: any) {
     const runnerHeader = c.req.header("x-orgops-runner-token");
-    if (RUNNER_TOKEN && runnerHeader === RUNNER_TOKEN) {
-      c.set("user", { username: "runner", mustChangePassword: false });
+    const runnerUser = resolveRunnerUserFromToken(runnerHeader);
+    if (runnerUser) {
+      c.set("user", runnerUser);
       return next();
     }
     const cookie = c.req.header("cookie") ?? "";
@@ -202,10 +235,11 @@ export function createApp(config: AppConfig = {}) {
 
   function requireRunnerAuth(c: any, next: any) {
     const runnerHeader = c.req.header("x-orgops-runner-token");
-    if (runnerHeader !== RUNNER_TOKEN) {
+    const runnerUser = resolveRunnerUserFromToken(runnerHeader);
+    if (!runnerUser) {
       return jsonResponse(c, { error: "Runner token required" }, 401);
     }
-    c.set("user", { username: "runner", mustChangePassword: false });
+    c.set("user", runnerUser);
     return next();
   }
 
@@ -388,6 +422,13 @@ export function createApp(config: AppConfig = {}) {
     hashPassword,
   });
 
+  registerAgentInviteRoutes(app as any, {
+    orm,
+    jsonResponse,
+    access,
+    inviteBaseUrl: RUNNER_API_URL,
+  });
+
   registerModelsRoutes(app as any, { orm, jsonResponse, parseJson });
 
   registerAgentsRoutes(app as any, {
@@ -434,6 +475,7 @@ export function createApp(config: AppConfig = {}) {
     jsonResponse,
     publishProcessOutput,
     insertEvent,
+    access,
   });
 
   registerSkillsRoutes(app as any, { SKILL_ROOT, jsonResponse, listSkills });
@@ -444,6 +486,7 @@ export function createApp(config: AppConfig = {}) {
     requireAuth,
     requireRunnerAuth,
     insertEvent,
+    access,
   });
 
   registerWsRoutes(app as any, {
@@ -451,9 +494,8 @@ export function createApp(config: AppConfig = {}) {
     upgradeWebSocket,
     resolveRequestUser: (c: any) => {
       const runnerHeader = c.req.header("x-orgops-runner-token");
-      if (RUNNER_TOKEN && runnerHeader === RUNNER_TOKEN) {
-        return { username: "runner", mustChangePassword: false };
-      }
+      const runnerUser = resolveRunnerUserFromToken(runnerHeader);
+      if (runnerUser) return runnerUser;
       const cookie = c.req.header("cookie") ?? "";
       const match = cookie.match(/orgops_session=([^;]+)/);
       if (!match) return null;

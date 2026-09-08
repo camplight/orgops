@@ -94,11 +94,21 @@ export function registerRunnersRoutes(app: Hono<any>, deps: RunnersDeps) {
   });
 
   app.post("/api/runners/register", requireRunnerAuth, async (c) => {
+    const user = c.get("user") as
+      | { runnerScope?: { mode?: string; allowedRunnerId?: string } }
+      | undefined;
+    const scopedRunnerId =
+      user?.runnerScope?.mode === "SCOPED"
+        ? user.runnerScope.allowedRunnerId?.trim() ?? ""
+        : "";
     const body = await c.req.json().catch(() => ({}));
     const now = Date.now();
     const requestedId =
       typeof body.existingRunnerId === "string" ? body.existingRunnerId.trim() : "";
-    const runnerId = requestedId || randomUUID();
+    if (scopedRunnerId && requestedId && requestedId !== scopedRunnerId) {
+      return jsonResponse(c, { error: "Forbidden runner id for token scope" }, 403);
+    }
+    const runnerId = scopedRunnerId || requestedId || randomUUID();
     const displayNameRaw =
       typeof body.displayName === "string" ? body.displayName.trim() : "";
     const displayName = displayNameRaw || `runner-${runnerId.slice(0, 8)}`;
@@ -173,7 +183,17 @@ export function registerRunnersRoutes(app: Hono<any>, deps: RunnersDeps) {
   });
 
   app.post("/api/runners/:id/heartbeat", requireRunnerAuth, (c) => {
+    const user = c.get("user") as
+      | { runnerScope?: { mode?: string; allowedRunnerId?: string } }
+      | undefined;
+    const scopedRunnerId =
+      user?.runnerScope?.mode === "SCOPED"
+        ? user.runnerScope.allowedRunnerId?.trim() ?? ""
+        : "";
     const runnerId = c.req.param("id");
+    if (scopedRunnerId && runnerId !== scopedRunnerId) {
+      return jsonResponse(c, { error: "Forbidden runner id for token scope" }, 403);
+    }
     const now = Date.now();
     const row = orm
       .select()

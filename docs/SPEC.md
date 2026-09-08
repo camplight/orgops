@@ -184,6 +184,11 @@ Runner IDs are stable across restarts by persisting local `.agent-runner-id`.
 - `secrets`
 - `models`
 
+### Agent Invites / Runner Tokens
+
+- `agent_invites`: human-created wrapped-agent bootstrap invites (hashed token, scoped channel set, optional wrapped config, expiry, usage count)
+- `runner_tokens`: hashed runner credentials, including invite-scoped tokens bound to a single `agent_name` and `runner_id`
+
 ## Event Contract
 
 Envelope fields used by API/runner:
@@ -221,6 +226,7 @@ Validation is dynamic and composed from:
 
 - Trusted runner token header: `x-orgops-runner-token`
 - Runner-only endpoint for secret env injection: `GET /api/secrets/env`
+- Invite redemption can mint **scoped runner tokens**. Scoped tokens are restricted to one agent, one runner ID, and invite-approved channels.
 
 ### Tool Filesystem Access
 
@@ -275,6 +281,14 @@ Published topics include:
 - `GET /api/humans`
 - `POST /api/humans/invite`
 - `POST /api/humans/:id/reset-temp-password`
+- wrapped-agent invites:
+  - `GET /api/agent-invites`
+  - `POST /api/agent-invites`
+  - `POST /api/agent-invites/:id/revoke`
+  - `POST /api/agent-invites/:id/reissue` (rotates token; old link invalid)
+  - `GET /api/agent-invites/public/:token` (public)
+  - `POST /api/agent-invites/public/:token/redeem` (public)
+  - public invite/redeem responses include bootstrap hints (`wrappedConfigSchema`, patch endpoint, and session-memory guidance)
 
 ### Embed / v1 (integration API keys)
 
@@ -282,6 +296,9 @@ Published topics include:
 - `POST /v1/conversations`
 - `GET /v1/conversations/:id`
 - `POST /v1/chat/completions` (`conversation` required; waits for the agent reply)
+  - accepts text-only user messages and mixed content arrays (for example `text` + `image_url`)
+  - supports optional top-level `attachments` array (`[{ fileId, ... }]`)
+  - attachment references are normalized from `messages[].content` or `attachments`, then persisted on the emitted `message.created` payload as `payload.attachments[]` with file metadata
 - Admin key management: `GET/POST /api/integration-keys`, `POST /api/integration-keys/:id/revoke`
 - Integrator prompt: copy from admin UI → API keys
 
@@ -383,6 +400,7 @@ Published topics include:
 - `POST /api/runners/register` (runner auth; register/re-register)
 - `POST /api/runners/:id/heartbeat` (runner auth)
 - `DELETE /api/runners/:id` (also unassigns pinned agents from deleted runner)
+- scoped runner tokens must register/heartbeat only the runner ID bound into their scope
 
 ## Agent Runner Behavior
 

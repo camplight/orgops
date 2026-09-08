@@ -35,6 +35,16 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
     CHANNEL_KINDS.INTEGRATION_BRIDGE
   ]);
 
+  function isScopedRunner(user: RequestUser | undefined): boolean {
+    return user?.username === "runner" && user.runnerScope?.mode === "SCOPED";
+  }
+
+  function forbidScopedRunnerMutations(c: any): Response | null {
+    const user = c.get("user") as RequestUser | undefined;
+    if (!isScopedRunner(user)) return null;
+    return jsonResponse(c, { error: "Forbidden" }, 403);
+  }
+
   function normalizeDirectParticipants(input: unknown) {
     if (!Array.isArray(input) || input.length < 2) return [];
     const unique = new Map<
@@ -273,6 +283,8 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
   });
 
   app.post("/api/teams", async (c) => {
+    const forbidden = forbidScopedRunnerMutations(c);
+    if (forbidden) return forbidden;
     const body = await c.req.json();
     const id = randomUUID();
     orm
@@ -288,6 +300,8 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
   });
 
   app.patch("/api/teams/:id", async (c) => {
+    const forbidden = forbidScopedRunnerMutations(c);
+    if (forbidden) return forbidden;
     const id = c.req.param("id");
     const body = await c.req.json().catch(() => ({}));
     const name = typeof body.name === "string" ? body.name.trim() : "";
@@ -297,6 +311,8 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
   });
 
   const deleteTeamHandler = (c: any) => {
+    const forbidden = forbidScopedRunnerMutations(c);
+    if (forbidden) return forbidden;
     const id = c.req.param("id");
     orm
       .delete(schema.teamMemberships)
@@ -348,6 +364,8 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
   });
 
   app.post("/api/teams/:id/members", async (c) => {
+    const forbidden = forbidScopedRunnerMutations(c);
+    if (forbidden) return forbidden;
     const id = c.req.param("id");
     const body = await c.req.json();
     orm
@@ -363,6 +381,8 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
   });
 
   app.delete("/api/teams/:id/members/:memberType/:memberId", (c) => {
+    const forbidden = forbidScopedRunnerMutations(c);
+    if (forbidden) return forbidden;
     const { id, memberType, memberId } = c.req.param();
     orm
       .delete(schema.teamMemberships)
@@ -421,6 +441,8 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
   });
 
   app.post("/api/channels", async (c) => {
+    const forbidden = forbidScopedRunnerMutations(c);
+    if (forbidden) return forbidden;
     const body = await c.req.json();
     const name = typeof body.name === "string" ? body.name.trim() : "";
     if (!name) return jsonResponse(c, { error: "Name is required" }, 400);
@@ -495,6 +517,8 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
   });
 
   app.post("/api/channels/direct", async (c) => {
+    const forbidden = forbidScopedRunnerMutations(c);
+    if (forbidden) return forbidden;
     const body = await c.req.json().catch(() => ({}));
     const participants = normalizeDirectParticipants(body.participants);
     if (participants.length < 2) {
@@ -538,6 +562,8 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
   });
 
   app.post("/api/channels/direct/human-agent", async (c) => {
+    const forbidden = forbidScopedRunnerMutations(c);
+    if (forbidden) return forbidden;
     const body = await c.req.json().catch(() => ({}));
     const user = c.get("user") as RequestUser | undefined;
     const humanId = user?.username;
@@ -570,6 +596,8 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
   });
 
   app.post("/api/channels/direct/agent-agent", async (c) => {
+    const forbidden = forbidScopedRunnerMutations(c);
+    if (forbidden) return forbidden;
     const body = await c.req.json().catch(() => ({}));
     const leftAgentName =
       typeof body.leftAgentName === "string" ? body.leftAgentName.trim() : "";
@@ -608,6 +636,8 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
   });
 
   app.patch("/api/channels/:id", async (c) => {
+    const forbidden = forbidScopedRunnerMutations(c);
+    if (forbidden) return forbidden;
     const id = c.req.param("id");
     const user = c.get("user") as RequestUser | undefined;
     if (!access.canManageChannel(user, id)) {
@@ -660,6 +690,8 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
   });
 
   const archiveChannelHandler = (archived: boolean) => (c: any) => {
+    const forbidden = forbidScopedRunnerMutations(c);
+    if (forbidden) return forbidden;
     const id = c.req.param("id");
     const user = c.get("user") as RequestUser | undefined;
     if (!access.canManageChannel(user, id)) {
@@ -684,6 +716,8 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
   app.post("/api/channels/:id/unarchive", archiveChannelHandler(false));
 
   const deleteChannelHandler = (c: any) => {
+    const forbidden = forbidScopedRunnerMutations(c);
+    if (forbidden) return forbidden;
     const id = c.req.param("id");
     const user = c.get("user") as RequestUser | undefined;
     if (!access.canManageChannel(user, id)) {
@@ -706,6 +740,8 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
   app.post("/api/channels/:id/delete", deleteChannelHandler);
 
   app.delete("/api/channels", (c) => {
+    const forbidden = forbidScopedRunnerMutations(c);
+    if (forbidden) return forbidden;
     const user = c.get("user") as RequestUser | undefined;
     const channelIds = orm
       .select({ id: schema.channels.id })
@@ -751,6 +787,12 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
     if (subscriberType === "TEAM" && !teamExists(subscriberId)) {
       return jsonResponse(c, { error: `TEAM not found: ${subscriberId}` }, 404);
     }
+    if (isScopedRunner(user)) {
+      const allowedAgentName = user.runnerScope?.allowedAgentName ?? "";
+      if (subscriberType !== "AGENT" || subscriberId !== allowedAgentName) {
+        return jsonResponse(c, { error: "Scoped runner can subscribe only its own AGENT identity" }, 403);
+      }
+    }
     orm
       .insert(schema.channelSubscriptions)
       .values({
@@ -774,6 +816,12 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
     const subscriberId = String(body.subscriberId ?? "").trim();
     if (!subscriberType || !subscriberId) {
       return jsonResponse(c, { error: "subscriberType and subscriberId are required" }, 400);
+    }
+    if (isScopedRunner(user)) {
+      const allowedAgentName = user.runnerScope?.allowedAgentName ?? "";
+      if (subscriberType !== "AGENT" || subscriberId !== allowedAgentName) {
+        return jsonResponse(c, { error: "Scoped runner can unsubscribe only its own AGENT identity" }, 403);
+      }
     }
     orm
       .delete(schema.channelSubscriptions)
@@ -821,6 +869,8 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
   });
 
   app.post("/api/conversations", async (c) => {
+    const forbidden = forbidScopedRunnerMutations(c);
+    if (forbidden) return forbidden;
     const body = await c.req.json();
     const id = randomUUID();
     orm
@@ -849,6 +899,8 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
   });
 
   app.post("/api/conversations/:id/threads", async (c) => {
+    const forbidden = forbidScopedRunnerMutations(c);
+    if (forbidden) return forbidden;
     const conversationId = c.req.param("id");
     const body = await c.req.json();
     const id = randomUUID();

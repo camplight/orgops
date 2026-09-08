@@ -1,4 +1,4 @@
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -327,6 +327,225 @@ describe("wrapped runtime", () => {
       ).toBe(true);
     } finally {
       await stopWrappedAgentRuntime(agent.name);
+      rmSync(workspacePath, { recursive: true, force: true });
+    }
+  });
+
+  it("passes attachment payloads to wrapped runtime message input", async () => {
+    const workspacePath = mkdtempSync(join(tmpdir(), "orgops-wrapped-attachments-"));
+    const emitted: unknown[] = [];
+    const agent: Agent = {
+      name: "wrapped-attachments-test",
+      systemInstructions: "",
+      soulPath: "",
+      workspacePath,
+      modelId: "wrapped:none",
+      desiredState: "RUNNING",
+      runtimeState: "RUNNING",
+      mode: "WRAPPED",
+      wrappedConfig: {
+        kind: "test",
+        runtime: {
+          command:
+            'node -e "process.stdout.write(JSON.stringify({payloads:[{text:process.env.ORGOPS_WRAPPED_MESSAGE}]}))"',
+          parse: "json-payloads",
+        },
+      },
+    };
+    const event: Event = {
+      id: "evt-attachments",
+      type: "message.created",
+      payload: {
+        text: "please inspect attached screenshot",
+        attachments: [{ fileId: "img-123", mime: "image/png", name: "screen.png" }],
+      },
+      source: "human:alice",
+      channelId: "chan-attachments",
+      createdAt: Date.now(),
+    };
+
+    try {
+      await runWrappedAgentTurn(
+        {
+          projectRoot: workspacePath,
+          api: {
+            emitEvent: async (outbound: unknown) => {
+              emitted.push(outbound);
+            },
+            getPackageSecretsEnv: async () => ({}),
+          },
+        },
+        agent,
+        [event],
+      );
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true });
+    }
+
+    const wrappedReply = emitted.find(
+      (outbound) =>
+        (outbound as any).type === "message.created" &&
+        (outbound as any).source === "agent:wrapped-attachments-test",
+    ) as { payload?: { text?: string } } | undefined;
+    expect(wrappedReply?.payload?.text).toContain('"attachments"');
+    expect(wrappedReply?.payload?.text).toContain('"img-123"');
+    expect(wrappedReply?.payload?.text).toContain('"orgops.pending.events"');
+  });
+
+  it("streams wrapped runtime output via process output events", async () => {
+    const workspacePath = mkdtempSync(join(tmpdir(), "orgops-wrapped-stream-"));
+    const emitted: unknown[] = [];
+    const apiRequests: Array<{ path: string; body: any }> = [];
+    const agent: Agent = {
+      name: "wrapped-stream-test",
+      systemInstructions: "",
+      soulPath: "",
+      workspacePath,
+      modelId: "wrapped:none",
+      desiredState: "RUNNING",
+      runtimeState: "RUNNING",
+      mode: "WRAPPED",
+      wrappedConfig: {
+        kind: "test",
+        runtime: {
+          command:
+            'node -e "process.stdout.write(\\"stream-a\\"); setTimeout(() => process.stderr.write(\\"stream-b\\"), 20); setTimeout(() => process.exit(0), 40)"',
+          parse: "text",
+        },
+      },
+    };
+    const event: Event = {
+      id: "evt-stream",
+      type: "message.created",
+      payload: { text: "stream test" },
+      source: "human:alice",
+      channelId: "chan-stream",
+      createdAt: Date.now(),
+    };
+
+    try {
+      await runWrappedAgentTurn(
+        {
+          projectRoot: workspacePath,
+          api: {
+            apiFetch: async (path: string, init?: RequestInit) => {
+              apiRequests.push({
+                path,
+                body: init?.body ? JSON.parse(String(init.body)) : null,
+              });
+              return new Response(JSON.stringify({ ok: true }), { status: 200 });
+            },
+            emitEvent: async (outbound: unknown) => {
+              emitted.push(outbound);
+            },
+            getPackageSecretsEnv: async () => ({}),
+          },
+        },
+        agent,
+        [event],
+      );
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true });
+    }
+
+    expect(apiRequests.some((request) => request.path === "/api/processes")).toBe(true);
+    expect(
+      apiRequests.some((request) => request.path.includes("/api/processes/") && request.path.endsWith("/output")),
+    ).toBe(true);
+    expect(
+      apiRequests.some((request) => request.path.includes("/api/processes/") && request.path.endsWith("/exit")),
+    ).toBe(true);
+    expect(
+      apiRequests.some((request) => request.body?.source === "system:process-runner"),
+    ).toBe(true);
+    expect(
+      emitted.some((outbound) => (outbound as any).type === "message.created"),
+    ).toBe(true);
+  });
+
+  it("downloads attached files for wrapped runtime when tempPath is absent", async () => {
+    const workspacePath = mkdtempSync(join(tmpdir(), "orgops-wrapped-attachment-download-"));
+    const emitted: unknown[] = [];
+    const agent: Agent = {
+      name: "wrapped-attachment-download-test",
+      systemInstructions: "",
+      soulPath: "",
+      workspacePath,
+      modelId: "wrapped:none",
+      desiredState: "RUNNING",
+      runtimeState: "RUNNING",
+      mode: "WRAPPED",
+      wrappedConfig: {
+        kind: "test",
+        runtime: {
+          command:
+            'node -e "process.stdout.write(JSON.stringify({payloads:[{text:process.env.ORGOPS_WRAPPED_MESSAGE}]}))"',
+          parse: "json-payloads",
+        },
+      },
+    };
+    const event: Event = {
+      id: "evt-download",
+      type: "message.created",
+      payload: {
+        text: "inspect this image",
+        attachments: [
+          {
+            fileId: "img-777",
+            name: "capture.png",
+            mime: "image/png",
+          },
+        ],
+      },
+      source: "human:alice",
+      channelId: "chan-download",
+      createdAt: Date.now(),
+    };
+
+    try {
+      await runWrappedAgentTurn(
+        {
+          projectRoot: workspacePath,
+          api: {
+            apiFetch: async (path: string) => {
+              if (path === "/api/files/img-777") {
+                return new Response(new Uint8Array([1, 2, 3, 4]));
+              }
+              if (path === "/api/processes") {
+                return new Response(JSON.stringify({ ok: true }), { status: 200 });
+              }
+              if (path.includes("/api/processes/") && path.endsWith("/output")) {
+                return new Response(JSON.stringify({ ok: true }), { status: 200 });
+              }
+              if (path.includes("/api/processes/") && path.endsWith("/exit")) {
+                return new Response(JSON.stringify({ ok: true }), { status: 200 });
+              }
+              throw new Error(`Unexpected path: ${path}`);
+            },
+            emitEvent: async (outbound: unknown) => {
+              emitted.push(outbound);
+            },
+            getPackageSecretsEnv: async () => ({}),
+          },
+        },
+        agent,
+        [event],
+      );
+
+      const wrappedReply = emitted.find(
+        (outbound) =>
+          (outbound as any).type === "message.created" &&
+          (outbound as any).source === "agent:wrapped-attachment-download-test",
+      ) as { payload?: { text?: string } } | undefined;
+      const replyText = wrappedReply?.payload?.text ?? "";
+      expect(replyText).toContain('"fileId": "img-777"');
+      expect(replyText).toContain('"downloadedByRunner": true');
+      const tempPathMatch = replyText.match(/"tempPath":\s*"([^"]+)"/);
+      expect(tempPathMatch?.[1]).toBeTruthy();
+      const hydratedPath = tempPathMatch?.[1] ?? "";
+      expect(existsSync(hydratedPath)).toBe(true);
+      expect(readFileSync(hydratedPath)).toEqual(Buffer.from([1, 2, 3, 4]));
+    } finally {
       rmSync(workspacePath, { recursive: true, force: true });
     }
   });

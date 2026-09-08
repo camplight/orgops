@@ -12,6 +12,16 @@ export type RequestUser = {
   id?: string;
   username?: string;
   mustChangePassword?: boolean;
+  runnerScope?: RunnerScope;
+};
+
+export type RunnerScope = {
+  mode: "GLOBAL" | "SCOPED";
+  tokenId?: string;
+  allowedAgentName?: string;
+  allowedRunnerId?: string;
+  allowedChannelIds?: string[];
+  inviteId?: string;
 };
 
 type AccessDeps = {
@@ -22,12 +32,19 @@ function isRunnerUser(user: RequestUser | undefined): boolean {
   return user?.username === "runner";
 }
 
+function getScopedRunner(user: RequestUser | undefined): RunnerScope | null {
+  if (!isRunnerUser(user)) return null;
+  if (user?.runnerScope?.mode !== "SCOPED") return null;
+  return user.runnerScope;
+}
+
 function isHumanUser(user: RequestUser | undefined): user is RequestUser & { username: string } {
   return Boolean(user?.username && user.username !== "runner");
 }
 
 type ChannelAccessRow = {
   id: string;
+  name: string;
   visibility: string | null;
   ownerHumanId: string | null;
 };
@@ -71,6 +88,7 @@ export function createAccessControl(deps: AccessDeps) {
     return orm
       .select({
         id: schema.channels.id,
+        name: schema.channels.name,
         visibility: schema.channels.visibility,
         ownerHumanId: schema.channels.owner_human_id,
       })
@@ -92,6 +110,16 @@ export function createAccessControl(deps: AccessDeps) {
 
   function canViewChannel(user: RequestUser | undefined, channelId: string): boolean {
     const channel = getChannel(channelId);
+    const scopedRunner = getScopedRunner(user);
+    if (scopedRunner) {
+      if (!channel) return false;
+      const allowedChannelIds = new Set(scopedRunner.allowedChannelIds ?? []);
+      if (allowedChannelIds.has(channelId)) return true;
+      const lifecycleName = scopedRunner.allowedAgentName
+        ? `agent.lifecycle.${scopedRunner.allowedAgentName}`
+        : "";
+      return Boolean(lifecycleName && channel.name === lifecycleName);
+    }
     // Legacy channel-less integrations have historically emitted arbitrary
     // channel ids before rows existed. Treat unknown ids as public legacy ids.
     if (!channel) return true;
@@ -132,6 +160,16 @@ export function createAccessControl(deps: AccessDeps) {
 
   function canManageChannel(user: RequestUser | undefined, channelId: string): boolean {
     const channel = getChannel(channelId);
+    const scopedRunner = getScopedRunner(user);
+    if (scopedRunner) {
+      if (!channel) return false;
+      const allowedChannelIds = new Set(scopedRunner.allowedChannelIds ?? []);
+      if (allowedChannelIds.has(channelId)) return true;
+      const lifecycleName = scopedRunner.allowedAgentName
+        ? `agent.lifecycle.${scopedRunner.allowedAgentName}`
+        : "";
+      return Boolean(lifecycleName && channel.name === lifecycleName);
+    }
     // Preserve idempotent delete/update behavior for missing legacy channel ids.
     if (!channel) return true;
     if (isRunnerUser(user)) return true;
@@ -148,6 +186,23 @@ export function createAccessControl(deps: AccessDeps) {
   }
 
   function listVisibleChannelIds(user: RequestUser | undefined): string[] {
+    const scopedRunner = getScopedRunner(user);
+    if (scopedRunner) {
+      const allowed = new Set(scopedRunner.allowedChannelIds ?? []);
+      const rows = orm
+        .select({ id: schema.channels.id, name: schema.channels.name })
+        .from(schema.channels)
+        .all();
+      for (const row of rows) {
+        if (
+          scopedRunner.allowedAgentName &&
+          row.name === `agent.lifecycle.${scopedRunner.allowedAgentName}`
+        ) {
+          allowed.add(row.id);
+        }
+      }
+      return [...allowed];
+    }
     if (isRunnerUser(user)) {
       return orm
         .select({ id: schema.channels.id })
@@ -219,6 +274,10 @@ export function createAccessControl(deps: AccessDeps) {
   }
 
   function canViewAgent(user: RequestUser | undefined, agentName: string): boolean {
+    const scopedRunner = getScopedRunner(user);
+    if (scopedRunner) {
+      return scopedRunner.allowedAgentName === agentName;
+    }
     const agent = getAgent(agentName);
     // Runners write/read memory for agents during bootstrap before a full row
     // may exist in tests and legacy integrations.
@@ -270,6 +329,8 @@ export function createAccessControl(deps: AccessDeps) {
   }
 
   function canManageAgent(user: RequestUser | undefined, agentName: string): boolean {
+    const scopedRunner = getScopedRunner(user);
+    if (scopedRunner) return scopedRunner.allowedAgentName === agentName;
     if (isRunnerUser(user)) return true;
     if (!isHumanUser(user)) return false;
     const agent = getAgent(agentName);

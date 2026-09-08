@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { apiFetch, apiJson, getApiHeaders } from "../api";
 import type {
   Agent,
+  AgentInvite,
   Channel,
   ChannelParticipant,
   EventRow,
@@ -56,6 +57,7 @@ export function useOrgOpsData(authenticated: boolean) {
   >({});
   const [secrets, setSecrets] = useState<SecretRow[]>([]);
   const [integrationKeys, setIntegrationKeys] = useState<IntegrationKey[]>([]);
+  const [agentInvites, setAgentInvites] = useState<AgentInvite[]>([]);
   const [channelEvents, setChannelEvents] = useState<EventRow[]>([]);
   const [channelParticipants, setChannelParticipants] = useState<
     ChannelParticipant[]
@@ -137,6 +139,10 @@ export function useOrgOpsData(authenticated: boolean) {
     () => apiJson<IntegrationKey[]>("/api/integration-keys").then(setIntegrationKeys),
     [],
   );
+  const refreshAgentInvites = useCallback(
+    () => apiJson<AgentInvite[]>("/api/agent-invites").then(setAgentInvites),
+    [],
+  );
 
   useEffect(() => {
     if (!authenticated) return;
@@ -149,6 +155,7 @@ export function useOrgOpsData(authenticated: boolean) {
     refreshProcesses();
     refreshSecrets();
     refreshIntegrationKeys();
+    refreshAgentInvites();
     refreshTeams();
     refreshHumans();
   }, [
@@ -162,6 +169,7 @@ export function useOrgOpsData(authenticated: boolean) {
     refreshProcesses,
     refreshSecrets,
     refreshIntegrationKeys,
+    refreshAgentInvites,
     refreshTeams,
     refreshHumans,
   ]);
@@ -234,6 +242,8 @@ export function useOrgOpsData(authenticated: boolean) {
     setSecrets,
     integrationKeys,
     setIntegrationKeys,
+    agentInvites,
+    setAgentInvites,
     refreshDashboard,
     refreshSkills,
     refreshEvents,
@@ -247,6 +257,7 @@ export function useOrgOpsData(authenticated: boolean) {
     refreshProcesses,
     refreshSecrets,
     refreshIntegrationKeys,
+    refreshAgentInvites,
     channelEvents,
     channelParticipants,
     dashboardEventStats,

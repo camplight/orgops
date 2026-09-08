@@ -20,8 +20,16 @@ POST ${baseUrl}/v1/conversations
 GET ${baseUrl}/v1/conversations/{id}
 
 POST ${baseUrl}/v1/chat/completions
-{ "model": "${agentName}", "conversation": "conv_…", "messages": [{ "role": "user", "content": "…" }], "stream"?: false }
+{
+  "model": "${agentName}",
+  "conversation": "conv_…",
+  "messages": [{ "role": "user", "content": "…" }],
+  "attachments"?: [{ "fileId": "…" }],
+  "stream"?: false
+}
 conversation required (body or X-OrgOps-Conversation). No default.
+attachments are optional. You can also pass image content parts with file URLs:
+{ "role":"user", "content":[{ "type":"text", "text":"..." }, { "type":"image_url", "image_url": { "url":"orgops://file/<fileId>" } }] }
 → OpenAI chat completion (choices[0].message.content). stream:true → SSE then data: [DONE]
 Errors: { "error": "…" }
 Timeout default 180s.
