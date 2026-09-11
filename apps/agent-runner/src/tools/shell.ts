@@ -11,6 +11,11 @@ const MAX_TIMEOUT_MS = 45_000;
 const DEFAULT_TIMEOUT_MS = 45_000;
 const DEFAULT_MAX_BUFFER = 10 * 1024 * 1024;
 const DEFAULT_TIMEOUT_KILL_GRACE_MS = 5_000;
+const PROVIDER_SECRET_ENV_KEYS = [
+  "OPENAI_API_KEY",
+  "ANTHROPIC_API_KEY",
+  "OPENROUTER_API_KEY",
+] as const;
 const shellRunSchema = z.object({
   cmd: z.string().min(1),
   cwd: z.string().optional(),
@@ -152,9 +157,19 @@ async function spawnTrackedProcess(
 ) {
   const processId = randomUUID();
   const shell = getShellLaunch(input.cmd);
+  const mergedEnv: Record<string, string> = {
+    ...(process.env as Record<string, string>),
+    ...ctx.injectionEnv,
+    ...input.env,
+  };
+  for (const key of PROVIDER_SECRET_ENV_KEYS) {
+    if (!(key in ctx.injectionEnv) && !(key in input.env)) {
+      delete mergedEnv[key];
+    }
+  }
   const child = spawn(shell.command, shell.args, {
     cwd: input.cwd,
-    env: { ...process.env, ...ctx.injectionEnv, ...input.env },
+    env: mergedEnv,
     stdio: ["ignore", "pipe", "pipe"],
   });
 

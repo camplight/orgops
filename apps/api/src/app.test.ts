@@ -4164,6 +4164,15 @@ describe("api app", () => {
     });
     expect(createTeamRes.status).toBe(201);
     const team = (await createTeamRes.json()) as { id: string };
+    const addAdminToTeamRes = await app.request(
+      `http://localhost/api/teams/${encodeURIComponent(team.id)}/members`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ memberType: "HUMAN", memberId: "admin" }),
+      },
+    );
+    expect(addAdminToTeamRes.status).toBe(200);
 
     const addTeamMemberRes = await app.request(
       `http://localhost/api/teams/${team.id}/members`,
@@ -5043,6 +5052,291 @@ describe("api app", () => {
     const scopedEventsRows = (await scopedEventsWithoutAgent.json()) as unknown[];
     expect(scopedEventsRows).toEqual([]);
 
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("resolves secret env precedence as private > team > public > package", async () => {
+    const previousMasterKey = process.env.ORGOPS_MASTER_KEY;
+    process.env.ORGOPS_MASTER_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const createTeamRes = await app.request("http://localhost/api/teams", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ name: "Platform Team" }),
+    });
+    expect(createTeamRes.status).toBe(201);
+    const team = (await createTeamRes.json()) as { id: string };
+
+    const createChannelRes = await app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ name: `team-secret-${Date.now()}` }),
+    });
+    expect(createChannelRes.status).toBe(201);
+    const channel = (await createChannelRes.json()) as { id: string };
+
+    const createAgentARes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "agent-a",
+        modelId: "openai:gpt-4o-mini",
+        workspacePath: ".orgops-data/workspaces/agent-a",
+      }),
+    });
+    expect(createAgentARes.status).toBe(201);
+    const createAgentBRes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "agent-b",
+        modelId: "openai:gpt-4o-mini",
+        workspacePath: ".orgops-data/workspaces/agent-b",
+      }),
+    });
+    expect(createAgentBRes.status).toBe(201);
+
+    for (const subscriber of [
+      { subscriberType: "TEAM", subscriberId: team.id },
+      { subscriberType: "AGENT", subscriberId: "agent-a" },
+      { subscriberType: "AGENT", subscriberId: "agent-b" },
+    ]) {
+      const res = await app.request(
+        `http://localhost/api/channels/${encodeURIComponent(channel.id)}/subscribe`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", cookie },
+          body: JSON.stringify(subscriber),
+        },
+      );
+      expect(res.status).toBe(200);
+    }
+
+    const createSecrets = [
+      { name: "OPENAI_API_KEY", scopeType: "package", scopeId: "llm", value: "pkg-key" },
+      { name: "OPENAI_API_KEY", scopeType: "public", scopeId: null, value: "public-key" },
+      { name: "OPENAI_API_KEY", scopeType: "private", scopeId: "agent-a", value: "private-key-a" },
+      { name: "ANTHROPIC_API_KEY", scopeType: "public", scopeId: null, value: "anth-public" },
+    ];
+    for (const secret of createSecrets) {
+      const res = await app.request("http://localhost/api/secrets", {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify(secret),
+      });
+      expect(res.status).toBe(201);
+    }
+    const teamSecretRes = await app.request("http://localhost/api/secrets", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orgops-runner-token": "test-token",
+      },
+      body: JSON.stringify({
+        name: "OPENAI_API_KEY",
+        scopeType: "team",
+        scopeId: team.id,
+        value: "team-key",
+      }),
+    });
+    expect(teamSecretRes.status).toBe(201);
+
+    const envARes = await app.request("http://localhost/api/secrets/env", {
+      headers: {
+        "x-orgops-runner-token": "test-token",
+        "x-orgops-agent-name": "agent-a",
+        "x-orgops-channel-id": channel.id,
+      },
+    });
+    expect(envARes.status).toBe(200);
+    const envA = (await envARes.json()) as Record<string, string>;
+    expect(envA.OPENAI_API_KEY).toBe("private-key-a");
+    expect(envA.ANTHROPIC_API_KEY).toBe("anth-public");
+
+    const envBRes = await app.request("http://localhost/api/secrets/env", {
+      headers: {
+        "x-orgops-runner-token": "test-token",
+        "x-orgops-agent-name": "agent-b",
+        "x-orgops-channel-id": channel.id,
+      },
+    });
+    expect(envBRes.status).toBe(200);
+    const envB = (await envBRes.json()) as Record<string, string>;
+    expect(envB.OPENAI_API_KEY).toBe("team-key");
+
+    if (previousMasterKey === undefined) delete process.env.ORGOPS_MASTER_KEY;
+    else process.env.ORGOPS_MASTER_KEY = previousMasterKey;
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("restricts scoped runners to private/team secrets and filters visible secrets", async () => {
+    const previousMasterKey = process.env.ORGOPS_MASTER_KEY;
+    process.env.ORGOPS_MASTER_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+      runnerApiUrl: "http://localhost:8787",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const inviteRes = await app.request("http://localhost/api/agent-invites", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        agentName: "scoped-agent",
+        visibility: "PRIVATE",
+        channelIds: [],
+      }),
+    });
+    expect(inviteRes.status).toBe(201);
+    const inviteBody = (await inviteRes.json()) as { inviteLink?: string };
+    const inviteToken = decodeURIComponent((inviteBody.inviteLink ?? "").split("/public/")[1] ?? "");
+    expect(inviteToken.startsWith("org_inv_")).toBe(true);
+
+    const redeemRes = await app.request(
+      `http://localhost/api/agent-invites/public/${encodeURIComponent(inviteToken)}/redeem`,
+      { method: "POST" },
+    );
+    expect(redeemRes.status).toBe(200);
+    const redeemed = (await redeemRes.json()) as { runner: { token: string } };
+
+    const createPublicAsScopedRes = await app.request("http://localhost/api/secrets", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orgops-runner-token": redeemed.runner.token,
+      },
+      body: JSON.stringify({
+        name: "OPENAI_API_KEY",
+        scopeType: "public",
+        value: "blocked-public",
+      }),
+    });
+    expect(createPublicAsScopedRes.status).toBe(403);
+
+    const createPrivateAsScopedRes = await app.request("http://localhost/api/secrets", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orgops-runner-token": redeemed.runner.token,
+      },
+      body: JSON.stringify({
+        name: "OPENAI_API_KEY",
+        scopeType: "private",
+        scopeId: "scoped-agent",
+        value: "allowed-private",
+      }),
+    });
+    expect(createPrivateAsScopedRes.status).toBe(201);
+
+    const createPrivateOtherRes = await app.request("http://localhost/api/secrets", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orgops-runner-token": redeemed.runner.token,
+      },
+      body: JSON.stringify({
+        name: "OPENAI_API_KEY",
+        scopeType: "private",
+        scopeId: "other-agent",
+        value: "blocked-private",
+      }),
+    });
+    expect(createPrivateOtherRes.status).toBe(403);
+
+    const createOtherAgentRes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "other-agent",
+        modelId: "openai:gpt-4o-mini",
+        workspacePath: ".orgops-data/workspaces/other-agent",
+      }),
+    });
+    expect(createOtherAgentRes.status).toBe(201);
+
+    const adminPublicRes = await app.request("http://localhost/api/secrets", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "OPENROUTER_API_KEY",
+        scopeType: "public",
+        value: "admin-public",
+      }),
+    });
+    expect(adminPublicRes.status).toBe(201);
+
+    const adminOtherPrivateRes = await app.request("http://localhost/api/secrets", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "OPENAI_API_KEY",
+        scopeType: "private",
+        scopeId: "other-agent",
+        value: "admin-other-private",
+      }),
+    });
+    expect(adminOtherPrivateRes.status).toBe(201);
+
+    const secretsListRes = await app.request("http://localhost/api/secrets", {
+      headers: { "x-orgops-runner-token": redeemed.runner.token },
+    });
+    expect(secretsListRes.status).toBe(200);
+    const secretsList = (await secretsListRes.json()) as Array<{
+      name: string;
+      scope_type: string;
+      scope_id: string | null;
+    }>;
+    expect(secretsList).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "OPENAI_API_KEY",
+          scope_type: "private",
+          scope_id: "scoped-agent",
+        }),
+        expect.objectContaining({
+          name: "OPENROUTER_API_KEY",
+          scope_type: "public",
+        }),
+      ]),
+    );
+    expect(
+      secretsList.some(
+        (secret) => secret.scope_type === "private" && secret.scope_id === "other-agent",
+      ),
+    ).toBe(false);
+
+    if (previousMasterKey === undefined) delete process.env.ORGOPS_MASTER_KEY;
+    else process.env.ORGOPS_MASTER_KEY = previousMasterKey;
     rmSync(dataDir, { recursive: true, force: true });
   });
 });

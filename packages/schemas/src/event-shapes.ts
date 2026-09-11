@@ -525,6 +525,12 @@ const coreEventShapes: EventShapeDefinition[] = [
     source: "core",
     payloadSchema: z.record(z.string(), z.unknown()),
   },
+  {
+    type: "audit.secret.deleted",
+    description: "Audit record for secret deletion.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
   ...(
     [
       "audit.memory.channel.recent.tool_refresh",

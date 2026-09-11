@@ -132,7 +132,7 @@ Commands run with the agent workspace/source directory as cwd unless overridden 
 - `ORGOPS_WRAPPED_TRIGGER_EVENT_ID` (turn commands)
 - `ORGOPS_WRAPPED_SOURCE_DIR` (when a source checkout is configured)
 
-Package secrets available to the agent/channel are also injected into setup and turn command environments.
+Resolved runtime secrets are injected into setup and turn command environments using precedence `private > team > public > package(legacy)`.
 
 Wrapper harness implementation:
 
@@ -226,6 +226,7 @@ Validation is dynamic and composed from:
 
 - Trusted runner token header: `x-orgops-runner-token`
 - Runner-only endpoint for secret env injection: `GET /api/secrets/env`
+- Runner secret env requests must include `x-orgops-agent-name`; optional `x-orgops-channel-id` enables team-scope resolution for that channel context.
 - Invite redemption can mint **scoped runner tokens**. Scoped tokens are restricted to one agent, one runner ID, and invite-approved channels.
 - `POST /api/agent-invites` accepts authenticated humans and runner-authenticated agents.
 
@@ -395,6 +396,8 @@ Published topics include:
   - `DELETE /api/secrets/:id`
   - `DELETE /api/secrets` (by key/scope tuple)
   - `GET /api/secrets/env` (runner auth only)
+  - scope types: `public`, `team`, `private` (`package` remains supported as legacy compatibility scope)
+  - env resolution precedence: `private > team > public > package(legacy)`
 - skills:
   - `GET /api/skills`
 
@@ -518,6 +521,7 @@ Security note: wrapped `source`, `setup.command`, and `runtime.command` are host
 - `ORGOPS_AGENT_INTENT_TIMEOUT_MS`
 - `ORGOPS_AGENT_INTENT_MAX_TIMEOUTS`
 - `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`
+  - for native/wrapped runtime execution with injected env, provider keys are loaded from resolved secrets and do not fall back to host process env
 - `OPENROUTER_BASE_URL`, `OPENROUTER_HTTP_REFERER`, `OPENROUTER_APP_TITLE`
 - `ORGOPS_GIT_BASH_PATH`
 - `ORGOPS_SHELL_PATH`, `ORGOPS_SHELL_ARGS`

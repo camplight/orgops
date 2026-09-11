@@ -182,8 +182,8 @@ export type ProcessOutputRow = {
 export type SecretRow = {
   id: string;
   name: string;
-  scope_type: string;
-  scope_id?: string;
+  scope_type: "public" | "team" | "private" | "package" | "app" | string;
+  scope_id?: string | null;
   created_at: number;
 };
 

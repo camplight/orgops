@@ -1204,6 +1204,8 @@ export default function App() {
       {activeScreen === "secrets" && (
         <SecretsScreen
           secrets={data.secrets}
+          agents={data.agents}
+          teams={data.teams}
           onAddSecret={async (secret) => {
             await data.apiFetch("/api/secrets", {
               method: "POST",

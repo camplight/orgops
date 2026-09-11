@@ -48,6 +48,11 @@ const DEFAULT_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_RUNTIME_COMMAND_TIMEOUT_MS = 0;
 const DEFAULT_SIDECAR_RESTART_DELAY_MS = 2_000;
 const sidecars = new Map<string, SidecarEntry>();
+const PROVIDER_SECRET_ENV_KEYS = [
+  "OPENAI_API_KEY",
+  "ANTHROPIC_API_KEY",
+  "OPENROUTER_API_KEY",
+] as const;
 
 function mergeEnv(...envs: Array<NodeJS.ProcessEnv | Record<string, string>>): Record<string, string> {
   const merged: Record<string, string> = {};
@@ -140,8 +145,16 @@ async function runCommand(
     onStdout?: (chunk: Buffer | string) => void;
     onStderr?: (chunk: Buffer | string) => void;
   },
+  options?: { strictProviderEnv?: boolean },
 ): Promise<CommandResult> {
   const mergedEnv = mergeEnv(process.env, env, commandConfig.env);
+  if (options?.strictProviderEnv) {
+    for (const key of PROVIDER_SECRET_ENV_KEYS) {
+      if (!(key in env) && !(key in commandConfig.env)) {
+        delete mergedEnv[key];
+      }
+    }
+  }
   if (commandConfig.cwd) {
     mkdirSync(commandConfig.cwd, { recursive: true });
   }
@@ -207,7 +220,9 @@ async function ensureSidecarStarted(
     return;
   }
   if (sidecar.checkCommand) {
-    const check = await runCommand(sidecar.checkCommand, env);
+    const check = await runCommand(sidecar.checkCommand, env, undefined, {
+      strictProviderEnv: true,
+    });
     if (check.exitCode === 0) {
       await ctx.api.emitEvent({
         type: "wrapper.sidecar.skipped",
@@ -226,6 +241,11 @@ async function ensureSidecarStarted(
   const sidecarEnv = mergeEnv(process.env, env, sidecar.env, {
     ORGOPS_WRAPPED_SIDECAR_NAME: sidecar.name,
   });
+  for (const key of PROVIDER_SECRET_ENV_KEYS) {
+    if (!(key in env) && !(key in sidecar.env)) {
+      delete sidecarEnv[key];
+    }
+  }
   if (sidecar.cwd) {
     mkdirSync(sidecar.cwd, { recursive: true });
   }
@@ -600,7 +620,9 @@ export const commandWrapperHarness: WrapperHarness = {
             harness: commandWrapperHarness.name,
             command: setupCommand.command,
           });
-          const result = await runCommand(setupCommand, baseEnv);
+          const result = await runCommand(setupCommand, baseEnv, undefined, {
+            strictProviderEnv: true,
+          });
           if (result.exitCode !== 0) {
             await emitWrapperEvent(ctx, agent, "wrapper.setup.failed", {
               kind: config.kind,
@@ -638,7 +660,9 @@ export const commandWrapperHarness: WrapperHarness = {
           harness: commandWrapperHarness.name,
           command: setupCommand.command,
         });
-        const result = await runCommand(setupCommand, baseEnv);
+        const result = await runCommand(setupCommand, baseEnv, undefined, {
+          strictProviderEnv: true,
+        });
         if (result.exitCode !== 0) {
           await emitWrapperEvent(ctx, agent, "wrapper.setup.failed", {
             kind: config.kind,
@@ -742,6 +766,7 @@ export const commandWrapperHarness: WrapperHarness = {
           onStdout: (chunk) => streamRuntimeOutput("STDOUT", chunk),
           onStderr: (chunk) => streamRuntimeOutput("STDERR", chunk),
         },
+        { strictProviderEnv: true },
       );
     } finally {
       if (ctx.api.apiFetch && runtimeProcessId) {
