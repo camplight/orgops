@@ -29,7 +29,7 @@ button {
 .app-shell {
   display: grid;
   grid-template-columns: 250px minmax(0, 1fr) 280px;
-  height: 100vh;
+  height: 100dvh;
   min-height: 0;
   overflow: hidden;
   background: #e8eef3;
@@ -40,12 +40,18 @@ button {
   flex-direction: column;
   gap: 26px;
   padding: 22px;
-  height: 100vh;
+  height: 100dvh;
   min-height: 0;
   min-width: 0;
   overflow: hidden;
   background: #0f172a;
   color: #fff;
+}
+
+.sidebar-mobile-toggle,
+.sidebar-mobile-close,
+.sidebar-mobile-backdrop {
+  display: none;
 }
 
 .brand {
@@ -450,7 +456,7 @@ button {
   display: grid;
   grid-template-rows: auto auto 1fr auto;
   min-width: 0;
-  height: 100vh;
+  height: 100dvh;
   padding: 24px;
   overflow: hidden;
 }
@@ -686,10 +692,12 @@ button {
   min-height: 0;
   margin-top: 18px;
   padding: 6px;
+  overflow-x: hidden;
   overflow-y: auto;
 }
 
 .message {
+  min-width: 0;
   max-width: 760px;
   padding: 14px 16px;
   border: 1px solid #e2e8f0;
@@ -699,6 +707,7 @@ button {
 }
 
 .trace-group {
+  min-width: 0;
   max-width: 760px;
   display: grid;
   gap: 6px;
@@ -924,7 +933,9 @@ button {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
   align-items: end;
-  align-self: end;
+  align-self: stretch;
+  width: 100%;
+  min-width: 0;
   padding: 14px;
   border: 1px solid #cbd5e1;
   border-radius: 24px;
@@ -1044,7 +1055,7 @@ button {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   gap: 18px;
-  height: 100vh;
+  height: 100dvh;
   padding: 22px;
   overflow: hidden;
   background: #edf4f6;
@@ -1414,16 +1425,73 @@ button {
 @media (max-width: 760px) {
   .app-shell {
     grid-template-columns: 1fr;
+    height: 100dvh;
+    min-height: 100dvh;
+    overflow: hidden;
   }
 
   .sidebar {
-    height: auto;
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 30;
+    width: min(310px, 88vw);
+    height: 100dvh;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    max-height: none;
+    padding: 16px;
+    gap: 16px;
+  }
+
+  .sidebar.sidebar-mobile-open {
+    transform: translateX(0);
+  }
+
+  .sidebar-mobile-backdrop {
+    display: block;
+    position: fixed;
+    z-index: 20;
+    inset: 0;
+    border: 0;
+    background: rgba(15, 23, 42, 0.6);
+  }
+
+  .sidebar-mobile-close {
+    display: inline-flex;
+    align-self: flex-end;
+    padding: 6px 10px;
+    border: 1px solid rgba(203, 213, 225, 0.4);
+    border-radius: 10px;
+    background: transparent;
+    color: #cbd5e1;
+    font-size: 12px;
+    font-weight: 800;
+  }
+
+  .sidebar-mobile-toggle {
+    display: inline-flex;
+    align-self: flex-start;
+    margin-bottom: 6px;
+    padding: 7px 11px;
+    border: 0;
+    border-radius: 11px;
+    background: #0f172a;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 900;
+  }
+
+  .channel-list {
+    max-height: 34vh;
   }
 
   .workspace {
-    height: auto;
-    min-height: 100vh;
-    overflow: visible;
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+    min-height: 100dvh;
+    padding: 12px;
+    overflow: hidden;
   }
 
   .login-screen {
@@ -1436,8 +1504,72 @@ button {
     font-size: 56px;
   }
 
+  .workspace-header {
+    display: grid;
+    padding: 16px;
+    gap: 12px;
+  }
+
+  .workspace-header h1 {
+    font-size: 30px;
+    line-height: 1.1;
+    white-space: normal;
+  }
+
+  .workspace-header p {
+    font-size: 14px;
+  }
+
   .workspace-header,
   .composer {
     grid-template-columns: 1fr;
+  }
+
+  .channel-actions,
+  .channel-actions button {
+    width: 100%;
+  }
+
+  .messages-panel {
+    flex: 1;
+    margin-top: 12px;
+    width: 100%;
+    max-width: 100%;
+    padding: 2px 0 14px;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .message,
+  .trace-group {
+    max-width: 100%;
+  }
+
+  .composer {
+    position: static;
+    margin-top: 10px;
+    padding: 10px;
+    border-radius: 16px;
+  }
+
+  .composer-actions {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .composer button {
+    padding: 12px 14px;
+  }
+
+  .new-conversation-button kbd {
+    display: none;
+  }
+
+  .dialog-backdrop {
+    padding: 12px;
+  }
+
+  .conversation-dialog {
+    max-height: calc(100dvh - 24px);
   }
 }

@@ -511,6 +511,7 @@ export default function App() {
   const [expandedTraceEventId, setExpandedTraceEventId] = useState<string | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const [wsConnected, setWsConnected] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   const activeChannel = useMemo(
     () => channels.find((channel) => channel.id === activeChannelId) ?? null,
@@ -673,6 +674,7 @@ export default function App() {
 
   function selectChannel(channelId: string | null, options?: { replace?: boolean }) {
     setActiveChannelId(channelId);
+    setMobileSidebarOpen(false);
     updateChannelDeepLink(channelId, options?.replace);
   }
 
@@ -1351,12 +1353,16 @@ export default function App() {
       });
       setDraft("");
       setPendingAttachments([]);
+      setHasNewMessagesBelow(false);
       if (wsConnected) {
-        setHasNewMessagesBelow(false);
         scrollMessagesToBottom();
       } else {
         await loadMessages(activeChannelId, { scrollToBottom: true });
       }
+      window.requestAnimationFrame(() => {
+        scrollMessagesToBottom("auto");
+        composerTextareaRef.current?.scrollIntoView({ block: "nearest" });
+      });
     } catch (sendError) {
       setError(sendError instanceof Error ? sendError.message : "Unable to send message");
     } finally {
@@ -1770,7 +1776,14 @@ export default function App() {
 
   return (
     <main className="app-shell">
-      <aside className="sidebar">
+      <aside className={`sidebar ${mobileSidebarOpen ? "sidebar-mobile-open" : ""}`}>
+        <button
+          type="button"
+          className="sidebar-mobile-close"
+          onClick={() => setMobileSidebarOpen(false)}
+        >
+          Close
+        </button>
         <div className="brand">
           <div className="brand-mark">OO</div>
           <div>
@@ -1876,9 +1889,24 @@ export default function App() {
           </button>
         </section>
       </aside>
+      {mobileSidebarOpen ? (
+        <button
+          type="button"
+          aria-label="Close navigation"
+          className="sidebar-mobile-backdrop"
+          onClick={() => setMobileSidebarOpen(false)}
+        />
+      ) : null}
 
       <section className="workspace">
         <header className="workspace-header">
+          <button
+            type="button"
+            className="sidebar-mobile-toggle"
+            onClick={() => setMobileSidebarOpen(true)}
+          >
+            Menu
+          </button>
           <div>
             <span>Workspace</span>
             <div className="workspace-title-row">
