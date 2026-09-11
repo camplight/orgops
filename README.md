@@ -190,7 +190,8 @@ chmod +x ./opscli-macos
   - in dev, Vite proxies `/api` and `/ws` to `http://localhost:8787` when using relative paths
 - User UI (`apps/user-ui`):
   - `VITE_API_BASE_URL` (optional; default: `/api`)
-  - runtime override via `window.__ORGOPS_USER_UI_CONFIG__ = { apiBaseUrl }`
+  - `VITE_WS_BASE_URL` (optional; default: `/ws`, or derived from `VITE_API_BASE_URL` when absolute)
+  - runtime override via `window.__ORGOPS_USER_UI_CONFIG__ = { apiBaseUrl, wsBaseUrl }`
   - in dev, Vite proxies `/api` and `/ws` to `http://localhost:8787` when using relative paths
 
 ## Runner behavior notes

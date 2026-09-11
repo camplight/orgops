@@ -8,6 +8,7 @@ import {
   useState
 } from "react";
 import { apiFetch, apiJson, getApiHeaders } from "./api";
+import { wsUrl } from "./config";
 import type { Agent, AuthMe, Channel, ChannelParticipant, EventRow, Team } from "./types";
 
 function formatTime(value?: number) {
@@ -86,6 +87,12 @@ type MessageAttachment = {
   name: string;
   mime?: string;
   size?: number;
+};
+
+type WsServerEventMessage = {
+  type: "event";
+  topic: string;
+  data: EventRow;
 };
 
 function normalizedSubscriberType(participant: ChannelParticipant) {
@@ -445,6 +452,16 @@ export default function App() {
   const lastSeenByChannelRef = useRef<Record<string, number>>({});
   const lastLoadedMessageAtByChannelRef = useRef<Record<string, number>>({});
   const lastLoadedTimelineAtByChannelRef = useRef<Record<string, number>>({});
+  const channelsRef = useRef<Channel[]>([]);
+  const usernameRef = useRef("");
+  const userIdRef = useRef<string | null>(null);
+  const viewerTeamIdsRef = useRef<Set<string>>(new Set());
+  const seenWsEventIdsRef = useRef<Set<string>>(new Set());
+  const wsRef = useRef<WebSocket | null>(null);
+  const wsSubscribedTopicsRef = useRef<Set<string>>(new Set());
+  const wsReconnectTimerRef = useRef<number | null>(null);
+  const wsShouldReconnectRef = useRef(true);
+  const wsReconnectAttemptRef = useRef(0);
   const messageFetchSeqRef = useRef(0);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -493,11 +510,24 @@ export default function App() {
   const [archiveDraft, setArchiveDraft] = useState(false);
   const [expandedTraceEventId, setExpandedTraceEventId] = useState<string | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
+  const [wsConnected, setWsConnected] = useState(false);
 
   const activeChannel = useMemo(
     () => channels.find((channel) => channel.id === activeChannelId) ?? null,
     [activeChannelId, channels]
   );
+
+  useEffect(() => {
+    channelsRef.current = channels;
+  }, [channels]);
+
+  useEffect(() => {
+    usernameRef.current = username;
+  }, [username]);
+
+  useEffect(() => {
+    userIdRef.current = userId;
+  }, [userId]);
 
   const visibleTimelineEvents = useMemo(
     () => events.filter((event) => event.type === "message.created" || isTraceEvent(event)),
@@ -553,6 +583,9 @@ export default function App() {
   }, [events]);
 
   const viewerTeamIds = useMemo(() => new Set(teams.map((team) => team.id)), [teams]);
+  useEffect(() => {
+    viewerTeamIdsRef.current = viewerTeamIds;
+  }, [viewerTeamIds]);
   const visibleChannels = useMemo(
     () =>
       channels.filter((channel) =>
@@ -758,6 +791,17 @@ export default function App() {
     });
   }
 
+  function rememberWsEvent(eventId: string) {
+    const seen = seenWsEventIdsRef.current;
+    if (seen.has(eventId)) return false;
+    seen.add(eventId);
+    if (seen.size > 3000) {
+      const first = seen.values().next();
+      if (!first.done) seen.delete(first.value);
+    }
+    return true;
+  }
+
   async function loadMessages(
     channelId: string,
     options?: { scrollToBottom?: boolean; showLoading?: boolean; scrollBehavior?: ScrollBehavior }
@@ -947,6 +991,74 @@ export default function App() {
     }
   }
 
+  function handleIncomingRealtimeEvent(event: EventRow) {
+    if (!event.id || !rememberWsEvent(event.id)) return;
+    const eventChannelId = event.channelId;
+    if (!eventChannelId) return;
+
+    const currentActiveId = activeChannelIdRef.current;
+    if (eventChannelId === currentActiveId && (event.type === "message.created" || isTraceEvent(event))) {
+      const shouldAutoScroll = isMessagesPanelNearBottom();
+      setEvents((current) => mergeEventsChronologically(current, [event]));
+      if (event.type === "message.created" || event.type === "agent.turn.failed") {
+        const eventCreatedAt = event.createdAt ?? 0;
+        if (eventCreatedAt > 0) {
+          lastSeenByChannelRef.current[eventChannelId] = Math.max(
+            lastSeenByChannelRef.current[eventChannelId] ?? 0,
+            eventCreatedAt
+          );
+          lastLoadedMessageAtByChannelRef.current[eventChannelId] = Math.max(
+            lastLoadedMessageAtByChannelRef.current[eventChannelId] ?? 0,
+            eventCreatedAt
+          );
+        }
+      }
+      const timelineCreatedAt = event.createdAt ?? 0;
+      if (timelineCreatedAt > 0) {
+        lastLoadedTimelineAtByChannelRef.current[eventChannelId] = Math.max(
+          lastLoadedTimelineAtByChannelRef.current[eventChannelId] ?? 0,
+          timelineCreatedAt
+        );
+      }
+      setUnreadCounts((current) => {
+        if (!current[eventChannelId]) return current;
+        const next = { ...current };
+        delete next[eventChannelId];
+        return next;
+      });
+      if (shouldAutoScroll) {
+        setHasNewMessagesBelow(false);
+        scrollMessagesToBottom();
+      } else {
+        setHasNewMessagesBelow(true);
+      }
+      return;
+    }
+
+    if (event.type !== "message.created") return;
+    if (eventChannelId === currentActiveId) return;
+
+    const channel = channelsRef.current.find((candidate) => candidate.id === eventChannelId);
+    if (!channel || channel.archivedAt) return;
+    if (
+      !channelVisibleToUserUi(
+        channel,
+        userIdRef.current,
+        usernameRef.current,
+        viewerTeamIdsRef.current
+      )
+    ) {
+      return;
+    }
+    const eventCreatedAt = event.createdAt ?? 0;
+    if (eventCreatedAt <= (lastSeenByChannelRef.current[eventChannelId] ?? 0)) return;
+
+    setUnreadCounts((current) => ({
+      ...current,
+      [eventChannelId]: (current[eventChannelId] ?? 0) + 1
+    }));
+  }
+
   useEffect(() => {
     document.title = "OrgOps User UI";
     void loadSession();
@@ -982,16 +1094,118 @@ export default function App() {
       scrollToBottom: true,
       showLoading: true
     });
-    const interval = window.setInterval(() => void loadMessages(activeChannelId), 5000);
-    return () => window.clearInterval(interval);
   }, [activeChannelId, authenticated, mustChangePassword]);
 
   useEffect(() => {
     if (!authenticated || mustChangePassword) return;
     void loadMessageNotifications();
-    const interval = window.setInterval(() => void loadMessageNotifications(), 5000);
-    return () => window.clearInterval(interval);
   }, [authenticated, mustChangePassword, channels]);
+
+  useEffect(() => {
+    if (!authenticated || mustChangePassword) return;
+    wsShouldReconnectRef.current = true;
+    const url = wsUrl();
+
+    const clearReconnectTimer = () => {
+      if (wsReconnectTimerRef.current !== null) {
+        window.clearTimeout(wsReconnectTimerRef.current);
+        wsReconnectTimerRef.current = null;
+      }
+    };
+
+    const subscribeTopic = (topic: string) => {
+      if (!wsSubscribedTopicsRef.current.has(topic)) {
+        wsSubscribedTopicsRef.current.add(topic);
+      }
+      const ws = wsRef.current;
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "subscribe", topic }));
+      }
+    };
+
+    const connect = () => {
+      const ws = new WebSocket(url);
+      wsRef.current = ws;
+      ws.onopen = () => {
+        setWsConnected(true);
+        wsReconnectAttemptRef.current = 0;
+        for (const topic of wsSubscribedTopicsRef.current) {
+          ws.send(JSON.stringify({ type: "subscribe", topic }));
+        }
+        const liveChannelId = activeChannelIdRef.current;
+        if (liveChannelId) {
+          void loadMessages(liveChannelId);
+        }
+        void loadMessageNotifications();
+      };
+      ws.onmessage = (raw) => {
+        try {
+          const parsed = JSON.parse(String(raw.data)) as WsServerEventMessage;
+          if (parsed.type === "event" && parsed.data) {
+            handleIncomingRealtimeEvent(parsed.data);
+          }
+        } catch {
+          // Ignore malformed payloads from background topics.
+        }
+      };
+      ws.onerror = () => ws.close();
+      ws.onclose = () => {
+        setWsConnected(false);
+        if (!wsShouldReconnectRef.current) return;
+        const delay = Math.min(5000, 400 * 2 ** wsReconnectAttemptRef.current);
+        wsReconnectAttemptRef.current += 1;
+        clearReconnectTimer();
+        wsReconnectTimerRef.current = window.setTimeout(connect, delay);
+      };
+    };
+
+    connect();
+
+    return () => {
+      wsShouldReconnectRef.current = false;
+      clearReconnectTimer();
+      wsRef.current?.close();
+      wsRef.current = null;
+      wsReconnectAttemptRef.current = 0;
+      wsSubscribedTopicsRef.current.clear();
+      setWsConnected(false);
+    };
+  }, [authenticated, mustChangePassword]);
+
+  useEffect(() => {
+    if (!authenticated || mustChangePassword) return;
+    const desiredTopics = new Set<string>();
+    for (const channel of visibleChannels) {
+      desiredTopics.add(`channel:${channel.id}`);
+    }
+    const ws = wsRef.current;
+    for (const topic of [...wsSubscribedTopicsRef.current]) {
+      if (!desiredTopics.has(topic)) {
+        wsSubscribedTopicsRef.current.delete(topic);
+        if (ws?.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "unsubscribe", topic }));
+        }
+      }
+    }
+    for (const topic of desiredTopics) {
+      if (!wsSubscribedTopicsRef.current.has(topic)) {
+        wsSubscribedTopicsRef.current.add(topic);
+        if (ws?.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "subscribe", topic }));
+        }
+      }
+    }
+  }, [authenticated, mustChangePassword, visibleChannels]);
+
+  useEffect(() => {
+    if (!authenticated || mustChangePassword || wsConnected) return;
+    const interval = window.setInterval(() => {
+      const liveChannelId = activeChannelIdRef.current;
+      if (liveChannelId) void loadMessages(liveChannelId);
+      void loadMessageNotifications();
+    }, 10000);
+    return () => window.clearInterval(interval);
+  }, [authenticated, mustChangePassword, wsConnected]);
 
   useEffect(() => {
     if (!authenticated || mustChangePassword) return;
@@ -1137,7 +1351,12 @@ export default function App() {
       });
       setDraft("");
       setPendingAttachments([]);
-      await loadMessages(activeChannelId, { scrollToBottom: true });
+      if (wsConnected) {
+        setHasNewMessagesBelow(false);
+        scrollMessagesToBottom();
+      } else {
+        await loadMessages(activeChannelId, { scrollToBottom: true });
+      }
     } catch (sendError) {
       setError(sendError instanceof Error ? sendError.message : "Unable to send message");
     } finally {

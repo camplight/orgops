@@ -523,7 +523,8 @@ Security note: wrapped `source`, `setup.command`, and `runtime.command` are host
   - optional runtime override: `window.__ORGOPS_UI_CONFIG__ = { apiBaseUrl, wsBaseUrl }`
 - User UI build/runtime config:
   - `VITE_API_BASE_URL`
-  - optional runtime override: `window.__ORGOPS_USER_UI_CONFIG__ = { apiBaseUrl }`
+  - `VITE_WS_BASE_URL`
+  - optional runtime override: `window.__ORGOPS_USER_UI_CONFIG__ = { apiBaseUrl, wsBaseUrl }`
 - RLM controls:
   - `ORGOPS_RLM_MAX_STEPS`
   - `ORGOPS_RLM_MAX_OUTPUT_CHARS`
