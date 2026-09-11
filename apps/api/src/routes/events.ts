@@ -178,6 +178,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
   function readEventQuery(url: string) {
     const params = new URL(url).searchParams;
     const scheduled = params.get("scheduled");
+    const includeConsumed = params.get("includeConsumed");
     return {
       params,
       channelId: params.get("channelId"),
@@ -195,6 +196,8 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       descending: params.get("order") === "desc",
       all: params.get("all") === "1",
       scheduledOnly: scheduled === "1" || scheduled === "true",
+      includeConsumedScheduled:
+        includeConsumed === "1" || includeConsumed === "true",
     };
   }
 
@@ -214,6 +217,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       after: query.after ?? undefined,
       before: query.before ?? undefined,
       scheduled: query.scheduledOnly ? true : undefined,
+      includeConsumed: query.includeConsumedScheduled ? true : undefined,
       order: query.order ?? undefined,
     };
   }
@@ -238,6 +242,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       descending,
       all,
       scheduledOnly,
+      includeConsumedScheduled,
     } = query;
     const isRunnerRequest = user?.username === "runner";
     const isScopedRunner =
@@ -284,7 +289,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       whereClauses.push(eq(schema.events.status, status));
     }
 
-    if (scheduledOnly && !status) {
+    if (scheduledOnly && !status && !includeConsumedScheduled) {
       whereClauses.push(eq(schema.events.status, "PENDING"));
     }
 
@@ -302,7 +307,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
         const receiptClauses: any[] = [
           eq(schema.eventReceipts.agent_name, agentName),
         ];
-        if (scheduledOnly) {
+        if (scheduledOnly && !includeConsumedScheduled) {
           receiptClauses.push(gt(schema.events.deliver_at, now));
         } else {
           receiptClauses.push(
@@ -314,7 +319,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
         }
         if (status) {
           receiptClauses.push(eq(schema.eventReceipts.status, status));
-        } else if (scheduledOnly) {
+        } else if (scheduledOnly && !includeConsumedScheduled) {
           receiptClauses.push(eq(schema.eventReceipts.status, "PENDING"));
         }
         if (channelId) {
@@ -439,14 +444,20 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       if (agentVisibility) whereClauses.push(agentVisibility);
       whereClauses.push(
         (scheduledOnly
-          ? gt(schema.events.deliver_at, now)
+          ? includeConsumedScheduled
+            ? not(isNull(schema.events.deliver_at))
+            : gt(schema.events.deliver_at, now)
           : or(
               isNull(schema.events.deliver_at),
               lte(schema.events.deliver_at, now),
             )) as any,
       );
     } else if (scheduledOnly) {
-      whereClauses.push(gt(schema.events.deliver_at, now));
+      whereClauses.push(
+        includeConsumedScheduled
+          ? not(isNull(schema.events.deliver_at))
+          : gt(schema.events.deliver_at, now),
+      );
     }
 
     const whereExpr =

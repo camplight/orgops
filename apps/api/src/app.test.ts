@@ -3096,6 +3096,20 @@ describe("api app", () => {
     expect(futureRes.status).toBe(201);
     const futureEvent = (await futureRes.json()) as { id: string };
 
+    const pastScheduledRes = await app.request("http://localhost/api/events", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        type: "message.created",
+        payload: { text: "past scheduled message" },
+        source: "agent:agent-future",
+        channelId: channel.id,
+        deliverAt: Date.now() - 60_000,
+      }),
+    });
+    expect(pastScheduledRes.status).toBe(201);
+    const pastScheduledEvent = (await pastScheduledRes.json()) as { id: string };
+
     const uiFeedRes = await app.request(
       `http://localhost/api/events?channelId=${channel.id}&limit=50`,
       { headers: { cookie } },
@@ -3112,6 +3126,16 @@ describe("api app", () => {
     expect(scheduledRes.status).toBe(200);
     const scheduled = (await scheduledRes.json()) as Array<{ id: string }>;
     expect(scheduled.some((row) => row.id === futureEvent.id)).toBe(true);
+    expect(scheduled.some((row) => row.id === pastScheduledEvent.id)).toBe(false);
+
+    const scheduledAllRes = await app.request(
+      `http://localhost/api/events?channelId=${channel.id}&scheduled=1&includeConsumed=1&limit=50`,
+      { headers: { cookie } },
+    );
+    expect(scheduledAllRes.status).toBe(200);
+    const scheduledAll = (await scheduledAllRes.json()) as Array<{ id: string }>;
+    expect(scheduledAll.some((row) => row.id === futureEvent.id)).toBe(true);
+    expect(scheduledAll.some((row) => row.id === pastScheduledEvent.id)).toBe(true);
 
     rmSync(dataDir, { recursive: true, force: true });
   });

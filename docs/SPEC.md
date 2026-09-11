@@ -269,6 +269,8 @@ Server messages:
 { "type": "error", "message": "..." }
 ```
 
+For non-runner websocket clients, `event` messages with future `deliverAt` are deferred and delivered when due (`deliverAt <= now`) to match non-runner `GET /api/events` visibility while preserving realtime pacing for scheduled events. Runner-authenticated websocket clients still receive future scheduled events immediately.
+
 Published topics include:
 
 - `org:events`
@@ -362,6 +364,9 @@ Published topics include:
 
 - `POST /api/events`
 - `GET /api/events`
+  - query supports filters (`channelId`, `type`, `source`, `status`, `after`, `before`, `limit`, `order`)
+  - `scheduled=1` returns future pending scheduled events
+  - `scheduled=1&includeConsumed=1` returns scheduled history (both future and consumed)
 - `GET /api/events/:id`
 - `PATCH /api/events/:id` (future scheduled `PENDING` events only)
 - `POST /api/events/:id/ack`

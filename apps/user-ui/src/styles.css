@@ -454,11 +454,20 @@ button {
 
 .workspace {
   display: grid;
-  grid-template-rows: auto auto 1fr auto;
+  grid-template-rows: auto auto minmax(0, 1fr);
   min-width: 0;
   height: 100dvh;
   padding: 24px;
   overflow: hidden;
+}
+
+.chat-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  min-height: 0;
+  margin-top: 18px;
 }
 
 .workspace-header {
@@ -688,12 +697,16 @@ button {
 .messages-panel {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
   gap: 10px;
   min-height: 0;
-  margin-top: 18px;
   padding: 6px;
   overflow-x: hidden;
   overflow-y: auto;
+}
+
+.messages-panel-empty {
+  justify-content: flex-start;
 }
 
 .message {
@@ -911,7 +924,7 @@ button {
 .empty-state {
   display: grid;
   place-items: center;
-  min-height: 260px;
+  min-height: clamp(120px, 26vh, 240px);
   border: 1px dashed #cbd5e1;
   border-radius: 24px;
   background: rgba(255, 255, 255, 0.62);
@@ -934,6 +947,8 @@ button {
   gap: 12px;
   align-items: end;
   align-self: stretch;
+  flex: 0 0 auto;
+  margin-top: auto;
   width: 100%;
   min-width: 0;
   padding: 14px;
@@ -941,6 +956,14 @@ button {
   border-radius: 24px;
   background: #fff;
   box-shadow: 0 18px 50px rgba(15, 23, 42, 0.08);
+}
+
+.composer-compact {
+  width: 100%;
+  max-width: none;
+  margin-inline: auto;
+  padding: 8px 10px;
+  border-radius: 18px;
 }
 
 .composer-file-input {
@@ -1020,6 +1043,48 @@ button {
   font-size: 16px;
   line-height: 1.45;
   overflow-y: hidden;
+}
+
+.composer-compact textarea {
+  min-height: 34px;
+  line-height: 1.35;
+  resize: none;
+}
+
+.composer-compact .composer-actions {
+  grid-template-columns: auto auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.composer-compact button {
+  padding: 9px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+}
+
+@media (min-width: 1025px) {
+  .composer-compact {
+    padding: 6px 8px;
+    border-radius: 14px;
+  }
+
+  .composer-compact textarea {
+    min-height: 30px;
+    max-height: 64px;
+    font-size: 14px;
+    line-height: 1.25;
+  }
+
+  .composer-compact .composer-actions {
+    gap: 4px;
+  }
+
+  .composer-compact button {
+    padding: 7px 10px;
+    border-radius: 10px;
+    font-size: 11px;
+  }
 }
 
 .composer-actions {
@@ -1494,6 +1559,10 @@ button {
     overflow: hidden;
   }
 
+  .chat-stack {
+    margin-top: 12px;
+  }
+
   .login-screen {
     grid-template-columns: 1fr;
     gap: 28px;
@@ -1532,7 +1601,6 @@ button {
 
   .messages-panel {
     flex: 1;
-    margin-top: 12px;
     width: 100%;
     max-width: 100%;
     padding: 2px 0 14px;

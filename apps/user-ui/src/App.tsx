@@ -28,7 +28,8 @@ function formatTime(value?: number) {
           ...(date.getFullYear() === today.getFullYear() ? {} : { year: "numeric" })
         }),
     hour: "2-digit",
-    minute: "2-digit"
+    minute: "2-digit",
+    second: "2-digit"
   }).format(date);
 }
 
@@ -53,6 +54,10 @@ function messageRole(source: string) {
   if (source.startsWith("human:")) return "human";
   if (source.startsWith("agent:")) return "agent";
   return "system";
+}
+
+function messageDisplayTime(event: EventRow) {
+  return event.deliverAt ?? event.createdAt;
 }
 
 const DIRECT_CHANNEL_KINDS = new Set(["HUMAN_AGENT_DM", "AGENT_AGENT_DM", "DIRECT_GROUP"]);
@@ -407,7 +412,15 @@ function mergeEventsChronologically(current: EventRow[], incoming: EventRow[]) {
   const byId = new Map<string, EventRow>();
   for (const event of current) byId.set(event.id, event);
   for (const event of incoming) byId.set(event.id, event);
-  return [...byId.values()].sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0));
+  return [...byId.values()].sort((left, right) => {
+    const leftPrimary = left.deliverAt ?? left.createdAt ?? 0;
+    const rightPrimary = right.deliverAt ?? right.createdAt ?? 0;
+    if (leftPrimary !== rightPrimary) return leftPrimary - rightPrimary;
+    const leftCreated = left.createdAt ?? 0;
+    const rightCreated = right.createdAt ?? 0;
+    if (leftCreated !== rightCreated) return leftCreated - rightCreated;
+    return left.id.localeCompare(right.id);
+  });
 }
 
 function createLocalAttachmentId() {
@@ -463,6 +476,8 @@ export default function App() {
   const wsShouldReconnectRef = useRef(true);
   const wsReconnectAttemptRef = useRef(0);
   const messageFetchSeqRef = useRef(0);
+  const loadingChannelIdRef = useRef<string | null>(null);
+  const forceScrollToBottomOnLoadRef = useRef(false);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
@@ -571,6 +586,7 @@ export default function App() {
     flushTraceBuffer();
     return items;
   }, [visibleTimelineEvents]);
+  const isConversationEmpty = !messagesLoading && timelineItems.length === 0;
 
   const agentIsThinking = useMemo(() => {
     let activeTurns = 0;
@@ -811,7 +827,10 @@ export default function App() {
     const fetchSeq = messageFetchSeqRef.current + 1;
     messageFetchSeqRef.current = fetchSeq;
     const limit = adaptiveMessageBatchSize();
-    if (options?.showLoading) setMessagesLoading(true);
+    if (options?.showLoading) {
+      loadingChannelIdRef.current = channelId;
+      setMessagesLoading(true);
+    }
     try {
       const [messageEvents, failureEvents, turnEvents, toolEvents, contextEvents, wrapperEvents, processEvents] =
         await Promise.all([
@@ -874,6 +893,7 @@ export default function App() {
         nextNewestTimelineAt
       );
       if (options?.scrollToBottom) {
+        forceScrollToBottomOnLoadRef.current = true;
         setHasNewMessagesBelow(false);
         scrollMessagesToBottom(options.scrollBehavior);
       }
@@ -890,7 +910,11 @@ export default function App() {
         setError(loadError instanceof Error ? loadError.message : "Unable to load messages");
       }
     } finally {
-      if (options?.showLoading && fetchSeq === messageFetchSeqRef.current) {
+      if (
+        loadingChannelIdRef.current === channelId &&
+        fetchSeq === messageFetchSeqRef.current
+      ) {
+        loadingChannelIdRef.current = null;
         setMessagesLoading(false);
       }
     }
@@ -1074,6 +1098,8 @@ export default function App() {
   useEffect(() => {
     messageFetchSeqRef.current += 1;
     activeChannelIdRef.current = activeChannelId;
+    loadingChannelIdRef.current = activeChannelId;
+    forceScrollToBottomOnLoadRef.current = Boolean(activeChannelId);
     setEvents([]);
     setMessagesLoading(Boolean(activeChannelId));
     setLoadingOlderMessages(false);
@@ -1097,6 +1123,19 @@ export default function App() {
       showLoading: true
     });
   }, [activeChannelId, authenticated, mustChangePassword]);
+
+  useEffect(() => {
+    if (!activeChannelId || messagesLoading) return;
+    if (!forceScrollToBottomOnLoadRef.current) return;
+    forceScrollToBottomOnLoadRef.current = false;
+    // Run after paint to handle initial DOM/layout settling on hard reload.
+    window.requestAnimationFrame(() => {
+      scrollMessagesToBottom("auto");
+      window.requestAnimationFrame(() => {
+        scrollMessagesToBottom("auto");
+      });
+    });
+  }, [activeChannelId, messagesLoading, timelineItems.length]);
 
   useEffect(() => {
     if (!authenticated || mustChangePassword) return;
@@ -1636,11 +1675,14 @@ export default function App() {
   function resizeComposerTextarea(textarea?: HTMLTextAreaElement | null) {
     const target = textarea ?? composerTextareaRef.current;
     if (!target) return;
-    const viewportMax = Math.max(120, Math.floor(window.innerHeight / 3));
+    const viewportMax = isConversationEmpty
+      ? Math.max(56, Math.floor(window.innerHeight / 8))
+      : Math.max(120, Math.floor(window.innerHeight / 3));
+    const minHeight = isConversationEmpty ? 34 : 56;
     target.style.maxHeight = `${viewportMax}px`;
     target.style.height = "auto";
     const nextHeight = Math.min(target.scrollHeight, viewportMax);
-    target.style.height = `${Math.max(56, nextHeight)}px`;
+    target.style.height = `${Math.max(minHeight, nextHeight)}px`;
     target.style.overflowY = target.scrollHeight > viewportMax ? "auto" : "hidden";
   }
 
@@ -1665,7 +1707,7 @@ export default function App() {
 
   useEffect(() => {
     resizeComposerTextarea();
-  }, [draft]);
+  }, [draft, isConversationEmpty, activeChannelId]);
 
   useEffect(() => {
     function handleWindowResize() {
@@ -1928,124 +1970,129 @@ export default function App() {
         {error ? <div className="notice error">{error}</div> : null}
         {loading ? <div className="notice">Loading OrgOps...</div> : null}
 
-        <section className="messages-panel" ref={messagesPanelRef} onScroll={handleMessagesScroll}>
-          {!messagesLoading && hasOlderMessages ? (
-            <button
-              className="load-older-button"
-              disabled={loadingOlderMessages}
-              onClick={() => void handleLoadOlderMessages()}
-            >
-              {loadingOlderMessages ? "Loading previous messages..." : "Load previous messages"}
-            </button>
-          ) : null}
-          {messagesLoading ? (
-            <div className="empty-state">
-              <strong>Loading messages...</strong>
-              <p>Fetching the latest channel activity.</p>
-            </div>
-          ) : timelineItems.length === 0 ? (
-            <div className="empty-state">
-              <strong>No messages yet</strong>
-              <p>Send a short update or request to start the conversation.</p>
-            </div>
-          ) : (
-            timelineItems.map((item) => {
-              if (item.kind === "message") {
-                const event = item.event;
-                const role = messageRole(event.source);
-                const attachments = parseMessageAttachments(event.payload);
+        <section className="chat-stack">
+          <section
+            className={`messages-panel${isConversationEmpty ? " messages-panel-empty" : ""}`}
+            ref={messagesPanelRef}
+            onScroll={handleMessagesScroll}
+          >
+            {!messagesLoading && hasOlderMessages ? (
+              <button
+                className="load-older-button"
+                disabled={loadingOlderMessages}
+                onClick={() => void handleLoadOlderMessages()}
+              >
+                {loadingOlderMessages ? "Loading previous messages..." : "Load previous messages"}
+              </button>
+            ) : null}
+            {messagesLoading ? (
+              <div className="empty-state">
+                <strong>Loading messages...</strong>
+                <p>Fetching the latest channel activity.</p>
+              </div>
+            ) : timelineItems.length === 0 ? (
+              <div className="empty-state">
+                <strong>No messages yet</strong>
+                <p>Send a short update or request to start the conversation.</p>
+              </div>
+            ) : (
+              timelineItems.map((item) => {
+                if (item.kind === "message") {
+                  const event = item.event;
+                  const role = messageRole(event.source);
+                  const attachments = parseMessageAttachments(event.payload);
+                  return (
+                    <article className={`message message-${role}`} key={item.id}>
+                      <div className="message-meta">
+                        <strong>{sourceLabel(event.source)}</strong>
+                        <span>{formatTime(messageDisplayTime(event))}</span>
+                      </div>
+                      <p>{messageText(event)}</p>
+                      {attachments.length > 0 ? (
+                        <div className="message-attachments">
+                          <strong>Attachments</strong>
+                          <ul>
+                            {attachments.map((attachment, index) => {
+                              const sizeLabel = formatAttachmentSize(attachment.size);
+                              const mimeLabel = attachment.mime ? attachment.mime : "";
+                              return (
+                                <li key={`${event.id}-attachment-${index}`}>
+                                  <a href={`/api/files/${encodeURIComponent(attachment.fileId)}`} target="_blank" rel="noreferrer">
+                                    {attachment.name}
+                                  </a>
+                                  {mimeLabel || sizeLabel ? (
+                                    <span>
+                                      {mimeLabel}
+                                      {mimeLabel && sizeLabel ? " • " : ""}
+                                      {sizeLabel || ""}
+                                    </span>
+                                  ) : null}
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        </div>
+                      ) : null}
+                    </article>
+                  );
+                }
+                const selectedEvent = item.traceEvents.find((event) => event.id === expandedTraceEventId) ?? null;
                 return (
-                  <article className={`message message-${role}`} key={item.id}>
-                    <div className="message-meta">
-                      <strong>{sourceLabel(event.source)}</strong>
-                      <span>{formatTime(event.createdAt)}</span>
+                  <article className={`trace-group trace-group-${item.tone}`} key={item.id}>
+                    <div className="trace-chips" role="list" aria-label="Agent activity trace">
+                      {item.traceEvents.map((event) => {
+                        const selected = event.id === expandedTraceEventId;
+                        const summary = traceTitle(event);
+                        return (
+                          <button
+                            key={event.id}
+                            className={`trace-chip trace-chip-${traceChipTone(event)} ${
+                              selected ? "trace-chip-active" : ""
+                            }`}
+                            title={`${summary}${event.createdAt ? ` • ${formatTime(event.createdAt)}` : ""}`}
+                            type="button"
+                            onClick={() =>
+                              setExpandedTraceEventId((current) => (current === event.id ? null : event.id))
+                            }
+                            aria-label={summary}
+                          >
+                            <span>{traceChipCode(event)}</span>
+                          </button>
+                        );
+                      })}
                     </div>
-                    <p>{messageText(event)}</p>
-                    {attachments.length > 0 ? (
-                      <div className="message-attachments">
-                        <strong>Attachments</strong>
-                        <ul>
-                          {attachments.map((attachment, index) => {
-                            const sizeLabel = formatAttachmentSize(attachment.size);
-                            const mimeLabel = attachment.mime ? attachment.mime : "";
-                            return (
-                              <li key={`${event.id}-attachment-${index}`}>
-                                <a href={`/api/files/${encodeURIComponent(attachment.fileId)}`} target="_blank" rel="noreferrer">
-                                  {attachment.name}
-                                </a>
-                                {mimeLabel || sizeLabel ? (
-                                  <span>
-                                    {mimeLabel}
-                                    {mimeLabel && sizeLabel ? " • " : ""}
-                                    {sizeLabel || ""}
-                                  </span>
-                                ) : null}
-                              </li>
-                            );
-                          })}
-                        </ul>
+                    {selectedEvent ? (
+                      <div className="trace-detail-card">
+                        <div className="trace-detail-meta">
+                          <strong>{traceTitle(selectedEvent)}</strong>
+                          <span>{formatTime(selectedEvent.createdAt)}</span>
+                        </div>
+                        {traceDetail(selectedEvent) ? (
+                          <pre>{traceDetail(selectedEvent)}</pre>
+                        ) : (
+                          <p>No additional details.</p>
+                        )}
                       </div>
                     ) : null}
                   </article>
                 );
-              }
-              const selectedEvent = item.traceEvents.find((event) => event.id === expandedTraceEventId) ?? null;
-              return (
-                <article className={`trace-group trace-group-${item.tone}`} key={item.id}>
-                  <div className="trace-chips" role="list" aria-label="Agent activity trace">
-                    {item.traceEvents.map((event) => {
-                      const selected = event.id === expandedTraceEventId;
-                      const summary = traceTitle(event);
-                      return (
-                        <button
-                          key={event.id}
-                          className={`trace-chip trace-chip-${traceChipTone(event)} ${
-                            selected ? "trace-chip-active" : ""
-                          }`}
-                          title={`${summary}${event.createdAt ? ` • ${formatTime(event.createdAt)}` : ""}`}
-                          type="button"
-                          onClick={() =>
-                            setExpandedTraceEventId((current) => (current === event.id ? null : event.id))
-                          }
-                          aria-label={summary}
-                        >
-                          <span>{traceChipCode(event)}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {selectedEvent ? (
-                    <div className="trace-detail-card">
-                      <div className="trace-detail-meta">
-                        <strong>{traceTitle(selectedEvent)}</strong>
-                        <span>{formatTime(selectedEvent.createdAt)}</span>
-                      </div>
-                      {traceDetail(selectedEvent) ? (
-                        <pre>{traceDetail(selectedEvent)}</pre>
-                      ) : (
-                        <p>No additional details.</p>
-                      )}
-                    </div>
-                  ) : null}
-                </article>
-              );
-            })
-          )}
-        </section>
+              })
+            )}
+          </section>
 
-        {hasNewMessagesBelow ? (
-          <button
-            className="new-messages-button"
-            onClick={() => {
-              setHasNewMessagesBelow(false);
-              scrollMessagesToBottom();
-            }}
-          >
-            New messages below
-          </button>
-        ) : null}
+          {hasNewMessagesBelow ? (
+            <button
+              className="new-messages-button"
+              onClick={() => {
+                setHasNewMessagesBelow(false);
+                scrollMessagesToBottom();
+              }}
+            >
+              New messages below
+            </button>
+          ) : null}
 
-        <form className="composer" onSubmit={handleSubmit}>
+          <form className={`composer${isConversationEmpty ? " composer-compact" : ""}`} onSubmit={handleSubmit}>
           <input
             ref={fileInputRef}
             type="file"
@@ -2100,11 +2147,13 @@ export default function App() {
               activeChannel?.archivedAt
                 ? "Restore this channel to send messages"
                 : activeChannel
-                  ? `Message ${channelLabel(activeChannel, username)} (Enter to send, Shift+Enter for newline)`
+                  ? isConversationEmpty
+                    ? `Message ${channelLabel(activeChannel, username)}`
+                    : `Message ${channelLabel(activeChannel, username)} (Enter to send, Shift+Enter for newline)`
                   : "Select a channel first"
             }
             disabled={!activeChannel || Boolean(activeChannel.archivedAt) || sending}
-            rows={3}
+            rows={isConversationEmpty ? 1 : 3}
           />
           <div className="composer-actions">
             <button
@@ -2136,7 +2185,8 @@ export default function App() {
               One or more attachments failed to upload. Remove them or retry.
             </p>
           ) : null}
-        </form>
+          </form>
+        </section>
       </section>
 
       <aside className="activity-panel">
