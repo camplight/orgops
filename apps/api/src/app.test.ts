@@ -4906,24 +4906,13 @@ describe("api app", () => {
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
 
-    const createChannelRes = await app.request("http://localhost/api/channels", {
+    const createInviteRes = await app.request("http://orgops.exe.xyz/api/agent-invites", {
       method: "POST",
       headers: { "content-type": "application/json", cookie },
       body: JSON.stringify({
-        name: "external-agents",
-        kind: "GROUP",
-      }),
-    });
-    expect(createChannelRes.status).toBe(201);
-    const createdChannel = (await createChannelRes.json()) as { id: string };
-
-    const createInviteRes = await app.request("http://localhost/api/agent-invites", {
-      method: "POST",
-      headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({
-        name: "claude-bootstrap",
         agentName: "claude-bridge",
-        channelIds: [createdChannel.id],
+        visibility: "PRIVATE",
+        channelIds: [],
       }),
     });
     expect(createInviteRes.status).toBe(201);
@@ -4932,10 +4921,17 @@ describe("api app", () => {
       inviteLink?: string;
       agentName: string;
       channelIds: string[];
+      visibility?: string;
+      createdByType?: string;
+      createdById?: string;
     };
     expect(invite.agentName).toBe("claude-bridge");
-    expect(invite.channelIds).toEqual([createdChannel.id]);
+    expect(invite.channelIds).toEqual([]);
+    expect(invite.visibility).toBe("PRIVATE");
+    expect(invite.createdByType).toBe("HUMAN");
+    expect(invite.createdById).toBe("admin");
     expect(typeof invite.inviteLink).toBe("string");
+    expect(invite.inviteLink?.startsWith("http://orgops.exe.xyz/api/agent-invites/public/")).toBe(true);
 
     const inviteLink = invite.inviteLink ?? "";
     const token = decodeURIComponent(inviteLink.split("/public/")[1] ?? "");
@@ -4974,11 +4970,31 @@ describe("api app", () => {
     expect(redeemRes.status).toBe(200);
     const redeemed = (await redeemRes.json()) as {
       runner: { token: string; runnerId: string };
-      agent: { name: string; assignedRunnerId: string };
+      agent: { name: string; assignedRunnerId: string; visibility?: string };
     };
     expect(redeemed.runner.token.startsWith("org_rt_")).toBe(true);
     expect(redeemed.agent.name).toBe("claude-bridge");
+    expect(redeemed.agent.visibility).toBe("PRIVATE");
     expect(redeemed.agent.assignedRunnerId).toBe(redeemed.runner.runnerId);
+
+    const agentCreatedInviteRes = await app.request("http://localhost/api/agent-invites", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orgops-runner-token": "test-token",
+      },
+      body: JSON.stringify({
+        agentName: "runner-owned-agent",
+        createdByAgentName: "ops-bot",
+      }),
+    });
+    expect(agentCreatedInviteRes.status).toBe(201);
+    const runnerInvite = (await agentCreatedInviteRes.json()) as {
+      createdByType?: string;
+      createdById?: string;
+    };
+    expect(runnerInvite.createdByType).toBe("AGENT");
+    expect(runnerInvite.createdById).toBe("ops-bot");
 
     const wrongRunnerRegister = await app.request("http://localhost/api/runners/register", {
       method: "POST",

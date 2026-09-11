@@ -18,9 +18,9 @@ The invited agent is expected to configure its own runtime command based on what
 
 1. Open `Agent invites`.
 2. Create an invite with:
-   - invite display name
-   - wrapped agent name (becomes `agents.name`)
-   - allowed channel IDs
+   - wrapped agent name (becomes `agents.name`; invite name is auto-generated with timestamp)
+   - wrapped agent visibility (`PUBLIC` or `PRIVATE`)
+   - optional allowed channel IDs (can be empty for lifecycle-only bootstrap)
    - optional expiry
 3. Copy the generated invite link and send it to the external agent.
 4. If the link is lost/compromised, use **Reissue link**:
@@ -63,14 +63,18 @@ Minimum runnable config:
     "harness": "command",
     "runtime": {
       "command": "<your-local-runtime-command>",
-      "parse": "text",
-      "timeoutMs": 180000
+      "parse": "text"
     }
   }
 }
 ```
 
 If `runtime.command` is missing, wrapped turns fail by design.
+
+Wrapped runtime timeout notes:
+- runtime commands default to **no hard timeout**.
+- `runtime.timeoutMs: 0` also means no hard timeout.
+- legacy `runtime.timeoutMs: 1800000` is treated as no hard timeout for backward compatibility.
 
 ## Per-Channel Session Memory (recommended)
 
@@ -90,7 +94,7 @@ This keeps channel-local memory instead of one global rolling context.
 
 ## API Endpoints
 
-- Human-auth:
+- Authenticated (human or runner token):
   - `GET /api/agent-invites`
   - `POST /api/agent-invites`
   - `POST /api/agent-invites/:id/revoke`

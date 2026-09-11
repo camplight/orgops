@@ -45,6 +45,7 @@ type SidecarEntry = {
 };
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
+const DEFAULT_RUNTIME_COMMAND_TIMEOUT_MS = 0;
 const DEFAULT_SIDECAR_RESTART_DELAY_MS = 2_000;
 const sidecars = new Map<string, SidecarEntry>();
 
@@ -86,15 +87,25 @@ function normalizeCommand(
   fallbackCwd: string,
   fallbackTimeoutMs = DEFAULT_COMMAND_TIMEOUT_MS,
   projectRoot?: string,
+  options?: { allowDisableTimeout?: boolean },
 ): NormalizedCommand | null {
   const command = readString(config?.command);
   if (!command) return null;
   const parse = readString(config?.parse);
+  const configuredTimeout = Number(config?.timeoutMs);
+  const timeoutMs =
+    options?.allowDisableTimeout &&
+    Number.isFinite(configuredTimeout) &&
+    // Legacy wrapped configs commonly set 1800000; treat it as "no hard timeout"
+    // so long-running wrapped turns are not force-terminated.
+    (configuredTimeout === 0 || configuredTimeout === 1_800_000)
+      ? 0
+      : readPositiveInt(config?.timeoutMs, fallbackTimeoutMs);
   return {
     command,
     args: readStringArray(config?.args),
     cwd: resolveCommandCwd(config?.cwd, fallbackCwd, projectRoot),
-    timeoutMs: readPositiveInt(config?.timeoutMs, fallbackTimeoutMs),
+    timeoutMs,
     env: readStringEnv(config?.env),
     parse: parse === "json-payloads" ? "json-payloads" : parse === "text" ? "text" : undefined,
   };
@@ -145,10 +156,13 @@ async function runCommand(
       windowsHide: true,
     });
     hooks?.onSpawn?.({ pid: child.pid });
-    const timeout = setTimeout(() => {
-      child.kill("SIGTERM");
-      rejectPromise(new Error(`Wrapped command timed out after ${commandConfig.timeoutMs}ms`));
-    }, commandConfig.timeoutMs);
+    const timeout =
+      commandConfig.timeoutMs > 0
+        ? setTimeout(() => {
+            child.kill("SIGTERM");
+            rejectPromise(new Error(`Wrapped command timed out after ${commandConfig.timeoutMs}ms`));
+          }, commandConfig.timeoutMs)
+        : null;
     child.stdout?.on("data", (chunk) => {
       stdout += String(chunk);
       if (stdout.length > 1_000_000) stdout = stdout.slice(-1_000_000);
@@ -160,11 +174,11 @@ async function runCommand(
       hooks?.onStderr?.(chunk);
     });
     child.on("error", (error) => {
-      clearTimeout(timeout);
+      if (timeout) clearTimeout(timeout);
       rejectPromise(error);
     });
     child.on("exit", (exitCode) => {
-      clearTimeout(timeout);
+      if (timeout) clearTimeout(timeout);
       resolvePromise({ exitCode, stdout, stderr });
     });
   });
@@ -658,7 +672,13 @@ export const commandWrapperHarness: WrapperHarness = {
     const { ctx, agent, config, channelId, triggerEvent, message, sessionId } = input;
     const sourceDir = sourceCheckoutPath(agent.workspacePath, config.source);
     const runtimeCwd = sourceDir && existsSync(sourceDir) ? sourceDir : agent.workspacePath;
-    const runtime = normalizeCommand(config.runtime, runtimeCwd, DEFAULT_COMMAND_TIMEOUT_MS, ctx.projectRoot);
+    const runtime = normalizeCommand(
+      config.runtime,
+      runtimeCwd,
+      DEFAULT_RUNTIME_COMMAND_TIMEOUT_MS,
+      ctx.projectRoot,
+      { allowDisableTimeout: true },
+    );
     if (!runtime) {
       throw new Error(`Wrapped agent ${agent.name} is missing wrappedConfig.runtime.command.`);
     }

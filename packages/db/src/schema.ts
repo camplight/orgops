@@ -97,12 +97,17 @@ export const agentInvites = sqliteTable(
     id: text("id").primaryKey(),
     name: text("name").notNull(),
     agent_name: text("agent_name").notNull(),
+    agent_visibility: text("agent_visibility")
+      .notNull()
+      .default(AGENT_VISIBILITY.PUBLIC),
     token_hash: text("token_hash").notNull().unique(),
     token_prefix: text("token_prefix").notNull(),
     channel_ids_json: text("channel_ids_json").notNull().default("[]"),
     wrapped_config_json: text("wrapped_config_json").notNull().default("{}"),
     max_uses: integer("max_uses").notNull().default(1),
     use_count: integer("use_count").notNull().default(0),
+    created_by_type: text("created_by_type").notNull().default("HUMAN"),
+    created_by_id: text("created_by_id"),
     created_by_human_id: text("created_by_human_id"),
     created_at: integer("created_at").notNull(),
     expires_at: integer("expires_at"),

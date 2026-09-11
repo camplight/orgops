@@ -186,7 +186,7 @@ Runner IDs are stable across restarts by persisting local `.agent-runner-id`.
 
 ### Agent Invites / Runner Tokens
 
-- `agent_invites`: human-created wrapped-agent bootstrap invites (hashed token, scoped channel set, optional wrapped config, expiry, usage count)
+- `agent_invites`: wrapped-agent bootstrap invites (hashed token, optional scoped channel set, invite-time agent visibility, creator metadata for human/agent callers, optional wrapped config, expiry, usage count)
 - `runner_tokens`: hashed runner credentials, including invite-scoped tokens bound to a single `agent_name` and `runner_id`
 
 ## Event Contract
@@ -227,6 +227,7 @@ Validation is dynamic and composed from:
 - Trusted runner token header: `x-orgops-runner-token`
 - Runner-only endpoint for secret env injection: `GET /api/secrets/env`
 - Invite redemption can mint **scoped runner tokens**. Scoped tokens are restricted to one agent, one runner ID, and invite-approved channels.
+- `POST /api/agent-invites` accepts authenticated humans and runner-authenticated agents.
 
 ### Tool Filesystem Access
 
@@ -288,6 +289,10 @@ Published topics include:
   - `POST /api/agent-invites/:id/reissue` (rotates token; old link invalid)
   - `GET /api/agent-invites/public/:token` (public)
   - `POST /api/agent-invites/public/:token/redeem` (public)
+  - `channelIds` is optional on create (invite may grant lifecycle-only bootstrap access)
+  - create payload supports `visibility` (`PUBLIC`/`PRIVATE`) applied to the wrapped agent at redeem time
+  - invite list/create responses include creator metadata (`createdByType`, `createdById`)
+  - invite links are resolved from request origin (`x-forwarded-*` or request URL), not hardcoded localhost
   - public invite/redeem responses include bootstrap hints (`wrappedConfigSchema`, patch endpoint, and session-memory guidance)
 
 ### Embed / v1 (integration API keys)

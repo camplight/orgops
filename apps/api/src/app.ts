@@ -426,7 +426,7 @@ export function createApp(config: AppConfig = {}) {
     orm,
     jsonResponse,
     access,
-    inviteBaseUrl: RUNNER_API_URL,
+    inviteBaseUrlFallback: RUNNER_API_URL,
   });
 
   registerModelsRoutes(app as any, { orm, jsonResponse, parseJson });

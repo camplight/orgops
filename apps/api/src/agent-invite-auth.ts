@@ -9,12 +9,15 @@ export type AgentInviteRow = {
   id: string;
   name: string;
   agent_name: string;
+  agent_visibility: string;
   token_hash: string;
   token_prefix: string;
   channel_ids_json: string;
   wrapped_config_json: string;
   max_uses: number;
   use_count: number;
+  created_by_type: string;
+  created_by_id: string | null;
   created_by_human_id: string | null;
   created_at: number;
   expires_at: number | null;

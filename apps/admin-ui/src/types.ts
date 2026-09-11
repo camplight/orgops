@@ -203,10 +203,13 @@ export type AgentInvite = {
   id: string;
   name: string;
   agentName: string;
+  visibility?: "PUBLIC" | "PRIVATE";
   tokenPrefix: string;
   channelIds: string[];
   maxUses: number;
   useCount: number;
+  createdByType?: "HUMAN" | "AGENT";
+  createdById?: string;
   createdByHumanId?: string | null;
   createdAt: number;
   expiresAt?: number | null;
