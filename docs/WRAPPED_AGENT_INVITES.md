@@ -64,12 +64,18 @@ Minimum runnable config:
     "runtime": {
       "command": "<your-local-runtime-command>",
       "parse": "text"
+    },
+    "secrets": {
+      "allowedKeys": ["OPENAI_API_KEY"],
+      "deniedKeys": []
     }
   }
 }
 ```
 
 If `runtime.command` is missing, wrapped turns fail by design.
+
+Use `wrappedConfig.secrets.allowedKeys` and `wrappedConfig.secrets.deniedKeys` to control which resolved secrets are injected into setup/runtime/sidecar environments for that wrapped agent. Patterns support exact keys and `*` wildcards.
 
 Wrapped runtime timeout notes:
 - runtime commands default to **no hard timeout**.

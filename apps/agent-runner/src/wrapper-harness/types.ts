@@ -40,6 +40,11 @@ export type WrapperSidecarConfig = WrapperCommandConfig & {
   restartDelayMs?: unknown;
 };
 
+export type WrapperSecretsConfig = {
+  allowedKeys?: unknown;
+  deniedKeys?: unknown;
+};
+
 export type NormalizedWrappedConfig = {
   kind: string;
   harness: string;
@@ -47,6 +52,7 @@ export type NormalizedWrappedConfig = {
   setup?: WrapperSetupConfig;
   runtime?: WrapperCommandConfig;
   sidecars: WrapperSidecarConfig[];
+  secrets?: WrapperSecretsConfig;
   sessionScope: WrapperSessionScope;
   raw: Record<string, unknown>;
 };
