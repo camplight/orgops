@@ -10,6 +10,12 @@ import {
 import { apiFetch, apiJson, getApiHeaders } from "./api";
 import { wsUrl } from "./config";
 import type { Agent, AuthMe, Channel, ChannelParticipant, EventRow, Team } from "./types";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+
+const MARKDOWN_HINT_RE =
+  /(^|\n)\s{0,3}(#{1,6}\s|[-*+]\s|\d+\.\s|>\s)|`{1,3}[^`]|(\*\*|__)[^*_]+(\*\*|__)|(\*|_)[^*_]+(\*|_)|\[[^\]]+\]\([^)]+\)|!\[[^\]]*\]\([^)]+\)|(^|\n)\|.+\|/m;
+const URL_RE = /(https?:\/\/[^\s<]+)/i;
 
 function formatTime(value?: number) {
   if (!value) return "";
@@ -42,6 +48,12 @@ function messageText(event: EventRow) {
   }
   const text = (payload as { text?: unknown }).text;
   return typeof text === "string" ? text : "";
+}
+
+function shouldRenderMarkdown(text: string) {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  return MARKDOWN_HINT_RE.test(trimmed) || URL_RE.test(trimmed);
 }
 
 function sourceLabel(source: string) {
@@ -2001,13 +2013,30 @@ export default function App() {
                   const event = item.event;
                   const role = messageRole(event.source);
                   const attachments = parseMessageAttachments(event.payload);
+                  const text = messageText(event);
+                  const markdown = shouldRenderMarkdown(text);
                   return (
                     <article className={`message message-${role}`} key={item.id}>
                       <div className="message-meta">
                         <strong>{sourceLabel(event.source)}</strong>
                         <span>{formatTime(messageDisplayTime(event))}</span>
                       </div>
-                      <p>{messageText(event)}</p>
+                      {markdown ? (
+                        <div className="message-markdown">
+                          <ReactMarkdown
+                            remarkPlugins={[remarkGfm]}
+                            components={{
+                              a: ({ node: _node, ...props }) => (
+                                <a {...props} target="_blank" rel="noreferrer" />
+                              )
+                            }}
+                          >
+                            {text}
+                          </ReactMarkdown>
+                        </div>
+                      ) : (
+                        <p>{text}</p>
+                      )}
                       {attachments.length > 0 ? (
                         <div className="message-attachments">
                           <strong>Attachments</strong>
