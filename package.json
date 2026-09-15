@@ -16,7 +16,7 @@
     "prod:all": "npm run build && dotenv -e .env -- concurrently -k \"npm run --workspace @orgops/api start\" \"npm run --workspace @orgops/admin-ui preview\" \"npm run prod:runner:after-api\"",
     "admin-ui:dev": "npm run --workspace @orgops/admin-ui dev",
     "admin-ui:build": "npm run --workspace @orgops/admin-ui build",
-    "user-ui:dev": "npm run --workspace @orgops/user-ui dev",
+    "user-ui:dev": "npm run --workspace @orgops/user-ui dev --",
     "user-ui:build": "npm run --workspace @orgops/user-ui build",
     "start:api:env": "node --env-file=.env --import tsx apps/api/src/server.ts",
     "start:runner:env": "node --env-file=.env --import tsx apps/agent-runner/src/index.ts",
