@@ -294,17 +294,13 @@ export function createRunnerApi(deps: RunnerApiDeps) {
     agentName: string,
     channelId?: string,
   ): Promise<Record<string, string>> {
-    try {
-      const res = await apiFetch("/api/secrets/env", {
-        headers: {
-          "x-orgops-agent-name": agentName,
-          ...(channelId ? { "x-orgops-channel-id": channelId } : {}),
-        },
-      });
-      return (await res.json()) as Record<string, string>;
-    } catch {
-      return {};
-    }
+    const res = await apiFetch("/api/secrets/env", {
+      headers: {
+        "x-orgops-agent-name": agentName,
+        ...(channelId ? { "x-orgops-channel-id": channelId } : {}),
+      },
+    });
+    return (await res.json()) as Record<string, string>;
   }
 
   return {

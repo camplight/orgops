@@ -5210,6 +5210,64 @@ describe("api app", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("resolves secrets env for agent names containing spaces", async () => {
+    const previousMasterKey = process.env.ORGOPS_MASTER_KEY;
+    process.env.ORGOPS_MASTER_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const createAgentRes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "agent with spaces",
+        modelId: "openai:gpt-4o-mini",
+        workspacePath: ".orgops-data/workspaces/agent-with-spaces",
+      }),
+    });
+    expect(createAgentRes.status).toBe(201);
+
+    const createSecretRes = await app.request("http://localhost/api/secrets", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "CURSOR_API_KEY",
+        scopeType: "public",
+        value: "cursor-token",
+      }),
+    });
+    expect(createSecretRes.status).toBe(201);
+
+    const envRes = await app.request("http://localhost/api/secrets/env", {
+      headers: {
+        "x-orgops-runner-token": "test-token",
+        "x-orgops-agent-name": "agent with spaces",
+      },
+    });
+    expect(envRes.status).toBe(200);
+    const env = (await envRes.json()) as Record<string, string>;
+    expect(env.CURSOR_API_KEY).toBe("cursor-token");
+
+    if (previousMasterKey === undefined) delete process.env.ORGOPS_MASTER_KEY;
+    else process.env.ORGOPS_MASTER_KEY = previousMasterKey;
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("restricts scoped runners to private/team secrets and filters visible secrets", async () => {
     const previousMasterKey = process.env.ORGOPS_MASTER_KEY;
     process.env.ORGOPS_MASTER_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";

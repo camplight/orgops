@@ -400,7 +400,7 @@ export function registerSecretsRoutes(app: Hono<any>, deps: SecretsDeps) {
     const requestedChannelId = (c.req.header("x-orgops-channel-id") ?? "").trim();
     const user = c.get("user") as RequestUser | undefined;
 
-    if (!requestedByAgent || !SAFE_SCOPE_ID_PATTERN.test(requestedByAgent)) {
+    if (!requestedByAgent) {
       return jsonResponse(c, { error: "x-orgops-agent-name is required" }, 400);
     }
     if (!access.canManageAgent(user, requestedByAgent)) {
