@@ -208,6 +208,48 @@ export const channelSubscriptions = sqliteTable(
   })
 );
 
+export const channelViewers = sqliteTable(
+  "channel_viewers",
+  {
+    channel_id: text("channel_id").notNull(),
+    viewer_type: text("viewer_type").notNull(),
+    viewer_id: text("viewer_id").notNull(),
+    created_at: integer("created_at").notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      columns: [table.channel_id, table.viewer_type, table.viewer_id],
+    }),
+    idxChannelViewersChannel: index("idx_channel_viewers_channel").on(
+      table.channel_id,
+      table.viewer_type,
+    ),
+    idxChannelViewersViewer: index("idx_channel_viewers_viewer").on(
+      table.viewer_type,
+      table.viewer_id,
+    ),
+  }),
+);
+
+export const channelShareLinks = sqliteTable(
+  "channel_share_links",
+  {
+    id: text("id").primaryKey(),
+    token: text("token").notNull().unique(),
+    channel_id: text("channel_id").notNull(),
+    created_by_human_id: text("created_by_human_id"),
+    created_at: integer("created_at").notNull(),
+    expires_at: integer("expires_at"),
+    revoked_at: integer("revoked_at"),
+  },
+  (table) => ({
+    idxChannelShareLinksChannel: index("idx_channel_share_links_channel").on(
+      table.channel_id,
+      table.created_at,
+    ),
+  }),
+);
+
 export const conversations = sqliteTable("conversations", {
   id: text("id").primaryKey(),
   kind: text("kind").notNull(),
@@ -454,6 +496,8 @@ export const schema = {
   teamMemberships,
   channels,
   channelSubscriptions,
+  channelViewers,
+  channelShareLinks,
   conversations,
   threads,
   events,

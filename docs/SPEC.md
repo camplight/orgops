@@ -171,6 +171,8 @@ Runner IDs are stable across restarts by persisting local `.agent-runner-id`.
 - `teams`, `team_memberships`
 - `channels`: includes `kind`, optional `metadata_json`, optional `direct_participant_key`
 - `channel_subscriptions`: channel participants/subscribers (`AGENT`, `HUMAN`, `TEAM`)
+- `channel_viewers`: read-only channel shares (`AGENT`, `HUMAN`)
+- `channel_share_links`: tokenized invite links that let an authenticated human self-claim read-only access
 - `conversations`, `threads`
 
 ### Events and Delivery
@@ -227,6 +229,9 @@ Validation is dynamic and composed from:
   - the owner (`channels.owner_human_id`)
   - explicitly subscribed humans (`channel_subscriptions` with `subscriber_type=HUMAN`)
   - humans who belong to a subscribed team (`channel_subscriptions` with `subscriber_type=TEAM` + `team_memberships`)
+  - explicitly shared human viewers (`channel_viewers` with `viewer_type=HUMAN`)
+- `channel_viewers` grants read-only visibility. Shared viewers can read channel metadata/messages but cannot post events or mutate channel participants/settings.
+- `channel_share_links` are claim tokens. Visiting a link and calling the claim endpoint adds the authenticated human to `channel_viewers`.
 
 ### Runner Auth
 
@@ -350,8 +355,16 @@ Published topics include:
   - membership: list/add/remove endpoints
 - channels:
   - CRUD/list/clear: `GET/POST/PATCH/DELETE /api/channels...`
+  - `GET /api/channels` includes `participants[]`, `shares[]`, plus per-request booleans `canPost` and `canManage`
   - `PATCH /api/channels/:id` supports `name`, `description`, `metadata`, and `visibility` (`PUBLIC`/`PRIVATE`)
   - participant management via subscribe/unsubscribe endpoints (`AGENT`, `HUMAN`, `TEAM`)
+  - read-only share management:
+    - `GET /api/channels/:id/shares`
+    - `POST /api/channels/:id/share` (`viewerType`: `AGENT`/`HUMAN`)
+    - `POST /api/channels/:id/unshare`
+  - tokenized share-link flow:
+    - `POST /api/channels/:id/share-link` (creates a claim token)
+    - `POST /api/channel-share-links/:token/claim` (authenticated human claims viewer access)
   - direct channel creation:
     - `POST /api/channels/direct`
     - `POST /api/channels/direct/human-agent`

@@ -537,6 +537,12 @@ button {
   font-weight: 900;
 }
 
+.channel-actions button.secondary {
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #334155;
+}
+
 .channel-actions select {
   padding: 9px 10px;
   border: 1px solid #cbd5e1;
@@ -1233,6 +1239,31 @@ button {
   gap: 10px;
 }
 
+.shared-viewer-list {
+  margin-top: 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.shared-viewer-list h3 {
+  margin: 0;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.shared-viewer-list article {
+  display: flex;
+  min-width: 0;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border-radius: 16px;
+  background: #f8fafc;
+}
+
 .participants-header-row {
   display: flex;
   align-items: center;
@@ -1344,6 +1375,23 @@ button {
   border-radius: 10px;
   background: #fff;
   color: #0f172a;
+}
+
+.channel-manage-quick-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.channel-manage-secondary-button {
+  padding: 9px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  background: #fff;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .archive-checkbox-row {
@@ -1496,6 +1544,10 @@ button {
   place-items: center;
   padding: 24px;
   background: rgba(15, 23, 42, 0.46);
+}
+
+.dialog-backdrop-underlay {
+  z-index: 15;
 }
 
 .conversation-dialog {
@@ -1671,6 +1723,10 @@ button {
   .channel-actions,
   .channel-actions button {
     width: 100%;
+  }
+
+  .channel-manage-quick-actions {
+    grid-template-columns: 1fr;
   }
 
   .messages-panel {

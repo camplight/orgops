@@ -30,7 +30,12 @@ function isHumanUser(user: RequestUser | undefined): user is RequestUser & {
   return Boolean(user?.id && user?.username && user.username !== "runner");
 }
 
-function isRunnerUser(user: RequestUser | undefined): boolean {
+function isRunnerUser(
+  user: RequestUser | undefined,
+): user is RequestUser & {
+  username: "runner";
+  runnerScope?: { mode?: "GLOBAL" | "SCOPED"; allowedAgentName?: string };
+} {
   return user?.username === "runner";
 }
 

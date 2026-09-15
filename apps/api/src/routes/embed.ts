@@ -403,7 +403,7 @@ export function registerEmbedRoutes(app: Hono<any>, deps: EmbedDeps) {
       ...parseRequestedAttachments(body.attachments),
     ];
     const resolved = resolveAttachments(orm, requestedAttachments);
-    if ("error" in resolved) {
+    if ("error" in resolved && resolved.error) {
       return jsonResponse(c, { error: resolved.error.message }, 400);
     }
     if (!parsedUser.text && resolved.attachments.length === 0) {

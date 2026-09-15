@@ -4192,7 +4192,7 @@ describe("api app", () => {
       `http://localhost/api/teams/${encodeURIComponent(team.id)}/members`,
       {
         method: "POST",
-        headers: { "content-type": "application/json", cookie },
+        headers: { "content-type": "application/json", cookie: adminCookie },
         body: JSON.stringify({ memberType: "HUMAN", memberId: "admin" }),
       },
     );
@@ -4227,6 +4227,229 @@ describe("api app", () => {
     expect(danaAfterTeamRes.status).toBe(200);
     const danaAfterTeam = (await danaAfterTeamRes.json()) as Array<{ id: string }>;
     expect(danaAfterTeam.some((row) => row.id === channel.id)).toBe(true);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("shares a private channel as read-only for a human viewer", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const adminLoginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(adminLoginRes.status).toBe(200);
+    const adminCookie = adminLoginRes.headers.get("set-cookie") ?? "";
+
+    const inviteRes = await app.request("http://localhost/api/humans/invite", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ username: "viewer" }),
+    });
+    expect(inviteRes.status).toBe(201);
+    const inviteBody = (await inviteRes.json()) as { temporaryPassword: string };
+
+    const viewerLoginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        username: "viewer",
+        password: inviteBody.temporaryPassword,
+      }),
+    });
+    expect(viewerLoginRes.status).toBe(200);
+    const viewerCookie = viewerLoginRes.headers.get("set-cookie") ?? "";
+    const viewerProfileRes = await app.request("http://localhost/api/auth/profile", {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie: viewerCookie },
+      body: JSON.stringify({
+        username: "viewer",
+        newPassword: "viewer-password-123",
+      }),
+    });
+    expect(viewerProfileRes.status).toBe(200);
+
+    const createPrivateChannelRes = await app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({
+        name: "readonly-shared-channel",
+        visibility: "PRIVATE",
+      }),
+    });
+    expect(createPrivateChannelRes.status).toBe(201);
+    const created = (await createPrivateChannelRes.json()) as { id: string };
+
+    const viewerBeforeShareRes = await app.request("http://localhost/api/channels", {
+      headers: { cookie: viewerCookie },
+    });
+    expect(viewerBeforeShareRes.status).toBe(200);
+    const viewerBeforeShare = (await viewerBeforeShareRes.json()) as Array<{ id: string }>;
+    expect(viewerBeforeShare.some((channel) => channel.id === created.id)).toBe(false);
+
+    const shareRes = await app.request(
+      `http://localhost/api/channels/${created.id}/share`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: adminCookie },
+        body: JSON.stringify({
+          viewerType: "HUMAN",
+          viewerId: "viewer",
+        }),
+      },
+    );
+    expect(shareRes.status).toBe(200);
+
+    const viewerAfterShareRes = await app.request("http://localhost/api/channels", {
+      headers: { cookie: viewerCookie },
+    });
+    expect(viewerAfterShareRes.status).toBe(200);
+    const viewerAfterShare = (await viewerAfterShareRes.json()) as Array<{
+      id: string;
+      canPost?: boolean;
+      canManage?: boolean;
+      shares?: Array<{ viewerType: string; viewerId: string }>;
+    }>;
+    const visibleShared = viewerAfterShare.find((channel) => channel.id === created.id);
+    expect(visibleShared).toBeTruthy();
+    expect(visibleShared?.canPost).toBe(false);
+    expect(visibleShared?.canManage).toBe(false);
+    expect(visibleShared?.shares).toEqual([{ viewerType: "HUMAN", viewerId: "viewer" }]);
+
+    const viewerPostRes = await app.request("http://localhost/api/events", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: viewerCookie },
+      body: JSON.stringify({
+        type: "message.created",
+        payload: { text: "should fail" },
+        source: "human:viewer",
+        channelId: created.id,
+      }),
+    });
+    expect(viewerPostRes.status).toBe(403);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("claims share links by authenticating then auto-adding human viewer", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const adminLoginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(adminLoginRes.status).toBe(200);
+    const adminCookie = adminLoginRes.headers.get("set-cookie") ?? "";
+
+    const inviteRes = await app.request("http://localhost/api/humans/invite", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ username: "boris" }),
+    });
+    expect(inviteRes.status).toBe(201);
+    const inviteBody = (await inviteRes.json()) as { temporaryPassword: string };
+
+    const borisLoginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        username: "boris",
+        password: inviteBody.temporaryPassword,
+      }),
+    });
+    expect(borisLoginRes.status).toBe(200);
+    const borisCookie = borisLoginRes.headers.get("set-cookie") ?? "";
+    const borisProfileRes = await app.request("http://localhost/api/auth/profile", {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie: borisCookie },
+      body: JSON.stringify({
+        username: "boris",
+        newPassword: "boris-password-123",
+      }),
+    });
+    expect(borisProfileRes.status).toBe(200);
+
+    const createChannelRes = await app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({
+        name: "share-link-channel",
+        visibility: "PRIVATE",
+      }),
+    });
+    expect(createChannelRes.status).toBe(201);
+    const channel = (await createChannelRes.json()) as { id: string };
+
+    const createShareLinkRes = await app.request(
+      `http://localhost/api/channels/${channel.id}/share-link`,
+      {
+        method: "POST",
+        headers: { cookie: adminCookie },
+      },
+    );
+    expect(createShareLinkRes.status).toBe(200);
+    const shareLink = (await createShareLinkRes.json()) as { token: string; channelId: string };
+    expect(shareLink.channelId).toBe(channel.id);
+    expect(typeof shareLink.token).toBe("string");
+    expect(shareLink.token.length).toBeGreaterThan(10);
+
+    const unauthClaimRes = await app.request(
+      `http://localhost/api/channel-share-links/${shareLink.token}/claim`,
+      {
+        method: "POST",
+      },
+    );
+    expect(unauthClaimRes.status).toBe(401);
+
+    const borisBeforeClaimRes = await app.request("http://localhost/api/channels", {
+      headers: { cookie: borisCookie },
+    });
+    expect(borisBeforeClaimRes.status).toBe(200);
+    const borisBeforeClaim = (await borisBeforeClaimRes.json()) as Array<{ id: string }>;
+    expect(borisBeforeClaim.some((entry) => entry.id === channel.id)).toBe(false);
+
+    const claimRes = await app.request(
+      `http://localhost/api/channel-share-links/${shareLink.token}/claim`,
+      {
+        method: "POST",
+        headers: { cookie: borisCookie },
+      },
+    );
+    expect(claimRes.status).toBe(200);
+    const claimBody = (await claimRes.json()) as { channelId: string };
+    expect(claimBody.channelId).toBe(channel.id);
+
+    const borisAfterClaimRes = await app.request("http://localhost/api/channels", {
+      headers: { cookie: borisCookie },
+    });
+    expect(borisAfterClaimRes.status).toBe(200);
+    const borisAfterClaim = (await borisAfterClaimRes.json()) as Array<{
+      id: string;
+      canPost?: boolean;
+      shares?: Array<{ viewerType: string; viewerId: string }>;
+    }>;
+    const claimedChannel = borisAfterClaim.find((entry) => entry.id === channel.id);
+    expect(claimedChannel).toBeTruthy();
+    expect(claimedChannel?.canPost).toBe(false);
+    expect(claimedChannel?.shares).toEqual([{ viewerType: "HUMAN", viewerId: "boris" }]);
 
     rmSync(dataDir, { recursive: true, force: true });
   });

@@ -108,28 +108,7 @@ export function createAccessControl(deps: AccessDeps) {
       .get() as AgentAccessRow | undefined;
   }
 
-  function canViewChannel(user: RequestUser | undefined, channelId: string): boolean {
-    const channel = getChannel(channelId);
-    const scopedRunner = getScopedRunner(user);
-    if (scopedRunner) {
-      if (!channel) return false;
-      const allowedChannelIds = new Set(scopedRunner.allowedChannelIds ?? []);
-      if (allowedChannelIds.has(channelId)) return true;
-      const lifecycleName = scopedRunner.allowedAgentName
-        ? `agent.lifecycle.${scopedRunner.allowedAgentName}`
-        : "";
-      return Boolean(lifecycleName && channel.name === lifecycleName);
-    }
-    // Legacy channel-less integrations have historically emitted arbitrary
-    // channel ids before rows existed. Treat unknown ids as public legacy ids.
-    if (!channel) return true;
-    if (isRunnerUser(user)) return true;
-
-    const visibility = normalizeChannelVisibility(channel.visibility);
-    if (visibility === CHANNEL_VISIBILITY.PUBLIC) return true;
-    if (!isHumanUser(user)) return false;
-    if (channel.ownerHumanId && user.id && channel.ownerHumanId === user.id) return true;
-
+  function hasHumanChannelSubscription(channelId: string, username: string): boolean {
     const member = orm
       .select({ channelId: schema.channelSubscriptions.channel_id })
       .from(schema.channelSubscriptions)
@@ -137,12 +116,14 @@ export function createAccessControl(deps: AccessDeps) {
         and(
           eq(schema.channelSubscriptions.channel_id, channelId),
           eq(schema.channelSubscriptions.subscriber_type, "HUMAN"),
-          eq(schema.channelSubscriptions.subscriber_id, user.username),
+          eq(schema.channelSubscriptions.subscriber_id, username),
         ),
       )
       .get();
-    if (member) return true;
-    const teamIds = listViewerTeamIds(user);
+    return Boolean(member);
+  }
+
+  function hasTeamChannelSubscription(channelId: string, teamIds: string[]): boolean {
     if (teamIds.length === 0) return false;
     const teamMember = orm
       .select({ channelId: schema.channelSubscriptions.channel_id })
@@ -156,6 +137,67 @@ export function createAccessControl(deps: AccessDeps) {
       )
       .get();
     return Boolean(teamMember);
+  }
+
+  function hasHumanChannelViewerShare(channelId: string, username: string): boolean {
+    const sharedViewer = orm
+      .select({ channelId: schema.channelViewers.channel_id })
+      .from(schema.channelViewers)
+      .where(
+        and(
+          eq(schema.channelViewers.channel_id, channelId),
+          eq(schema.channelViewers.viewer_type, "HUMAN"),
+          eq(schema.channelViewers.viewer_id, username),
+        ),
+      )
+      .get();
+    return Boolean(sharedViewer);
+  }
+
+  function hasAgentChannelViewerShare(channelId: string, agentName: string): boolean {
+    const sharedViewer = orm
+      .select({ channelId: schema.channelViewers.channel_id })
+      .from(schema.channelViewers)
+      .where(
+        and(
+          eq(schema.channelViewers.channel_id, channelId),
+          eq(schema.channelViewers.viewer_type, "AGENT"),
+          eq(schema.channelViewers.viewer_id, agentName),
+        ),
+      )
+      .get();
+    return Boolean(sharedViewer);
+  }
+
+  function canViewChannel(user: RequestUser | undefined, channelId: string): boolean {
+    const channel = getChannel(channelId);
+    const scopedRunner = getScopedRunner(user);
+    if (scopedRunner) {
+      if (!channel) return false;
+      const allowedChannelIds = new Set(scopedRunner.allowedChannelIds ?? []);
+      if (allowedChannelIds.has(channelId)) return true;
+      const lifecycleName = scopedRunner.allowedAgentName
+        ? `agent.lifecycle.${scopedRunner.allowedAgentName}`
+        : "";
+      if (lifecycleName && channel.name === lifecycleName) return true;
+      if (scopedRunner.allowedAgentName) {
+        return hasAgentChannelViewerShare(channelId, scopedRunner.allowedAgentName);
+      }
+      return false;
+    }
+    // Legacy channel-less integrations have historically emitted arbitrary
+    // channel ids before rows existed. Treat unknown ids as public legacy ids.
+    if (!channel) return true;
+    if (isRunnerUser(user)) return true;
+
+    const visibility = normalizeChannelVisibility(channel.visibility);
+    if (visibility === CHANNEL_VISIBILITY.PUBLIC) return true;
+    if (!isHumanUser(user)) return false;
+    if (channel.ownerHumanId && user.id && channel.ownerHumanId === user.id) return true;
+    if (hasHumanChannelSubscription(channelId, user.username)) return true;
+    const teamIds = listViewerTeamIds(user);
+    if (hasTeamChannelSubscription(channelId, teamIds)) return true;
+    return hasHumanChannelViewerShare(channelId, user.username);
   }
 
   function canManageChannel(user: RequestUser | undefined, channelId: string): boolean {
@@ -182,7 +224,18 @@ export function createAccessControl(deps: AccessDeps) {
   function canPostToChannel(user: RequestUser | undefined, channelId: string): boolean {
     const channel = getChannel(channelId);
     if (!channel) return true;
-    return canViewChannel(user, channelId);
+    const scopedRunner = getScopedRunner(user);
+    if (scopedRunner) {
+      return canManageChannel(user, channelId);
+    }
+    if (isRunnerUser(user)) return true;
+    const visibility = normalizeChannelVisibility(channel.visibility);
+    if (visibility === CHANNEL_VISIBILITY.PUBLIC) return true;
+    if (!isHumanUser(user)) return false;
+    if (channel.ownerHumanId && user.id && channel.ownerHumanId === user.id) return true;
+    if (hasHumanChannelSubscription(channelId, user.username)) return true;
+    const teamIds = listViewerTeamIds(user);
+    return hasTeamChannelSubscription(channelId, teamIds);
   }
 
   function listVisibleChannelIds(user: RequestUser | undefined): string[] {
@@ -199,6 +252,21 @@ export function createAccessControl(deps: AccessDeps) {
           row.name === `agent.lifecycle.${scopedRunner.allowedAgentName}`
         ) {
           allowed.add(row.id);
+        }
+      }
+      if (scopedRunner.allowedAgentName) {
+        const sharedRows = orm
+          .select({ channelId: schema.channelViewers.channel_id })
+          .from(schema.channelViewers)
+          .where(
+            and(
+              eq(schema.channelViewers.viewer_type, "AGENT"),
+              eq(schema.channelViewers.viewer_id, scopedRunner.allowedAgentName),
+            ),
+          )
+          .all();
+        for (const row of sharedRows) {
+          allowed.add(row.channelId);
         }
       }
       return [...allowed];
@@ -248,6 +316,18 @@ export function createAccessControl(deps: AccessDeps) {
         )
         .all();
       for (const row of humanSubs) visible.add(row.channelId);
+      const humanShares = orm
+        .select({ channelId: schema.channelViewers.channel_id })
+        .from(schema.channelViewers)
+        .where(
+          and(
+            eq(schema.channelViewers.viewer_type, "HUMAN"),
+            eq(schema.channelViewers.viewer_id, user.username),
+            inArray(schema.channelViewers.channel_id, privateIds),
+          ),
+        )
+        .all();
+      for (const row of humanShares) visible.add(row.channelId);
 
       const viewerTeamIds = listViewerTeamIds(user);
       if (viewerTeamIds.length > 0) {
@@ -312,6 +392,18 @@ export function createAccessControl(deps: AccessDeps) {
       )
       .get();
     if (humanSub) return true;
+    const humanShare = orm
+      .select({ channelId: schema.channelViewers.channel_id })
+      .from(schema.channelViewers)
+      .where(
+        and(
+          eq(schema.channelViewers.viewer_type, "HUMAN"),
+          eq(schema.channelViewers.viewer_id, user.username),
+          inArray(schema.channelViewers.channel_id, shared),
+        ),
+      )
+      .get();
+    if (humanShare) return true;
     const viewerTeamIds = listViewerTeamIds(user);
     if (viewerTeamIds.length === 0) return false;
     const teamSub = orm

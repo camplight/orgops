@@ -94,7 +94,7 @@ export function registerRunnersRoutes(app: Hono<any>, deps: RunnersDeps) {
   });
 
   app.post("/api/runners/register", requireRunnerAuth, async (c) => {
-    const user = c.get("user") as
+    const user = (c as any).get("user") as
       | { runnerScope?: { mode?: string; allowedRunnerId?: string } }
       | undefined;
     const scopedRunnerId =
@@ -183,7 +183,7 @@ export function registerRunnersRoutes(app: Hono<any>, deps: RunnersDeps) {
   });
 
   app.post("/api/runners/:id/heartbeat", requireRunnerAuth, (c) => {
-    const user = c.get("user") as
+    const user = (c as any).get("user") as
       | { runnerScope?: { mode?: string; allowedRunnerId?: string } }
       | undefined;
     const scopedRunnerId =

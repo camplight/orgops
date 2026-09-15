@@ -9,7 +9,7 @@ import {
 } from "react";
 import { apiFetch, apiJson, getApiHeaders } from "./api";
 import { wsUrl } from "./config";
-import type { Agent, AuthMe, Channel, ChannelParticipant, EventRow, Team } from "./types";
+import type { Agent, AuthMe, Channel, ChannelParticipant, ChannelShare, EventRow, Team } from "./types";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -75,7 +75,8 @@ function messageDisplayTime(event: EventRow) {
 const DIRECT_CHANNEL_KINDS = new Set(["HUMAN_AGENT_DM", "AGENT_AGENT_DM", "DIRECT_GROUP"]);
 const CHANNEL_GROUPS = [
   { id: "direct", label: "Direct messages" },
-  { id: "channels", label: "Channels" }
+  { id: "channels", label: "Channels" },
+  { id: "shared", label: "Shared channels" }
 ] as const;
 
 type ChannelGroupId = (typeof CHANNEL_GROUPS)[number]["id"];
@@ -340,6 +341,23 @@ function participantType(participant: ChannelParticipant) {
   return participant.subscriberType || "Participant";
 }
 
+function shareTypeLabel(share: ChannelShare) {
+  const type = share.viewerType.trim().toUpperCase();
+  if (type === "HUMAN") return "Shared human viewer";
+  if (type === "AGENT") return "Shared agent viewer";
+  return "Shared viewer";
+}
+
+function channelHasHumanShare(channel: Channel, humanId: string) {
+  return (channel.shares ?? []).some(
+    (share) => share.viewerType.trim().toUpperCase() === "HUMAN" && share.viewerId === humanId
+  );
+}
+
+function isSharedChannelForUser(channel: Channel, currentUsername: string) {
+  return Boolean(currentUsername && channelHasHumanShare(channel, currentUsername));
+}
+
 function participantAgentStatus(participant: ChannelParticipant, agents: Agent[]) {
   if (normalizedSubscriberType(participant) !== "AGENT") return null;
   const agent = agents.find((candidate) => candidate.name === participant.subscriberId);
@@ -352,7 +370,8 @@ function channelMatchesQuery(channel: Channel, query: string, currentUsername: s
 }
 
 function canManageUserChannel(channel: Channel | null, userId: string | null) {
-  if (!channel || isDirectChannel(channel) || isLifecycleChannel(channel)) return false;
+  if (!channel || isLifecycleChannel(channel)) return false;
+  if (typeof channel.canManage === "boolean") return channel.canManage;
   if (channel.visibility === "PRIVATE") return Boolean(userId && channel.ownerHumanId === userId);
   return true;
 }
@@ -370,12 +389,18 @@ function channelVisibleToUserUi(
   username: string,
   viewerTeamIds: Set<string>
 ) {
+  const isSharedToHuman = channelHasHumanShare(channel, username);
   if (isLifecycleChannel(channel)) return false;
-  if (isHumanAgentDirectChannel(channel)) return channelHasHumanParticipant(channel, username);
-  if (isDirectChannel(channel)) return false;
+  if (isHumanAgentDirectChannel(channel)) {
+    return channelHasHumanParticipant(channel, username) || isSharedToHuman;
+  }
+  if (isDirectChannel(channel)) {
+    return channelHasHumanParticipant(channel, username) || isSharedToHuman;
+  }
   if (channel.visibility !== "PRIVATE") return true;
   if (Boolean(userId && channel.ownerHumanId === userId)) return true;
-  return channelHasTeamParticipant(channel, viewerTeamIds);
+  if (channelHasTeamParticipant(channel, viewerTeamIds)) return true;
+  return isSharedToHuman;
 }
 
 function agentVisibleToUserUi(
@@ -392,6 +417,11 @@ function readLinkedChannelId() {
   return new URL(window.location.href).searchParams.get("channel");
 }
 
+function readPendingShareToken() {
+  const token = new URL(window.location.href).searchParams.get("share");
+  return token?.trim() || null;
+}
+
 function updateChannelDeepLink(channelId: string | null, replace = false) {
   const url = new URL(window.location.href);
   if (channelId) {
@@ -401,6 +431,15 @@ function updateChannelDeepLink(channelId: string | null, replace = false) {
   }
   const method = replace ? "replaceState" : "pushState";
   window.history[method](null, "", url);
+}
+
+function consumeShareToken(channelId?: string | null) {
+  const url = new URL(window.location.href);
+  url.searchParams.delete("share");
+  if (channelId) {
+    url.searchParams.set("channel", channelId);
+  }
+  window.history.replaceState(null, "", url);
 }
 
 function adaptiveMessageBatchSize() {
@@ -499,7 +538,8 @@ export default function App() {
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const [collapsedChannelGroups, setCollapsedChannelGroups] = useState<Record<ChannelGroupId, boolean>>({
     channels: false,
-    direct: false
+    direct: false,
+    shared: false
   });
   const [hasNewMessagesBelow, setHasNewMessagesBelow] = useState(false);
   const [channelQuery, setChannelQuery] = useState("");
@@ -532,11 +572,16 @@ export default function App() {
   const [participantValue, setParticipantValue] = useState("");
   const [participantSubmitting, setParticipantSubmitting] = useState(false);
   const [participantRemovingKey, setParticipantRemovingKey] = useState<string | null>(null);
+  const [shareKind, setShareKind] = useState<"HUMAN" | "AGENT">("HUMAN");
+  const [shareValue, setShareValue] = useState("");
+  const [shareSubmitting, setShareSubmitting] = useState(false);
+  const [shareRemovingKey, setShareRemovingKey] = useState<string | null>(null);
   const [channelVisibilityDraft, setChannelVisibilityDraft] = useState<"PUBLIC" | "PRIVATE">("PRIVATE");
   const [updatingChannelVisibility, setUpdatingChannelVisibility] = useState(false);
   const [archiveDraft, setArchiveDraft] = useState(false);
   const [expandedTraceEventId, setExpandedTraceEventId] = useState<string | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
+  const [shareLinkCopied, setShareLinkCopied] = useState(false);
   const [wsConnected, setWsConnected] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
@@ -663,10 +708,18 @@ export default function App() {
       CHANNEL_GROUPS.map((group) => ({
         ...group,
         channels: filteredChannels.filter((channel) => {
-          if (channelGroupId(channel) !== group.id) return false;
-          if (group.id !== "direct") return true;
-          if (!username) return false;
-          return isHumanAgentDirectChannel(channel) && channelHasHumanParticipant(channel, username);
+          const shared = isSharedChannelForUser(channel, username);
+          if (group.id === "shared") return shared;
+          if (group.id === "direct") {
+            if (shared || !username) return false;
+            return (
+              channelGroupId(channel) === "direct" &&
+              isHumanAgentDirectChannel(channel) &&
+              channelHasHumanParticipant(channel, username)
+            );
+          }
+          if (shared) return false;
+          return channelGroupId(channel) === "channels";
         })
       })).filter((group) => group.channels.length > 0),
     [filteredChannels, username]
@@ -679,6 +732,7 @@ export default function App() {
     .map((item) => item.uploaded as UploadedAttachment);
   const hasAttachmentErrors = pendingAttachments.some((item) => item.status === "error");
   const activeChannelManageable = canManageUserChannel(activeChannel, userId);
+  const activeChannelCanPost = activeChannel ? activeChannel.canPost !== false : false;
   const canStartConversation =
     Boolean(conversationName.trim()) || selectedConversationAgents.length === 1;
   const selectedConversationAgentRecords = useMemo(
@@ -732,6 +786,28 @@ export default function App() {
     setError(null);
     setLoading(true);
     try {
+      const pendingShareToken = readPendingShareToken();
+      let claimedShareChannelId: string | null = null;
+      if (pendingShareToken) {
+        try {
+          const claimed = await apiJson<{ ok?: boolean; channelId: string }>(
+            `/api/channel-share-links/${encodeURIComponent(pendingShareToken)}/claim`,
+            {
+              method: "POST",
+              headers: getApiHeaders()
+            }
+          );
+          claimedShareChannelId = claimed.channelId;
+          consumeShareToken(claimed.channelId);
+        } catch (claimError) {
+          consumeShareToken(readLinkedChannelId());
+          setError(
+            claimError instanceof Error
+              ? claimError.message
+              : "Unable to claim shared channel link"
+          );
+        }
+      }
       const [nextChannels, nextAgents, nextHumans, nextTeams] = await Promise.all([
         apiJson<Channel[]>("/api/channels?includeArchived=1"),
         apiJson<Agent[]>("/api/agents"),
@@ -761,7 +837,8 @@ export default function App() {
         current.filter((agentName) => nextVisibleAgents.some((agent) => agent.name === agentName))
       );
       const linkedChannelId = readLinkedChannelId();
-      const linkedChannel = visibleChannels.find((channel) => channel.id === linkedChannelId);
+      const preferredLinkedId = claimedShareChannelId ?? linkedChannelId;
+      const linkedChannel = visibleChannels.find((channel) => channel.id === preferredLinkedId);
       const nextActiveChannelId =
         linkedChannel?.id ??
         (activeChannelId && visibleChannels.some((channel) => channel.id === activeChannelId && !channel.archivedAt)
@@ -1121,6 +1198,10 @@ export default function App() {
     setShowParticipantsDialog(false);
     setShowChannelManageDialog(false);
     setPendingAttachments([]);
+    setShareValue("");
+    setShareLinkCopied(false);
+    setShareRemovingKey(null);
+    setShareSubmitting(false);
   }, [activeChannelId]);
 
   useEffect(() => {
@@ -1378,7 +1459,7 @@ export default function App() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!activeChannelId || activeChannel?.archivedAt) return;
+    if (!activeChannelId || activeChannel?.archivedAt || !activeChannelCanPost) return;
     if (uploadingAttachmentCount > 0) return;
     const trimmedText = draft.trim();
     if (!trimmedText && readyAttachments.length === 0) return;
@@ -1607,9 +1688,76 @@ export default function App() {
     }
   }
 
+  async function handleAddShare(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!activeChannelId || !shareValue.trim()) return;
+    setShareSubmitting(true);
+    setError(null);
+    try {
+      await apiFetch(`/api/channels/${encodeURIComponent(activeChannelId)}/share`, {
+        method: "POST",
+        headers: getApiHeaders(),
+        body: JSON.stringify({
+          viewerType: shareKind,
+          viewerId: shareValue.trim()
+        })
+      });
+      await refreshChannels(activeChannelId);
+      setShareValue("");
+    } catch (shareError) {
+      setError(shareError instanceof Error ? shareError.message : "Unable to share channel");
+    } finally {
+      setShareSubmitting(false);
+    }
+  }
+
+  async function handleRemoveShare(share: ChannelShare) {
+    if (!activeChannelId) return;
+    const shareKey = `${share.viewerType}:${share.viewerId}`;
+    setShareRemovingKey(shareKey);
+    setError(null);
+    try {
+      await apiFetch(`/api/channels/${encodeURIComponent(activeChannelId)}/unshare`, {
+        method: "POST",
+        headers: getApiHeaders(),
+        body: JSON.stringify({
+          viewerType: share.viewerType,
+          viewerId: share.viewerId
+        })
+      });
+      await refreshChannels(activeChannelId);
+    } catch (removeError) {
+      setError(removeError instanceof Error ? removeError.message : "Unable to remove shared viewer");
+    } finally {
+      setShareRemovingKey(null);
+    }
+  }
+
   function handleMessagesScroll() {
     if (hasNewMessagesBelow && isMessagesPanelNearBottom()) {
       setHasNewMessagesBelow(false);
+    }
+  }
+
+  async function handleCopyShareLink() {
+    if (!activeChannelId) return;
+    try {
+      const created = await apiJson<{ token: string; channelId: string }>(
+        `/api/channels/${encodeURIComponent(activeChannelId)}/share-link`,
+        {
+          method: "POST",
+          headers: getApiHeaders()
+        }
+      );
+      const url = new URL(window.location.href);
+      url.searchParams.set("share", created.token);
+      url.searchParams.set("channel", created.channelId);
+      const shareLink = url.toString();
+      await navigator.clipboard.writeText(shareLink);
+      setShareLinkCopied(true);
+      window.setTimeout(() => setShareLinkCopied(false), 2000);
+    } catch {
+      setError("Unable to copy link. Please copy it from the address bar.");
     }
   }
 
@@ -1969,12 +2117,16 @@ export default function App() {
             <p>
               {activeChannel?.archivedAt
                 ? "Archived channel"
+                : activeChannel && !activeChannelCanPost
+                  ? "Read-only shared channel"
                 : activeChannel?.description || "Talk to the team and agents in plain language."}
             </p>
           </div>
           {activeChannel && activeChannelManageable ? (
             <div className="channel-actions">
-              <button onClick={() => setShowChannelManageDialog(true)}>Manage channel</button>
+              <button type="button" onClick={() => setShowChannelManageDialog(true)}>
+                Manage channel
+              </button>
             </div>
           ) : null}
         </header>
@@ -2175,20 +2327,22 @@ export default function App() {
             placeholder={
               activeChannel?.archivedAt
                 ? "Restore this channel to send messages"
+                : activeChannel && !activeChannelCanPost
+                  ? "This channel is shared with you as read-only"
                 : activeChannel
                   ? isConversationEmpty
                     ? `Message ${channelLabel(activeChannel, username)}`
                     : `Message ${channelLabel(activeChannel, username)} (Enter to send, Shift+Enter for newline)`
                   : "Select a channel first"
             }
-            disabled={!activeChannel || Boolean(activeChannel.archivedAt) || sending}
+            disabled={!activeChannel || Boolean(activeChannel.archivedAt) || !activeChannelCanPost || sending}
             rows={isConversationEmpty ? 1 : 3}
           />
           <div className="composer-actions">
             <button
               type="button"
               className="composer-secondary"
-              disabled={!activeChannel || Boolean(activeChannel.archivedAt) || sending}
+              disabled={!activeChannel || Boolean(activeChannel.archivedAt) || !activeChannelCanPost || sending}
               onClick={() => fileInputRef.current?.click()}
             >
               Attach files
@@ -2197,6 +2351,7 @@ export default function App() {
               disabled={
                 !activeChannel ||
                 Boolean(activeChannel.archivedAt) ||
+                !activeChannelCanPost ||
                 sending ||
                 uploadingAttachmentCount > 0 ||
                 (!draft.trim() && readyAttachments.length === 0)
@@ -2222,15 +2377,6 @@ export default function App() {
         <section className="participants-card">
           <div className="participants-header-row">
             <h2>Participants</h2>
-            {activeChannel && activeChannelManageable ? (
-              <button
-                className="manage-participants-button"
-                onClick={() => setShowParticipantsDialog(true)}
-                type="button"
-              >
-                Manage
-              </button>
-            ) : null}
           </div>
           <div className="participant-list">
             {activeChannel?.participants?.map((participant, index) => {
@@ -2256,6 +2402,19 @@ export default function App() {
             {!activeChannel?.participants?.length ? (
               <p>No participants listed for this channel.</p>
             ) : null}
+          </div>
+          <div className="shared-viewer-list">
+            <h3>Shared viewers</h3>
+            {activeChannel?.shares?.map((share, index) => (
+              <article key={`${share.viewerType}:${share.viewerId}:${index}`}>
+                <div className="participant-avatar">{share.viewerId.slice(0, 2) || "SV"}</div>
+                <div>
+                  <strong>{share.viewerId}</strong>
+                  <span>{shareTypeLabel(share)}</span>
+                </div>
+              </article>
+            ))}
+            {!activeChannel?.shares?.length ? <p>No shared viewers.</p> : null}
           </div>
         </section>
 
@@ -2459,13 +2618,77 @@ export default function App() {
                 <p>No participants yet.</p>
               ) : null}
             </div>
+
+            <header>
+              <div>
+                <span>Read-only sharing</span>
+                <h2>Shared viewers</h2>
+              </div>
+            </header>
+
+            <form className="participant-form" onSubmit={handleAddShare}>
+              <select
+                value={shareKind}
+                onChange={(event) => setShareKind(event.target.value === "AGENT" ? "AGENT" : "HUMAN")}
+                disabled={shareSubmitting}
+              >
+                <option value="HUMAN">Human viewer</option>
+                <option value="AGENT">Agent viewer</option>
+              </select>
+              <input
+                list={shareKind === "AGENT" ? "agent-share-options" : "human-share-options"}
+                placeholder={shareKind === "AGENT" ? "agent name" : "username"}
+                value={shareValue}
+                onChange={(event) => setShareValue(event.target.value)}
+                disabled={shareSubmitting}
+              />
+              <button type="submit" disabled={shareSubmitting || !shareValue.trim()}>
+                {shareSubmitting ? "Sharing..." : "Share"}
+              </button>
+              <datalist id="agent-share-options">
+                {visibleAgents.map((agent) => (
+                  <option key={agent.name} value={agent.name} />
+                ))}
+              </datalist>
+              <datalist id="human-share-options">
+                {humans.map((human) => (
+                  <option key={human.username} value={human.username} />
+                ))}
+              </datalist>
+            </form>
+
+            <div className="participants-dialog-list">
+              {(activeChannel.shares ?? []).map((share, index) => {
+                const shareKey = `${share.viewerType}:${share.viewerId}`;
+                return (
+                  <article key={`${share.viewerType}:${share.viewerId}:${index}`}>
+                    <div>
+                      <strong>{share.viewerId}</strong>
+                      <span>{shareTypeLabel(share)}</span>
+                    </div>
+                    <button
+                      className="participant-remove-button"
+                      onClick={() => void handleRemoveShare(share)}
+                      disabled={shareRemovingKey === shareKey}
+                      title={`Remove shared viewer ${share.viewerId}`}
+                      type="button"
+                    >
+                      {shareRemovingKey === shareKey ? "Removing..." : "Remove"}
+                    </button>
+                  </article>
+                );
+              })}
+              {(activeChannel.shares ?? []).length === 0 ? (
+                <p>No shared viewers yet.</p>
+              ) : null}
+            </div>
           </section>
         </div>
       ) : null}
 
       {showChannelManageDialog && activeChannel && activeChannelManageable ? (
         <div
-          className="dialog-backdrop"
+          className={`dialog-backdrop${showParticipantsDialog ? " dialog-backdrop-underlay" : ""}`}
           role="presentation"
           onMouseDown={() => setShowChannelManageDialog(false)}
         >
@@ -2514,6 +2737,27 @@ export default function App() {
                 />
                 <span>Archived</span>
               </label>
+            </div>
+
+            <div className="channel-manage-quick-actions">
+              <button
+                type="button"
+                className="channel-manage-secondary-button"
+                onClick={() => {
+                  setShowParticipantsDialog(true);
+                }}
+                disabled={updatingChannelVisibility}
+              >
+                Manage participants
+              </button>
+              <button
+                type="button"
+                className="channel-manage-secondary-button"
+                onClick={() => void handleCopyShareLink()}
+                disabled={updatingChannelVisibility}
+              >
+                {shareLinkCopied ? "Link copied" : "Copy share link"}
+              </button>
             </div>
 
             <button

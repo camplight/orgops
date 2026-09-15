@@ -1,5 +1,6 @@
 import type { Hono } from "hono";
 import { randomUUID } from "node:crypto";
+import { Buffer } from "node:buffer";
 
 import { decryptSecret, encryptSecret, parseMasterKey } from "@orgops/crypto";
 import { schema, type OrgOpsDrizzleDb } from "@orgops/db";
@@ -45,11 +46,29 @@ type SecretRow = {
   created_at: number;
 };
 
-function isRunnerUser(user: RequestUser | undefined): boolean {
+function isRunnerUser(
+  user: RequestUser | undefined,
+): user is RequestUser & {
+  username: "runner";
+  runnerScope?: {
+    mode: "GLOBAL" | "SCOPED";
+    allowedAgentName?: string;
+    allowedChannelIds?: string[];
+  };
+} {
   return user?.username === "runner";
 }
 
-function isScopedRunner(user: RequestUser | undefined): boolean {
+function isScopedRunner(
+  user: RequestUser | undefined,
+): user is RequestUser & {
+  username: "runner";
+  runnerScope: {
+    mode: "SCOPED";
+    allowedAgentName?: string;
+    allowedChannelIds?: string[];
+  };
+} {
   return isRunnerUser(user) && user?.runnerScope?.mode === "SCOPED";
 }
 
@@ -76,9 +95,10 @@ function decryptRows(
   rows: Array<{ name: string; ciphertext_b64: string }>,
 ): Record<string, string> {
   const env: Record<string, string> = {};
+  const bufferKey = Buffer.from(masterKey);
   for (const row of rows) {
     try {
-      env[row.name] = decryptSecret(masterKey, row.ciphertext_b64);
+      env[row.name] = decryptSecret(bufferKey, row.ciphertext_b64);
     } catch {
       // Skip corrupted or wrong-key entries.
     }
@@ -216,7 +236,7 @@ export function registerSecretsRoutes(app: Hono<any>, deps: SecretsDeps) {
   }
 
   app.get("/api/secrets", requireAuth, (c) => {
-    const user = c.get("user") as RequestUser | undefined;
+    const user = (c as any).get("user") as RequestUser | undefined;
     const rows = orm
       .select({
         id: schema.secrets.id,
@@ -232,8 +252,8 @@ export function registerSecretsRoutes(app: Hono<any>, deps: SecretsDeps) {
   });
 
   app.get("/api/secrets/keys", requireAuth, (c) => {
-    const packageFilter = c.req.query("package");
-    const user = c.get("user") as RequestUser | undefined;
+    const packageFilter = new URL(c.req.url).searchParams.get("package");
+    const user = (c as any).get("user") as RequestUser | undefined;
     let rows: { name: string; scope_id: string | null }[];
     if (packageFilter) {
       rows = orm
@@ -260,7 +280,7 @@ export function registerSecretsRoutes(app: Hono<any>, deps: SecretsDeps) {
   });
 
   app.post("/api/secrets", requireAuth, async (c) => {
-    const user = c.get("user") as RequestUser | undefined;
+    const user = (c as any).get("user") as RequestUser | undefined;
     const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
     const value = body.value;
     if (value === undefined) return jsonResponse(c, { error: "Missing value" }, 400);
@@ -323,7 +343,7 @@ export function registerSecretsRoutes(app: Hono<any>, deps: SecretsDeps) {
   });
 
   app.delete("/api/secrets/:id", requireAuth, (c) => {
-    const user = c.get("user") as RequestUser | undefined;
+    const user = (c as any).get("user") as RequestUser | undefined;
     const id = c.req.param("id");
     const existing = orm
       .select({
@@ -354,7 +374,7 @@ export function registerSecretsRoutes(app: Hono<any>, deps: SecretsDeps) {
   });
 
   app.delete("/api/secrets", requireAuth, async (c) => {
-    const user = c.get("user") as RequestUser | undefined;
+    const user = (c as any).get("user") as RequestUser | undefined;
     const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
     const parsedInput = parseSecretInput(body);
     if (!parsedInput.ok) return jsonResponse(c, { error: parsedInput.error }, 400);
@@ -398,7 +418,7 @@ export function registerSecretsRoutes(app: Hono<any>, deps: SecretsDeps) {
     const masterKey = parseMasterKey(process.env.ORGOPS_MASTER_KEY ?? "");
     const requestedByAgent = (c.req.header("x-orgops-agent-name") ?? "").trim();
     const requestedChannelId = (c.req.header("x-orgops-channel-id") ?? "").trim();
-    const user = c.get("user") as RequestUser | undefined;
+    const user = (c as any).get("user") as RequestUser | undefined;
 
     if (!requestedByAgent) {
       return jsonResponse(c, { error: "x-orgops-agent-name is required" }, 400);

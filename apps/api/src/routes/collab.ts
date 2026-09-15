@@ -10,7 +10,7 @@ import {
   type ChannelKind,
   type OrgOpsDrizzleDb
 } from "@orgops/db";
-import { and, asc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNull, or } from "drizzle-orm";
 import type { AccessControl, RequestUser } from "./access";
 
 type CollabDeps = {
@@ -22,6 +22,7 @@ type CollabDeps = {
 export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
   const { orm, jsonResponse, access } = deps;
   const DIRECT_CHANNEL_PARTICIPANT_TYPES = new Set(["HUMAN", "AGENT"]);
+  const CHANNEL_VIEWER_TYPES = new Set(["HUMAN", "AGENT"]);
   const DIRECT_CHANNEL_KIND: Record<
     "humanAgent" | "agentAgent" | "group",
     ChannelKind
@@ -35,7 +36,12 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
     CHANNEL_KINDS.INTEGRATION_BRIDGE
   ]);
 
-  function isScopedRunner(user: RequestUser | undefined): boolean {
+  function isScopedRunner(
+    user: RequestUser | undefined,
+  ): user is RequestUser & {
+    username: "runner";
+    runnerScope: { mode: "SCOPED"; allowedAgentName?: string };
+  } {
     return user?.username === "runner" && user.runnerScope?.mode === "SCOPED";
   }
 
@@ -169,6 +175,10 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
     return Boolean(row);
   }
 
+  function isHumanUser(user: RequestUser | undefined): user is RequestUser & { username: string; id?: string } {
+    return Boolean(user?.username && user.username !== "runner");
+  }
+
   function findMissingParticipant(
     participants: Array<{ subscriberType: string; subscriberId: string }>,
   ) {
@@ -185,6 +195,16 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
       ) {
         return participant;
       }
+    }
+    return null;
+  }
+
+  function findMissingViewer(input: { viewerType: string; viewerId: string }) {
+    if (input.viewerType === "AGENT" && !agentExists(input.viewerId)) {
+      return `${input.viewerType} not found: ${input.viewerId}`;
+    }
+    if (input.viewerType === "HUMAN" && !humanExists(input.viewerId)) {
+      return `${input.viewerType} not found: ${input.viewerId}`;
     }
     return null;
   }
@@ -423,6 +443,22 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
           subscriberType: participant.subscriber_type,
           subscriberId: participant.subscriber_id,
         }));
+      const shares = orm
+        .select({
+          viewer_type: schema.channelViewers.viewer_type,
+          viewer_id: schema.channelViewers.viewer_id,
+        })
+        .from(schema.channelViewers)
+        .where(eq(schema.channelViewers.channel_id, channel.id))
+        .orderBy(
+          asc(schema.channelViewers.viewer_type),
+          asc(schema.channelViewers.viewer_id),
+        )
+        .all()
+        .map((viewer) => ({
+          viewerType: viewer.viewer_type,
+          viewerId: viewer.viewer_id,
+        }));
       return {
         ...channel,
         visibility:
@@ -435,6 +471,9 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
         directParticipantKey: channel.direct_participant_key ?? undefined,
         archivedAt: channel.archived_at ?? null,
         participants,
+        shares,
+        canPost: access.canPostToChannel(user, channel.id),
+        canManage: access.canManageChannel(user, channel.id),
       };
     });
     return jsonResponse(c, data.filter(Boolean));
@@ -732,6 +771,14 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
       .delete(schema.channelSubscriptions)
       .where(eq(schema.channelSubscriptions.channel_id, id))
       .run();
+    orm
+      .delete(schema.channelShareLinks)
+      .where(eq(schema.channelShareLinks.channel_id, id))
+      .run();
+    orm
+      .delete(schema.channelViewers)
+      .where(eq(schema.channelViewers.channel_id, id))
+      .run();
     orm.delete(schema.channels).where(eq(schema.channels.id, id)).run();
     return jsonResponse(c, { ok: true, deleted: Boolean(existing) });
   };
@@ -756,6 +803,14 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
       orm
         .delete(schema.channelSubscriptions)
         .where(eq(schema.channelSubscriptions.channel_id, channelId))
+        .run();
+      orm
+        .delete(schema.channelShareLinks)
+        .where(eq(schema.channelShareLinks.channel_id, channelId))
+        .run();
+      orm
+        .delete(schema.channelViewers)
+        .where(eq(schema.channelViewers.channel_id, channelId))
         .run();
       orm.delete(schema.channels).where(eq(schema.channels.id, channelId)).run();
     }
@@ -830,6 +885,159 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
           eq(schema.channelSubscriptions.channel_id, id),
           eq(schema.channelSubscriptions.subscriber_type, subscriberType),
           eq(schema.channelSubscriptions.subscriber_id, subscriberId),
+        ),
+      )
+      .run();
+    return jsonResponse(c, { ok: true });
+  });
+
+  app.get("/api/channels/:id/shares", (c) => {
+    const id = c.req.param("id");
+    const user = c.get("user") as RequestUser | undefined;
+    if (!access.canViewChannel(user, id)) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
+    const rows = orm
+      .select({
+        viewer_type: schema.channelViewers.viewer_type,
+        viewer_id: schema.channelViewers.viewer_id,
+      })
+      .from(schema.channelViewers)
+      .where(eq(schema.channelViewers.channel_id, id))
+      .orderBy(
+        asc(schema.channelViewers.viewer_type),
+        asc(schema.channelViewers.viewer_id),
+      )
+      .all() as { viewer_type: string; viewer_id: string }[];
+    return jsonResponse(
+      c,
+      rows.map((row) => ({
+        viewerType: row.viewer_type,
+        viewerId: row.viewer_id,
+      })),
+    );
+  });
+
+  app.post("/api/channels/:id/share-link", (c) => {
+    const id = c.req.param("id");
+    const user = c.get("user") as RequestUser | undefined;
+    if (!access.canManageChannel(user, id)) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
+    if (!isHumanUser(user)) {
+      return jsonResponse(c, { error: "Authenticated human user required" }, 401);
+    }
+    const now = Date.now();
+    const token = randomUUID();
+    orm
+      .insert(schema.channelShareLinks)
+      .values({
+        id: randomUUID(),
+        token,
+        channel_id: id,
+        created_by_human_id: user.id ?? null,
+        created_at: now,
+        expires_at: now + 7 * 24 * 60 * 60 * 1000,
+        revoked_at: null,
+      })
+      .run();
+    return jsonResponse(c, { token, channelId: id });
+  });
+
+  app.post("/api/channel-share-links/:token/claim", (c) => {
+    const token = c.req.param("token").trim();
+    const user = c.get("user") as RequestUser | undefined;
+    if (!isHumanUser(user)) {
+      return jsonResponse(c, { error: "Authenticated human user required" }, 401);
+    }
+    if (!token) return jsonResponse(c, { error: "token is required" }, 400);
+    const now = Date.now();
+    const link = orm
+      .select({ channelId: schema.channelShareLinks.channel_id })
+      .from(schema.channelShareLinks)
+      .where(
+        and(
+          eq(schema.channelShareLinks.token, token),
+          isNull(schema.channelShareLinks.revoked_at),
+          or(
+            isNull(schema.channelShareLinks.expires_at),
+            gt(schema.channelShareLinks.expires_at, now),
+          ) as any,
+        ),
+      )
+      .get() as { channelId: string } | undefined;
+    if (!link) {
+      return jsonResponse(c, { error: "Share link not found or expired" }, 404);
+    }
+    const channel = orm
+      .select({ id: schema.channels.id })
+      .from(schema.channels)
+      .where(eq(schema.channels.id, link.channelId))
+      .get();
+    if (!channel) return jsonResponse(c, { error: "Channel not found" }, 404);
+    orm
+      .insert(schema.channelViewers)
+      .values({
+        channel_id: link.channelId,
+        viewer_type: "HUMAN",
+        viewer_id: user.username,
+        created_at: now,
+      })
+      .onConflictDoNothing()
+      .run();
+    return jsonResponse(c, { ok: true, channelId: link.channelId });
+  });
+
+  app.post("/api/channels/:id/share", async (c) => {
+    const id = c.req.param("id");
+    const user = c.get("user") as RequestUser | undefined;
+    if (!access.canManageChannel(user, id)) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
+    const body = await c.req.json().catch(() => ({}));
+    const viewerType = String(body.viewerType ?? "").trim().toUpperCase();
+    const viewerId = String(body.viewerId ?? "").trim();
+    if (!viewerId || !CHANNEL_VIEWER_TYPES.has(viewerType)) {
+      return jsonResponse(
+        c,
+        { error: "Only AGENT and HUMAN channel viewers are supported" },
+        400,
+      );
+    }
+    const missingViewer = findMissingViewer({ viewerType, viewerId });
+    if (missingViewer) return jsonResponse(c, { error: missingViewer }, 404);
+    orm
+      .insert(schema.channelViewers)
+      .values({
+        channel_id: id,
+        viewer_type: viewerType,
+        viewer_id: viewerId,
+        created_at: Date.now(),
+      })
+      .onConflictDoNothing()
+      .run();
+    return jsonResponse(c, { ok: true });
+  });
+
+  app.post("/api/channels/:id/unshare", async (c) => {
+    const id = c.req.param("id");
+    const user = c.get("user") as RequestUser | undefined;
+    if (!access.canManageChannel(user, id)) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
+    const body = await c.req.json().catch(() => ({}));
+    const viewerType = String(body.viewerType ?? "").trim().toUpperCase();
+    const viewerId = String(body.viewerId ?? "").trim();
+    if (!viewerType || !viewerId) {
+      return jsonResponse(c, { error: "viewerType and viewerId are required" }, 400);
+    }
+    orm
+      .delete(schema.channelViewers)
+      .where(
+        and(
+          eq(schema.channelViewers.channel_id, id),
+          eq(schema.channelViewers.viewer_type, viewerType),
+          eq(schema.channelViewers.viewer_id, viewerId),
         ),
       )
       .run();
