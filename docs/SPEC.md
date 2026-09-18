@@ -238,8 +238,11 @@ Validation is dynamic and composed from:
 - Trusted runner token header: `x-orgops-runner-token`
 - Runner-only endpoint for secret env injection: `GET /api/secrets/env`
 - Runner secret env requests must include `x-orgops-agent-name`; optional `x-orgops-channel-id` enables team-scope resolution for that channel context.
-- Invite redemption can mint **scoped runner tokens**. Scoped tokens are restricted to one agent, one runner ID, and invite-approved channels.
+- Invite redemption can mint runner tokens in either mode:
+  - `SCOPED` (default): restricted to one agent and one runner ID, and by default restricted to invite-approved channels.
+  - `GLOBAL`: behaves like a normal unrestricted runner token (full runner access).
 - `POST /api/agent-invites` accepts authenticated humans and runner-authenticated agents.
+- Scoped invites can later be promoted to global mode with `POST /api/agent-invites/:id/promote-global`; this updates the invite and any non-revoked redeemed runner tokens from that invite.
 
 ### Tool Filesystem Access
 
@@ -301,10 +304,12 @@ Published topics include:
   - `POST /api/agent-invites`
   - `POST /api/agent-invites/:id/revoke`
   - `POST /api/agent-invites/:id/reissue` (rotates token; old link invalid)
+  - `POST /api/agent-invites/:id/promote-global` (switches scoped invite/tokens to global mode)
   - `GET /api/agent-invites/public/:token` (public)
   - `POST /api/agent-invites/public/:token/redeem` (public)
   - `channelIds` is optional on create (invite may grant lifecycle-only bootstrap access)
   - create payload supports `visibility` (`PUBLIC`/`PRIVATE`) applied to the wrapped agent at redeem time
+  - create payload supports `runnerScopeMode` (`SCOPED` default, or `GLOBAL`)
   - invite list/create responses include creator metadata (`createdByType`, `createdById`)
   - invite links are resolved from request origin (`x-forwarded-*` or request URL), not hardcoded localhost
   - public invite/redeem responses include bootstrap hints (`wrappedConfigSchema`, patch endpoint, and session-memory guidance)

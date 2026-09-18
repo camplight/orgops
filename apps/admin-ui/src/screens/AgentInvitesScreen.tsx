@@ -9,11 +9,15 @@ type AgentInvitesScreenProps = {
   onCreateInvite: (input: {
     agentName: string;
     visibility: "PUBLIC" | "PRIVATE";
+    runnerScopeMode: "SCOPED" | "GLOBAL";
     channelIds: string[];
     expiresAt?: number;
   }) => Promise<AgentInvite>;
   onRevokeInvite: (id: string) => Promise<void>;
   onReissueInvite: (id: string) => Promise<AgentInvite>;
+  onPromoteInviteGlobal: (
+    id: string,
+  ) => Promise<{ invite: AgentInvite; promotedScopedRunnerTokenCount: number }>;
   onRefresh: () => Promise<void> | void;
 };
 
@@ -28,11 +32,13 @@ export function AgentInvitesScreen({
   onCreateInvite,
   onRevokeInvite,
   onReissueInvite,
+  onPromoteInviteGlobal,
   onRefresh,
 }: AgentInvitesScreenProps) {
   const [agentName, setAgentName] = useState("");
   const [visibility, setVisibility] = useState<"PUBLIC" | "PRIVATE">("PUBLIC");
   const [selectedChannelIds, setSelectedChannelIds] = useState<string[]>([]);
+  const [runnerScopeMode, setRunnerScopeMode] = useState<"SCOPED" | "GLOBAL">("SCOPED");
   const [channelQuery, setChannelQuery] = useState("");
   const [channelsOpen, setChannelsOpen] = useState(false);
   const [expiresAtIso, setExpiresAtIso] = useState("");
@@ -97,6 +103,7 @@ export function AgentInvitesScreen({
       const created = await onCreateInvite({
         agentName: trimmedAgentName,
         visibility,
+        runnerScopeMode,
         channelIds: selectedChannelIds,
         ...(expiresAt ? { expiresAt } : {}),
       });
@@ -104,6 +111,7 @@ export function AgentInvitesScreen({
       setLatestInviteLink(created.inviteLink ?? null);
       setAgentName("");
       setVisibility("PUBLIC");
+      setRunnerScopeMode("SCOPED");
       setSelectedChannelIds([]);
       setChannelQuery("");
       setChannelsOpen(false);
@@ -141,6 +149,29 @@ export function AgentInvitesScreen({
       await onRefresh();
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Failed to reissue invite.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handlePromoteGlobal = async (id: string, inviteName: string) => {
+    const confirmed = window.confirm(
+      `Promote invite "${inviteName}" to global scope?\n\nThis removes scoped runner restrictions for this invite and all non-revoked redeemed runner tokens from it.`,
+    );
+    if (!confirmed) return;
+    setBusy(true);
+    setStatus(null);
+    try {
+      const result = await onPromoteInviteGlobal(id);
+      const promotedCount = result.promotedScopedRunnerTokenCount;
+      setStatus(
+        promotedCount > 0
+          ? `Invite "${result.invite.name}" is now global. Promoted ${promotedCount} scoped runner token${promotedCount === 1 ? "" : "s"}.`
+          : `Invite "${result.invite.name}" is now global.`,
+      );
+      await onRefresh();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Failed to promote invite to global.");
     } finally {
       setBusy(false);
     }
@@ -205,6 +236,9 @@ export function AgentInvitesScreen({
                         Channels:{" "}
                         {invite.channelIds.length > 0 ? invite.channelIds.join(", ") : "none"}
                       </div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        Runner scope: {(invite.runnerScopeMode ?? "SCOPED").toLowerCase()}
+                      </div>
                     </td>
                     <td className="px-2 py-2 text-slate-300">
                       {(invite.createdByType ?? "HUMAN").toLowerCase()}:
@@ -244,6 +278,15 @@ export function AgentInvitesScreen({
                         >
                           Reissue link
                         </Button>
+                        {(invite.runnerScopeMode ?? "SCOPED") === "SCOPED" ? (
+                          <Button
+                            variant="secondary"
+                            onClick={() => void handlePromoteGlobal(invite.id, invite.name)}
+                            disabled={busy}
+                          >
+                            Promote to global
+                          </Button>
+                        ) : null}
                       </div>
                     </td>
                   </tr>
@@ -391,6 +434,25 @@ export function AgentInvitesScreen({
                 </div>
               )}
             </div>
+            <Label>
+              Runner scope
+              <Select
+                className="mt-1"
+                value={runnerScopeMode}
+                onChange={(event) =>
+                  setRunnerScopeMode(event.target.value === "GLOBAL" ? "GLOBAL" : "SCOPED")
+                }
+              >
+                <option value="SCOPED">Scoped (recommended)</option>
+                <option value="GLOBAL">Global (acts like normal runner token)</option>
+              </Select>
+            </Label>
+            {runnerScopeMode === "GLOBAL" ? (
+              <div className="rounded border border-amber-700/40 bg-amber-900/20 p-2 text-xs text-amber-200">
+                Global scope removes invite channel/agent/runner restrictions for this redeemed token.
+                Use only for trusted environments.
+              </div>
+            ) : null}
           </div>
           <div className="mt-auto border-t border-slate-800 px-4 py-3">
             <Button onClick={() => void handleCreate()} disabled={busy || !agentName.trim()}>

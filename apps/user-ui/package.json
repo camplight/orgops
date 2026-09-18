@@ -4,9 +4,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5190",
-    "build": "tsc -p tsconfig.json --noEmit && vite build",
+    "build": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json --noEmit && vite build",
     "preview": "vite preview --host 0.0.0.0 --port 4190",
-    "lint": "tsc -p tsconfig.json --noEmit"
+    "lint": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "react": "^18.3.1",

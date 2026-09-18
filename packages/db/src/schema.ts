@@ -103,6 +103,10 @@ export const agentInvites = sqliteTable(
     token_hash: text("token_hash").notNull().unique(),
     token_prefix: text("token_prefix").notNull(),
     channel_ids_json: text("channel_ids_json").notNull().default("[]"),
+    allow_channel_expansion: integer("allow_channel_expansion")
+      .notNull()
+      .default(0),
+    runner_scope_mode: text("runner_scope_mode").notNull().default("SCOPED"),
     wrapped_config_json: text("wrapped_config_json").notNull().default("{}"),
     max_uses: integer("max_uses").notNull().default(1),
     use_count: integer("use_count").notNull().default(0),
@@ -136,6 +140,10 @@ export const runnerTokens = sqliteTable(
     allowed_channel_ids_json: text("allowed_channel_ids_json")
       .notNull()
       .default("[]"),
+    allow_channel_expansion: integer("allow_channel_expansion")
+      .notNull()
+      .default(0),
+    runner_scope_mode: text("runner_scope_mode").notNull().default("SCOPED"),
     invite_id: text("invite_id"),
     created_by_human_id: text("created_by_human_id"),
     created_at: integer("created_at").notNull(),

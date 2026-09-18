@@ -2,6 +2,10 @@ import type { Agent, Event } from "../types";
 
 export type WrapperRuntimeContext = {
   projectRoot: string;
+  runtimeAuth?: {
+    apiBaseUrl?: string;
+    runnerToken?: string;
+  };
   api: {
     apiFetch?: (path: string, init?: RequestInit) => Promise<Response>;
     emitEvent: (event: unknown) => Promise<void>;

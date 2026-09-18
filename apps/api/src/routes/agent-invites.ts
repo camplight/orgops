@@ -23,6 +23,8 @@ type AgentInvitesDeps = {
   inviteBaseUrlFallback: string;
 };
 
+type RunnerScopeMode = "SCOPED" | "GLOBAL";
+
 function isHumanUser(user: RequestUser | undefined): user is RequestUser & {
   id: string;
   username: string;
@@ -75,6 +77,14 @@ function parseChannelIds(value: unknown): string[] {
     .filter((entry): entry is string => typeof entry === "string")
     .map((entry) => entry.trim())
     .filter(Boolean);
+}
+
+function normalizeRunnerScopeMode(value: unknown): RunnerScopeMode {
+  const normalized =
+    typeof value === "string" && value.trim()
+      ? value.trim().toUpperCase()
+      : "SCOPED";
+  return normalized === "GLOBAL" ? "GLOBAL" : "SCOPED";
 }
 
 function normalizeAgentVisibility(value: unknown): AgentVisibility {
@@ -180,6 +190,7 @@ function toInviteApi(
     name: row.name,
     agentName: row.agent_name,
     visibility: normalizeAgentVisibility(row.agent_visibility),
+    runnerScopeMode: normalizeRunnerScopeMode(row.runner_scope_mode),
     tokenPrefix: row.token_prefix,
     channelIds,
     maxUses: row.max_uses,
@@ -229,6 +240,7 @@ export function registerAgentInviteRoutes(app: Hono<any>, deps: AgentInvitesDeps
     const inputName = typeof body.name === "string" ? body.name.trim() : "";
     const name = inputName || defaultInviteName(agentName, now);
     const visibility = normalizeAgentVisibility(body.visibility);
+    const runnerScopeMode = normalizeRunnerScopeMode(body.runnerScopeMode);
     const channelIds = [...new Set(parseChannelIds(body.channelIds))];
     const maxUsesRaw = Number(body.maxUses ?? 1);
     const maxUses =
@@ -323,6 +335,8 @@ export function registerAgentInviteRoutes(app: Hono<any>, deps: AgentInvitesDeps
         token_hash: generated.hash,
         token_prefix: generated.prefix,
         channel_ids_json: JSON.stringify(channelIds),
+        allow_channel_expansion: 0,
+        runner_scope_mode: runnerScopeMode,
         wrapped_config_json: JSON.stringify(wrappedConfigParsed.value),
         max_uses: maxUses,
         use_count: 0,
@@ -412,6 +426,70 @@ export function registerAgentInviteRoutes(app: Hono<any>, deps: AgentInvitesDeps
     return jsonResponse(c, toInviteApi(updated, inviteBaseUrl, generated.token));
   });
 
+  app.post("/api/agent-invites/:id/promote-global", (c) => {
+    const user = c.get("user") as RequestUser | undefined;
+    if (!isHumanUser(user) && !isRunnerUser(user)) {
+      return jsonResponse(c, { error: "Authentication required" }, 403);
+    }
+    const inviteBaseUrl = resolveInviteBaseUrl(c, inviteBaseUrlFallback);
+    const id = c.req.param("id");
+    const row = orm
+      .select()
+      .from(schema.agentInvites)
+      .where(eq(schema.agentInvites.id, id))
+      .get() as AgentInviteRow | undefined;
+    if (!row) return jsonResponse(c, { error: "Invite not found" }, 404);
+    if (!canManageInvite(user, row, access)) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
+    const scopedRunnerTokens = orm
+      .select({ id: schema.runnerTokens.id })
+      .from(schema.runnerTokens)
+      .where(
+        and(
+          eq(schema.runnerTokens.invite_id, id),
+          eq(schema.runnerTokens.runner_scope_mode, "SCOPED"),
+          isNull(schema.runnerTokens.revoked_at),
+        ),
+      )
+      .all() as Array<{ id: string }>;
+    orm
+      .update(schema.agentInvites)
+      .set({
+        runner_scope_mode: "GLOBAL",
+        allow_channel_expansion: 0,
+      })
+      .where(eq(schema.agentInvites.id, id))
+      .run();
+    orm
+      .update(schema.runnerTokens)
+      .set({
+        runner_scope_mode: "GLOBAL",
+        allowed_agent_name: null,
+        allowed_runner_id: null,
+        allowed_channel_ids_json: "[]",
+        allow_channel_expansion: 0,
+      })
+      .where(
+        and(
+          eq(schema.runnerTokens.invite_id, id),
+          isNull(schema.runnerTokens.revoked_at),
+        ),
+      )
+      .run();
+    const updated = orm
+      .select()
+      .from(schema.agentInvites)
+      .where(eq(schema.agentInvites.id, id))
+      .get() as AgentInviteRow | undefined;
+    if (!updated) return jsonResponse(c, { error: "Failed to promote invite scope" }, 500);
+    return jsonResponse(c, {
+      ok: true,
+      invite: toInviteApi(updated, inviteBaseUrl),
+      promotedScopedRunnerTokenCount: scopedRunnerTokens.length,
+    });
+  });
+
   app.get("/api/agent-invites/public/:token", (c) => {
     const token = c.req.param("token");
     const invite = findActiveInviteByToken(orm, token);
@@ -422,6 +500,7 @@ export function registerAgentInviteRoutes(app: Hono<any>, deps: AgentInvitesDeps
         name: invite.name,
         agentName: invite.agent_name,
         visibility: normalizeAgentVisibility(invite.agent_visibility),
+        runnerScopeMode: normalizeRunnerScopeMode(invite.runner_scope_mode),
         channelIds: parseStringArraySafe(invite.channel_ids_json),
         expiresAt: invite.expires_at,
       },
@@ -462,6 +541,7 @@ export function registerAgentInviteRoutes(app: Hono<any>, deps: AgentInvitesDeps
 
     const now = Date.now();
     const channelIds = parseStringArraySafe(invite.channel_ids_json);
+    const runnerScopeMode = normalizeRunnerScopeMode(invite.runner_scope_mode);
     const lifecycleName = `agent.lifecycle.${invite.agent_name}`;
     let lifecycleChannelId = "";
     const existingLifecycle = orm
@@ -501,9 +581,12 @@ export function registerAgentInviteRoutes(app: Hono<any>, deps: AgentInvitesDeps
         name: `invite:${invite.name}`,
         token_hash: generatedRunnerToken.hash,
         token_prefix: generatedRunnerToken.prefix,
-        allowed_agent_name: invite.agent_name,
-        allowed_runner_id: runnerId,
-        allowed_channel_ids_json: JSON.stringify(allowedChannelIds),
+        allowed_agent_name: runnerScopeMode === "SCOPED" ? invite.agent_name : null,
+        allowed_runner_id: runnerScopeMode === "SCOPED" ? runnerId : null,
+        allowed_channel_ids_json:
+          runnerScopeMode === "SCOPED" ? JSON.stringify(allowedChannelIds) : "[]",
+        allow_channel_expansion: 0,
+        runner_scope_mode: runnerScopeMode,
         invite_id: invite.id,
         created_by_human_id: invite.created_by_human_id,
         created_at: now,
@@ -628,10 +711,12 @@ export function registerAgentInviteRoutes(app: Hono<any>, deps: AgentInvitesDeps
         name: invite.name,
         agentName: invite.agent_name,
         visibility: normalizeAgentVisibility(invite.agent_visibility),
+        runnerScopeMode,
       },
       runner: {
         token: generatedRunnerToken.token,
         runnerId,
+        scopeMode: runnerScopeMode,
       },
       channels,
       agent: {

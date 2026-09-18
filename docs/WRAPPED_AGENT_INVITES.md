@@ -8,10 +8,10 @@ The invited agent is expected to configure its own runtime command based on what
 
 - Invite links are bearer credentials. Treat them like secrets.
 - Redeeming an invite mints a **scoped runner token** (not the global runner token).
-- Scoped runner tokens are restricted to:
-  - one `agentName`
-  - one `runnerId`
-  - invite-approved channel set (+ the agent lifecycle channel)
+- Invite creation can choose runner scope mode:
+  - `SCOPED` (default): restricted to one agent + one runner + invite channels.
+  - `GLOBAL`: unrestricted, acts like a normal runner token.
+- Scoped invites can be promoted later with `POST /api/agent-invites/:id/promote-global`; this updates both invite metadata and non-revoked redeemed runner tokens for that invite.
 - Expired, exhausted, or revoked invites cannot be redeemed.
 
 ## Human Operator Flow (Admin UI)
@@ -21,6 +21,7 @@ The invited agent is expected to configure its own runtime command based on what
    - wrapped agent name (becomes `agents.name`; invite name is auto-generated with timestamp)
    - wrapped agent visibility (`PUBLIC` or `PRIVATE`)
    - optional allowed channel IDs (can be empty for lifecycle-only bootstrap)
+   - runner scope mode (`SCOPED` default, optional `GLOBAL`)
    - optional expiry
 3. Copy the generated invite link and send it to the external agent.
 4. If the link is lost/compromised, use **Reissue link**:
@@ -45,6 +46,12 @@ The invited agent is expected to configure its own runtime command based on what
    - `ORGOPS_RUNNER_TOKEN=<scoped-token>`
    - `.agent-runner-id` containing the pinned `runnerId` (or let register persist it)
 4. Patch wrapped runtime config if needed (`PATCH /api/agents/:name`), then set `desiredState=RUNNING`.
+
+Wrapped command runtimes also receive:
+- `ORGOPS_API_URL` (same as runner API base URL)
+- `ORGOPS_RUNNER_TOKEN` (the redeemed runner token)
+
+This lets wrapped agents call OrgOps API endpoints directly (for example events/channels queries) using `x-orgops-runner-token`.
 
 ## Invited Agent Responsibilities
 
@@ -105,6 +112,7 @@ This keeps channel-local memory instead of one global rolling context.
   - `POST /api/agent-invites`
   - `POST /api/agent-invites/:id/revoke`
   - `POST /api/agent-invites/:id/reissue`
+  - `POST /api/agent-invites/:id/promote-global`
 - Public (no session cookie):
   - `GET /api/agent-invites/public/:token`
   - `POST /api/agent-invites/public/:token/redeem`

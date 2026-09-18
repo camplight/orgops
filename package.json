@@ -8,8 +8,8 @@
   "scripts": {
     "dev": "dotenv -e .env -- npm run --workspace @orgops/api dev",
     "dev:runner:after-api": "node --env-file=.env --import tsx scripts/start-runner-after-api.ts dev",
-    "dev:all": "dotenv -e .env -- concurrently -k \"npm run --workspace @orgops/api dev\" \"npm run --workspace @orgops/admin-ui dev\" \"npm run dev:runner:after-api\"",
-    "dev:all:no-api": "dotenv -e .env -- concurrently -k \"npm run --workspace @orgops/admin-ui dev\" \"npm run dev:runner:after-api\"",
+    "dev:all": "dotenv -e .env -- concurrently -k \"npm run --workspace @orgops/api dev\" \"npm run --workspace @orgops/admin-ui dev\" \"npm run --workspace @orgops/user-ui dev\" \"npm run dev:runner:after-api\"",
+    "dev:all:no-api": "dotenv -e .env -- concurrently -k \"npm run --workspace @orgops/admin-ui dev\" \"npm run --workspace @orgops/user-ui dev\" \"npm run dev:runner:after-api\"",
     "dev:all:clean": "node --env-file=.env --import tsx scripts/dev-all-clean.ts",
     "build": "npm run --workspace @orgops/admin-ui build && npm run --workspace @orgops/user-ui build",
     "prod:runner:after-api": "node --env-file=.env --import tsx scripts/start-runner-after-api.ts start",

@@ -203,15 +203,20 @@ export function createApp(config: AppConfig = {}) {
     const scoped = findActiveRunnerTokenByToken(orm, token);
     if (!scoped) return null;
     touchRunnerTokenLastUsed(orm, scoped.id);
+    const mode: "GLOBAL" | "SCOPED" =
+      scoped.runner_scope_mode === "GLOBAL" ? "GLOBAL" : "SCOPED";
     return {
       username: "runner",
       mustChangePassword: false,
       runnerScope: {
-        mode: "SCOPED" as const,
+        mode,
         tokenId: scoped.id,
-        allowedAgentName: scoped.allowed_agent_name ?? undefined,
-        allowedRunnerId: scoped.allowed_runner_id ?? undefined,
-        allowedChannelIds: parseRunnerScopeChannels(scoped.allowed_channel_ids_json),
+        allowedAgentName: mode === "SCOPED" ? scoped.allowed_agent_name ?? undefined : undefined,
+        allowedRunnerId: mode === "SCOPED" ? scoped.allowed_runner_id ?? undefined : undefined,
+        allowedChannelIds:
+          mode === "SCOPED"
+            ? parseRunnerScopeChannels(scoped.allowed_channel_ids_json)
+            : undefined,
         inviteId: scoped.invite_id ?? undefined,
       },
     };

@@ -40,7 +40,10 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
     user: RequestUser | undefined,
   ): user is RequestUser & {
     username: "runner";
-    runnerScope: { mode: "SCOPED"; allowedAgentName?: string };
+    runnerScope: {
+      mode: "SCOPED";
+      allowedAgentName?: string;
+    };
   } {
     return user?.username === "runner" && user.runnerScope?.mode === "SCOPED";
   }
@@ -820,9 +823,6 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
   app.post("/api/channels/:id/subscribe", async (c) => {
     const id = c.req.param("id");
     const user = c.get("user") as RequestUser | undefined;
-    if (!access.canManageChannel(user, id)) {
-      return jsonResponse(c, { error: "Forbidden" }, 403);
-    }
     const body = await c.req.json();
     const subscriberType = String(body.subscriberType ?? "").trim().toUpperCase();
     const subscriberId = String(body.subscriberId ?? "").trim();
@@ -842,11 +842,17 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
     if (subscriberType === "TEAM" && !teamExists(subscriberId)) {
       return jsonResponse(c, { error: `TEAM not found: ${subscriberId}` }, 404);
     }
-    if (isScopedRunner(user)) {
-      const allowedAgentName = user.runnerScope?.allowedAgentName ?? "";
+    const scopedRunner = isScopedRunner(user) ? user : null;
+    if (scopedRunner) {
+      const allowedAgentName = scopedRunner.runnerScope?.allowedAgentName ?? "";
       if (subscriberType !== "AGENT" || subscriberId !== allowedAgentName) {
         return jsonResponse(c, { error: "Scoped runner can subscribe only its own AGENT identity" }, 403);
       }
+      if (!access.canManageChannel(user, id)) {
+        return jsonResponse(c, { error: "Forbidden" }, 403);
+      }
+    } else if (!access.canManageChannel(user, id)) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
     }
     orm
       .insert(schema.channelSubscriptions)
@@ -863,20 +869,23 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
   app.post("/api/channels/:id/unsubscribe", async (c) => {
     const id = c.req.param("id");
     const user = c.get("user") as RequestUser | undefined;
-    if (!access.canManageChannel(user, id)) {
-      return jsonResponse(c, { error: "Forbidden" }, 403);
-    }
     const body = await c.req.json();
     const subscriberType = String(body.subscriberType ?? "").trim().toUpperCase();
     const subscriberId = String(body.subscriberId ?? "").trim();
     if (!subscriberType || !subscriberId) {
       return jsonResponse(c, { error: "subscriberType and subscriberId are required" }, 400);
     }
-    if (isScopedRunner(user)) {
-      const allowedAgentName = user.runnerScope?.allowedAgentName ?? "";
+    const scopedRunner = isScopedRunner(user) ? user : null;
+    if (scopedRunner) {
+      const allowedAgentName = scopedRunner.runnerScope?.allowedAgentName ?? "";
       if (subscriberType !== "AGENT" || subscriberId !== allowedAgentName) {
         return jsonResponse(c, { error: "Scoped runner can unsubscribe only its own AGENT identity" }, 403);
       }
+      if (!access.canManageChannel(user, id)) {
+        return jsonResponse(c, { error: "Forbidden" }, 403);
+      }
+    } else if (!access.canManageChannel(user, id)) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
     }
     orm
       .delete(schema.channelSubscriptions)

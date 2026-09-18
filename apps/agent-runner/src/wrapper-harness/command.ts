@@ -628,6 +628,8 @@ export const commandWrapperHarness: WrapperHarness = {
       ORGOPS_WRAPPED_AGENT_NAME: agent.name,
       ORGOPS_WRAPPED_KIND: config.kind,
       ORGOPS_WRAPPED_WORKSPACE_PATH: agent.workspacePath,
+      ...(ctx.runtimeAuth?.apiBaseUrl ? { ORGOPS_API_URL: ctx.runtimeAuth.apiBaseUrl } : {}),
+      ...(ctx.runtimeAuth?.runnerToken ? { ORGOPS_RUNNER_TOKEN: ctx.runtimeAuth.runnerToken } : {}),
     };
     const sourceDir = await ensureSourceCheckout(agent.workspacePath, config, baseEnv);
     if (sourceDir) baseEnv.ORGOPS_WRAPPED_SOURCE_DIR = sourceDir;
@@ -799,6 +801,8 @@ export const commandWrapperHarness: WrapperHarness = {
           ORGOPS_WRAPPED_SESSION_ID: sessionId,
           ORGOPS_WRAPPED_MESSAGE: message,
           ORGOPS_WRAPPED_TRIGGER_EVENT_ID: triggerEvent.id,
+          ...(ctx.runtimeAuth?.apiBaseUrl ? { ORGOPS_API_URL: ctx.runtimeAuth.apiBaseUrl } : {}),
+          ...(ctx.runtimeAuth?.runnerToken ? { ORGOPS_RUNNER_TOKEN: ctx.runtimeAuth.runnerToken } : {}),
           ...(sourceDir ? { ORGOPS_WRAPPED_SOURCE_DIR: sourceDir } : {}),
         },
         {

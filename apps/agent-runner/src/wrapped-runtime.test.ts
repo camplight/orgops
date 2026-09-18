@@ -614,4 +614,64 @@ describe("wrapped runtime", () => {
     const replyText = wrappedReply?.payload?.text ?? "";
     expect(replyText).toBe("openai-visible||");
   });
+
+  it("injects OrgOps API auth env vars into wrapped runtime commands", async () => {
+    const workspacePath = mkdtempSync(join(tmpdir(), "orgops-wrapped-api-auth-"));
+    const emitted: unknown[] = [];
+    const agent: Agent = {
+      name: "wrapped-api-auth-test",
+      systemInstructions: "",
+      soulPath: "",
+      workspacePath,
+      modelId: "wrapped:none",
+      desiredState: "RUNNING",
+      runtimeState: "RUNNING",
+      mode: "WRAPPED",
+      wrappedConfig: {
+        kind: "test",
+        runtime: {
+          command:
+            'node -e "process.stdout.write(JSON.stringify({payloads:[{text:[process.env.ORGOPS_API_URL||\\"\\",process.env.ORGOPS_RUNNER_TOKEN||\\"\\"] .join(\\"|\\")}]}))"',
+          parse: "json-payloads",
+        },
+      },
+    };
+    const event: Event = {
+      id: "evt-api-auth",
+      type: "message.created",
+      payload: { text: "api env" },
+      source: "human:alice",
+      channelId: "chan-api-auth",
+      createdAt: Date.now(),
+    };
+
+    try {
+      await runWrappedAgentTurn(
+        {
+          projectRoot: workspacePath,
+          runtimeAuth: {
+            apiBaseUrl: "http://localhost:8787",
+            runnerToken: "scoped-runner-token",
+          },
+          api: {
+            emitEvent: async (outbound: unknown) => {
+              emitted.push(outbound);
+            },
+            getPackageSecretsEnv: async () => ({}),
+          },
+        },
+        agent,
+        [event],
+      );
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true });
+    }
+
+    const wrappedReply = emitted.find(
+      (outbound) =>
+        (outbound as any).type === "message.created" &&
+        (outbound as any).source === "agent:wrapped-api-auth-test",
+    ) as { payload?: { text?: string } } | undefined;
+    expect(wrappedReply?.payload?.text).toBe("http://localhost:8787|scoped-runner-token");
+  });
 });

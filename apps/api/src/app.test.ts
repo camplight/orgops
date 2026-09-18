@@ -5178,12 +5178,14 @@ describe("api app", () => {
       agentName: string;
       channelIds: string[];
       visibility?: string;
+      runnerScopeMode?: string;
       createdByType?: string;
       createdById?: string;
     };
     expect(invite.agentName).toBe("claude-bridge");
     expect(invite.channelIds).toEqual([]);
     expect(invite.visibility).toBe("PRIVATE");
+    expect(invite.runnerScopeMode).toBe("SCOPED");
     expect(invite.createdByType).toBe("HUMAN");
     expect(invite.createdById).toBe("admin");
     expect(typeof invite.inviteLink).toBe("string");
@@ -5298,6 +5300,174 @@ describe("api app", () => {
     expect(scopedEventsWithoutAgent.status).toBe(200);
     const scopedEventsRows = (await scopedEventsWithoutAgent.json()) as unknown[];
     expect(scopedEventsRows).toEqual([]);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("promotes scoped invite runner tokens to global scope", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+      runnerApiUrl: "http://localhost:8787",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const inviteRes = await app.request("http://localhost/api/agent-invites", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        agentName: "scoped-expand-agent",
+        visibility: "PRIVATE",
+        channelIds: [],
+        runnerScopeMode: "SCOPED",
+      }),
+    });
+    expect(inviteRes.status).toBe(201);
+    const invite = (await inviteRes.json()) as {
+      id: string;
+      inviteLink?: string;
+      runnerScopeMode?: string;
+    };
+    expect(invite.runnerScopeMode).toBe("SCOPED");
+    const inviteToken = decodeURIComponent((invite.inviteLink ?? "").split("/public/")[1] ?? "");
+    expect(inviteToken.startsWith("org_inv_")).toBe(true);
+
+    const redeemRes = await app.request(
+      `http://localhost/api/agent-invites/public/${encodeURIComponent(inviteToken)}/redeem`,
+      { method: "POST" },
+    );
+    expect(redeemRes.status).toBe(200);
+    const redeemed = (await redeemRes.json()) as { runner: { token: string } };
+
+    const scopedCreateOtherAgent = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orgops-runner-token": redeemed.runner.token,
+      },
+      body: JSON.stringify({
+        name: "another-agent-before-promote",
+        modelId: "openai:gpt-4o-mini",
+      }),
+    });
+    expect(scopedCreateOtherAgent.status).toBe(403);
+
+    const promoteRes = await app.request(
+      `http://localhost/api/agent-invites/${encodeURIComponent(invite.id)}/promote-global`,
+      {
+        method: "POST",
+        headers: { cookie },
+      },
+    );
+    expect(promoteRes.status).toBe(200);
+    const promoted = (await promoteRes.json()) as {
+      invite?: { runnerScopeMode?: string };
+      promotedScopedRunnerTokenCount?: number;
+    };
+    expect(promoted.invite?.runnerScopeMode).toBe("GLOBAL");
+    expect(promoted.promotedScopedRunnerTokenCount).toBeGreaterThanOrEqual(1);
+
+    const registerRes = await app.request("http://localhost/api/runners/register", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orgops-runner-token": redeemed.runner.token,
+      },
+      body: JSON.stringify({
+        existingRunnerId: "any-runner-id-after-promote",
+        displayName: "promoted-global-runner",
+      }),
+    });
+    expect(registerRes.status).toBe(201);
+
+    const eventsRes = await app.request("http://localhost/api/events", {
+      headers: { "x-orgops-runner-token": redeemed.runner.token },
+    });
+    expect(eventsRes.status).toBe(200);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("supports global-scope invite runner tokens for normal agent access", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+      runnerApiUrl: "http://localhost:8787",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const inviteRes = await app.request("http://localhost/api/agent-invites", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        agentName: "global-invite-agent",
+        visibility: "PRIVATE",
+        runnerScopeMode: "GLOBAL",
+        channelIds: [],
+      }),
+    });
+    expect(inviteRes.status).toBe(201);
+    const invite = (await inviteRes.json()) as {
+      inviteLink?: string;
+      runnerScopeMode?: string;
+    };
+    expect(invite.runnerScopeMode).toBe("GLOBAL");
+    const inviteToken = decodeURIComponent((invite.inviteLink ?? "").split("/public/")[1] ?? "");
+    expect(inviteToken.startsWith("org_inv_")).toBe(true);
+
+    const redeemRes = await app.request(
+      `http://localhost/api/agent-invites/public/${encodeURIComponent(inviteToken)}/redeem`,
+      { method: "POST" },
+    );
+    expect(redeemRes.status).toBe(200);
+    const redeemed = (await redeemRes.json()) as {
+      runner: { token: string; scopeMode?: string };
+    };
+    expect(redeemed.runner.scopeMode).toBe("GLOBAL");
+
+    const registerRes = await app.request("http://localhost/api/runners/register", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orgops-runner-token": redeemed.runner.token,
+      },
+      body: JSON.stringify({
+        existingRunnerId: "any-runner-id-works",
+        displayName: "global-token-runner",
+      }),
+    });
+    expect(registerRes.status).toBe(201);
+
+    const eventsRes = await app.request("http://localhost/api/events", {
+      headers: { "x-orgops-runner-token": redeemed.runner.token },
+    });
+    expect(eventsRes.status).toBe(200);
+    const events = (await eventsRes.json()) as unknown[];
+    expect(Array.isArray(events)).toBe(true);
 
     rmSync(dataDir, { recursive: true, force: true });
   });

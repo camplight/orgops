@@ -1264,6 +1264,21 @@ export default function App() {
             await data.refreshAgentInvites();
             return body;
           }}
+          onPromoteInviteGlobal={async (id) => {
+            const res = await data.apiFetch(
+              `/api/agent-invites/${encodeURIComponent(id)}/promote-global`,
+              {
+                method: "POST",
+                headers: data.getApiHeaders(),
+              },
+            );
+            const body = (await res.json()) as {
+              invite: AgentInvite;
+              promotedScopedRunnerTokenCount: number;
+            };
+            await data.refreshAgentInvites();
+            return body;
+          }}
           onRevokeInvite={async (id) => {
             await data.apiFetch(`/api/agent-invites/${encodeURIComponent(id)}/revoke`, {
               method: "POST",

@@ -204,6 +204,7 @@ export type AgentInvite = {
   name: string;
   agentName: string;
   visibility?: "PUBLIC" | "PRIVATE";
+  runnerScopeMode?: "SCOPED" | "GLOBAL";
   tokenPrefix: string;
   channelIds: string[];
   maxUses: number;
