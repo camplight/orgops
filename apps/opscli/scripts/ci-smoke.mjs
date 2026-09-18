@@ -28,7 +28,7 @@ function run(binaryPath, args, extraEnv = {}) {
       ...process.env,
       ...extraEnv,
     },
-    shell: process.platform === "win32",
+    shell: false,
   });
   if (result.status !== 0) {
     fail(`Command failed with exit code ${result.status}: ${args.join(" ")}`);
@@ -43,7 +43,7 @@ function runBestEffort(binaryPath, args, extraEnv = {}) {
       ...process.env,
       ...extraEnv,
     },
-    shell: process.platform === "win32",
+    shell: false,
   });
 }
 
