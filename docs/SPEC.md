@@ -22,7 +22,7 @@ This document describes the current implementation in this repository.
 apps/
   api/            Hono HTTP + WS server
   agent-runner/   Agent polling loop + tool/runtime execution
-  opscli/         Host bootstrap/maintenance CLI (RLM REPL loop)
+  opscli/         Host bootstrap/maintenance CLI (deterministic commands + optional chat)
   admin-ui/       React + Tailwind admin UI
   user-ui/        Lightweight user UI
 packages/
@@ -496,25 +496,22 @@ Audit events are emitted around tool/process operations and RLM execution.
 
 ## OpsCLI Behavior
 
-`apps/opscli` is a lightweight standalone RLM runtime for bootstrap/maintenance.
+`apps/opscli` is a standalone host bootstrap/maintenance CLI with deterministic commands and an optional chat loop.
 
-- persistent Node VM runtime session
-- LLM emits one JS snippet per step
-- built-in REPL methods:
-  - `shell(command)`
-  - `print(...args)`
-  - `input(question)`
-  - `finish()`
-  - `clear()`
-  - `exit(code)`
-- supports empty initial goal and interactive goal gathering via `input(...)`
-- maintains rolling summarization and context-capped recent messages
-- reads the bundled docs payload in release builds, including this spec
-- can create wrapped agents through the `createWrappedAgent` tool, which calls `POST /api/agents` with `mode: "WRAPPED"`, `modelId: "wrapped:none"`, native soul fields, and generic `wrappedConfig`
-- can create and maintain wrapped agents through the documented HTTP API:
-  - `POST /api/agents` with `mode: "WRAPPED"` and `wrappedConfig`
-  - `PATCH /api/agents/:name` to edit `wrappedConfig` as JSON
-  - set `desiredState: "RUNNING"` to let the assigned runner clone/setup/start the wrapper lifecycle
+- deterministic commands:
+  - `install` (prereq checks + clone/pull repo + `npm ci` + build)
+  - `doctor` (host prerequisite check)
+  - `start` / `stop` / `status` for API + runner + user-ui stack
+  - `admin open` / `admin stop` / `admin status` for admin-ui lifecycle
+- optional `chat` command:
+  - plain tool-calling loop (`shell`, `askPassword`, `getBundledDocs`, `exitOpscli`)
+  - rolling summarization + context-capped history
+  - prompts for provider API keys only in chat mode
+- release build embeds docs/build metadata for chat context (not a full source snapshot)
+- auto-start registration is OS-specific:
+  - macOS LaunchAgent
+  - Linux systemd user service
+  - Windows Scheduled Task
 
 Security note: wrapped `source`, `setup.command`, and `runtime.command` are host code execution. Native orgops agents and opscli should treat GitHub-derived wrapper recipes as privileged changes and should prefer explicit user approval or trusted repo allowlists before enabling them on shared hosts.
 
@@ -573,18 +570,14 @@ Security note: wrapped `source`, `setup.command`, and `runtime.command` are host
   - `ORGOPS_RLM_MAX_SUBAGENTS_PER_EVENT`
 - OpsCLI controls:
   - `ORGOPS_OPSCLI_MODEL`
-  - `ORGOPS_OPSCLI_MAX_STEPS`
+  - `ORGOPS_OPSCLI_TOOL_LOOP_MAX_STEPS`
   - `ORGOPS_OPSCLI_COMMAND_TIMEOUT_MS`
-  - `ORGOPS_OPSCLI_EVAL_TIMEOUT_MS`
-  - `ORGOPS_OPSCLI_EVAL_CALLBACK_TIMEOUT_MS`
   - `ORGOPS_OPSCLI_MAX_CONTEXT_CHARS`
   - `ORGOPS_OPSCLI_MAX_SUMMARY_CHARS`
   - `ORGOPS_OPSCLI_SUMMARY_CHUNK_MESSAGES`
   - `ORGOPS_OPSCLI_MIN_RECENT_MESSAGES`
   - `ORGOPS_OPSCLI_MAX_SYSTEM_DOC_CHARS`
-  - `ORGOPS_OPSCLI_DEBUG`
   - `ORGOPS_OPSCLI_PROGRESS`
   - `ORGOPS_OPSCLI_SPINNER`
   - `ORGOPS_OPSCLI_LOG_PATH`
   - `ORGOPS_OPSCLI_DOUBLE_SIGINT_MS`
-  - `ORGOPS_EXTRACTED_ROOT` (auto-managed by OpsCLI)

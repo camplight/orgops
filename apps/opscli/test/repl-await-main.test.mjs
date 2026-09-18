@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-const AGENT_SOURCE = resolve(process.cwd(), "src/agent.ts");
+const AGENT_SOURCE = resolve(process.cwd(), "src/lib/agent.ts");
 
 test("opscli agent uses llm tools with bounded internal loop", () => {
   const source = readFileSync(AGENT_SOURCE, "utf-8");
@@ -24,8 +24,8 @@ test("opscli agent uses llm tools with bounded internal loop", () => {
   );
 
   assert.ok(
-    source.includes("synthesizeFinalAnswerFromToolResults"),
-    "Agent should synthesize a final user-facing answer when model text is empty."
+    source.includes('throw new Error("Model returned an empty final response.");'),
+    "Agent should fail loudly when model returns empty final text."
   );
 });
 

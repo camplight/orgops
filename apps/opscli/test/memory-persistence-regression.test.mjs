@@ -29,7 +29,6 @@ test("opscli keeps shared session memory and modular tools", () => {
   assert.ok(
     toolsSource.includes("createShellTool") &&
       toolsSource.includes("createAskPasswordTool") &&
-      toolsSource.includes("createExtractOrgOpsTool") &&
       toolsSource.includes("createGetBundledDocsTool") &&
       toolsSource.includes("createExitTool"),
     "tools index should compose separate tool modules."

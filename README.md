@@ -112,16 +112,9 @@ Each release includes:
 - a release changelog artifact (`CHANGELOG-<release-tag>.md`)
 - release notes generated from commits since the previous release tag
 
-Each binary bundles:
-
-- OrgOps source snapshot for `api`, `agent-runner`, `admin-ui`, `user-ui`, and shared packages
-- OrgOps docs (README + SPEC + runner README) injected into OpsCLI system prompt
-
-On host launch, `opscli` can prompt for missing provider keys (`OPENAI_API_KEY`,
-`ANTHROPIC_API_KEY`, or `OPENROUTER_API_KEY`), persist the selected key to a local `.env`,
-and then use REPL helpers (`extractOrgOps`, `setupOrgOps`) to unpack and prepare selected
-components. By default, extraction is done to `./orgops`, and OpsCLI stores the extracted
-path in `.env` via `ORGOPS_EXTRACTED_ROOT` for reuse in later sessions.
+Each binary includes deterministic installer commands (`install`, `doctor`, `admin open`) and
+an optional agentic `chat` command. Installer mode clones OrgOps from git, builds runtime
+artifacts, and can register OS auto-start services.
 
 On macOS, downloaded binaries may be quarantined by Gatekeeper. After download:
 

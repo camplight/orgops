@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-const AGENT_SOURCE = resolve(process.cwd(), "src/agent.ts");
+const AGENT_SOURCE = resolve(process.cwd(), "src/lib/agent.ts");
 
 test("opscli agent writes user and assistant roles to memory", () => {
   const source = readFileSync(AGENT_SOURCE, "utf-8");
