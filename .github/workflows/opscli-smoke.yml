@@ -37,12 +37,13 @@ jobs:
         run: npm ci
 
       - name: OpsCLI tests
-        run: npm run --workspace @orgops/opscli test
+        shell: bash
+        run: |
+          cd apps/opscli
+          node --test test/*.test.mjs
 
       - name: Build self-contained OpsCLI executable
         run: npm run --workspace @orgops/opscli build:release
 
-      - name: Smoke test binary (help, doctor, mocked install)
-        # install smoke uses ORGOPS_OPSCLI_INSTALL_SMOKE_MOCK in script to avoid
-        # network clone, npm build, service registration, and browser side-effects.
+      - name: Smoke test binary (full command surface)
         run: node apps/opscli/scripts/ci-smoke.mjs
