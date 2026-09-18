@@ -66,6 +66,7 @@ export async function startAndOpenAdminUi(options?: { installDir?: string; openB
             detached: true,
             stdio: "ignore",
             env: process.env,
+            shell: true,
           })
         : (() => {
             const outFd = openSync(logPath, "a");

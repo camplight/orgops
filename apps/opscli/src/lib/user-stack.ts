@@ -108,6 +108,7 @@ export async function startUserStack(options?: { installDir?: string; openBrowse
             detached: true,
             stdio: "ignore",
             env: process.env,
+            shell: true,
           })
         : (() => {
             const outFd = openSync(logPath, "a");
