@@ -55,8 +55,8 @@ async function waitForAdminUi(timeoutMs: number) {
   throw new Error(`Admin UI did not become ready at ${ADMIN_UI_URL} within ${timeoutMs}ms.`);
 }
 
-export async function startAndOpenAdminUi(installDirFromArg?: string) {
-  const installDir = resolveInstallDir(installDirFromArg);
+export async function startAndOpenAdminUi(options?: { installDir?: string; openBrowser?: boolean }) {
+  const installDir = resolveInstallDir(options?.installDir);
   const existing = loadAdminState(installDir);
   if (!existing) {
     const runtimeDir = resolve(installDir, ".orgops-runtime");
@@ -79,7 +79,9 @@ export async function startAndOpenAdminUi(installDirFromArg?: string) {
   }
 
   await waitForAdminUi(30_000);
-  openUrlInBrowser(ADMIN_UI_URL);
+  if (options?.openBrowser !== false) {
+    openUrlInBrowser(ADMIN_UI_URL);
+  }
   return {
     installDir,
     url: ADMIN_UI_URL,

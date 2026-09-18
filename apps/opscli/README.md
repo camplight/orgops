@@ -2,7 +2,7 @@
 
 `opscli` is a deterministic installer/launcher CLI for OrgOps hosts with an optional agentic chat mode.
 
-- Deterministic commands: `install`, `doctor`, `start`, `stop`, `status`, `admin open`, `admin stop`, `admin status`
+- Deterministic commands: `install`, `upgrade`, `doctor`, `start`, `stop`, `status`, `admin open`, `admin stop`, `admin status`
 - Agentic mode: `chat` command only
 - `install` can optionally register an auto-start service and create a desktop shortcut for User UI
 
@@ -11,6 +11,7 @@
 `opscli` command surface:
 
 - `opscli install [--dir <path>] [--repo <url>] [--ref <git-ref>] [--register-service] [--create-shortcut]`
+- `opscli upgrade [--dir <path>] [--repo <url>] [--ref <git-ref>] [--no-restart]`
 - `opscli doctor`
 - `opscli start [--dir <path>] [--no-open]`
 - `opscli stop [--dir <path>]`
@@ -21,6 +22,7 @@
 - `opscli chat [--goal "..."]`
 
 During `install`, OpsCLI checks required host tools (`node`, `npm`, `git`), clones/updates OrgOps from git, runs `npm ci`, and builds UI assets.
+During `upgrade`, OpsCLI creates a safety backup of `.orgops-data`/`files`/`.env` (if present), then performs an in-place git + dependency + build update and restarts previously running runtime services by default.
 
 ## Build standalone executable
 

@@ -18,6 +18,7 @@ import { runInstall } from "./lib/install";
 import { getAdminUiStatus, startAndOpenAdminUi, stopAdminUi } from "./lib/admin-ui";
 import { ensurePrerequisites } from "./lib/prereqs";
 import { getUserStackStatus, startUserStack, stopUserStack } from "./lib/user-stack";
+import { runUpgrade } from "./lib/upgrade";
 
 type ParsedCommand =
   | { name: "help" }
@@ -30,6 +31,15 @@ type ParsedCommand =
         repoRef?: string;
         registerService: boolean;
         createShortcut: boolean;
+      };
+    }
+  | {
+      name: "upgrade";
+      options: {
+        installDir?: string;
+        repoUrl?: string;
+        repoRef?: string;
+        restart: boolean;
       };
     }
   | {
@@ -86,6 +96,7 @@ function printCliHelp() {
     "Usage:",
     "  opscli chat [--goal \"instruction\"]",
     "  opscli install [--dir <path>] [--repo <url>] [--ref <git-ref>] [--register-service] [--create-shortcut]",
+    "  opscli upgrade [--dir <path>] [--repo <url>] [--ref <git-ref>] [--no-restart]",
     "  opscli start [--dir <path>] [--no-open]",
     "  opscli stop [--dir <path>]",
     "  opscli status [--dir <path>]",
@@ -101,6 +112,7 @@ function printCliHelp() {
     "  --ref <git-ref>      Install: git branch/tag/ref (default: main)",
     "  --register-service   Install: register auto-start service at login",
     "  --create-shortcut    Install: create desktop shortcut for User UI",
+    "  --no-restart         Upgrade: do not restart previously running services",
     "  --no-open            Start: do not open User UI in browser",
     "  -h, --help           Show help",
   ];
@@ -244,6 +256,37 @@ function parseGlobalArgs(argv: string[]): ParsedCommand {
         createShortcut,
       },
     };
+  }
+  if (first === "upgrade") {
+    const args = [second, ...rest].filter(Boolean);
+    let installDir: string | undefined;
+    let repoUrl: string | undefined;
+    let repoRef: string | undefined;
+    let restart = true;
+    while (args.length > 0) {
+      const token = args.shift() ?? "";
+      if (token === "--dir") {
+        installDir = args.shift();
+        if (!installDir) throw new Error("Missing value for --dir.");
+        continue;
+      }
+      if (token === "--repo") {
+        repoUrl = args.shift();
+        if (!repoUrl) throw new Error("Missing value for --repo.");
+        continue;
+      }
+      if (token === "--ref") {
+        repoRef = args.shift();
+        if (!repoRef) throw new Error("Missing value for --ref.");
+        continue;
+      }
+      if (token === "--no-restart") {
+        restart = false;
+        continue;
+      }
+      throw new Error(`Unknown argument for upgrade: ${token}`);
+    }
+    return { name: "upgrade", options: { installDir, repoUrl, repoRef, restart } };
   }
   if (first === "chat") {
     const options = parseChatArgs([second, ...rest].filter(Boolean));
@@ -459,6 +502,24 @@ async function main() {
     return;
   }
 
+  if (parsed.name === "upgrade") {
+    try {
+      writeRoleMessage("opscli", "Running safe in-place OrgOps upgrade.");
+      const result = await runUpgrade(parsed.options);
+      writeRoleMessage("opscli", `Upgrade complete at ${result.installDir}.`);
+      if (result.backupPath) {
+        writeRoleMessage("opscli", `Safety backup: ${result.backupPath}`);
+      } else {
+        writeRoleMessage("opscli", "No backup payload found (.orgops-data/files/.env missing).");
+      }
+      writeRoleMessage("opscli", `Restart policy: ${result.restartMessage}`);
+    } catch (error) {
+      writeRoleMessage("error", `Upgrade failed: ${toDisplayError(error)}`, { toStderr: true });
+      process.exitCode = 1;
+    }
+    return;
+  }
+
   if (parsed.name === "start") {
     try {
       writeRoleMessage("opscli", "Starting OrgOps user stack.");
@@ -518,7 +579,10 @@ async function main() {
   if (parsed.name === "admin-open") {
     try {
       writeRoleMessage("opscli", "Starting Admin UI and opening browser.");
-      const result = await startAndOpenAdminUi(parsed.options.installDir);
+      const result = await startAndOpenAdminUi({
+        installDir: parsed.options.installDir,
+        openBrowser: true,
+      });
       writeRoleMessage(
         "opscli",
         result.alreadyRunning

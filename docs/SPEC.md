@@ -500,6 +500,7 @@ Audit events are emitted around tool/process operations and RLM execution.
 
 - deterministic commands:
   - `install` (prereq checks + clone/pull repo + `npm ci` + build)
+  - `upgrade` (safety backup + controlled stop + in-place update + optional restart)
   - `doctor` (host prerequisite check)
   - `start` / `stop` / `status` for API + runner + user-ui stack
   - `admin open` / `admin stop` / `admin status` for admin-ui lifecycle

@@ -63,12 +63,15 @@ export function runInstall(rawOptions: InstallOptions) {
   }
 
   const prior = loadState();
+  const serviceRegistered = rawOptions.registerService
+    ? true
+    : Boolean(prior.serviceRegistered);
   saveState({
     ...prior,
     installDir,
     repoRef,
     repoUrl,
-    serviceRegistered: Boolean(rawOptions.registerService),
+    serviceRegistered,
   });
 
   if (rawOptions.registerService) {
@@ -79,7 +82,7 @@ export function runInstall(rawOptions: InstallOptions) {
     installDir,
     repoUrl,
     repoRef,
-    serviceRegistered: Boolean(rawOptions.registerService),
+    serviceRegistered,
     serviceMessage,
     shortcutPath,
     userUiUrl: USER_UI_URL,
