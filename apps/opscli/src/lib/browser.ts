@@ -3,6 +3,12 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { runChecked } from "./exec";
 
+function isTruthyEnv(value: string | undefined) {
+  if (!value) return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
 function desktopDir() {
   if (process.platform === "win32") {
     const userProfile = process.env.USERPROFILE ?? homedir();
@@ -12,6 +18,9 @@ function desktopDir() {
 }
 
 export function openUrlInBrowser(url: string) {
+  if (isTruthyEnv(process.env.ORGOPS_OPSCLI_NO_BROWSER)) {
+    return;
+  }
   if (process.platform === "darwin") {
     runChecked("open", [url]);
     return;

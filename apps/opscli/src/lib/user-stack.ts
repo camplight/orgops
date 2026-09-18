@@ -1,4 +1,6 @@
-import { createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { spawn, spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -45,12 +47,42 @@ function resolveInstallDir(inputDir?: string) {
 }
 
 async function isUserUiReachable() {
-  try {
-    const response = await fetch(USER_UI_URL);
-    return response.ok;
-  } catch {
-    return false;
-  }
+  return await checkHttpOk(USER_UI_URL);
+}
+
+function checkHttpOk(url: string): Promise<boolean> {
+  return new Promise((resolveReady) => {
+    let settled = false;
+    const target = new URL(url);
+    const requester = target.protocol === "https:" ? httpsRequest : httpRequest;
+    const req = requester(
+      target,
+      {
+        method: "GET",
+        timeout: 1_500,
+      },
+      (res) => {
+        if (settled) return;
+        settled = true;
+        resolveReady((res.statusCode ?? 500) >= 200 && (res.statusCode ?? 500) < 400);
+        res.resume();
+      }
+    );
+    req.on("timeout", () => {
+      req.destroy();
+      if (!settled) {
+        settled = true;
+        resolveReady(false);
+      }
+    });
+    req.on("error", () => {
+      if (!settled) {
+        settled = true;
+        resolveReady(false);
+      }
+    });
+    req.end();
+  });
 }
 
 async function waitForUserUi(timeoutMs: number) {
@@ -69,15 +101,20 @@ export async function startUserStack(options?: { installDir?: string; openBrowse
     const runtimeDir = resolve(installDir, ".orgops-runtime");
     mkdirSync(runtimeDir, { recursive: true });
     const logPath = resolve(runtimeDir, "user-stack.log");
-    const stream = createWriteStream(logPath, { flags: "a" });
-    const child = spawn(npmCommandForHost(), ["run", "start:user-stack:env"], {
-      cwd: installDir,
-      detached: true,
-      stdio: ["ignore", "pipe", "pipe"],
-      env: process.env,
-    });
-    child.stdout.pipe(stream);
-    child.stderr.pipe(stream);
+    const outFd = openSync(logPath, "a");
+    const errFd = openSync(logPath, "a");
+    const child = spawn(
+      npmCommandForHost(),
+      ["run", "start:user-stack:env"],
+      {
+        cwd: installDir,
+        detached: true,
+        stdio: ["ignore", outFd, errFd],
+        env: process.env,
+      }
+    );
+    closeSync(outFd);
+    closeSync(errFd);
     child.unref();
     if (typeof child.pid !== "number") {
       throw new Error("Failed to start user stack process.");

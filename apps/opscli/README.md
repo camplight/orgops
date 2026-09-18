@@ -33,6 +33,15 @@ npm run --workspace @orgops/opscli build:release
 This creates `dist/opscli-*` for the current platform. Release workflow builds all 3 platforms.
 The built binary embeds docs + build metadata used by `chat`.
 
+For CI smoke tests that include `install` without mutating host services or relying on internet access, set:
+
+- `ORGOPS_OPSCLI_INSTALL_SMOKE_MOCK=1`
+- `ORGOPS_OPSCLI_NO_BROWSER=1`
+
+In this mode, `install` creates deterministic marker files in `--dir` instead of cloning/building/registering services.
+The same env var is also honored during `upgrade` (because upgrade reuses install internally), which enables deterministic cross-OS upgrade smoke checks in CI.
+`ORGOPS_OPSCLI_NO_BROWSER` skips launching URLs while preserving command behavior, which keeps CI smoke checks headless-friendly.
+
 ## Chat mode
 
 ```bash
