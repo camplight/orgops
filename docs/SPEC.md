@@ -437,6 +437,8 @@ Published topics include:
 
 - `GET /api/runners`
 - `GET /api/runners/setup-config` (authenticated human users)
+- `POST /api/runners/invites` (authenticated human users; creates scoped runner bootstrap invite)
+- `GET /api/runners/invites/:token` (public invite bootstrap payload for opscli)
 - `POST /api/runners/register` (runner auth; register/re-register)
 - `PATCH /api/runners/:id` (authenticated human users; rename runner display name)
 - `POST /api/runners/:id/heartbeat` (runner auth)
@@ -503,11 +505,14 @@ Audit events are emitted around tool/process operations and RLM execution.
 `apps/opscli` is a standalone host bootstrap/maintenance CLI with deterministic commands and an optional chat loop.
 
 - deterministic commands:
-  - `install` (prereq checks + clone/pull repo + `npm ci` + build)
-  - `upgrade` (safety backup + controlled stop + in-place update + optional restart)
+  - `install` (prereq checks + clone/pull repo + `npm ci` + component-scoped build/config)
+  - `upgrade` (safety backup + component-scoped stop/update + optional restart)
   - `doctor` (host prerequisite check)
-  - `start` / `stop` / `status` for API + runner + user-ui stack
-  - `admin open` / `admin stop` / `admin status` for admin-ui lifecycle
+  - `start` / `stop` / `status` for selected components (`api`, `runner`, `user-ui`, `admin-ui`)
+  - `admin open` / `admin stop` / `admin status` convenience wrappers for `admin-ui`
+  - install/upgrade support runner bootstrap via:
+    - explicit `--runner-api-url` + `--runner-token` (+ optional `--runner-name`)
+    - invite bootstrap URL from `GET /api/runners/invites/:token`
 - optional `chat` command:
   - plain tool-calling loop (`shell`, `askPassword`, `getBundledDocs`, `exitOpscli`)
   - rolling summarization + context-capped history

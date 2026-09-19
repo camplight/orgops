@@ -45,6 +45,21 @@ export type RunnerSetupConfig = {
   runnerApiUrl?: string;
 };
 
+export type RunnerInviteConfig = {
+  ok: boolean;
+  invite: {
+    name: string;
+    runnerId: string;
+    tokenPrefix: string;
+    expiresAt: number;
+    inviteUrl: string;
+  };
+  bootstrap: {
+    apiBaseUrl: string;
+    runnerNameHint?: string;
+  };
+};
+
 export type AgentWorkspaceEntry = {
   name: string;
   path: string;

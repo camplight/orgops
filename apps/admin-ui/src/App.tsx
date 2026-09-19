@@ -33,6 +33,7 @@ import type {
   AgentInvite,
   IntegrationKey,
   ProcessOutputRow,
+  RunnerInviteConfig,
   RunnerSetupConfig,
   TeamMember
 } from "./types";
@@ -945,6 +946,15 @@ export default function App() {
           }}
           loadRunnerSetupConfig={() =>
             data.apiJson<RunnerSetupConfig>("/api/runners/setup-config")
+          }
+          createRunnerInvite={(input) =>
+            data
+              .apiFetch("/api/runners/invites", {
+                method: "POST",
+                headers: data.getApiHeaders(),
+                body: JSON.stringify(input ?? {}),
+              })
+              .then((res) => res.json() as Promise<RunnerInviteConfig>)
           }
           onDeregisterRunner={async (runnerId) => {
             await data.apiFetch(`/api/runners/${encodeURIComponent(runnerId)}`, {

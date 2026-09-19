@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import type { Agent, RunnerNode, RunnerSetupConfig } from "../types";
+import type {
+  Agent,
+  RunnerInviteConfig,
+  RunnerNode,
+  RunnerSetupConfig,
+} from "../types";
 import { Button, Card } from "../components/ui";
 import { runnerApiUrlHint } from "../config";
 import { formatTimestamp } from "../utils/formatTimestamp";
@@ -11,6 +16,10 @@ type RunnersScreenProps = {
   onRenameRunner: (runnerId: string, displayName: string) => Promise<void>;
   onDeregisterRunner: (runnerId: string) => Promise<void>;
   loadRunnerSetupConfig: () => Promise<RunnerSetupConfig>;
+  createRunnerInvite: (input?: {
+    name?: string;
+    expiresInHours?: number;
+  }) => Promise<RunnerInviteConfig>;
 };
 
 export function RunnersScreen({
@@ -19,7 +28,8 @@ export function RunnersScreen({
   onRefresh,
   onRenameRunner,
   onDeregisterRunner,
-  loadRunnerSetupConfig
+  loadRunnerSetupConfig,
+  createRunnerInvite,
 }: RunnersScreenProps) {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [pendingRunnerId, setPendingRunnerId] = useState<string | null>(null);
@@ -27,6 +37,7 @@ export function RunnersScreen({
   const [error, setError] = useState<string | null>(null);
   const [runnerToken, setRunnerToken] = useState<string>("");
   const [runnerApiUrl, setRunnerApiUrl] = useState<string>("");
+  const [runnerInviteUrl, setRunnerInviteUrl] = useState<string>("");
 
   useEffect(() => {
     let cancelled = false;
@@ -66,22 +77,19 @@ export function RunnersScreen({
   }, [agents]);
 
   const apiBaseUrl = runnerApiUrl || runnerApiUrlHint();
-  const runnerTokenLine = runnerToken
-    ? `- ORGOPS_RUNNER_TOKEN=${runnerToken}`
-    : "- ORGOPS_RUNNER_TOKEN=<paste-shared-runner-token>";
   const opsCliSetupPrompt = [
-    "Set up this host as an OrgOps runner connected to my API.",
+    "Set up this host as an OrgOps runner connected to my API using invite bootstrap.",
     "",
-    "Use these environment variables:",
-    `- ORGOPS_API_URL=${apiBaseUrl}`,
-    runnerTokenLine,
-    "- ORGOPS_RUNNER_NAME=<optional-friendly-runner-name>",
+    "Run:",
+    runnerInviteUrl
+      ? `opscli install --components runner --runner-invite-url "${runnerInviteUrl}"`
+      : "opscli install --components runner --runner-invite-url <paste-runner-invite-url>",
     "",
-    "Then:",
-    "1) Ensure dependencies are installed.",
-    "2) Start @orgops/agent-runner for this host.",
-    "3) Verify it successfully registers and heartbeats to the API.",
-    "4) Print the runner id and status once connected."
+    "Localhost/manual fallback (without invite):",
+    `opscli install --components runner --runner-api-url "${apiBaseUrl}" --runner-token "${runnerToken || "<token>"}" --runner-name "<name>"`,
+    "",
+    "Then start and verify:",
+    'opscli start --components runner && opscli status --components runner'
   ].join("\n");
 
   const copyText = async (key: string, text: string) => {
@@ -138,10 +146,44 @@ export function RunnersScreen({
       setPendingRenameRunnerId(null);
     }
   };
+
+  const handleCreateInvite = async () => {
+    setError(null);
+    try {
+      const result = await createRunnerInvite({ expiresInHours: 24 });
+      setRunnerInviteUrl(result.invite.inviteUrl);
+      await copyText("runner-invite-url", result.invite.inviteUrl);
+    } catch (inviteError) {
+      const message =
+        inviteError instanceof Error
+          ? inviteError.message
+          : "Failed to create runner invite.";
+      setError(message);
+    }
+  };
   return (
     <div className="space-y-4">
       <Card title="OpsCLI Runner Setup Prompt">
         <div className="space-y-3 text-sm">
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" onClick={() => void handleCreateInvite()}>
+              Generate Runner Invite Link
+            </Button>
+            {runnerInviteUrl ? (
+              <Button
+                variant="secondary"
+                className="px-2 py-1 text-xs"
+                onClick={() => void copyText("runner-invite-url", runnerInviteUrl)}
+              >
+                {copiedKey === "runner-invite-url" ? "Copied invite link" : "Copy invite link"}
+              </Button>
+            ) : null}
+          </div>
+          {runnerInviteUrl ? (
+            <div className="rounded border border-emerald-900/40 bg-emerald-950/20 px-3 py-2 text-xs text-emerald-300 break-all">
+              {runnerInviteUrl}
+            </div>
+          ) : null}
           <div className="rounded border border-slate-800 bg-slate-950 p-3">
             <div className="mb-2 text-xs uppercase tracking-wide text-slate-500">
               Prompt to give OpsCLI

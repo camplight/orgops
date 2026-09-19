@@ -10,19 +10,31 @@
 
 `opscli` command surface:
 
-- `opscli install [--dir <path>] [--repo <url>] [--ref <git-ref>] [--register-service] [--create-shortcut]`
-- `opscli upgrade [--dir <path>] [--repo <url>] [--ref <git-ref>] [--no-restart]`
+- `opscli install [--dir <path>] [--repo <url>] [--ref <git-ref>] [--components <csv>] [--runner-api-url <url>] [--runner-token <token>] [--runner-name <name>] [--runner-invite-url <url>] [--register-service] [--create-shortcut]`
+- `opscli upgrade [--dir <path>] [--repo <url>] [--ref <git-ref>] [--components <csv>] [--runner-api-url <url>] [--runner-token <token>] [--runner-name <name>] [--runner-invite-url <url>] [--no-restart]`
 - `opscli doctor`
-- `opscli start [--dir <path>] [--no-open]`
-- `opscli stop [--dir <path>]`
-- `opscli status [--dir <path>]`
+- `opscli start [--dir <path>] [--components <csv>] [--no-open]`
+- `opscli stop [--dir <path>] [--components <csv>]`
+- `opscli status [--dir <path>] [--components <csv>]`
 - `opscli admin open [--dir <path>]`
 - `opscli admin stop [--dir <path>]`
 - `opscli admin status [--dir <path>]`
 - `opscli chat [--goal "..."]`
 
+`--components` accepts a comma-separated subset of:
+
+- `api`
+- `runner`
+- `user-ui`
+- `admin-ui`
+
 During `install`, OpsCLI checks required host tools (`node`, `npm`, `git`), clones/updates OrgOps from git, runs `npm ci`, and builds UI assets.
-During `upgrade`, OpsCLI creates a safety backup of `.orgops-data`/`files`/`.env` (if present), then performs an in-place git + dependency + build update and restarts previously running runtime services by default.
+When `runner` is installed/upgraded, OpsCLI can bootstrap config from either:
+
+- `--runner-invite-url <url>` (recommended secure flow from Admin UI runner invite)
+- explicit `--runner-api-url` + `--runner-token` (+ optional `--runner-name`)
+
+During `upgrade`, OpsCLI creates a safety backup of `.orgops-data`/`files`/`.env` (if present), updates selected components, and optionally restarts only components that were running before upgrade.
 
 ## Build standalone executable
 
