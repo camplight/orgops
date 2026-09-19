@@ -935,6 +935,14 @@ export default function App() {
           runners={data.runners}
           agents={data.agents}
           onRefresh={data.refreshDashboard}
+          onRenameRunner={async (runnerId, displayName) => {
+            await data.apiFetch(`/api/runners/${encodeURIComponent(runnerId)}`, {
+              method: "PATCH",
+              headers: data.getApiHeaders(),
+              body: JSON.stringify({ displayName }),
+            });
+            await data.refreshDashboard();
+          }}
           loadRunnerSetupConfig={() =>
             data.apiJson<RunnerSetupConfig>("/api/runners/setup-config")
           }

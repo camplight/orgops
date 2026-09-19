@@ -62,6 +62,13 @@ export function registerRunnersRoutes(app: Hono<any>, deps: RunnersDeps) {
   const ONLINE_THRESHOLD_MS = Number(
     process.env.ORGOPS_RUNNER_ONLINE_THRESHOLD_MS ?? 15_000
   );
+  const requireHumanUser = (c: any) => {
+    const user = (c as any).get("user") as { id?: string; username?: string } | undefined;
+    if (!user?.id || !user?.username || user.username === "runner") {
+      return null;
+    }
+    return user;
+  };
   const publishDashboardRefresh = (reason: string, meta?: Record<string, unknown>) => {
     bus.publish("org:dashboard", {
       type: "dashboard_refresh",
@@ -86,8 +93,8 @@ export function registerRunnersRoutes(app: Hono<any>, deps: RunnersDeps) {
   });
 
   app.get("/api/runners/setup-config", (c) => {
-    const user = (c as any).get("user") as { username?: string } | undefined;
-    if (!user?.username || user.username === "runner") {
+    const user = requireHumanUser(c);
+    if (!user) {
       return jsonResponse(c, { error: "Authenticated human user required" }, 401);
     }
     return jsonResponse(c, { runnerToken, runnerApiUrl });
@@ -180,6 +187,51 @@ export function registerRunnersRoutes(app: Hono<any>, deps: RunnersDeps) {
     }
     publishDashboardRefresh("runner.registered", { runnerId });
     return jsonResponse(c, { runner: toApiRunner(row, ONLINE_THRESHOLD_MS) }, 201);
+  });
+
+  app.patch("/api/runners/:id", async (c) => {
+    const user = requireHumanUser(c);
+    if (!user) {
+      return jsonResponse(c, { error: "Authenticated human user required" }, 401);
+    }
+    const runnerId = c.req.param("id");
+    const body = await c.req.json().catch(() => ({}));
+    const displayName =
+      typeof body.displayName === "string" ? body.displayName.trim() : "";
+    if (!displayName) {
+      return jsonResponse(c, { error: "displayName is required" }, 400);
+    }
+
+    const now = Date.now();
+    const row = orm
+      .select()
+      .from(schema.runnerNodes)
+      .where(eq(schema.runnerNodes.id, runnerId))
+      .get() as RunnerRecord | undefined;
+    if (!row) {
+      return jsonResponse(c, { error: "Runner not found" }, 404);
+    }
+
+    orm
+      .update(schema.runnerNodes)
+      .set({
+        display_name: displayName,
+        updated_at: now,
+      })
+      .where(eq(schema.runnerNodes.id, runnerId))
+      .run();
+
+    const updated = orm
+      .select()
+      .from(schema.runnerNodes)
+      .where(eq(schema.runnerNodes.id, runnerId))
+      .get() as RunnerRecord | undefined;
+    if (!updated) {
+      return jsonResponse(c, { error: "Failed to update runner" }, 500);
+    }
+
+    publishDashboardRefresh("runner.renamed", { runnerId });
+    return jsonResponse(c, { runner: toApiRunner(updated, ONLINE_THRESHOLD_MS) });
   });
 
   app.post("/api/runners/:id/heartbeat", requireRunnerAuth, (c) => {

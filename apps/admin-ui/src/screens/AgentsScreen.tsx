@@ -113,7 +113,7 @@ type AgentsScreenProps = {
   runners: RunnerNode[];
   skills: SkillMeta[];
   onCreateAgent: (agent: AgentForm) => Promise<void>;
-  onUpdateAgent: (name: string, agent: Omit<AgentForm, "name">) => Promise<void>;
+  onUpdateAgent: (name: string, agent: AgentForm) => Promise<void>;
   onDeleteAgent: (name: string) => Promise<void>;
   onStartAgent: (name: string) => Promise<void>;
   onStopAgent: (name: string) => Promise<void>;
@@ -604,7 +604,9 @@ export function AgentsScreen({
         return;
       }
       if (!selectedAgent) return;
+      const normalizedName = form.name.trim();
       await onUpdateAgent(selectedAgent.name, {
+        name: normalizedName,
         modelId,
         visibility: form.visibility,
         mode: form.mode,
@@ -622,10 +624,23 @@ export function AgentsScreen({
         wrappedConfigJson: JSON.stringify(wrappedConfig),
         wrappedConfig
       });
+      if (normalizedName !== selectedAgent.name) {
+        const cachedCrossMemory = crossMemoryCacheRef.current.get(selectedAgent.name);
+        if (cachedCrossMemory) {
+          crossMemoryCacheRef.current.set(normalizedName, cachedCrossMemory);
+          crossMemoryCacheRef.current.delete(selectedAgent.name);
+        }
+        const cachedSystemPrompt = systemPromptCacheRef.current.get(selectedAgent.name);
+        if (cachedSystemPrompt) {
+          systemPromptCacheRef.current.set(normalizedName, cachedSystemPrompt);
+          systemPromptCacheRef.current.delete(selectedAgent.name);
+        }
+        setSelectedAgentName(normalizedName);
+      }
       setIsFormDirty(false);
       setSaveStatus({
         kind: "success",
-        message: `Agent "${selectedAgent.name}" was saved successfully.`
+        message: `Agent "${normalizedName}" was saved successfully.`
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to save agent.";
@@ -1037,7 +1052,6 @@ export function AgentsScreen({
                       <div className="text-sm text-slate-400">Name</div>
                       <Input
                         value={form.name}
-                        disabled={!isCreating}
                         onChange={(e) => {
                           setIsFormDirty(true);
                           setSaveStatus(null);

@@ -8,6 +8,7 @@ type RunnersScreenProps = {
   runners: RunnerNode[];
   agents: Agent[];
   onRefresh: () => Promise<void> | void;
+  onRenameRunner: (runnerId: string, displayName: string) => Promise<void>;
   onDeregisterRunner: (runnerId: string) => Promise<void>;
   loadRunnerSetupConfig: () => Promise<RunnerSetupConfig>;
 };
@@ -16,11 +17,13 @@ export function RunnersScreen({
   runners,
   agents,
   onRefresh,
+  onRenameRunner,
   onDeregisterRunner,
   loadRunnerSetupConfig
 }: RunnersScreenProps) {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [pendingRunnerId, setPendingRunnerId] = useState<string | null>(null);
+  const [pendingRenameRunnerId, setPendingRenameRunnerId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [runnerToken, setRunnerToken] = useState<string>("");
   const [runnerApiUrl, setRunnerApiUrl] = useState<string>("");
@@ -112,6 +115,29 @@ export function RunnersScreen({
     }
   };
 
+  const handleRenameRunner = async (runnerId: string, currentDisplayName: string) => {
+    const nextDisplayName = window.prompt("Rename runner", currentDisplayName);
+    if (nextDisplayName === null) return;
+    const trimmed = nextDisplayName.trim();
+    if (!trimmed) {
+      setError("Runner name cannot be empty.");
+      return;
+    }
+    if (trimmed === currentDisplayName) return;
+
+    setError(null);
+    setPendingRenameRunnerId(runnerId);
+    try {
+      await onRenameRunner(runnerId, trimmed);
+      await onRefresh();
+    } catch (renameError) {
+      const message =
+        renameError instanceof Error ? renameError.message : "Failed to rename runner.";
+      setError(message);
+    } finally {
+      setPendingRenameRunnerId(null);
+    }
+  };
   return (
     <div className="space-y-4">
       <Card title="OpsCLI Runner Setup Prompt">
@@ -196,6 +222,16 @@ export function RunnersScreen({
                       {assignedAgents.length > 0 ? assignedAgents.join(", ") : "-"}
                     </td>
                     <td className="whitespace-nowrap px-2 py-2">
+                      <Button
+                        variant="secondary"
+                        className="mr-2"
+                        onClick={() =>
+                          void handleRenameRunner(runner.id, runner.displayName)
+                        }
+                        disabled={pendingRenameRunnerId === runner.id}
+                      >
+                        {pendingRenameRunnerId === runner.id ? "Renaming..." : "Rename"}
+                      </Button>
                       <Button
                         variant="secondary"
                         className="bg-rose-900 text-rose-100 hover:bg-rose-800"

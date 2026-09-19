@@ -285,6 +285,83 @@ describe("api app", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("renames runners from admin endpoint", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const registerRes = await app.request("http://localhost/api/runners/register", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orgops-runner-token": "test-token",
+      },
+      body: JSON.stringify({
+        displayName: "runner-old-name",
+      }),
+    });
+    expect(registerRes.status).toBe(201);
+    const registerBody = (await registerRes.json()) as {
+      runner?: { id?: string };
+    };
+    const runnerId = registerBody.runner?.id ?? "";
+    expect(runnerId.length).toBeGreaterThan(0);
+
+    const runnerRenameRes = await app.request(
+      `http://localhost/api/runners/${encodeURIComponent(runnerId)}`,
+      {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          "x-orgops-runner-token": "test-token",
+        },
+        body: JSON.stringify({ displayName: "runner-new-name" }),
+      },
+    );
+    expect(runnerRenameRes.status).toBe(401);
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const invalidRenameRes = await app.request(
+      `http://localhost/api/runners/${encodeURIComponent(runnerId)}`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ displayName: "   " }),
+      },
+    );
+    expect(invalidRenameRes.status).toBe(400);
+
+    const renameRes = await app.request(
+      `http://localhost/api/runners/${encodeURIComponent(runnerId)}`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ displayName: "runner-new-name" }),
+      },
+    );
+    expect(renameRes.status).toBe(200);
+    const renameBody = (await renameRes.json()) as {
+      runner?: { id?: string; displayName?: string };
+    };
+    expect(renameBody.runner?.id).toBe(runnerId);
+    expect(renameBody.runner?.displayName).toBe("runner-new-name");
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("returns runner setup token only for authenticated humans", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");
@@ -378,6 +455,144 @@ describe("api app", () => {
     };
     expect(agent.soulContents).toBe("updated soul from db");
     expect(agent.allowOutsideWorkspace).toBe(false);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("renames agents and migrates agent-linked records", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const orm = createDrizzleDb(db);
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const createAgentRes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "rename-source-agent",
+        modelId: "openai:gpt-4o-mini",
+        workspacePath: ".orgops-data/workspaces/rename-source-agent",
+      }),
+    });
+    expect(createAgentRes.status).toBe(201);
+
+    const directChannelRes = await app.request(
+      "http://localhost/api/channels/direct/human-agent",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ agentName: "rename-source-agent" }),
+      },
+    );
+    expect(directChannelRes.status).toBe(201);
+    const directChannelBody = (await directChannelRes.json()) as { id: string };
+    const directChannelId = directChannelBody.id;
+
+    const now = Date.now();
+    orm
+      .insert(schema.channelMemoryRecent)
+      .values({
+        agent_name: "rename-source-agent",
+        channel_id: directChannelId,
+        summary_text: "",
+        window_start_at: now,
+        last_processed_at: now,
+        last_processed_event_id: null,
+        version: 0,
+        created_at: now,
+        updated_at: now,
+      })
+      .run();
+    orm
+      .insert(schema.crossChannelMemoryRecent)
+      .values({
+        agent_name: "rename-source-agent",
+        summary_text: "",
+        window_start_at: now,
+        last_processed_at: now,
+        last_processed_event_id: null,
+        version: 0,
+        created_at: now,
+        updated_at: now,
+      })
+      .run();
+
+    const renameRes = await app.request("http://localhost/api/agents/rename-source-agent", {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ name: "rename-target-agent" }),
+    });
+    expect(renameRes.status).toBe(200);
+    const renameBody = (await renameRes.json()) as { agentName?: string };
+    expect(renameBody.agentName).toBe("rename-target-agent");
+
+    const oldAgentRes = await app.request("http://localhost/api/agents/rename-source-agent", {
+      headers: { cookie },
+    });
+    expect(oldAgentRes.status).toBe(404);
+    const newAgentRes = await app.request("http://localhost/api/agents/rename-target-agent", {
+      headers: { cookie },
+    });
+    expect(newAgentRes.status).toBe(200);
+
+    const participantsRes = await app.request(
+      `http://localhost/api/channels/${encodeURIComponent(directChannelId)}/participants`,
+      {
+        headers: { cookie },
+      },
+    );
+    expect(participantsRes.status).toBe(200);
+    const participants = (await participantsRes.json()) as Array<{
+      subscriberType: string;
+      subscriberId: string;
+    }>;
+    expect(
+      participants.some(
+        (participant) =>
+          participant.subscriberType === "AGENT" &&
+          participant.subscriberId === "rename-target-agent",
+      ),
+    ).toBe(true);
+    expect(
+      participants.some(
+        (participant) =>
+          participant.subscriberType === "AGENT" &&
+          participant.subscriberId === "rename-source-agent",
+      ),
+    ).toBe(false);
+
+    const recentChannelMemory = orm
+      .select()
+      .from(schema.channelMemoryRecent)
+      .where(eq(schema.channelMemoryRecent.agent_name, "rename-target-agent"))
+      .all();
+    expect(recentChannelMemory.length).toBe(1);
+    const oldChannelMemory = orm
+      .select()
+      .from(schema.channelMemoryRecent)
+      .where(eq(schema.channelMemoryRecent.agent_name, "rename-source-agent"))
+      .all();
+    expect(oldChannelMemory.length).toBe(0);
+    const recentCrossMemory = orm
+      .select()
+      .from(schema.crossChannelMemoryRecent)
+      .where(eq(schema.crossChannelMemoryRecent.agent_name, "rename-target-agent"))
+      .all();
+    expect(recentCrossMemory.length).toBe(1);
 
     rmSync(dataDir, { recursive: true, force: true });
   });
