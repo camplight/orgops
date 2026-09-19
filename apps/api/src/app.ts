@@ -513,6 +513,7 @@ export function createApp(config: AppConfig = {}) {
     orm,
     bus,
     jsonResponse,
+    requireAuth,
     requireRunnerAuth,
     runnerToken: RUNNER_TOKEN,
     runnerApiUrl: RUNNER_API_URL,

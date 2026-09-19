@@ -58,7 +58,10 @@ function writeFixtureRuntimePackage(installDir) {
     name: "orgops-ci-smoke-runtime",
     private: true,
     scripts: {
+      "start:api:env": "node .opscli-smoke-api-server.mjs",
+      "start:runner:env": "node .opscli-smoke-runner-process.mjs",
       "start:user-stack:env": "node .opscli-smoke-user-ui-server.mjs",
+      "start:user-ui:preview:env": "node .opscli-smoke-user-ui-server.mjs",
       "start:admin-ui:preview:env": "node .opscli-smoke-admin-ui-server.mjs",
     },
   };
@@ -75,6 +78,27 @@ function writeFixtureRuntimePackage(installDir) {
     "",
   ].join("\n");
   writeFileSync(resolve(installDir, ".opscli-smoke-user-ui-server.mjs"), userUiServer, "utf-8");
+
+  const apiServer = [
+    "import http from 'node:http';",
+    "const server = http.createServer((_req, res) => { res.statusCode = 200; res.end('ok'); });",
+    "server.listen(8787);",
+    "const shutdown = () => server.close(() => process.exit(0));",
+    "process.on('SIGTERM', shutdown);",
+    "process.on('SIGINT', shutdown);",
+    "setInterval(() => {}, 1000);",
+    "",
+  ].join("\n");
+  writeFileSync(resolve(installDir, ".opscli-smoke-api-server.mjs"), apiServer, "utf-8");
+
+  const runnerProcess = [
+    "const shutdown = () => process.exit(0);",
+    "process.on('SIGTERM', shutdown);",
+    "process.on('SIGINT', shutdown);",
+    "setInterval(() => {}, 1000);",
+    "",
+  ].join("\n");
+  writeFileSync(resolve(installDir, ".opscli-smoke-runner-process.mjs"), runnerProcess, "utf-8");
 
   const adminUiServer = [
     "import http from 'node:http';",

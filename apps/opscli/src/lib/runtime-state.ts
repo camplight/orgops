@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import type { InstallComponent } from "./components";
 
 const STATE_DIR = resolve(homedir(), ".orgops");
 const STATE_PATH = join(STATE_DIR, "opscli-state.json");
@@ -10,6 +11,7 @@ export type OpsCliState = {
   repoUrl?: string;
   repoRef?: string;
   serviceRegistered?: boolean;
+  installedComponents?: InstallComponent[];
 };
 
 export function getStatePath() {

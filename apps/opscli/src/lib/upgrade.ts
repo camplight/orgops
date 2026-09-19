@@ -1,18 +1,19 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import * as tar from "tar";
-import { getAdminUiStatus, startAndOpenAdminUi, stopAdminUi } from "./admin-ui";
 import { runInstall } from "./install";
 import { loadState } from "./runtime-state";
-import { registerAutostartService, stopAutostartService } from "./service";
-import { getUserStackStatus, startUserStack, stopUserStack } from "./user-stack";
+import { parseComponentsArg, type InstallComponent } from "./components";
+import { getComponentsStatus, startComponents, stopComponents } from "./component-runtime";
+import type { RunnerBootstrapOptions } from "./runner-bootstrap";
 
 export type UpgradeOptions = {
   installDir?: string;
   repoUrl?: string;
   repoRef?: string;
+  components?: string;
   restart?: boolean;
-};
+} & RunnerBootstrapOptions;
 
 function resolveInstallDir(inputDir?: string) {
   return resolve(inputDir ?? loadState().installDir ?? "orgops");
@@ -43,54 +44,44 @@ export async function runUpgrade(rawOptions: UpgradeOptions) {
     throw new Error(`No git repository found at ${installDir}. Run install first.`);
   }
 
-  const userStatusBefore = await getUserStackStatus({ installDir });
-  const adminStatusBefore = await getAdminUiStatus(installDir);
-  const serviceRegistered = Boolean(loadState().serviceRegistered);
+  const state = loadState();
+  const components = parseComponentsArg(
+    rawOptions.components ??
+      (Array.isArray(state.installedComponents) && state.installedComponents.length > 0
+        ? state.installedComponents.join(",")
+        : undefined)
+  );
+  const statusBefore = await getComponentsStatus({ installDir, components });
+  const runningBefore = statusBefore.statuses
+    .filter((status) => status.running)
+    .map((status) => status.component);
   const backupPath = await createSafetyBackup(installDir);
 
-  if (!serviceRegistered && userStatusBefore.running && !userStatusBefore.runtimePid) {
-    throw new Error(
-      "User stack appears to be running but is not managed by opscli PID state. Stop it manually, then rerun upgrade."
-    );
-  }
-  if (adminStatusBefore.running && !adminStatusBefore.runtimePid) {
-    throw new Error(
-      "Admin UI appears to be running but is not managed by opscli PID state. Stop it manually, then rerun upgrade."
-    );
+  if (runningBefore.length > 0) {
+    stopComponents({ installDir, components: runningBefore });
   }
 
-  if (serviceRegistered) {
-    stopAutostartService(installDir);
-  } else if (userStatusBefore.runtimePid) {
-    stopUserStack({ installDir });
-  }
-  if (adminStatusBefore.runtimePid) {
-    stopAdminUi(installDir);
-  }
-
-  const installResult = runInstall({
+  const installResult = await runInstall({
     installDir,
     repoUrl: rawOptions.repoUrl,
     repoRef: rawOptions.repoRef,
-    registerService: false,
+    components: components.join(","),
+    runnerApiUrl: rawOptions.runnerApiUrl,
+    runnerToken: rawOptions.runnerToken,
+    runnerName: rawOptions.runnerName,
+    runnerInviteUrl: rawOptions.runnerInviteUrl,
+    registerService: Boolean(state.serviceRegistered),
     createShortcut: false,
   });
 
   const shouldRestart = rawOptions.restart !== false;
   const restartNotes: string[] = [];
   if (shouldRestart) {
-    if (serviceRegistered) {
-      restartNotes.push(registerAutostartService(installDir));
-    } else if (userStatusBefore.running) {
-      await startUserStack({ installDir, openBrowser: false });
-      restartNotes.push("Restarted user stack.");
+    if (runningBefore.length > 0) {
+      await startComponents({ installDir, components: runningBefore, openBrowser: false });
+      restartNotes.push(`Restarted components: ${runningBefore.join(", ")}.`);
     } else {
-      restartNotes.push("No user stack restart needed (was not running).");
-    }
-
-    if (adminStatusBefore.running) {
-      await startAndOpenAdminUi({ installDir, openBrowser: false });
-      restartNotes.push("Restarted Admin UI.");
+      restartNotes.push("No component restart needed (none were running).");
     }
   } else {
     restartNotes.push("Skipped restart (by option).");
@@ -100,10 +91,10 @@ export async function runUpgrade(rawOptions: UpgradeOptions) {
     installDir,
     repoUrl: installResult.repoUrl,
     repoRef: installResult.repoRef,
+    components,
     backupPath,
     restarted: shouldRestart,
     restartMessage: restartNotes.join(" "),
-    userWasRunning: userStatusBefore.running,
-    adminWasRunning: adminStatusBefore.running,
+    runningBefore,
   };
 }

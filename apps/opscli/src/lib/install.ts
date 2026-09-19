@@ -5,6 +5,17 @@ import { ensurePrerequisites } from "./prereqs";
 import { createUserUiShortcut, openUrlInBrowser } from "./browser";
 import { registerAutostartService } from "./service";
 import { loadState, saveState } from "./runtime-state";
+import {
+  formatComponents,
+  includesComponent,
+  parseComponentsArg,
+  type InstallComponent,
+} from "./components";
+import {
+  resolveRunnerBootstrap,
+  writeRunnerEnvConfig,
+  type RunnerBootstrapOptions,
+} from "./runner-bootstrap";
 
 export const USER_UI_URL = "http://localhost:4190";
 
@@ -12,9 +23,10 @@ export type InstallOptions = {
   installDir?: string;
   repoUrl?: string;
   repoRef?: string;
+  components?: string;
   registerService?: boolean;
   createShortcut?: boolean;
-};
+} & RunnerBootstrapOptions;
 
 const DEFAULT_REPO_URL = "https://github.com/camplight/orgops.git";
 const DEFAULT_REPO_REF = "main";
@@ -70,7 +82,16 @@ function createMockShortcut(installDir: string) {
   return shortcutPath;
 }
 
-export function runInstall(rawOptions: InstallOptions) {
+function buildSelectedComponents(installDir: string, components: InstallComponent[]) {
+  if (includesComponent(components, "admin-ui")) {
+    runChecked(npmCommandForHost(), ["run", "admin-ui:build"], installDir);
+  }
+  if (includesComponent(components, "user-ui")) {
+    runChecked(npmCommandForHost(), ["run", "user-ui:build"], installDir);
+  }
+}
+
+export async function runInstall(rawOptions: InstallOptions) {
   const prerequisites = ensurePrerequisites();
   if (!prerequisites.ok) {
     const detail = prerequisites.results
@@ -82,6 +103,7 @@ export function runInstall(rawOptions: InstallOptions) {
   const installDir = resolve(rawOptions.installDir ?? "orgops");
   const repoUrl = rawOptions.repoUrl ?? DEFAULT_REPO_URL;
   const repoRef = rawOptions.repoRef ?? DEFAULT_REPO_REF;
+  const components = parseComponentsArg(rawOptions.components);
   const smokeMockEnabled = isInstallSmokeMockEnabled();
   if (smokeMockEnabled) ensureRepoReadyMock(installDir, repoUrl, repoRef);
   else ensureRepoReady(installDir, repoUrl, repoRef);
@@ -91,7 +113,14 @@ export function runInstall(rawOptions: InstallOptions) {
   } else {
     const npmCmd = npmCommandForHost();
     runChecked(npmCmd, ["ci"], installDir);
-    runChecked(npmCmd, ["run", "build"], installDir);
+    buildSelectedComponents(installDir, components);
+  }
+
+  let runnerConfigApplied = false;
+  if (includesComponent(components, "runner")) {
+    const runnerConfig = await resolveRunnerBootstrap(rawOptions);
+    writeRunnerEnvConfig(installDir, runnerConfig);
+    runnerConfigApplied = true;
   }
 
   let serviceMessage = "";
@@ -102,7 +131,7 @@ export function runInstall(rawOptions: InstallOptions) {
   }
 
   let shortcutPath = "";
-  if (rawOptions.createShortcut) {
+  if (rawOptions.createShortcut && includesComponent(components, "user-ui")) {
     shortcutPath = smokeMockEnabled ? createMockShortcut(installDir) : createUserUiShortcut(USER_UI_URL);
   }
 
@@ -116,6 +145,7 @@ export function runInstall(rawOptions: InstallOptions) {
     repoRef,
     repoUrl,
     serviceRegistered,
+    installedComponents: components,
   });
 
   if (rawOptions.registerService && !smokeMockEnabled) {
@@ -126,6 +156,9 @@ export function runInstall(rawOptions: InstallOptions) {
     installDir,
     repoUrl,
     repoRef,
+    components,
+    componentsSummary: formatComponents(components),
+    runnerConfigApplied,
     serviceRegistered,
     serviceMessage,
     shortcutPath,
