@@ -98,10 +98,30 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
   function directParticipantKeyForParticipants(
     participants: Array<{ subscriberType: string; subscriberId: string }>,
   ) {
+    const resolveAgentKey = (value: string) => {
+      const raw = String(value ?? "").trim();
+      if (!raw) return raw;
+      const byId = orm
+        .select({ id: schema.agents.id })
+        .from(schema.agents)
+        .where(eq(schema.agents.id, raw))
+        .get() as { id: string } | undefined;
+      if (byId?.id) return byId.id;
+      const byName = orm
+        .select({ id: schema.agents.id })
+        .from(schema.agents)
+        .where(eq(schema.agents.name, raw))
+        .get() as { id: string } | undefined;
+      return byName?.id ?? raw;
+    };
     return participants
       .map(
         (participant) =>
-          `${participant.subscriberType}:${participant.subscriberId}`,
+          `${participant.subscriberType}:${
+            participant.subscriberType === "AGENT"
+              ? resolveAgentKey(participant.subscriberId)
+              : participant.subscriberId
+          }`,
       )
       .join("|");
   }
