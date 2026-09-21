@@ -338,8 +338,8 @@ Published topics include:
 - `POST /api/agents`
 - `GET /api/agents/:name`
 - `PATCH /api/agents/:name`
-  - supports agent rename via `name` (migrates agent-linked records)
   - `:name` routes accept either agent name or agent id (id is preferred for callers)
+  - changing an agent's `name` via patch is currently rejected (rename unsupported)
 - supports `assignedRunnerId` on create/update/read
 - supports `wrappedConfig` JSON object/string on create/update/read
 - supports `GET /api/agents?assignedRunnerId=<runnerId>` filtering

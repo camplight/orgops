@@ -7,15 +7,9 @@ import {
   statSync
 } from "node:fs";
 import { basename, dirname, extname, relative, resolve, sep } from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 
-import {
-  CHANNEL_KINDS,
-  AGENT_VISIBILITY,
-  isAgentVisibility,
-  schema,
-  type OrgOpsDrizzleDb
-} from "@orgops/db";
+import { AGENT_VISIBILITY, isAgentVisibility, schema, type OrgOpsDrizzleDb } from "@orgops/db";
 import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import type { EventBus } from "@orgops/event-bus";
 import type { AccessControl, RequestUser } from "./access";
@@ -149,80 +143,6 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
 
   function lifecycleChannelName(agentName: string) {
     return `agent.lifecycle.${agentName}`;
-  }
-
-  function directParticipantKeyForParticipants(
-    participants: Array<{ subscriberType: string; subscriberId: string }>
-  ) {
-    const resolveAgentKey = (value: string) => {
-      const raw = String(value ?? "").trim();
-      if (!raw) return raw;
-      const byId = orm
-        .select({ id: schema.agents.id })
-        .from(schema.agents)
-        .where(eq(schema.agents.id, raw))
-        .get() as { id: string } | undefined;
-      if (byId?.id) return byId.id;
-      const byName = orm
-        .select({ id: schema.agents.id })
-        .from(schema.agents)
-        .where(eq(schema.agents.name, raw))
-        .get() as { id: string } | undefined;
-      return byName?.id ?? raw;
-    };
-    return participants
-      .map(
-        (participant) =>
-          `${participant.subscriberType}:${
-            participant.subscriberType === "AGENT"
-              ? resolveAgentKey(participant.subscriberId)
-              : participant.subscriberId
-          }`
-      )
-      .join("|");
-  }
-
-  function directChannelNameForParticipants(
-    participants: Array<{ subscriberType: string; subscriberId: string }>
-  ) {
-    const key = directParticipantKeyForParticipants(participants);
-    const digest = createHash("sha256").update(key).digest("hex").slice(0, 12);
-    return `direct-${digest}`;
-  }
-
-  function refreshDirectChannelKey(channelId: string) {
-    const participants = orm
-      .select({
-        subscriberType: schema.channelSubscriptions.subscriber_type,
-        subscriberId: schema.channelSubscriptions.subscriber_id
-      })
-      .from(schema.channelSubscriptions)
-      .where(eq(schema.channelSubscriptions.channel_id, channelId))
-      .all()
-      .map((row) => ({
-        subscriberType: String(row.subscriberType ?? "").trim().toUpperCase(),
-        subscriberId: String(row.subscriberId ?? "").trim()
-      }))
-      .filter(
-        (row) =>
-          (row.subscriberType === "HUMAN" || row.subscriberType === "AGENT") &&
-          Boolean(row.subscriberId)
-      )
-      .sort((left, right) =>
-        `${left.subscriberType}:${left.subscriberId}`.localeCompare(
-          `${right.subscriberType}:${right.subscriberId}`
-        )
-      );
-    const nextKey = participants.length >= 2 ? directParticipantKeyForParticipants(participants) : null;
-    const nextName = participants.length >= 2 ? directChannelNameForParticipants(participants) : null;
-    orm
-      .update(schema.channels)
-      .set({
-        direct_participant_key: nextKey,
-        name: nextName ?? undefined
-      })
-      .where(eq(schema.channels.id, channelId))
-      .run();
   }
 
   function resolveAgentLifecycleChannelId(agentName: string): string | undefined {
@@ -620,61 +540,13 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       return jsonResponse(c, { error: "Forbidden" }, 403);
     }
     const body = await c.req.json();
-    const nextName =
-      body.name !== undefined
-        ? String(body.name ?? "").trim()
-        : String(existing.name ?? "").trim();
-    if (!nextName) {
-      return jsonResponse(c, { error: "name is required" }, 400);
+    if (
+      body.name !== undefined &&
+      String(body.name ?? "").trim() &&
+      String(body.name ?? "").trim() !== name
+    ) {
+      return jsonResponse(c, { error: "Agent rename is not supported" }, 400);
     }
-    if (scopedRunner?.allowedAgentName && nextName !== name) {
-      return jsonResponse(c, { error: "Forbidden" }, 403);
-    }
-    if (nextName !== name) {
-      const conflicting = orm
-        .select({ id: schema.agents.id })
-        .from(schema.agents)
-        .where(eq(schema.agents.name, nextName))
-        .get() as { id: string } | undefined;
-      if (conflicting) {
-        return jsonResponse(c, { error: "Agent name already exists" }, 409);
-      }
-      const lifecycleConflict = orm
-        .select({ id: schema.channels.id })
-        .from(schema.channels)
-        .where(eq(schema.channels.name, lifecycleChannelName(nextName)))
-        .get() as { id: string } | undefined;
-      if (lifecycleConflict) {
-        return jsonResponse(
-          c,
-          { error: `Lifecycle channel already exists for agent "${nextName}"` },
-          409
-        );
-      }
-    }
-    const directChannelIdsNeedingRefresh =
-      nextName !== name
-        ? (orm
-            .select({ channelId: schema.channels.id })
-            .from(schema.channelSubscriptions)
-            .innerJoin(
-              schema.channels,
-              eq(schema.channels.id, schema.channelSubscriptions.channel_id)
-            )
-            .where(
-              and(
-                eq(schema.channelSubscriptions.subscriber_type, "AGENT"),
-                eq(schema.channelSubscriptions.subscriber_id, name),
-                or(
-                  eq(schema.channels.kind, CHANNEL_KINDS.HUMAN_AGENT_DM),
-                  eq(schema.channels.kind, CHANNEL_KINDS.AGENT_AGENT_DM),
-                  eq(schema.channels.kind, CHANNEL_KINDS.DIRECT_GROUP)
-                )
-              )
-            )
-            .all() as Array<{ channelId: string }>)
-            .map((row) => row.channelId)
-        : [];
     const soulPath =
       typeof body.soulPath === "string" && body.soulPath.trim()
         ? body.soulPath.trim()
@@ -786,7 +658,6 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     orm
       .update(schema.agents)
       .set({
-        name: nextName,
         icon: body.icon ?? existing.icon,
         description: body.description ?? existing.description,
         model_id: body.modelId ?? existing.model_id,
@@ -843,107 +714,15 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       })
       .where(eq(schema.agents.name, name))
       .run();
-    if (nextName !== name) {
-      orm
-        .update(schema.channelSubscriptions)
-        .set({ subscriber_id: nextName })
-        .where(
-          and(
-            eq(schema.channelSubscriptions.subscriber_type, "AGENT"),
-            eq(schema.channelSubscriptions.subscriber_id, name)
-          )
-        )
-        .run();
-      orm
-        .update(schema.channelViewers)
-        .set({ viewer_id: nextName })
-        .where(
-          and(
-            eq(schema.channelViewers.viewer_type, "AGENT"),
-            eq(schema.channelViewers.viewer_id, name)
-          )
-        )
-        .run();
-      orm
-        .update(schema.eventReceipts)
-        .set({ agent_name: nextName })
-        .where(eq(schema.eventReceipts.agent_name, name))
-        .run();
-      orm
-        .update(schema.channelMemoryRecent)
-        .set({ agent_name: nextName })
-        .where(eq(schema.channelMemoryRecent.agent_name, name))
-        .run();
-      orm
-        .update(schema.channelMemoryFull)
-        .set({ agent_name: nextName })
-        .where(eq(schema.channelMemoryFull.agent_name, name))
-        .run();
-      orm
-        .update(schema.crossChannelMemoryRecent)
-        .set({ agent_name: nextName })
-        .where(eq(schema.crossChannelMemoryRecent.agent_name, name))
-        .run();
-      orm
-        .update(schema.crossChannelMemoryFull)
-        .set({ agent_name: nextName })
-        .where(eq(schema.crossChannelMemoryFull.agent_name, name))
-        .run();
-      orm
-        .update(schema.processes)
-        .set({ agent_name: nextName })
-        .where(eq(schema.processes.agent_name, name))
-        .run();
-      orm
-        .update(schema.conversations)
-        .set({ agent_name: nextName })
-        .where(eq(schema.conversations.agent_name, name))
-        .run();
-      orm
-        .update(schema.integrationKeys)
-        .set({ agent_name: nextName })
-        .where(eq(schema.integrationKeys.agent_name, name))
-        .run();
-      orm
-        .update(schema.agentInvites)
-        .set({ agent_name: nextName })
-        .where(eq(schema.agentInvites.agent_name, name))
-        .run();
-      orm
-        .update(schema.runnerTokens)
-        .set({ allowed_agent_name: nextName })
-        .where(eq(schema.runnerTokens.allowed_agent_name, name))
-        .run();
-      orm
-        .update(schema.embedConversations)
-        .set({ agent_name: nextName })
-        .where(eq(schema.embedConversations.agent_name, name))
-        .run();
-      orm
-        .update(schema.channels)
-        .set({ name: lifecycleChannelName(nextName) })
-        .where(eq(schema.channels.name, lifecycleChannelName(name)))
-        .run();
-      for (const channelId of directChannelIdsNeedingRefresh) {
-        refreshDirectChannelKey(channelId);
-      }
-    }
-    publishDashboardRefresh("agent.updated", {
-      agentName: nextName,
-      previousAgentName: nextName === name ? undefined : name
-    });
+    publishDashboardRefresh("agent.updated", { agentName: name });
     if (body.runtimeState) {
       bus.publish("org:agentStatus", {
         type: "agent_status",
         topic: "org:agentStatus",
-        data: { agentName: nextName, runtimeState: body.runtimeState }
+        data: { agentName: name, runtimeState: body.runtimeState }
       });
     }
-    return jsonResponse(c, {
-      ok: true,
-      agentName: nextName,
-      previousAgentName: nextName === name ? null : name
-    });
+    return jsonResponse(c, { ok: true });
   });
 
   app.delete("/api/agents/:name", (c) => {
