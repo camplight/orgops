@@ -45,8 +45,47 @@ type SidecarEntry = {
 };
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
+const DEFAULT_RUNTIME_COMMAND_TIMEOUT_MS = 0;
 const DEFAULT_SIDECAR_RESTART_DELAY_MS = 2_000;
 const sidecars = new Map<string, SidecarEntry>();
+const PROVIDER_SECRET_ENV_KEYS = [
+  "OPENAI_API_KEY",
+  "ANTHROPIC_API_KEY",
+  "OPENROUTER_API_KEY",
+] as const;
+
+function wildcardToRegex(pattern: string): RegExp {
+  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+  const wildcard = escaped.replace(/\*/g, ".*");
+  return new RegExp(`^${wildcard}$`);
+}
+
+function matchesSecretPattern(key: string, pattern: string): boolean {
+  if (!pattern.includes("*")) return key === pattern;
+  return wildcardToRegex(pattern).test(key);
+}
+
+function filterWrappedSecretsEnv(
+  env: Record<string, string>,
+  config: Pick<NormalizedWrappedConfig, "secrets">,
+): Record<string, string> {
+  const allowed = Array.isArray(config.secrets?.allowedKeys)
+    ? config.secrets?.allowedKeys
+    : [];
+  const denied = Array.isArray(config.secrets?.deniedKeys)
+    ? config.secrets?.deniedKeys
+    : [];
+  let keys = Object.keys(env);
+  if (allowed.length > 0) {
+    keys = keys.filter((key) => allowed.some((pattern) => matchesSecretPattern(key, pattern)));
+  }
+  if (denied.length > 0) {
+    keys = keys.filter((key) => !denied.some((pattern) => matchesSecretPattern(key, pattern)));
+  }
+  const filtered: Record<string, string> = {};
+  for (const key of keys) filtered[key] = env[key]!;
+  return filtered;
+}
 
 function mergeEnv(...envs: Array<NodeJS.ProcessEnv | Record<string, string>>): Record<string, string> {
   const merged: Record<string, string> = {};
@@ -86,15 +125,25 @@ function normalizeCommand(
   fallbackCwd: string,
   fallbackTimeoutMs = DEFAULT_COMMAND_TIMEOUT_MS,
   projectRoot?: string,
+  options?: { allowDisableTimeout?: boolean },
 ): NormalizedCommand | null {
   const command = readString(config?.command);
   if (!command) return null;
   const parse = readString(config?.parse);
+  const configuredTimeout = Number(config?.timeoutMs);
+  const timeoutMs =
+    options?.allowDisableTimeout &&
+    Number.isFinite(configuredTimeout) &&
+    // Legacy wrapped configs commonly set 1800000; treat it as "no hard timeout"
+    // so long-running wrapped turns are not force-terminated.
+    (configuredTimeout === 0 || configuredTimeout === 1_800_000)
+      ? 0
+      : readPositiveInt(config?.timeoutMs, fallbackTimeoutMs);
   return {
     command,
     args: readStringArray(config?.args),
     cwd: resolveCommandCwd(config?.cwd, fallbackCwd, projectRoot),
-    timeoutMs: readPositiveInt(config?.timeoutMs, fallbackTimeoutMs),
+    timeoutMs,
     env: readStringEnv(config?.env),
     parse: parse === "json-payloads" ? "json-payloads" : parse === "text" ? "text" : undefined,
   };
@@ -129,8 +178,16 @@ async function runCommand(
     onStdout?: (chunk: Buffer | string) => void;
     onStderr?: (chunk: Buffer | string) => void;
   },
+  options?: { strictProviderEnv?: boolean },
 ): Promise<CommandResult> {
   const mergedEnv = mergeEnv(process.env, env, commandConfig.env);
+  if (options?.strictProviderEnv) {
+    for (const key of PROVIDER_SECRET_ENV_KEYS) {
+      if (!(key in env) && !(key in commandConfig.env)) {
+        delete mergedEnv[key];
+      }
+    }
+  }
   if (commandConfig.cwd) {
     mkdirSync(commandConfig.cwd, { recursive: true });
   }
@@ -145,10 +202,13 @@ async function runCommand(
       windowsHide: true,
     });
     hooks?.onSpawn?.({ pid: child.pid });
-    const timeout = setTimeout(() => {
-      child.kill("SIGTERM");
-      rejectPromise(new Error(`Wrapped command timed out after ${commandConfig.timeoutMs}ms`));
-    }, commandConfig.timeoutMs);
+    const timeout =
+      commandConfig.timeoutMs > 0
+        ? setTimeout(() => {
+            child.kill("SIGTERM");
+            rejectPromise(new Error(`Wrapped command timed out after ${commandConfig.timeoutMs}ms`));
+          }, commandConfig.timeoutMs)
+        : null;
     child.stdout?.on("data", (chunk) => {
       stdout += String(chunk);
       if (stdout.length > 1_000_000) stdout = stdout.slice(-1_000_000);
@@ -160,11 +220,11 @@ async function runCommand(
       hooks?.onStderr?.(chunk);
     });
     child.on("error", (error) => {
-      clearTimeout(timeout);
+      if (timeout) clearTimeout(timeout);
       rejectPromise(error);
     });
     child.on("exit", (exitCode) => {
-      clearTimeout(timeout);
+      if (timeout) clearTimeout(timeout);
       resolvePromise({ exitCode, stdout, stderr });
     });
   });
@@ -193,7 +253,9 @@ async function ensureSidecarStarted(
     return;
   }
   if (sidecar.checkCommand) {
-    const check = await runCommand(sidecar.checkCommand, env);
+    const check = await runCommand(sidecar.checkCommand, env, undefined, {
+      strictProviderEnv: true,
+    });
     if (check.exitCode === 0) {
       await ctx.api.emitEvent({
         type: "wrapper.sidecar.skipped",
@@ -212,6 +274,11 @@ async function ensureSidecarStarted(
   const sidecarEnv = mergeEnv(process.env, env, sidecar.env, {
     ORGOPS_WRAPPED_SIDECAR_NAME: sidecar.name,
   });
+  for (const key of PROVIDER_SECRET_ENV_KEYS) {
+    if (!(key in env) && !(key in sidecar.env)) {
+      delete sidecarEnv[key];
+    }
+  }
   if (sidecar.cwd) {
     mkdirSync(sidecar.cwd, { recursive: true });
   }
@@ -551,13 +618,18 @@ export const commandWrapperHarness: WrapperHarness = {
   name: "command",
   canHandle: (config) => config.harness === "command" || config.harness === "cli",
   ensureReady: async ({ ctx, agent, config }) => {
-    const secretsEnv = await ctx.api.getPackageSecretsEnv(agent.name);
+    const secretsEnv = filterWrappedSecretsEnv(
+      await ctx.api.getPackageSecretsEnv(agent.name),
+      config,
+    );
     const baseEnv: Record<string, string> = {
       ...secretsEnv,
       ORGOPS_PROJECT_ROOT: ctx.projectRoot,
       ORGOPS_WRAPPED_AGENT_NAME: agent.name,
       ORGOPS_WRAPPED_KIND: config.kind,
       ORGOPS_WRAPPED_WORKSPACE_PATH: agent.workspacePath,
+      ...(ctx.runtimeAuth?.apiBaseUrl ? { ORGOPS_API_URL: ctx.runtimeAuth.apiBaseUrl } : {}),
+      ...(ctx.runtimeAuth?.runnerToken ? { ORGOPS_RUNNER_TOKEN: ctx.runtimeAuth.runnerToken } : {}),
     };
     const sourceDir = await ensureSourceCheckout(agent.workspacePath, config, baseEnv);
     if (sourceDir) baseEnv.ORGOPS_WRAPPED_SOURCE_DIR = sourceDir;
@@ -586,7 +658,9 @@ export const commandWrapperHarness: WrapperHarness = {
             harness: commandWrapperHarness.name,
             command: setupCommand.command,
           });
-          const result = await runCommand(setupCommand, baseEnv);
+          const result = await runCommand(setupCommand, baseEnv, undefined, {
+            strictProviderEnv: true,
+          });
           if (result.exitCode !== 0) {
             await emitWrapperEvent(ctx, agent, "wrapper.setup.failed", {
               kind: config.kind,
@@ -624,7 +698,9 @@ export const commandWrapperHarness: WrapperHarness = {
           harness: commandWrapperHarness.name,
           command: setupCommand.command,
         });
-        const result = await runCommand(setupCommand, baseEnv);
+        const result = await runCommand(setupCommand, baseEnv, undefined, {
+          strictProviderEnv: true,
+        });
         if (result.exitCode !== 0) {
           await emitWrapperEvent(ctx, agent, "wrapper.setup.failed", {
             kind: config.kind,
@@ -658,11 +734,20 @@ export const commandWrapperHarness: WrapperHarness = {
     const { ctx, agent, config, channelId, triggerEvent, message, sessionId } = input;
     const sourceDir = sourceCheckoutPath(agent.workspacePath, config.source);
     const runtimeCwd = sourceDir && existsSync(sourceDir) ? sourceDir : agent.workspacePath;
-    const runtime = normalizeCommand(config.runtime, runtimeCwd, DEFAULT_COMMAND_TIMEOUT_MS, ctx.projectRoot);
+    const runtime = normalizeCommand(
+      config.runtime,
+      runtimeCwd,
+      DEFAULT_RUNTIME_COMMAND_TIMEOUT_MS,
+      ctx.projectRoot,
+      { allowDisableTimeout: true },
+    );
     if (!runtime) {
       throw new Error(`Wrapped agent ${agent.name} is missing wrappedConfig.runtime.command.`);
     }
-    const secretsEnv = await ctx.api.getPackageSecretsEnv(agent.name, channelId);
+    const secretsEnv = filterWrappedSecretsEnv(
+      await ctx.api.getPackageSecretsEnv(agent.name, channelId),
+      config,
+    );
     const runtimeProcessId = ctx.api.apiFetch ? randomUUID() : undefined;
     let runtimeOutputSeq = 0;
     const streamRuntimeOutput = (stream: "STDOUT" | "STDERR", chunk: Buffer | string) => {
@@ -716,12 +801,15 @@ export const commandWrapperHarness: WrapperHarness = {
           ORGOPS_WRAPPED_SESSION_ID: sessionId,
           ORGOPS_WRAPPED_MESSAGE: message,
           ORGOPS_WRAPPED_TRIGGER_EVENT_ID: triggerEvent.id,
+          ...(ctx.runtimeAuth?.apiBaseUrl ? { ORGOPS_API_URL: ctx.runtimeAuth.apiBaseUrl } : {}),
+          ...(ctx.runtimeAuth?.runnerToken ? { ORGOPS_RUNNER_TOKEN: ctx.runtimeAuth.runnerToken } : {}),
           ...(sourceDir ? { ORGOPS_WRAPPED_SOURCE_DIR: sourceDir } : {}),
         },
         {
           onStdout: (chunk) => streamRuntimeOutput("STDOUT", chunk),
           onStderr: (chunk) => streamRuntimeOutput("STDERR", chunk),
         },
+        { strictProviderEnv: true },
       );
     } finally {
       if (ctx.api.apiFetch && runtimeProcessId) {

@@ -35,8 +35,8 @@ type RunnerIdentityPayload = { runner?: { id?: string } };
 let apiFetchRequestCounter = 0;
 
 export class RunnerApiHttpError extends Error {
-  constructor(readonly status: number, readonly code: CatalogLibraryErrorCode | undefined, path: string) {
-    super(`API ${path} failed: ${status}`);
+  constructor(readonly status: number, readonly code: CatalogLibraryErrorCode | undefined, path: string, statusText?: string) {
+    super(`API ${path} failed: ${status}${statusText ? ` ${statusText}` : ""}`);
     this.name = "RunnerApiHttpError";
   }
 }
@@ -121,7 +121,7 @@ export function createRunnerApi(deps: RunnerApiDeps) {
           ...(code ? { code } : {}),
           elapsedMs,
         });
-        throw new RunnerApiHttpError(res.status, code, path);
+        throw new RunnerApiHttpError(res.status, code, path, res.statusText || (path === "/api/secrets/env" && res.status === 403 ? "Forbidden" : undefined));
       }
       return res;
     } catch (error) {
@@ -365,17 +365,13 @@ export function createRunnerApi(deps: RunnerApiDeps) {
     agentName: string,
     channelId?: string,
   ): Promise<Record<string, string>> {
-    try {
-      const res = await apiFetch("/api/secrets/env", {
-        headers: {
-          "x-orgops-agent-name": agentName,
-          ...(channelId ? { "x-orgops-channel-id": channelId } : {}),
-        },
-      });
-      return (await res.json()) as Record<string, string>;
-    } catch {
-      return {};
-    }
+    const res = await apiFetch("/api/secrets/env", {
+      headers: {
+        "x-orgops-agent-name": agentName,
+        ...(channelId ? { "x-orgops-channel-id": channelId } : {}),
+      },
+    });
+    return (await res.json()) as Record<string, string>;
   }
 
   return {

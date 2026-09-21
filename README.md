@@ -55,7 +55,7 @@ OrgOps is split into three runtime components plus one bootstrap/maintenance CLI
 - `admin-ui`: operator/admin control surface
 - `user-ui`: lightweight non-technical user workspace
 - `agent-runner`: host-local execution runtime
-- `opscli`: host bootstrap + maintenance RLM REPL agent
+- `opscli`: host bootstrap + maintenance CLI (deterministic commands + optional chat)
 
 Multi-host execution is kept intentionally simple:
 
@@ -79,19 +79,19 @@ the API service) so browser auth cookies and WebSocket traffic work correctly.
 
 ## OpsCLI
 
-`apps/opscli` is the autonomous bootstrap and maintenance CLI for OrgOps hosts.
+`apps/opscli` is the bootstrap and maintenance CLI for OrgOps hosts.
 
 ```bash
 npm run --workspace @orgops/opscli start
 ```
 
-It scaffolds `.orgops-data` locally and runs a persistent JS runtime session (VM context) for an RLM loop.
-The REPL exposes:
+Command examples:
 
-- `shell(command)` for host command execution
-- `print(...args)` for stdout output
-- `input(question)` for interactive stdin requests
-- `exit(code)` for agent-driven process termination
+- `opscli install --register-service --create-shortcut`
+- `opscli upgrade`
+- `opscli start` / `opscli stop` / `opscli status`
+- `opscli admin open` / `opscli admin stop` / `opscli admin status`
+- `opscli chat`
 
 OpsCLI keeps a rolling session summary and capped recent history to stay within model context limits.
 
@@ -112,16 +112,9 @@ Each release includes:
 - a release changelog artifact (`CHANGELOG-<release-tag>.md`)
 - release notes generated from commits since the previous release tag
 
-Each binary bundles:
-
-- OrgOps source snapshot for `api`, `agent-runner`, `admin-ui`, `user-ui`, and shared packages
-- OrgOps docs (README + SPEC + runner README) injected into OpsCLI system prompt
-
-On host launch, `opscli` can prompt for missing provider keys (`OPENAI_API_KEY`,
-`ANTHROPIC_API_KEY`, or `OPENROUTER_API_KEY`), persist the selected key to a local `.env`,
-and then use REPL helpers (`extractOrgOps`, `setupOrgOps`) to unpack and prepare selected
-components. By default, extraction is done to `./orgops`, and OpsCLI stores the extracted
-path in `.env` via `ORGOPS_EXTRACTED_ROOT` for reuse in later sessions.
+Each binary includes deterministic installer/lifecycle commands (`install`, `upgrade`, `doctor`, `start`, `stop`, `status`, `admin open`, `admin stop`, `admin status`) and
+an optional agentic `chat` command. Installer mode clones OrgOps from git, builds runtime
+artifacts, and can register OS auto-start services.
 
 On macOS, downloaded binaries may be quarantined by Gatekeeper. After download:
 
@@ -190,7 +183,8 @@ chmod +x ./opscli-macos
   - in dev, Vite proxies `/api` and `/ws` to `http://localhost:8787` when using relative paths
 - User UI (`apps/user-ui`):
   - `VITE_API_BASE_URL` (optional; default: `/api`)
-  - runtime override via `window.__ORGOPS_USER_UI_CONFIG__ = { apiBaseUrl }`
+  - `VITE_WS_BASE_URL` (optional; default: `/ws`, or derived from `VITE_API_BASE_URL` when absolute)
+  - runtime override via `window.__ORGOPS_USER_UI_CONFIG__ = { apiBaseUrl, wsBaseUrl }`
   - in dev, Vite proxies `/api` and `/ws` to `http://localhost:8787` when using relative paths
 
 ## Runner behavior notes

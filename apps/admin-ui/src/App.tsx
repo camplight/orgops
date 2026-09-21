@@ -36,6 +36,7 @@ import type {
   AgentInvite,
   IntegrationKey,
   ProcessOutputRow,
+  RunnerInviteConfig,
   RunnerSetupConfig,
   TeamMember
 } from "./types";
@@ -991,8 +992,25 @@ export default function App() {
           runners={data.runners}
           agents={data.agents}
           onRefresh={data.refreshDashboard}
+          onRenameRunner={async (runnerId, displayName) => {
+            await data.apiFetch(`/api/runners/${encodeURIComponent(runnerId)}`, {
+              method: "PATCH",
+              headers: data.getApiHeaders(),
+              body: JSON.stringify({ displayName }),
+            });
+            await data.refreshDashboard();
+          }}
           loadRunnerSetupConfig={() =>
             data.apiJson<RunnerSetupConfig>("/api/runners/setup-config")
+          }
+          createRunnerInvite={(input) =>
+            data
+              .apiFetch("/api/runners/invites", {
+                method: "POST",
+                headers: data.getApiHeaders(),
+                body: JSON.stringify(input ?? {}),
+              })
+              .then((res) => res.json() as Promise<RunnerInviteConfig>)
           }
           onDeregisterRunner={async (runnerId) => {
             await data.apiFetch(`/api/runners/${encodeURIComponent(runnerId)}`, {
@@ -1260,6 +1278,8 @@ export default function App() {
       {activeScreen === "secrets" && (
         <SecretsScreen
           secrets={data.secrets}
+          agents={data.agents}
+          teams={data.teams}
           onAddSecret={async (secret) => {
             await data.apiFetch("/api/secrets", {
               method: "POST",
@@ -1315,6 +1335,21 @@ export default function App() {
               body: JSON.stringify(input),
             });
             const body = (await res.json()) as AgentInvite;
+            await data.refreshAgentInvites();
+            return body;
+          }}
+          onPromoteInviteGlobal={async (id) => {
+            const res = await data.apiFetch(
+              `/api/agent-invites/${encodeURIComponent(id)}/promote-global`,
+              {
+                method: "POST",
+                headers: data.getApiHeaders(),
+              },
+            );
+            const body = (await res.json()) as {
+              invite: AgentInvite;
+              promotedScopedRunnerTokenCount: number;
+            };
             await data.refreshAgentInvites();
             return body;
           }}

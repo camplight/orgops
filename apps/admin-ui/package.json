@@ -6,7 +6,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "lint": "tsc -p tsconfig.json --noEmit"
+    "lint": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@orgops/schemas": "0.0.1",

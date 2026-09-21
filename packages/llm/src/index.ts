@@ -62,6 +62,12 @@ export type LlmTool = {
   execute?: (args: any) => Promise<unknown> | unknown;
 };
 
+const PROVIDER_SECRET_ENV_KEYS = [
+  "OPENAI_API_KEY",
+  "ANTHROPIC_API_KEY",
+  "OPENROUTER_API_KEY",
+] as const;
+
 function normalizeToolsForSdk(tools?: Record<string, LlmTool>) {
   if (!tools) return undefined;
   return Object.fromEntries(
@@ -180,10 +186,15 @@ export async function generate(
   messages: LlmMessage[],
   options: GenerateOptions = {},
 ) {
-  const env = {
+  const env: Record<string, string | undefined> = {
     ...process.env,
     ...(options.env ?? {}),
   };
+  if (options.env) {
+    for (const key of PROVIDER_SECRET_ENV_KEYS) {
+      if (!(key in options.env)) delete env[key];
+    }
+  }
   if (env.ORGOPS_LLM_STUB === "1") {
     return { text: "LLM stub response.", toolCalls: [], toolResults: [] };
   }

@@ -247,9 +247,9 @@ const GenericCatalogAuditEventSchema = z.object({
   source: z.literal("system"), status: z.literal("DELIVERED"), channelId: z.null(),
   payload: z.object({
     actorKind: z.enum(["HUMAN_ADMIN", "AUTHENTICATED_HUMAN", "RUNNER"]), actorId: boundedId,
-    action: boundedText(200), outcome: z.enum(["SUCCEEDED", "FAILED"]), revision: PositiveIntegerSchema,
+    action: boundedText(200).optional(), outcome: z.enum(["SUCCEEDED", "FAILED"]), revision: PositiveIntegerSchema,
     sourceId: SourceIdSchema.optional(), releaseId: boundedId.optional(), operationId: boundedId.optional(), agentId: boundedId.optional(),
-    runnerId: boundedId.optional(), digest: DigestSchema.optional(), failureCode: CatalogLibraryErrorCodeSchema.optional(),
+    runnerId: boundedId.optional(), digest: DigestSchema.optional(), failureCode: CatalogLibraryErrorCodeSchema.nullish(),
   }).strict(),
 }).strict();
 export const CatalogAuditEventSchema = z.union([CatalogAssignmentAuditEventSchema, GenericCatalogAuditEventSchema]);

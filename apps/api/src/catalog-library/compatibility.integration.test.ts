@@ -28,7 +28,7 @@ describe("Catalog namespace after the completed compatibility window", () => {
     const adminCookie = (login.headers.get("set-cookie") ?? "").split(";", 1)[0];
     expect(adminCookie).toMatch(/^orgops_session=.+/);
     for (const headers of [{}, { cookie: "orgops_session=not-a-session" }, { cookie: adminCookie }, { "x-orgops-runner-token": "runner-token" }, { "x-orgops-runner-token": "bad", cookie: adminCookie }]) {
-      const response = await app.request(path, { method, headers });
+      const response = await app.request(path, { method, headers: headers as HeadersInit });
       expect(response.status).toBe(404);
       expect(response.headers.get("content-type")).toBe("text/plain; charset=UTF-8");
       expect(await response.text()).toBe("404 Not Found");

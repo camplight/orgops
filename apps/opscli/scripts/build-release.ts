@@ -1,7 +1,6 @@
 import {
   chmodSync,
   copyFileSync,
-  cpSync,
   mkdirSync,
   readFileSync,
   rmSync,
@@ -10,7 +9,6 @@ import {
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import * as tar from "tar";
 import { build } from "esbuild";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -20,7 +18,6 @@ const TMP_ROOT = resolve(OPSCLI_ROOT, ".release-tmp");
 const OUTPUT_DIR = resolve(REPO_ROOT, "dist");
 const SNAPSHOT_DIR = resolve(TMP_ROOT, "snapshot");
 const ASSET_DIR = resolve(SNAPSHOT_DIR, "assets");
-const ORGOPS_BUNDLE_NAME = "orgops-bundle.tar.gz";
 const DOCS_BUNDLE_NAME = "orgops-system-docs.md";
 const BUILD_INFO_NAME = "opscli-build-info.json";
 const SEA_CONFIG_NAME = "sea-config.json";
@@ -42,36 +39,6 @@ function outputNameForCurrentPlatform() {
   if (process.platform === "darwin") return "opscli-macos";
   if (process.platform === "win32") return "opscli-windows.exe";
   return "opscli-linux";
-}
-
-function prebuildFrontendArtifacts() {
-  runCommand("npm", ["run", "--workspace", "@orgops/admin-ui", "build"]);
-  runCommand("npm", ["run", "--workspace", "@orgops/user-ui", "build"]);
-}
-
-function stageOrgOpsSource() {
-  const stagedRoot = resolve(TMP_ROOT, "orgops");
-  rmSync(stagedRoot, { recursive: true, force: true });
-  mkdirSync(stagedRoot, { recursive: true });
-  const includePaths = [
-    "apps/api",
-    "apps/agent-runner",
-    "apps/admin-ui",
-    "apps/user-ui",
-    "packages",
-    "docs",
-    "skills",
-    "README.md",
-    "package.json",
-    "package-lock.json",
-    "tsconfig.base.json",
-  ];
-  for (const includePath of includePaths) {
-    cpSync(resolve(REPO_ROOT, includePath), resolve(stagedRoot, includePath), {
-      recursive: true,
-    });
-  }
-  return stagedRoot;
 }
 
 function buildDocsBundle() {
@@ -102,16 +69,6 @@ async function buildReleaseExecutable() {
   mkdirSync(ASSET_DIR, { recursive: true });
   mkdirSync(OUTPUT_DIR, { recursive: true });
 
-  prebuildFrontendArtifacts();
-  stageOrgOpsSource();
-  await tar.c(
-    {
-      gzip: true,
-      cwd: TMP_ROOT,
-      file: resolve(ASSET_DIR, ORGOPS_BUNDLE_NAME),
-    },
-    ["orgops"]
-  );
   writeFileSync(resolve(ASSET_DIR, DOCS_BUNDLE_NAME), buildDocsBundle(), "utf-8");
   writeFileSync(
     resolve(ASSET_DIR, BUILD_INFO_NAME),
@@ -153,7 +110,6 @@ async function buildReleaseExecutable() {
         useSnapshot: false,
         useCodeCache: false,
         assets: {
-          [ORGOPS_BUNDLE_NAME]: resolve(ASSET_DIR, ORGOPS_BUNDLE_NAME),
           [DOCS_BUNDLE_NAME]: resolve(ASSET_DIR, DOCS_BUNDLE_NAME),
           [BUILD_INFO_NAME]: resolve(ASSET_DIR, BUILD_INFO_NAME),
         },

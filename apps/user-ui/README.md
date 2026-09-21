@@ -20,3 +20,9 @@ For a different API origin, set:
 ```bash
 VITE_API_BASE_URL=https://example.com/api npm run user-ui:dev
 ```
+
+Optional WebSocket override:
+
+```bash
+VITE_WS_BASE_URL=wss://example.com/ws npm run user-ui:dev
+```

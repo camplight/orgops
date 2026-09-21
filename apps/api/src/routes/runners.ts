@@ -5,6 +5,10 @@ import { schema, type OrgOpsDrizzleDb } from "@orgops/db";
 import type { EventBus } from "@orgops/event-bus";
 import { DeploymentReportSchema, type CatalogLibraryErrorCode, type RunnerArtifactDelivery, type RunnerStartGateDelivery } from "@orgops/schemas";
 import { RunnerDeliveryError } from "../catalog-library/runner-delivery";
+import {
+  findActiveRunnerTokenByToken,
+  generateRunnerScopedToken,
+} from "../agent-invite-auth";
 
 type RunnerRecord = {
   id: string;
@@ -23,6 +27,7 @@ type RunnersDeps = {
   orm: OrgOpsDrizzleDb;
   bus: EventBus<any>;
   jsonResponse: (c: any, data: unknown, status?: number) => Response;
+  requireAuth: (c: any, next: any) => Response | Promise<Response>;
   requireRunnerAuth: (c: any, next: any) => Response | Promise<Response>;
   runnerToken: string;
   runnerApiUrl: string;
@@ -75,10 +80,17 @@ function toApiRunner(row: RunnerRecord, onlineThresholdMs: number) {
 }
 
 export function registerRunnersRoutes(app: Hono<any>, deps: RunnersDeps) {
-  const { orm, bus, jsonResponse, requireRunnerAuth, runnerToken, runnerApiUrl, runnerArtifactDelivery, runnerStartGateDelivery } = deps;
+  const { orm, bus, jsonResponse, requireAuth, requireRunnerAuth, runnerToken, runnerApiUrl, runnerArtifactDelivery, runnerStartGateDelivery } = deps;
   const ONLINE_THRESHOLD_MS = Number(
     process.env.ORGOPS_RUNNER_ONLINE_THRESHOLD_MS ?? 15_000
   );
+  const requireHumanUser = (c: any) => {
+    const user = (c as any).get("user") as { id?: string; username?: string } | undefined;
+    if (!user?.id || !user?.username || user.username === "runner") {
+      return null;
+    }
+    return user;
+  };
   const publishDashboardRefresh = (reason: string, meta?: Record<string, unknown>) => {
     bus.publish("org:dashboard", {
       type: "dashboard_refresh",
@@ -180,15 +192,93 @@ export function registerRunnersRoutes(app: Hono<any>, deps: RunnersDeps) {
   });
 
   app.get("/api/runners/setup-config", (c) => {
-    const user = (c as any).get("user") as { username?: string } | undefined;
-    if (!user?.username || user.username === "runner") {
+    const user = requireHumanUser(c);
+    if (!user) {
       return jsonResponse(c, { error: "Authenticated human user required" }, 401);
     }
     return jsonResponse(c, { runnerToken, runnerApiUrl });
   });
 
+  app.post("/api/runners/invites", requireAuth, async (c) => {
+    const user = (c as any).get("user") as { id?: string; username?: string } | undefined;
+    if (!user?.id || !user?.username || user.username === "runner") {
+      return jsonResponse(c, { error: "Authenticated human user required" }, 401);
+    }
+    const body = await c.req.json().catch(() => ({}));
+    const now = Date.now();
+    const expiresInHoursRaw = Number((body as Record<string, unknown>).expiresInHours ?? 24);
+    const expiresInHours = Number.isFinite(expiresInHoursRaw)
+      ? Math.max(1, Math.min(24 * 30, Math.floor(expiresInHoursRaw)))
+      : 24;
+    const expiresAt = now + expiresInHours * 60 * 60 * 1000;
+    const runnerId = randomUUID();
+    const generated = generateRunnerScopedToken();
+    const inviteNameRaw =
+      typeof (body as Record<string, unknown>).name === "string"
+        ? (body as Record<string, string>).name.trim()
+        : "";
+    const inviteName = inviteNameRaw || `runner-invite-${runnerId.slice(0, 8)}`;
+    orm
+      .insert(schema.runnerTokens)
+      .values({
+        id: randomUUID(),
+        name: inviteName,
+        token_hash: generated.hash,
+        token_prefix: generated.prefix,
+        allowed_agent_name: null,
+        allowed_runner_id: runnerId,
+        allowed_channel_ids_json: "[]",
+        allow_channel_expansion: 0,
+        runner_scope_mode: "SCOPED",
+        invite_id: null,
+        created_by_human_id: user.id,
+        created_at: now,
+        expires_at: expiresAt,
+        last_used_at: null,
+        revoked_at: null,
+      })
+      .run();
+    const base = runnerApiUrl.replace(/\/+$/, "");
+    const inviteUrl = `${base}/api/runners/invites/${encodeURIComponent(generated.token)}`;
+    return jsonResponse(
+      c,
+      {
+        ok: true,
+        invite: {
+          name: inviteName,
+          runnerId,
+          tokenPrefix: generated.prefix,
+          expiresAt,
+          inviteUrl,
+        },
+        bootstrap: {
+          apiBaseUrl: base,
+          runnerNameHint: `runner-${runnerId.slice(0, 8)}`,
+        },
+      },
+      201
+    );
+  });
+
+  app.get("/api/runners/invites/:token", (c) => {
+    const token = c.req.param("token");
+    const row = findActiveRunnerTokenByToken(orm, token);
+    if (!row) return jsonResponse(c, { error: "Invite not found or expired" }, 404);
+    if (row.runner_scope_mode !== "SCOPED" || !row.allowed_runner_id) {
+      return jsonResponse(c, { error: "Invite token is not scoped for bootstrap" }, 400);
+    }
+    return jsonResponse(c, {
+      ok: true,
+      bootstrap: {
+        apiBaseUrl: runnerApiUrl.replace(/\/+$/, ""),
+        runnerToken: token,
+        runnerId: row.allowed_runner_id ?? undefined,
+      },
+    });
+  });
+
   app.post("/api/runners/register", requireRunnerAuth, async (c) => {
-    const user = c.get("user") as
+    const user = (c as any).get("user") as
       | { runnerScope?: { mode?: string; allowedRunnerId?: string } }
       | undefined;
     const scopedRunnerId =
@@ -276,8 +366,53 @@ export function registerRunnersRoutes(app: Hono<any>, deps: RunnersDeps) {
     return jsonResponse(c, { runner: toApiRunner(row, ONLINE_THRESHOLD_MS) }, 201);
   });
 
+  app.patch("/api/runners/:id", async (c) => {
+    const user = requireHumanUser(c);
+    if (!user) {
+      return jsonResponse(c, { error: "Authenticated human user required" }, 401);
+    }
+    const runnerId = c.req.param("id");
+    const body = await c.req.json().catch(() => ({}));
+    const displayName =
+      typeof body.displayName === "string" ? body.displayName.trim() : "";
+    if (!displayName) {
+      return jsonResponse(c, { error: "displayName is required" }, 400);
+    }
+
+    const now = Date.now();
+    const row = orm
+      .select()
+      .from(schema.runnerNodes)
+      .where(eq(schema.runnerNodes.id, runnerId))
+      .get() as RunnerRecord | undefined;
+    if (!row) {
+      return jsonResponse(c, { error: "Runner not found" }, 404);
+    }
+
+    orm
+      .update(schema.runnerNodes)
+      .set({
+        display_name: displayName,
+        updated_at: now,
+      })
+      .where(eq(schema.runnerNodes.id, runnerId))
+      .run();
+
+    const updated = orm
+      .select()
+      .from(schema.runnerNodes)
+      .where(eq(schema.runnerNodes.id, runnerId))
+      .get() as RunnerRecord | undefined;
+    if (!updated) {
+      return jsonResponse(c, { error: "Failed to update runner" }, 500);
+    }
+
+    publishDashboardRefresh("runner.renamed", { runnerId });
+    return jsonResponse(c, { runner: toApiRunner(updated, ONLINE_THRESHOLD_MS) });
+  });
+
   app.post("/api/runners/:id/heartbeat", requireRunnerAuth, (c) => {
-    const user = c.get("user") as
+    const user = (c as any).get("user") as
       | { runnerScope?: { mode?: string; allowedRunnerId?: string } }
       | undefined;
     const scopedRunnerId =

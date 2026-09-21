@@ -107,6 +107,10 @@ const handleTurn = createTurnExecutor({
   projectRoot: PROJECT_ROOT,
   skillRoot: SKILL_ROOT,
   llmCallTimeoutMs: LLM_CALL_TIMEOUT_MS,
+  runtimeAuth: {
+    apiBaseUrl: API_URL,
+    runnerToken: process.env.ORGOPS_RUNNER_TOKEN ?? "dev-runner-token",
+  },
   api: {
     apiFetch: api.apiFetch,
     emitEvent: api.emitEvent,

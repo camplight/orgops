@@ -9,12 +9,17 @@ export type AgentInviteRow = {
   id: string;
   name: string;
   agent_name: string;
+  agent_visibility: string;
   token_hash: string;
   token_prefix: string;
   channel_ids_json: string;
+  allow_channel_expansion: number;
+  runner_scope_mode: string;
   wrapped_config_json: string;
   max_uses: number;
   use_count: number;
+  created_by_type: string;
+  created_by_id: string | null;
   created_by_human_id: string | null;
   created_at: number;
   expires_at: number | null;
@@ -30,6 +35,8 @@ export type RunnerTokenRow = {
   allowed_agent_name: string | null;
   allowed_runner_id: string | null;
   allowed_channel_ids_json: string;
+  allow_channel_expansion: number;
+  runner_scope_mode: string;
   invite_id: string | null;
   created_by_human_id: string | null;
   created_at: number;

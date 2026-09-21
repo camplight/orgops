@@ -8,7 +8,14 @@ import {
   useState
 } from "react";
 import { apiFetch, apiJson, getApiHeaders } from "./api";
-import type { Agent, AuthMe, Channel, ChannelParticipant, EventRow, Team } from "./types";
+import { wsUrl } from "./config";
+import type { Agent, AuthMe, Channel, ChannelParticipant, ChannelShare, EventRow, Team } from "./types";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+
+const MARKDOWN_HINT_RE =
+  /(^|\n)\s{0,3}(#{1,6}\s|[-*+]\s|\d+\.\s|>\s)|`{1,3}[^`]|(\*\*|__)[^*_]+(\*\*|__)|(\*|_)[^*_]+(\*|_)|\[[^\]]+\]\([^)]+\)|!\[[^\]]*\]\([^)]+\)|(^|\n)\|.+\|/m;
+const URL_RE = /(https?:\/\/[^\s<]+)/i;
 
 export function normalizeRetiredLibraryPath() {
   const url = new URL(window.location.href);
@@ -34,7 +41,8 @@ function formatTime(value?: number) {
           ...(date.getFullYear() === today.getFullYear() ? {} : { year: "numeric" })
         }),
     hour: "2-digit",
-    minute: "2-digit"
+    minute: "2-digit",
+    second: "2-digit"
   }).format(date);
 }
 
@@ -49,6 +57,12 @@ function messageText(event: EventRow) {
   return typeof text === "string" ? text : "";
 }
 
+function shouldRenderMarkdown(text: string) {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  return MARKDOWN_HINT_RE.test(trimmed) || URL_RE.test(trimmed);
+}
+
 function sourceLabel(source: string) {
   if (source.startsWith("human:")) return source.slice("human:".length) || "Human";
   if (source.startsWith("agent:")) return source.slice("agent:".length) || "Agent";
@@ -61,10 +75,15 @@ function messageRole(source: string) {
   return "system";
 }
 
+function messageDisplayTime(event: EventRow) {
+  return event.deliverAt ?? event.createdAt;
+}
+
 const DIRECT_CHANNEL_KINDS = new Set(["HUMAN_AGENT_DM", "AGENT_AGENT_DM", "DIRECT_GROUP"]);
 const CHANNEL_GROUPS = [
   { id: "direct", label: "Direct messages" },
-  { id: "channels", label: "Channels" }
+  { id: "channels", label: "Channels" },
+  { id: "shared", label: "Shared channels" }
 ] as const;
 
 type ChannelGroupId = (typeof CHANNEL_GROUPS)[number]["id"];
@@ -93,6 +112,12 @@ type MessageAttachment = {
   name: string;
   mime?: string;
   size?: number;
+};
+
+type WsServerEventMessage = {
+  type: "event";
+  topic: string;
+  data: EventRow;
 };
 
 function normalizedSubscriberType(participant: ChannelParticipant) {
@@ -323,6 +348,23 @@ function participantType(participant: ChannelParticipant) {
   return participant.subscriberType || "Participant";
 }
 
+function shareTypeLabel(share: ChannelShare) {
+  const type = share.viewerType.trim().toUpperCase();
+  if (type === "HUMAN") return "Shared human viewer";
+  if (type === "AGENT") return "Shared agent viewer";
+  return "Shared viewer";
+}
+
+function channelHasHumanShare(channel: Channel, humanId: string) {
+  return (channel.shares ?? []).some(
+    (share) => share.viewerType.trim().toUpperCase() === "HUMAN" && share.viewerId === humanId
+  );
+}
+
+function isSharedChannelForUser(channel: Channel, currentUsername: string) {
+  return Boolean(currentUsername && channelHasHumanShare(channel, currentUsername));
+}
+
 function participantAgentStatus(participant: ChannelParticipant, agents: Agent[]) {
   if (normalizedSubscriberType(participant) !== "AGENT") return null;
   const agent = agents.find((candidate) => candidate.name === participant.subscriberId);
@@ -335,7 +377,8 @@ function channelMatchesQuery(channel: Channel, query: string, currentUsername: s
 }
 
 function canManageUserChannel(channel: Channel | null, userId: string | null) {
-  if (!channel || isDirectChannel(channel) || isLifecycleChannel(channel)) return false;
+  if (!channel || isLifecycleChannel(channel)) return false;
+  if (typeof channel.canManage === "boolean") return channel.canManage;
   if (channel.visibility === "PRIVATE") return Boolean(userId && channel.ownerHumanId === userId);
   return true;
 }
@@ -353,12 +396,18 @@ function channelVisibleToUserUi(
   username: string,
   viewerTeamIds: Set<string>
 ) {
+  const isSharedToHuman = channelHasHumanShare(channel, username);
   if (isLifecycleChannel(channel)) return false;
-  if (isHumanAgentDirectChannel(channel)) return channelHasHumanParticipant(channel, username);
-  if (isDirectChannel(channel)) return false;
+  if (isHumanAgentDirectChannel(channel)) {
+    return channelHasHumanParticipant(channel, username) || isSharedToHuman;
+  }
+  if (isDirectChannel(channel)) {
+    return channelHasHumanParticipant(channel, username) || isSharedToHuman;
+  }
   if (channel.visibility !== "PRIVATE") return true;
   if (Boolean(userId && channel.ownerHumanId === userId)) return true;
-  return channelHasTeamParticipant(channel, viewerTeamIds);
+  if (channelHasTeamParticipant(channel, viewerTeamIds)) return true;
+  return isSharedToHuman;
 }
 
 function agentVisibleToUserUi(
@@ -375,6 +424,11 @@ function readLinkedChannelId() {
   return new URL(window.location.href).searchParams.get("channel");
 }
 
+function readPendingShareToken() {
+  const token = new URL(window.location.href).searchParams.get("share");
+  return token?.trim() || null;
+}
+
 function updateChannelDeepLink(channelId: string | null, replace = false) {
   const url = new URL(window.location.href);
   if (channelId) {
@@ -384,6 +438,15 @@ function updateChannelDeepLink(channelId: string | null, replace = false) {
   }
   const method = replace ? "replaceState" : "pushState";
   window.history[method](null, "", url);
+}
+
+function consumeShareToken(channelId?: string | null) {
+  const url = new URL(window.location.href);
+  url.searchParams.delete("share");
+  if (channelId) {
+    url.searchParams.set("channel", channelId);
+  }
+  window.history.replaceState(null, "", url);
 }
 
 function adaptiveMessageBatchSize() {
@@ -407,7 +470,15 @@ function mergeEventsChronologically(current: EventRow[], incoming: EventRow[]) {
   const byId = new Map<string, EventRow>();
   for (const event of current) byId.set(event.id, event);
   for (const event of incoming) byId.set(event.id, event);
-  return [...byId.values()].sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0));
+  return [...byId.values()].sort((left, right) => {
+    const leftPrimary = left.deliverAt ?? left.createdAt ?? 0;
+    const rightPrimary = right.deliverAt ?? right.createdAt ?? 0;
+    if (leftPrimary !== rightPrimary) return leftPrimary - rightPrimary;
+    const leftCreated = left.createdAt ?? 0;
+    const rightCreated = right.createdAt ?? 0;
+    if (leftCreated !== rightCreated) return leftCreated - rightCreated;
+    return left.id.localeCompare(right.id);
+  });
 }
 
 function createLocalAttachmentId() {
@@ -452,7 +523,19 @@ export default function App() {
   const lastSeenByChannelRef = useRef<Record<string, number>>({});
   const lastLoadedMessageAtByChannelRef = useRef<Record<string, number>>({});
   const lastLoadedTimelineAtByChannelRef = useRef<Record<string, number>>({});
+  const channelsRef = useRef<Channel[]>([]);
+  const usernameRef = useRef("");
+  const userIdRef = useRef<string | null>(null);
+  const viewerTeamIdsRef = useRef<Set<string>>(new Set());
+  const seenWsEventIdsRef = useRef<Set<string>>(new Set());
+  const wsRef = useRef<WebSocket | null>(null);
+  const wsSubscribedTopicsRef = useRef<Set<string>>(new Set());
+  const wsReconnectTimerRef = useRef<number | null>(null);
+  const wsShouldReconnectRef = useRef(true);
+  const wsReconnectAttemptRef = useRef(0);
   const messageFetchSeqRef = useRef(0);
+  const loadingChannelIdRef = useRef<string | null>(null);
+  const forceScrollToBottomOnLoadRef = useRef(false);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
@@ -462,7 +545,8 @@ export default function App() {
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const [collapsedChannelGroups, setCollapsedChannelGroups] = useState<Record<ChannelGroupId, boolean>>({
     channels: false,
-    direct: false
+    direct: false,
+    shared: false
   });
   const [hasNewMessagesBelow, setHasNewMessagesBelow] = useState(false);
   const [channelQuery, setChannelQuery] = useState("");
@@ -495,16 +579,35 @@ export default function App() {
   const [participantValue, setParticipantValue] = useState("");
   const [participantSubmitting, setParticipantSubmitting] = useState(false);
   const [participantRemovingKey, setParticipantRemovingKey] = useState<string | null>(null);
+  const [shareKind, setShareKind] = useState<"HUMAN" | "AGENT">("HUMAN");
+  const [shareValue, setShareValue] = useState("");
+  const [shareSubmitting, setShareSubmitting] = useState(false);
+  const [shareRemovingKey, setShareRemovingKey] = useState<string | null>(null);
   const [channelVisibilityDraft, setChannelVisibilityDraft] = useState<"PUBLIC" | "PRIVATE">("PRIVATE");
   const [updatingChannelVisibility, setUpdatingChannelVisibility] = useState(false);
   const [archiveDraft, setArchiveDraft] = useState(false);
   const [expandedTraceEventId, setExpandedTraceEventId] = useState<string | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
+  const [shareLinkCopied, setShareLinkCopied] = useState(false);
+  const [wsConnected, setWsConnected] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   const activeChannel = useMemo(
     () => channels.find((channel) => channel.id === activeChannelId) ?? null,
     [activeChannelId, channels]
   );
+
+  useEffect(() => {
+    channelsRef.current = channels;
+  }, [channels]);
+
+  useEffect(() => {
+    usernameRef.current = username;
+  }, [username]);
+
+  useEffect(() => {
+    userIdRef.current = userId;
+  }, [userId]);
 
   const visibleTimelineEvents = useMemo(
     () => events.filter((event) => event.type === "message.created" || isTraceEvent(event)),
@@ -547,6 +650,7 @@ export default function App() {
     flushTraceBuffer();
     return items;
   }, [visibleTimelineEvents]);
+  const isConversationEmpty = !messagesLoading && timelineItems.length === 0;
 
   const agentIsThinking = useMemo(() => {
     let activeTurns = 0;
@@ -560,6 +664,9 @@ export default function App() {
   }, [events]);
 
   const viewerTeamIds = useMemo(() => new Set(teams.map((team) => team.id)), [teams]);
+  useEffect(() => {
+    viewerTeamIdsRef.current = viewerTeamIds;
+  }, [viewerTeamIds]);
   const visibleChannels = useMemo(
     () =>
       channels.filter((channel) =>
@@ -608,10 +715,18 @@ export default function App() {
       CHANNEL_GROUPS.map((group) => ({
         ...group,
         channels: filteredChannels.filter((channel) => {
-          if (channelGroupId(channel) !== group.id) return false;
-          if (group.id !== "direct") return true;
-          if (!username) return false;
-          return isHumanAgentDirectChannel(channel) && channelHasHumanParticipant(channel, username);
+          const shared = isSharedChannelForUser(channel, username);
+          if (group.id === "shared") return shared;
+          if (group.id === "direct") {
+            if (shared || !username) return false;
+            return (
+              channelGroupId(channel) === "direct" &&
+              isHumanAgentDirectChannel(channel) &&
+              channelHasHumanParticipant(channel, username)
+            );
+          }
+          if (shared) return false;
+          return channelGroupId(channel) === "channels";
         })
       })).filter((group) => group.channels.length > 0),
     [filteredChannels, username]
@@ -624,6 +739,7 @@ export default function App() {
     .map((item) => item.uploaded as UploadedAttachment);
   const hasAttachmentErrors = pendingAttachments.some((item) => item.status === "error");
   const activeChannelManageable = canManageUserChannel(activeChannel, userId);
+  const activeChannelCanPost = activeChannel ? activeChannel.canPost !== false : false;
   const canStartConversation =
     Boolean(conversationName.trim()) || selectedConversationAgents.length === 1;
   const selectedConversationAgentRecords = useMemo(
@@ -647,6 +763,7 @@ export default function App() {
 
   function selectChannel(channelId: string | null, options?: { replace?: boolean }) {
     setActiveChannelId(channelId);
+    setMobileSidebarOpen(false);
     updateChannelDeepLink(channelId, options?.replace);
   }
 
@@ -676,6 +793,28 @@ export default function App() {
     setError(null);
     setLoading(true);
     try {
+      const pendingShareToken = readPendingShareToken();
+      let claimedShareChannelId: string | null = null;
+      if (pendingShareToken) {
+        try {
+          const claimed = await apiJson<{ ok?: boolean; channelId: string }>(
+            `/api/channel-share-links/${encodeURIComponent(pendingShareToken)}/claim`,
+            {
+              method: "POST",
+              headers: getApiHeaders()
+            }
+          );
+          claimedShareChannelId = claimed.channelId;
+          consumeShareToken(claimed.channelId);
+        } catch (claimError) {
+          consumeShareToken(readLinkedChannelId());
+          setError(
+            claimError instanceof Error
+              ? claimError.message
+              : "Unable to claim shared channel link"
+          );
+        }
+      }
       const [nextChannels, nextAgents, nextHumans, nextTeams] = await Promise.all([
         apiJson<Channel[]>("/api/channels?includeArchived=1"),
         apiJson<Agent[]>("/api/agents"),
@@ -705,7 +844,8 @@ export default function App() {
         current.filter((agentName) => nextVisibleAgents.some((agent) => agent.name === agentName))
       );
       const linkedChannelId = readLinkedChannelId();
-      const linkedChannel = visibleChannels.find((channel) => channel.id === linkedChannelId);
+      const preferredLinkedId = claimedShareChannelId ?? linkedChannelId;
+      const linkedChannel = visibleChannels.find((channel) => channel.id === preferredLinkedId);
       const nextActiveChannelId =
         linkedChannel?.id ??
         (activeChannelId && visibleChannels.some((channel) => channel.id === activeChannelId && !channel.archivedAt)
@@ -765,6 +905,17 @@ export default function App() {
     });
   }
 
+  function rememberWsEvent(eventId: string) {
+    const seen = seenWsEventIdsRef.current;
+    if (seen.has(eventId)) return false;
+    seen.add(eventId);
+    if (seen.size > 3000) {
+      const first = seen.values().next();
+      if (!first.done) seen.delete(first.value);
+    }
+    return true;
+  }
+
   async function loadMessages(
     channelId: string,
     options?: { scrollToBottom?: boolean; showLoading?: boolean; scrollBehavior?: ScrollBehavior }
@@ -772,7 +923,10 @@ export default function App() {
     const fetchSeq = messageFetchSeqRef.current + 1;
     messageFetchSeqRef.current = fetchSeq;
     const limit = adaptiveMessageBatchSize();
-    if (options?.showLoading) setMessagesLoading(true);
+    if (options?.showLoading) {
+      loadingChannelIdRef.current = channelId;
+      setMessagesLoading(true);
+    }
     try {
       const [messageEvents, failureEvents, turnEvents, toolEvents, contextEvents, wrapperEvents, processEvents] =
         await Promise.all([
@@ -835,6 +989,7 @@ export default function App() {
         nextNewestTimelineAt
       );
       if (options?.scrollToBottom) {
+        forceScrollToBottomOnLoadRef.current = true;
         setHasNewMessagesBelow(false);
         scrollMessagesToBottom(options.scrollBehavior);
       }
@@ -851,7 +1006,11 @@ export default function App() {
         setError(loadError instanceof Error ? loadError.message : "Unable to load messages");
       }
     } finally {
-      if (options?.showLoading && fetchSeq === messageFetchSeqRef.current) {
+      if (
+        loadingChannelIdRef.current === channelId &&
+        fetchSeq === messageFetchSeqRef.current
+      ) {
+        loadingChannelIdRef.current = null;
         setMessagesLoading(false);
       }
     }
@@ -954,6 +1113,74 @@ export default function App() {
     }
   }
 
+  function handleIncomingRealtimeEvent(event: EventRow) {
+    if (!event.id || !rememberWsEvent(event.id)) return;
+    const eventChannelId = event.channelId;
+    if (!eventChannelId) return;
+
+    const currentActiveId = activeChannelIdRef.current;
+    if (eventChannelId === currentActiveId && (event.type === "message.created" || isTraceEvent(event))) {
+      const shouldAutoScroll = isMessagesPanelNearBottom();
+      setEvents((current) => mergeEventsChronologically(current, [event]));
+      if (event.type === "message.created" || event.type === "agent.turn.failed") {
+        const eventCreatedAt = event.createdAt ?? 0;
+        if (eventCreatedAt > 0) {
+          lastSeenByChannelRef.current[eventChannelId] = Math.max(
+            lastSeenByChannelRef.current[eventChannelId] ?? 0,
+            eventCreatedAt
+          );
+          lastLoadedMessageAtByChannelRef.current[eventChannelId] = Math.max(
+            lastLoadedMessageAtByChannelRef.current[eventChannelId] ?? 0,
+            eventCreatedAt
+          );
+        }
+      }
+      const timelineCreatedAt = event.createdAt ?? 0;
+      if (timelineCreatedAt > 0) {
+        lastLoadedTimelineAtByChannelRef.current[eventChannelId] = Math.max(
+          lastLoadedTimelineAtByChannelRef.current[eventChannelId] ?? 0,
+          timelineCreatedAt
+        );
+      }
+      setUnreadCounts((current) => {
+        if (!current[eventChannelId]) return current;
+        const next = { ...current };
+        delete next[eventChannelId];
+        return next;
+      });
+      if (shouldAutoScroll) {
+        setHasNewMessagesBelow(false);
+        scrollMessagesToBottom();
+      } else {
+        setHasNewMessagesBelow(true);
+      }
+      return;
+    }
+
+    if (event.type !== "message.created") return;
+    if (eventChannelId === currentActiveId) return;
+
+    const channel = channelsRef.current.find((candidate) => candidate.id === eventChannelId);
+    if (!channel || channel.archivedAt) return;
+    if (
+      !channelVisibleToUserUi(
+        channel,
+        userIdRef.current,
+        usernameRef.current,
+        viewerTeamIdsRef.current
+      )
+    ) {
+      return;
+    }
+    const eventCreatedAt = event.createdAt ?? 0;
+    if (eventCreatedAt <= (lastSeenByChannelRef.current[eventChannelId] ?? 0)) return;
+
+    setUnreadCounts((current) => ({
+      ...current,
+      [eventChannelId]: (current[eventChannelId] ?? 0) + 1
+    }));
+  }
+
   useEffect(() => {
     normalizeRetiredLibraryPath();
     document.title = "OrgOps User UI";
@@ -968,6 +1195,8 @@ export default function App() {
   useEffect(() => {
     messageFetchSeqRef.current += 1;
     activeChannelIdRef.current = activeChannelId;
+    loadingChannelIdRef.current = activeChannelId;
+    forceScrollToBottomOnLoadRef.current = Boolean(activeChannelId);
     setEvents([]);
     setMessagesLoading(Boolean(activeChannelId));
     setLoadingOlderMessages(false);
@@ -977,6 +1206,10 @@ export default function App() {
     setShowParticipantsDialog(false);
     setShowChannelManageDialog(false);
     setPendingAttachments([]);
+    setShareValue("");
+    setShareLinkCopied(false);
+    setShareRemovingKey(null);
+    setShareSubmitting(false);
   }, [activeChannelId]);
 
   useEffect(() => {
@@ -990,16 +1223,131 @@ export default function App() {
       scrollToBottom: true,
       showLoading: true
     });
-    const interval = window.setInterval(() => void loadMessages(activeChannelId), 5000);
-    return () => window.clearInterval(interval);
   }, [activeChannelId, authenticated, mustChangePassword]);
+
+  useEffect(() => {
+    if (!activeChannelId || messagesLoading) return;
+    if (!forceScrollToBottomOnLoadRef.current) return;
+    forceScrollToBottomOnLoadRef.current = false;
+    // Run after paint to handle initial DOM/layout settling on hard reload.
+    window.requestAnimationFrame(() => {
+      scrollMessagesToBottom("auto");
+      window.requestAnimationFrame(() => {
+        scrollMessagesToBottom("auto");
+      });
+    });
+  }, [activeChannelId, messagesLoading, timelineItems.length]);
 
   useEffect(() => {
     if (!authenticated || mustChangePassword) return;
     void loadMessageNotifications();
-    const interval = window.setInterval(() => void loadMessageNotifications(), 5000);
-    return () => window.clearInterval(interval);
   }, [authenticated, mustChangePassword, channels]);
+
+  useEffect(() => {
+    if (!authenticated || mustChangePassword) return;
+    wsShouldReconnectRef.current = true;
+    const url = wsUrl();
+
+    const clearReconnectTimer = () => {
+      if (wsReconnectTimerRef.current !== null) {
+        window.clearTimeout(wsReconnectTimerRef.current);
+        wsReconnectTimerRef.current = null;
+      }
+    };
+
+    const subscribeTopic = (topic: string) => {
+      if (!wsSubscribedTopicsRef.current.has(topic)) {
+        wsSubscribedTopicsRef.current.add(topic);
+      }
+      const ws = wsRef.current;
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "subscribe", topic }));
+      }
+    };
+
+    const connect = () => {
+      const ws = new WebSocket(url);
+      wsRef.current = ws;
+      ws.onopen = () => {
+        setWsConnected(true);
+        wsReconnectAttemptRef.current = 0;
+        for (const topic of wsSubscribedTopicsRef.current) {
+          ws.send(JSON.stringify({ type: "subscribe", topic }));
+        }
+        const liveChannelId = activeChannelIdRef.current;
+        if (liveChannelId) {
+          void loadMessages(liveChannelId);
+        }
+        void loadMessageNotifications();
+      };
+      ws.onmessage = (raw) => {
+        try {
+          const parsed = JSON.parse(String(raw.data)) as WsServerEventMessage;
+          if (parsed.type === "event" && parsed.data) {
+            handleIncomingRealtimeEvent(parsed.data);
+          }
+        } catch {
+          // Ignore malformed payloads from background topics.
+        }
+      };
+      ws.onerror = () => ws.close();
+      ws.onclose = () => {
+        setWsConnected(false);
+        if (!wsShouldReconnectRef.current) return;
+        const delay = Math.min(5000, 400 * 2 ** wsReconnectAttemptRef.current);
+        wsReconnectAttemptRef.current += 1;
+        clearReconnectTimer();
+        wsReconnectTimerRef.current = window.setTimeout(connect, delay);
+      };
+    };
+
+    connect();
+
+    return () => {
+      wsShouldReconnectRef.current = false;
+      clearReconnectTimer();
+      wsRef.current?.close();
+      wsRef.current = null;
+      wsReconnectAttemptRef.current = 0;
+      wsSubscribedTopicsRef.current.clear();
+      setWsConnected(false);
+    };
+  }, [authenticated, mustChangePassword]);
+
+  useEffect(() => {
+    if (!authenticated || mustChangePassword) return;
+    const desiredTopics = new Set<string>();
+    for (const channel of visibleChannels) {
+      desiredTopics.add(`channel:${channel.id}`);
+    }
+    const ws = wsRef.current;
+    for (const topic of [...wsSubscribedTopicsRef.current]) {
+      if (!desiredTopics.has(topic)) {
+        wsSubscribedTopicsRef.current.delete(topic);
+        if (ws?.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "unsubscribe", topic }));
+        }
+      }
+    }
+    for (const topic of desiredTopics) {
+      if (!wsSubscribedTopicsRef.current.has(topic)) {
+        wsSubscribedTopicsRef.current.add(topic);
+        if (ws?.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "subscribe", topic }));
+        }
+      }
+    }
+  }, [authenticated, mustChangePassword, visibleChannels]);
+
+  useEffect(() => {
+    if (!authenticated || mustChangePassword || wsConnected) return;
+    const interval = window.setInterval(() => {
+      const liveChannelId = activeChannelIdRef.current;
+      if (liveChannelId) void loadMessages(liveChannelId);
+      void loadMessageNotifications();
+    }, 10000);
+    return () => window.clearInterval(interval);
+  }, [authenticated, mustChangePassword, wsConnected]);
 
   useEffect(() => {
     if (!authenticated || mustChangePassword) return;
@@ -1120,7 +1468,7 @@ export default function App() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!activeChannelId || activeChannel?.archivedAt) return;
+    if (!activeChannelId || activeChannel?.archivedAt || !activeChannelCanPost) return;
     if (uploadingAttachmentCount > 0) return;
     const trimmedText = draft.trim();
     if (!trimmedText && readyAttachments.length === 0) return;
@@ -1146,7 +1494,16 @@ export default function App() {
       });
       setDraft("");
       setPendingAttachments([]);
-      await loadMessages(activeChannelId, { scrollToBottom: true });
+      setHasNewMessagesBelow(false);
+      if (wsConnected) {
+        scrollMessagesToBottom();
+      } else {
+        await loadMessages(activeChannelId, { scrollToBottom: true });
+      }
+      window.requestAnimationFrame(() => {
+        scrollMessagesToBottom("auto");
+        composerTextareaRef.current?.scrollIntoView({ block: "nearest" });
+      });
     } catch (sendError) {
       setError(sendError instanceof Error ? sendError.message : "Unable to send message");
     } finally {
@@ -1340,9 +1697,76 @@ export default function App() {
     }
   }
 
+  async function handleAddShare(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!activeChannelId || !shareValue.trim()) return;
+    setShareSubmitting(true);
+    setError(null);
+    try {
+      await apiFetch(`/api/channels/${encodeURIComponent(activeChannelId)}/share`, {
+        method: "POST",
+        headers: getApiHeaders(),
+        body: JSON.stringify({
+          viewerType: shareKind,
+          viewerId: shareValue.trim()
+        })
+      });
+      await refreshChannels(activeChannelId);
+      setShareValue("");
+    } catch (shareError) {
+      setError(shareError instanceof Error ? shareError.message : "Unable to share channel");
+    } finally {
+      setShareSubmitting(false);
+    }
+  }
+
+  async function handleRemoveShare(share: ChannelShare) {
+    if (!activeChannelId) return;
+    const shareKey = `${share.viewerType}:${share.viewerId}`;
+    setShareRemovingKey(shareKey);
+    setError(null);
+    try {
+      await apiFetch(`/api/channels/${encodeURIComponent(activeChannelId)}/unshare`, {
+        method: "POST",
+        headers: getApiHeaders(),
+        body: JSON.stringify({
+          viewerType: share.viewerType,
+          viewerId: share.viewerId
+        })
+      });
+      await refreshChannels(activeChannelId);
+    } catch (removeError) {
+      setError(removeError instanceof Error ? removeError.message : "Unable to remove shared viewer");
+    } finally {
+      setShareRemovingKey(null);
+    }
+  }
+
   function handleMessagesScroll() {
     if (hasNewMessagesBelow && isMessagesPanelNearBottom()) {
       setHasNewMessagesBelow(false);
+    }
+  }
+
+  async function handleCopyShareLink() {
+    if (!activeChannelId) return;
+    try {
+      const created = await apiJson<{ token: string; channelId: string }>(
+        `/api/channels/${encodeURIComponent(activeChannelId)}/share-link`,
+        {
+          method: "POST",
+          headers: getApiHeaders()
+        }
+      );
+      const url = new URL(window.location.href);
+      url.searchParams.set("share", created.token);
+      url.searchParams.set("channel", created.channelId);
+      const shareLink = url.toString();
+      await navigator.clipboard.writeText(shareLink);
+      setShareLinkCopied(true);
+      window.setTimeout(() => setShareLinkCopied(false), 2000);
+    } catch {
+      setError("Unable to copy link. Please copy it from the address bar.");
     }
   }
 
@@ -1420,11 +1844,14 @@ export default function App() {
   function resizeComposerTextarea(textarea?: HTMLTextAreaElement | null) {
     const target = textarea ?? composerTextareaRef.current;
     if (!target) return;
-    const viewportMax = Math.max(120, Math.floor(window.innerHeight / 3));
+    const viewportMax = isConversationEmpty
+      ? Math.max(56, Math.floor(window.innerHeight / 8))
+      : Math.max(120, Math.floor(window.innerHeight / 3));
+    const minHeight = isConversationEmpty ? 34 : 56;
     target.style.maxHeight = `${viewportMax}px`;
     target.style.height = "auto";
     const nextHeight = Math.min(target.scrollHeight, viewportMax);
-    target.style.height = `${Math.max(56, nextHeight)}px`;
+    target.style.height = `${Math.max(minHeight, nextHeight)}px`;
     target.style.overflowY = target.scrollHeight > viewportMax ? "auto" : "hidden";
   }
 
@@ -1449,7 +1876,7 @@ export default function App() {
 
   useEffect(() => {
     resizeComposerTextarea();
-  }, [draft]);
+  }, [draft, isConversationEmpty, activeChannelId]);
 
   useEffect(() => {
     function handleWindowResize() {
@@ -1560,7 +1987,14 @@ export default function App() {
 
   return (
     <main className="app-shell">
-      <aside className="sidebar">
+      <aside className={`sidebar ${mobileSidebarOpen ? "sidebar-mobile-open" : ""}`}>
+        <button
+          type="button"
+          className="sidebar-mobile-close"
+          onClick={() => setMobileSidebarOpen(false)}
+        >
+          Close
+        </button>
         <div className="brand">
           <div className="brand-mark">OO</div>
           <div>
@@ -1668,9 +2102,24 @@ export default function App() {
           </button>
         </section>
       </aside>
+      {mobileSidebarOpen ? (
+        <button
+          type="button"
+          aria-label="Close navigation"
+          className="sidebar-mobile-backdrop"
+          onClick={() => setMobileSidebarOpen(false)}
+        />
+      ) : null}
 
       <section className="workspace">
         <header className="workspace-header">
+          <button
+            type="button"
+            className="sidebar-mobile-toggle"
+            onClick={() => setMobileSidebarOpen(true)}
+          >
+            Menu
+          </button>
           <div>
             <span>Workspace</span>
             <div className="workspace-title-row">
@@ -1679,12 +2128,16 @@ export default function App() {
             <p>
               {activeChannel?.archivedAt
                 ? "Archived channel"
+                : activeChannel && !activeChannelCanPost
+                  ? "Read-only shared channel"
                 : activeChannel?.description || "Talk to the team and agents in plain language."}
             </p>
           </div>
           {activeChannel && activeChannelManageable ? (
             <div className="channel-actions">
-              <button onClick={() => setShowChannelManageDialog(true)}>Manage channel</button>
+              <button type="button" onClick={() => setShowChannelManageDialog(true)}>
+                Manage channel
+              </button>
             </div>
           ) : null}
         </header>
@@ -1692,124 +2145,146 @@ export default function App() {
         {error ? <div className="notice error">{error}</div> : null}
         {loading ? <div className="notice">Loading OrgOps...</div> : null}
 
-        <section className="messages-panel" ref={messagesPanelRef} onScroll={handleMessagesScroll}>
-          {!messagesLoading && hasOlderMessages ? (
-            <button
-              className="load-older-button"
-              disabled={loadingOlderMessages}
-              onClick={() => void handleLoadOlderMessages()}
-            >
-              {loadingOlderMessages ? "Loading previous messages..." : "Load previous messages"}
-            </button>
-          ) : null}
-          {messagesLoading ? (
-            <div className="empty-state">
-              <strong>Loading messages...</strong>
-              <p>Fetching the latest channel activity.</p>
-            </div>
-          ) : timelineItems.length === 0 ? (
-            <div className="empty-state">
-              <strong>No messages yet</strong>
-              <p>Send a short update or request to start the conversation.</p>
-            </div>
-          ) : (
-            timelineItems.map((item) => {
-              if (item.kind === "message") {
-                const event = item.event;
-                const role = messageRole(event.source);
-                const attachments = parseMessageAttachments(event.payload);
+        <section className="chat-stack">
+          <section
+            className={`messages-panel${isConversationEmpty ? " messages-panel-empty" : ""}`}
+            ref={messagesPanelRef}
+            onScroll={handleMessagesScroll}
+          >
+            {!messagesLoading && hasOlderMessages ? (
+              <button
+                className="load-older-button"
+                disabled={loadingOlderMessages}
+                onClick={() => void handleLoadOlderMessages()}
+              >
+                {loadingOlderMessages ? "Loading previous messages..." : "Load previous messages"}
+              </button>
+            ) : null}
+            {messagesLoading ? (
+              <div className="empty-state">
+                <strong>Loading messages...</strong>
+                <p>Fetching the latest channel activity.</p>
+              </div>
+            ) : timelineItems.length === 0 ? (
+              <div className="empty-state">
+                <strong>No messages yet</strong>
+                <p>Send a short update or request to start the conversation.</p>
+              </div>
+            ) : (
+              timelineItems.map((item) => {
+                if (item.kind === "message") {
+                  const event = item.event;
+                  const role = messageRole(event.source);
+                  const attachments = parseMessageAttachments(event.payload);
+                  const text = messageText(event);
+                  const markdown = shouldRenderMarkdown(text);
+                  return (
+                    <article className={`message message-${role}`} key={item.id}>
+                      <div className="message-meta">
+                        <strong>{sourceLabel(event.source)}</strong>
+                        <span>{formatTime(messageDisplayTime(event))}</span>
+                      </div>
+                      {markdown ? (
+                        <div className="message-markdown">
+                          <ReactMarkdown
+                            remarkPlugins={[remarkGfm]}
+                            components={{
+                              a: ({ node: _node, ...props }) => (
+                                <a {...props} target="_blank" rel="noreferrer" />
+                              )
+                            }}
+                          >
+                            {text}
+                          </ReactMarkdown>
+                        </div>
+                      ) : (
+                        <p>{text}</p>
+                      )}
+                      {attachments.length > 0 ? (
+                        <div className="message-attachments">
+                          <strong>Attachments</strong>
+                          <ul>
+                            {attachments.map((attachment, index) => {
+                              const sizeLabel = formatAttachmentSize(attachment.size);
+                              const mimeLabel = attachment.mime ? attachment.mime : "";
+                              return (
+                                <li key={`${event.id}-attachment-${index}`}>
+                                  <a href={`/api/files/${encodeURIComponent(attachment.fileId)}`} target="_blank" rel="noreferrer">
+                                    {attachment.name}
+                                  </a>
+                                  {mimeLabel || sizeLabel ? (
+                                    <span>
+                                      {mimeLabel}
+                                      {mimeLabel && sizeLabel ? " • " : ""}
+                                      {sizeLabel || ""}
+                                    </span>
+                                  ) : null}
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        </div>
+                      ) : null}
+                    </article>
+                  );
+                }
+                const selectedEvent = item.traceEvents.find((event) => event.id === expandedTraceEventId) ?? null;
                 return (
-                  <article className={`message message-${role}`} key={item.id}>
-                    <div className="message-meta">
-                      <strong>{sourceLabel(event.source)}</strong>
-                      <span>{formatTime(event.createdAt)}</span>
+                  <article className={`trace-group trace-group-${item.tone}`} key={item.id}>
+                    <div className="trace-chips" role="list" aria-label="Agent activity trace">
+                      {item.traceEvents.map((event) => {
+                        const selected = event.id === expandedTraceEventId;
+                        const summary = traceTitle(event);
+                        return (
+                          <button
+                            key={event.id}
+                            className={`trace-chip trace-chip-${traceChipTone(event)} ${
+                              selected ? "trace-chip-active" : ""
+                            }`}
+                            title={`${summary}${event.createdAt ? ` • ${formatTime(event.createdAt)}` : ""}`}
+                            type="button"
+                            onClick={() =>
+                              setExpandedTraceEventId((current) => (current === event.id ? null : event.id))
+                            }
+                            aria-label={summary}
+                          >
+                            <span>{traceChipCode(event)}</span>
+                          </button>
+                        );
+                      })}
                     </div>
-                    <p>{messageText(event)}</p>
-                    {attachments.length > 0 ? (
-                      <div className="message-attachments">
-                        <strong>Attachments</strong>
-                        <ul>
-                          {attachments.map((attachment, index) => {
-                            const sizeLabel = formatAttachmentSize(attachment.size);
-                            const mimeLabel = attachment.mime ? attachment.mime : "";
-                            return (
-                              <li key={`${event.id}-attachment-${index}`}>
-                                <a href={`/api/files/${encodeURIComponent(attachment.fileId)}`} target="_blank" rel="noreferrer">
-                                  {attachment.name}
-                                </a>
-                                {mimeLabel || sizeLabel ? (
-                                  <span>
-                                    {mimeLabel}
-                                    {mimeLabel && sizeLabel ? " • " : ""}
-                                    {sizeLabel || ""}
-                                  </span>
-                                ) : null}
-                              </li>
-                            );
-                          })}
-                        </ul>
+                    {selectedEvent ? (
+                      <div className="trace-detail-card">
+                        <div className="trace-detail-meta">
+                          <strong>{traceTitle(selectedEvent)}</strong>
+                          <span>{formatTime(selectedEvent.createdAt)}</span>
+                        </div>
+                        {traceDetail(selectedEvent) ? (
+                          <pre>{traceDetail(selectedEvent)}</pre>
+                        ) : (
+                          <p>No additional details.</p>
+                        )}
                       </div>
                     ) : null}
                   </article>
                 );
-              }
-              const selectedEvent = item.traceEvents.find((event) => event.id === expandedTraceEventId) ?? null;
-              return (
-                <article className={`trace-group trace-group-${item.tone}`} key={item.id}>
-                  <div className="trace-chips" role="list" aria-label="Agent activity trace">
-                    {item.traceEvents.map((event) => {
-                      const selected = event.id === expandedTraceEventId;
-                      const summary = traceTitle(event);
-                      return (
-                        <button
-                          key={event.id}
-                          className={`trace-chip trace-chip-${traceChipTone(event)} ${
-                            selected ? "trace-chip-active" : ""
-                          }`}
-                          title={`${summary}${event.createdAt ? ` • ${formatTime(event.createdAt)}` : ""}`}
-                          type="button"
-                          onClick={() =>
-                            setExpandedTraceEventId((current) => (current === event.id ? null : event.id))
-                          }
-                          aria-label={summary}
-                        >
-                          <span>{traceChipCode(event)}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {selectedEvent ? (
-                    <div className="trace-detail-card">
-                      <div className="trace-detail-meta">
-                        <strong>{traceTitle(selectedEvent)}</strong>
-                        <span>{formatTime(selectedEvent.createdAt)}</span>
-                      </div>
-                      {traceDetail(selectedEvent) ? (
-                        <pre>{traceDetail(selectedEvent)}</pre>
-                      ) : (
-                        <p>No additional details.</p>
-                      )}
-                    </div>
-                  ) : null}
-                </article>
-              );
-            })
-          )}
-        </section>
+              })
+            )}
+          </section>
 
-        {hasNewMessagesBelow ? (
-          <button
-            className="new-messages-button"
-            onClick={() => {
-              setHasNewMessagesBelow(false);
-              scrollMessagesToBottom();
-            }}
-          >
-            New messages below
-          </button>
-        ) : null}
+          {hasNewMessagesBelow ? (
+            <button
+              className="new-messages-button"
+              onClick={() => {
+                setHasNewMessagesBelow(false);
+                scrollMessagesToBottom();
+              }}
+            >
+              New messages below
+            </button>
+          ) : null}
 
-        <form className="composer" onSubmit={handleSubmit}>
+          <form className={`composer${isConversationEmpty ? " composer-compact" : ""}`} onSubmit={handleSubmit}>
           <input
             ref={fileInputRef}
             type="file"
@@ -1863,18 +2338,22 @@ export default function App() {
             placeholder={
               activeChannel?.archivedAt
                 ? "Restore this channel to send messages"
+                : activeChannel && !activeChannelCanPost
+                  ? "This channel is shared with you as read-only"
                 : activeChannel
-                  ? `Message ${channelLabel(activeChannel, username)} (Enter to send, Shift+Enter for newline)`
+                  ? isConversationEmpty
+                    ? `Message ${channelLabel(activeChannel, username)}`
+                    : `Message ${channelLabel(activeChannel, username)} (Enter to send, Shift+Enter for newline)`
                   : "Select a channel first"
             }
-            disabled={!activeChannel || Boolean(activeChannel.archivedAt) || sending}
-            rows={3}
+            disabled={!activeChannel || Boolean(activeChannel.archivedAt) || !activeChannelCanPost || sending}
+            rows={isConversationEmpty ? 1 : 3}
           />
           <div className="composer-actions">
             <button
               type="button"
               className="composer-secondary"
-              disabled={!activeChannel || Boolean(activeChannel.archivedAt) || sending}
+              disabled={!activeChannel || Boolean(activeChannel.archivedAt) || !activeChannelCanPost || sending}
               onClick={() => fileInputRef.current?.click()}
             >
               Attach files
@@ -1883,6 +2362,7 @@ export default function App() {
               disabled={
                 !activeChannel ||
                 Boolean(activeChannel.archivedAt) ||
+                !activeChannelCanPost ||
                 sending ||
                 uploadingAttachmentCount > 0 ||
                 (!draft.trim() && readyAttachments.length === 0)
@@ -1900,22 +2380,14 @@ export default function App() {
               One or more attachments failed to upload. Remove them or retry.
             </p>
           ) : null}
-        </form>
+          </form>
+        </section>
       </section>
 
       <aside className="activity-panel">
         <section className="participants-card">
           <div className="participants-header-row">
             <h2>Participants</h2>
-            {activeChannel && activeChannelManageable ? (
-              <button
-                className="manage-participants-button"
-                onClick={() => setShowParticipantsDialog(true)}
-                type="button"
-              >
-                Manage
-              </button>
-            ) : null}
           </div>
           <div className="participant-list">
             {activeChannel?.participants?.map((participant, index) => {
@@ -1941,6 +2413,19 @@ export default function App() {
             {!activeChannel?.participants?.length ? (
               <p>No participants listed for this channel.</p>
             ) : null}
+          </div>
+          <div className="shared-viewer-list">
+            <h3>Shared viewers</h3>
+            {activeChannel?.shares?.map((share, index) => (
+              <article key={`${share.viewerType}:${share.viewerId}:${index}`}>
+                <div className="participant-avatar">{share.viewerId.slice(0, 2) || "SV"}</div>
+                <div>
+                  <strong>{share.viewerId}</strong>
+                  <span>{shareTypeLabel(share)}</span>
+                </div>
+              </article>
+            ))}
+            {!activeChannel?.shares?.length ? <p>No shared viewers.</p> : null}
           </div>
         </section>
 
@@ -2144,13 +2629,77 @@ export default function App() {
                 <p>No participants yet.</p>
               ) : null}
             </div>
+
+            <header>
+              <div>
+                <span>Read-only sharing</span>
+                <h2>Shared viewers</h2>
+              </div>
+            </header>
+
+            <form className="participant-form" onSubmit={handleAddShare}>
+              <select
+                value={shareKind}
+                onChange={(event) => setShareKind(event.target.value === "AGENT" ? "AGENT" : "HUMAN")}
+                disabled={shareSubmitting}
+              >
+                <option value="HUMAN">Human viewer</option>
+                <option value="AGENT">Agent viewer</option>
+              </select>
+              <input
+                list={shareKind === "AGENT" ? "agent-share-options" : "human-share-options"}
+                placeholder={shareKind === "AGENT" ? "agent name" : "username"}
+                value={shareValue}
+                onChange={(event) => setShareValue(event.target.value)}
+                disabled={shareSubmitting}
+              />
+              <button type="submit" disabled={shareSubmitting || !shareValue.trim()}>
+                {shareSubmitting ? "Sharing..." : "Share"}
+              </button>
+              <datalist id="agent-share-options">
+                {visibleAgents.map((agent) => (
+                  <option key={agent.name} value={agent.name} />
+                ))}
+              </datalist>
+              <datalist id="human-share-options">
+                {humans.map((human) => (
+                  <option key={human.username} value={human.username} />
+                ))}
+              </datalist>
+            </form>
+
+            <div className="participants-dialog-list">
+              {(activeChannel.shares ?? []).map((share, index) => {
+                const shareKey = `${share.viewerType}:${share.viewerId}`;
+                return (
+                  <article key={`${share.viewerType}:${share.viewerId}:${index}`}>
+                    <div>
+                      <strong>{share.viewerId}</strong>
+                      <span>{shareTypeLabel(share)}</span>
+                    </div>
+                    <button
+                      className="participant-remove-button"
+                      onClick={() => void handleRemoveShare(share)}
+                      disabled={shareRemovingKey === shareKey}
+                      title={`Remove shared viewer ${share.viewerId}`}
+                      type="button"
+                    >
+                      {shareRemovingKey === shareKey ? "Removing..." : "Remove"}
+                    </button>
+                  </article>
+                );
+              })}
+              {(activeChannel.shares ?? []).length === 0 ? (
+                <p>No shared viewers yet.</p>
+              ) : null}
+            </div>
           </section>
         </div>
       ) : null}
 
       {showChannelManageDialog && activeChannel && activeChannelManageable ? (
         <div
-          className="dialog-backdrop"
+          className={`dialog-backdrop${showParticipantsDialog ? " dialog-backdrop-underlay" : ""}`}
           role="presentation"
           onMouseDown={() => setShowChannelManageDialog(false)}
         >
@@ -2199,6 +2748,27 @@ export default function App() {
                 />
                 <span>Archived</span>
               </label>
+            </div>
+
+            <div className="channel-manage-quick-actions">
+              <button
+                type="button"
+                className="channel-manage-secondary-button"
+                onClick={() => {
+                  setShowParticipantsDialog(true);
+                }}
+                disabled={updatingChannelVisibility}
+              >
+                Manage participants
+              </button>
+              <button
+                type="button"
+                className="channel-manage-secondary-button"
+                onClick={() => void handleCopyShareLink()}
+                disabled={updatingChannelVisibility}
+              >
+                {shareLinkCopied ? "Link copied" : "Copy share link"}
+              </button>
             </div>
 
             <button

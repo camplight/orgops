@@ -42,6 +42,10 @@ const scheduledListSchema = z.object({
   channelId: z.string().min(1).optional(),
   type: z.string().min(1).optional(),
   source: z.string().min(1).optional(),
+  status: z.string().min(1).optional(),
+  includeConsumed: z.boolean().optional(),
+  after: z.number().int().min(0).optional(),
+  before: z.number().int().min(0).optional(),
   limit: z.number().int().min(1).max(500).optional(),
   order: z.enum(["asc", "desc"]).optional(),
 });
@@ -207,7 +211,7 @@ export const eventsToolDefs: ToolDef[] = [
   ],
   [
     "events_scheduled_list",
-    "List future scheduled events that are still pending, with optional filters.",
+    "List scheduled events. By default returns future pending items; set includeConsumed=true to include already-consumed history. Supports filters and pagination via status/after/before/order/limit.",
     scheduledListSchema,
   ],
   [
@@ -272,7 +276,7 @@ export const eventsToolDefs: ToolDef[] = [
   ],
   [
     "events_scheduled_create",
-    "Schedule an agent trigger event using exactly one of deliverAt, deliverAtIso, delayMs, or delaySeconds. targetAgentName must already be an AGENT participant in the destination channel.",
+    "Schedule an agent trigger event for a target agent using exactly one of deliverAt, deliverAtIso, delayMs, or delaySeconds. targetAgentName must be an AGENT participant in the destination channel.",
     scheduledCreateSchema,
   ],
   [
@@ -340,6 +344,34 @@ function resolveDeliverAt(input: {
   if (input.delayMs !== undefined) return Date.now() + input.delayMs;
   if (input.delaySeconds !== undefined) return Date.now() + input.delaySeconds * 1000;
   return undefined;
+}
+
+function hasAbsoluteScheduleInput(input: {
+  deliverAt?: number;
+  deliverAtIso?: string;
+  delayMs?: number;
+  delaySeconds?: number;
+}): boolean {
+  return input.deliverAt !== undefined || input.deliverAtIso !== undefined;
+}
+
+function validateDeliverAtNotStale(input: {
+  deliverAt?: number;
+  deliverAtIso?: string;
+  delayMs?: number;
+  delaySeconds?: number;
+}, deliverAt?: number): { ok: true } | { ok: false; error: string } {
+  if (deliverAt === undefined) return { ok: true };
+  // Allow a small clock-skew/granularity window for "now-ish" schedules.
+  const MAX_STALE_MS = 1000;
+  if (hasAbsoluteScheduleInput(input) && deliverAt < Date.now() - MAX_STALE_MS) {
+    return {
+      ok: false,
+      error:
+        "deliverAt must be in the future (or very near now). Use a future timestamp or delayMs/delaySeconds.",
+    };
+  }
+  return { ok: true };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -567,6 +599,12 @@ export async function execute(
     if (parsed.channelId) query.set("channelId", parsed.channelId);
     if (parsed.type) query.set("type", parsed.type);
     if (parsed.source) query.set("source", parsed.source);
+    if (parsed.status) query.set("status", parsed.status);
+    if (parsed.after !== undefined) query.set("after", String(parsed.after));
+    if (parsed.before !== undefined) query.set("before", String(parsed.before));
+    if (parsed.includeConsumed !== undefined) {
+      query.set("includeConsumed", parsed.includeConsumed ? "1" : "0");
+    }
     if (parsed.limit !== undefined) query.set("limit", String(parsed.limit));
     if (parsed.order) query.set("order", parsed.order);
     const response = await ctx.apiFetch(`/api/events?${query.toString()}`);
@@ -584,6 +622,8 @@ export async function execute(
     } catch (error) {
       return { error: String(error) };
     }
+    const staleCheck = validateDeliverAtNotStale(parsed, deliverAt);
+    if (!staleCheck.ok) return { error: staleCheck.error };
     let payload: unknown = parsed.payload;
     let existingEventForValidation: Record<string, unknown> | null = null;
     if (parsed.text !== undefined) {
@@ -909,6 +949,8 @@ export async function execute(
     } catch (error) {
       return { error: String(error) };
     }
+    const staleCheck = validateDeliverAtNotStale(parsed, deliverAt);
+    if (!staleCheck.ok) return { error: staleCheck.error };
     const defaultChannelId = ctx.channelId;
     const targetChannelId = parsed.channelId?.trim() || defaultChannelId;
     if (!targetChannelId) {
@@ -987,14 +1029,17 @@ export async function execute(
     } catch (error) {
       return { error: String(error) };
     }
+    const staleCheck = validateDeliverAtNotStale(parsed, deliverAt);
+    if (!staleCheck.ok) return { error: staleCheck.error };
     const channelId = parsed.channelId ?? ctx.channelId;
     if (!channelId) {
       return { error: "No current channelId. Provide channelId explicitly." };
     }
+    const targetAgentName = parsed.targetAgentName.trim();
     const targetMembership = await ensureAgentParticipantInChannel(
       ctx,
       channelId,
-      parsed.targetAgentName,
+      targetAgentName,
     );
     if (!targetMembership.ok) {
       return { error: targetMembership.error };
@@ -1005,7 +1050,7 @@ export async function execute(
       channelId,
       payload: {
         text: parsed.text,
-        targetAgentName: parsed.targetAgentName,
+        targetAgentName,
       },
       ...(deliverAt !== undefined ? { deliverAt } : {}),
     };
@@ -1033,6 +1078,8 @@ export async function execute(
     } catch (error) {
       return { error: String(error) };
     }
+    const staleCheck = validateDeliverAtNotStale(parsed, deliverAt);
+    if (!staleCheck.ok) return { error: staleCheck.error };
     const channelId = parsed.channelId ?? ctx.channelId;
     if (!channelId) {
       return { error: "No current channelId. Provide channelId explicitly." };

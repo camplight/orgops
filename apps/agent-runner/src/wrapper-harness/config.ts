@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import type { Agent, Event } from "../types";
-import type { NormalizedWrappedConfig, WrapperSessionScope, WrapperSidecarConfig } from "./types";
+import type {
+  NormalizedWrappedConfig,
+  WrapperSecretsConfig,
+  WrapperSessionScope,
+  WrapperSidecarConfig,
+} from "./types";
 
 export function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -26,6 +31,14 @@ export function readStringEnv(value: unknown): Record<string, string> {
   return out;
 }
 
+function readStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const values = value
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter(Boolean);
+  return values.length > 0 ? values : undefined;
+}
+
 function normalizeSessionScope(value: unknown): WrapperSessionScope {
   return readString(value) === "per-agent" ? "per-agent" : "per-channel";
 }
@@ -36,6 +49,7 @@ export function normalizeWrappedConfig(agent: Agent): NormalizedWrappedConfig {
   const source = asRecord(raw.source);
   const setup = asRecord(raw.setup);
   const session = asRecord(raw.session);
+  const secrets = asRecord(raw.secrets) as WrapperSecretsConfig;
   const sidecars = Array.isArray(raw.sidecars)
     ? raw.sidecars
         .map((sidecar) => asRecord(sidecar) as WrapperSidecarConfig)
@@ -48,6 +62,14 @@ export function normalizeWrappedConfig(agent: Agent): NormalizedWrappedConfig {
     setup: Object.keys(setup).length > 0 ? setup : undefined,
     runtime: Object.keys(runtime).length > 0 ? runtime : undefined,
     sidecars,
+    secrets:
+      Object.keys(secrets).length > 0
+        ? {
+            ...secrets,
+            allowedKeys: readStringArray(secrets.allowedKeys),
+            deniedKeys: readStringArray(secrets.deniedKeys),
+          }
+        : undefined,
     sessionScope: normalizeSessionScope(session.scope),
     raw,
   };

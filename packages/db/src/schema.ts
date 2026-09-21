@@ -120,12 +120,21 @@ export const agentInvites = sqliteTable(
     id: text("id").primaryKey(),
     name: text("name").notNull(),
     agent_name: text("agent_name").notNull(),
+    agent_visibility: text("agent_visibility")
+      .notNull()
+      .default(AGENT_VISIBILITY.PUBLIC),
     token_hash: text("token_hash").notNull().unique(),
     token_prefix: text("token_prefix").notNull(),
     channel_ids_json: text("channel_ids_json").notNull().default("[]"),
+    allow_channel_expansion: integer("allow_channel_expansion")
+      .notNull()
+      .default(0),
+    runner_scope_mode: text("runner_scope_mode").notNull().default("SCOPED"),
     wrapped_config_json: text("wrapped_config_json").notNull().default("{}"),
     max_uses: integer("max_uses").notNull().default(1),
     use_count: integer("use_count").notNull().default(0),
+    created_by_type: text("created_by_type").notNull().default("HUMAN"),
+    created_by_id: text("created_by_id"),
     created_by_human_id: text("created_by_human_id"),
     created_at: integer("created_at").notNull(),
     expires_at: integer("expires_at"),
@@ -154,6 +163,10 @@ export const runnerTokens = sqliteTable(
     allowed_channel_ids_json: text("allowed_channel_ids_json")
       .notNull()
       .default("[]"),
+    allow_channel_expansion: integer("allow_channel_expansion")
+      .notNull()
+      .default(0),
+    runner_scope_mode: text("runner_scope_mode").notNull().default("SCOPED"),
     invite_id: text("invite_id"),
     created_by_human_id: text("created_by_human_id"),
     created_at: integer("created_at").notNull(),
@@ -225,6 +238,48 @@ export const channelSubscriptions = sqliteTable(
       columns: [table.channel_id, table.subscriber_type, table.subscriber_id]
     })
   })
+);
+
+export const channelViewers = sqliteTable(
+  "channel_viewers",
+  {
+    channel_id: text("channel_id").notNull(),
+    viewer_type: text("viewer_type").notNull(),
+    viewer_id: text("viewer_id").notNull(),
+    created_at: integer("created_at").notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      columns: [table.channel_id, table.viewer_type, table.viewer_id],
+    }),
+    idxChannelViewersChannel: index("idx_channel_viewers_channel").on(
+      table.channel_id,
+      table.viewer_type,
+    ),
+    idxChannelViewersViewer: index("idx_channel_viewers_viewer").on(
+      table.viewer_type,
+      table.viewer_id,
+    ),
+  }),
+);
+
+export const channelShareLinks = sqliteTable(
+  "channel_share_links",
+  {
+    id: text("id").primaryKey(),
+    token: text("token").notNull().unique(),
+    channel_id: text("channel_id").notNull(),
+    created_by_human_id: text("created_by_human_id"),
+    created_at: integer("created_at").notNull(),
+    expires_at: integer("expires_at"),
+    revoked_at: integer("revoked_at"),
+  },
+  (table) => ({
+    idxChannelShareLinksChannel: index("idx_channel_share_links_channel").on(
+      table.channel_id,
+      table.created_at,
+    ),
+  }),
 );
 
 export const conversations = sqliteTable("conversations", {
@@ -956,6 +1011,8 @@ export const schema = {
   teamMemberships,
   channels,
   channelSubscriptions,
+  channelViewers,
+  channelShareLinks,
   conversations,
   threads,
   events,

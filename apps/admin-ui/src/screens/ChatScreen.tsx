@@ -47,6 +47,10 @@ type ChatScreenProps = {
 
 const CHAT_WINDOW_SIZE = 250;
 
+function eventOrderTimestamp(event: EventRow) {
+  return event.deliverAt ?? event.createdAt ?? 0;
+}
+
 const MARKDOWN_COMPONENTS = {
   p: ({ children }: { children?: ReactNode }) => (
     <p className="mb-2 leading-relaxed last:mb-0">{children}</p>
@@ -667,9 +671,12 @@ export function ChatScreen({
       events
         .filter((event) => event.type === "message.created" || event.type === "agent.turn.failed")
         .sort((left, right) => {
-          const leftTs = left.createdAt ?? 0;
-          const rightTs = right.createdAt ?? 0;
+          const leftTs = eventOrderTimestamp(left);
+          const rightTs = eventOrderTimestamp(right);
           if (leftTs !== rightTs) return leftTs - rightTs;
+          const leftCreated = left.createdAt ?? 0;
+          const rightCreated = right.createdAt ?? 0;
+          if (leftCreated !== rightCreated) return leftCreated - rightCreated;
           return left.id.localeCompare(right.id);
         }),
     [events]

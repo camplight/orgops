@@ -2,6 +2,10 @@ import type { Agent, Event } from "../types";
 
 export type WrapperRuntimeContext = {
   projectRoot: string;
+  runtimeAuth?: {
+    apiBaseUrl?: string;
+    runnerToken?: string;
+  };
   api: {
     apiFetch?: (path: string, init?: RequestInit) => Promise<Response>;
     emitEvent: (event: unknown) => Promise<void>;
@@ -40,6 +44,11 @@ export type WrapperSidecarConfig = WrapperCommandConfig & {
   restartDelayMs?: unknown;
 };
 
+export type WrapperSecretsConfig = {
+  allowedKeys?: unknown;
+  deniedKeys?: unknown;
+};
+
 export type NormalizedWrappedConfig = {
   kind: string;
   harness: string;
@@ -47,6 +56,7 @@ export type NormalizedWrappedConfig = {
   setup?: WrapperSetupConfig;
   runtime?: WrapperCommandConfig;
   sidecars: WrapperSidecarConfig[];
+  secrets?: WrapperSecretsConfig;
   sessionScope: WrapperSessionScope;
   raw: Record<string, unknown>;
 };

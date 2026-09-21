@@ -676,7 +676,7 @@ describe("agent runner", () => {
     expect(await shouldHandleEvent(agent, userEvent)).toBe(true);
   });
 
-  it("schedules internal self trigger event instead of visible message", async () => {
+  it("schedules internal self trigger event via events_schedule_self", async () => {
     const requests: Array<{ path: string; body: any }> = [];
     const before = Date.now();
     const ctx = {
@@ -1173,6 +1173,48 @@ describe("agent runner", () => {
     expect(requests[0]?.body.deliverAt).toBeLessThanOrEqual(after + 45_000);
   });
 
+  it("rejects events_scheduled_create when targetAgentName is missing", async () => {
+    const requests: string[] = [];
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async (path: string) => {
+        requests.push(path);
+        return new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+    };
+
+    const result = (await executeTool(ctx, "events_scheduled_create", {
+      text: "follow up",
+      delaySeconds: 10,
+    })) as { error?: string };
+
+    expect(typeof result.error).toBe("string");
+    expect(result.error).toContain("targetAgentName");
+    expect(requests).toEqual([]);
+  });
+
   it("rejects scheduling when target agent is not a channel participant", async () => {
     const requests: Array<string> = [];
     const ctx = {
@@ -1485,6 +1527,65 @@ describe("agent runner", () => {
     expect(result.delivery?.status).toBe("pending_timeout");
   });
 
+  it("rejects events_emit when absolute deliverAt is stale", async () => {
+    const requests: string[] = [];
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        soulContents: "role prompt",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async (path: string) => {
+        requests.push(path);
+        if (path === "/api/channels") {
+          return new Response(
+            JSON.stringify([
+              {
+                id: "chan-1",
+                participants: [{ subscriberType: "AGENT", subscriberId: "tester" }],
+              },
+            ]),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
+        return new Response(JSON.stringify({ id: "evt-custom" }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        });
+      },
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+    };
+
+    const staleDeliverAt = Date.now() - 60_000;
+    const result = (await executeTool(ctx, "events_emit", {
+      type: "custom.workflow.progressed",
+      payload: { step: "stale" },
+      deliverAt: staleDeliverAt,
+    })) as { error?: string };
+
+    expect(typeof result.error).toBe("string");
+    expect(result.error).toContain("deliverAt must be in the future");
+    expect(requests).toEqual([]);
+  });
+
   it("fails events_emit fast when composed validator rejects payload", async () => {
     const ctx = {
       agent: {
@@ -1663,6 +1764,60 @@ describe("agent runner", () => {
     expect(result.events[0]?.id).toBe("evt-scheduled");
   });
 
+  it("lists consumed scheduled history via events_scheduled_list pagination filters", async () => {
+    const requests: string[] = [];
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        soulContents: "role prompt",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async (path: string) => {
+        requests.push(path);
+        return new Response(JSON.stringify([{ id: "evt-consumed" }]), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+    };
+
+    const result = (await executeTool(ctx, "events_scheduled_list", {
+      channelId: "chan-1",
+      includeConsumed: true,
+      status: "DELIVERED",
+      after: 100,
+      before: 200,
+      order: "asc",
+      limit: 5,
+    })) as { events: Array<{ id: string }> };
+
+    expect(requests.length).toBe(1);
+    expect(requests[0]).toContain("scheduled=1");
+    expect(requests[0]).toContain("includeConsumed=1");
+    expect(requests[0]).toContain("status=DELIVERED");
+    expect(requests[0]).toContain("after=100");
+    expect(requests[0]).toContain("before=200");
+    expect(requests[0]).toContain("order=asc");
+    expect(requests[0]).toContain("limit=5");
+    expect(result.events[0]?.id).toBe("evt-consumed");
+  });
+
   it("updates scheduled events via events_scheduled_update", async () => {
     const requests: Array<{ path: string; method: string; body: any }> = [];
     const before = Date.now();
@@ -1733,6 +1888,59 @@ describe("agent runner", () => {
     expect(patchRequest?.body.deliverAt).toBeGreaterThanOrEqual(before + 60_000);
     expect(result.eventId).toBe("evt-scheduled");
     expect(result.event.id).toBe("evt-scheduled");
+  });
+
+  it("rejects events_scheduled_update when absolute deliverAt is stale", async () => {
+    const requests: string[] = [];
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        soulContents: "role prompt",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async (path: string) => {
+        requests.push(path);
+        return new Response(
+          JSON.stringify({
+            id: "evt-scheduled",
+            type: "message.created",
+            source: "agent:tester",
+            channelId: "chan-1",
+            payload: { text: "old text" },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      },
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+    };
+
+    const staleDeliverAt = Date.now() - 60_000;
+    const result = (await executeTool(ctx, "events_scheduled_update", {
+      eventId: "evt-scheduled",
+      deliverAt: staleDeliverAt,
+    })) as { error?: string };
+
+    expect(typeof result.error).toBe("string");
+    expect(result.error).toContain("deliverAt must be in the future");
+    expect(requests).toEqual([]);
   });
 
   it("rejects events_scheduled_update payload that fails shape validation", async () => {

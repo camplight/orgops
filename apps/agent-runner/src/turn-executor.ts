@@ -68,6 +68,10 @@ type CreateTurnExecutorInput = {
   projectRoot: string;
   skillRoot: { path: string };
   llmCallTimeoutMs: number;
+  runtimeAuth?: {
+    apiBaseUrl?: string;
+    runnerToken?: string;
+  };
   api: Pick<
     RunnerApi,
     | "apiFetch"
@@ -118,17 +122,36 @@ function clampMessageContent(content: LlmMessageContent, maxChars: number): LlmM
   if (typeof content === "string") {
     return truncateOversizedText(content, maxChars);
   }
-  return content.map((part) => {
-    if (part.type !== "text") return part;
-    return { ...part, text: truncateOversizedText(part.text, maxChars) };
-  });
+  const clamped = [...content] as Array<Record<string, unknown>>;
+  for (let index = 0; index < clamped.length; index += 1) {
+    const part = clamped[index];
+    if (!part || typeof part !== "object" || part.type !== "text") continue;
+    const text = typeof part.text === "string" ? part.text : "";
+    clamped[index] = {
+      ...part,
+      text: truncateOversizedText(text, maxChars),
+    };
+  }
+  return clamped as LlmMessageContent;
 }
 
 function clampMessagesForProviderLimit(messages: LlmMessage[]): LlmMessage[] {
-  return messages.map((message) => ({
-    ...message,
-    content: clampMessageContent(message.content, MAX_LLM_MESSAGE_CHARS),
-  }));
+  const clamped = messages.map((message) => ({ ...message })) as LlmMessage[];
+  for (const message of clamped) {
+    if (message.role === "system") {
+      const content =
+        typeof message.content === "string"
+          ? truncateOversizedText(message.content, MAX_LLM_MESSAGE_CHARS)
+          : truncateOversizedText(contentForTelemetry(message.content), MAX_LLM_MESSAGE_CHARS);
+      (message as { content: string }).content = content;
+      continue;
+    }
+    (message as { content: LlmMessageContent }).content = clampMessageContent(
+      message.content,
+      MAX_LLM_MESSAGE_CHARS,
+    );
+  }
+  return clamped;
 }
 
 function queryEventTypes(
@@ -498,6 +521,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       await runWrappedAgentTurn(
         {
           projectRoot: input.projectRoot,
+          runtimeAuth: input.runtimeAuth,
           api: {
             apiFetch: input.api.apiFetch,
             emitEvent: input.api.emitEvent,

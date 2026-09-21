@@ -568,6 +568,13 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     const body = await c.req.json();
     const existing = orm.select().from(schema.agents).where(eq(schema.agents.name, name)).get() as any;
     if (!existing) return jsonResponse(c, { error: "Not found" }, 404);
+    if (
+      body.name !== undefined &&
+      String(body.name ?? "").trim() &&
+      String(body.name ?? "").trim() !== name
+    ) {
+      return jsonResponse(c, { error: "Agent rename is not supported" }, 400);
+    }
     const soulPath =
       typeof body.soulPath === "string" && body.soulPath.trim()
         ? body.soulPath.trim()

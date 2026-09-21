@@ -3,6 +3,11 @@ export type ChannelParticipant = {
   subscriberId: string;
 };
 
+export type ChannelShare = {
+  viewerType: string;
+  viewerId: string;
+};
+
 export type Channel = {
   id: string;
   name: string;
@@ -12,6 +17,9 @@ export type Channel = {
   ownerHumanId?: string | null;
   archivedAt?: number | null;
   participants?: ChannelParticipant[];
+  shares?: ChannelShare[];
+  canPost?: boolean;
+  canManage?: boolean;
 };
 
 export type Agent = {
@@ -29,6 +37,7 @@ export type EventRow = {
   type: string;
   source: string;
   createdAt?: number;
+  deliverAt?: number;
   channelId?: string;
   payload?: unknown;
   status?: string;

@@ -1,18 +1,40 @@
 # OrgOps OpsCLI
 
-`opscli` is a lightweight autonomous maintenance CLI for OrgOps hosts.
+`opscli` is a deterministic installer/launcher CLI for OrgOps hosts with an optional agentic chat mode.
 
-- Uses a local terminal chat loop (stdin/stdout)
-- Uses a plain tool-calling agent loop (prompt + tools, no VM/REPL code execution)
-- Built-in tools include `shell`, `askPassword`, `extractOrgOps`, `getBundledDocs`, and `exitOpscli`
-- Session history is context-capped with rolling summarization
-- Bundled release executable prebuilds and embeds `admin-ui` + `user-ui` artifacts, then extracts full OrgOps source/docs/skills
+- Deterministic commands: `install`, `upgrade`, `doctor`, `start`, `stop`, `status`, `admin open`, `admin stop`, `admin status`
+- Agentic mode: `chat` command only
+- `install` can optionally register an auto-start service and create a desktop shortcut for User UI
 
 ## Run
 
-```bash
-npm run --workspace @orgops/opscli start
-```
+`opscli` command surface:
+
+- `opscli install [--dir <path>] [--repo <url>] [--ref <git-ref>] [--components <csv>] [--runner-api-url <url>] [--runner-token <token>] [--runner-name <name>] [--runner-invite-url <url>] [--register-service] [--create-shortcut]`
+- `opscli upgrade [--dir <path>] [--repo <url>] [--ref <git-ref>] [--components <csv>] [--runner-api-url <url>] [--runner-token <token>] [--runner-name <name>] [--runner-invite-url <url>] [--no-restart]`
+- `opscli doctor`
+- `opscli start [--dir <path>] [--components <csv>] [--no-open]`
+- `opscli stop [--dir <path>] [--components <csv>]`
+- `opscli status [--dir <path>] [--components <csv>]`
+- `opscli admin open [--dir <path>]`
+- `opscli admin stop [--dir <path>]`
+- `opscli admin status [--dir <path>]`
+- `opscli chat [--goal "..."]`
+
+`--components` accepts a comma-separated subset of:
+
+- `api`
+- `runner`
+- `user-ui`
+- `admin-ui`
+
+During `install`, OpsCLI checks required host tools (`node`, `npm`, `git`), clones/updates OrgOps from git, runs `npm ci`, and builds UI assets.
+When `runner` is installed/upgraded, OpsCLI can bootstrap config from either:
+
+- `--runner-invite-url <url>` (recommended secure flow from Admin UI runner invite)
+- explicit `--runner-api-url` + `--runner-token` (+ optional `--runner-name`)
+
+During `upgrade`, OpsCLI creates a safety backup of `.orgops-data`/`files`/`.env` (if present), updates selected components, and optionally restarts only components that were running before upgrade.
 
 ## Build standalone executable
 
@@ -21,28 +43,24 @@ npm run --workspace @orgops/opscli build:release
 ```
 
 This creates `dist/opscli-*` for the current platform. Release workflow builds all 3 platforms.
-The built binary embeds its build timestamp and prints it on startup.
-Builds use Node.js SEA (single executable applications) with embedded assets/docs.
+The built binary embeds docs + build metadata used by `chat`.
 
-## macOS downloaded binary notes
+For CI smoke tests that include `install` without mutating host services or relying on internet access, set:
 
-If you download `opscli-macos` from GitHub Releases, remove quarantine once and make it executable:
+- `ORGOPS_OPSCLI_INSTALL_SMOKE_MOCK=1`
+- `ORGOPS_OPSCLI_NO_BROWSER=1`
+
+In this mode, `install` creates deterministic marker files in `--dir` instead of cloning/building/registering services.
+The same env var is also honored during `upgrade` (because upgrade reuses install internally), which enables deterministic cross-OS upgrade smoke checks in CI.
+`ORGOPS_OPSCLI_NO_BROWSER` skips launching URLs while preserving command behavior, which keeps CI smoke checks headless-friendly.
+
+## Chat mode
 
 ```bash
-xattr -d com.apple.quarantine ./opscli-macos
-chmod +x ./opscli-macos
-./opscli-macos
+opscli chat
 ```
 
-If Finder still blocks first launch, use right-click -> Open once.
-
-## Bundled setup helpers via tools
-
-- `extractOrgOps(options?)`: extract bundled OrgOps source tree into `./orgops` (current working directory)
-- `getBundledDocs()`: return bundled OrgOps docs that also feed the system prompt
-
-Extraction always targets `./orgops` from the current working directory; custom extract paths are intentionally unsupported.
-The `extractOrgOps` result includes PM2 startup commands that use env-aware npm scripts, so `orgops/.env` is loaded for API, runner, admin UI, and user UI on macOS/Linux/Windows.
+`chat` mode is the only command that requires model credentials.
 
 ## Environment
 
@@ -64,7 +82,7 @@ The `extractOrgOps` result includes PM2 startup commands that use env-aware npm 
 - `ORGOPS_OPSCLI_LOG_PATH` (default: `.opscli-output.log` in current working directory; reset on each new session start)
 - `ORGOPS_OPSCLI_DOUBLE_SIGINT_MS` (default: `1200`; window for "double Ctrl+C to exit")
 
-If no API keys are configured, OpsCLI prompts on startup to choose OpenAI, Claude, or OpenRouter and saves the selected key to local `.env`.
+If no API keys are configured, `opscli chat` prompts to choose OpenAI, Claude, or OpenRouter and saves the selected key to local `.env`.
 
 During an active autonomous run, press `Ctrl+C` to interrupt the current run and return to the `You>` prompt without exiting OpsCLI.
 Press `Ctrl+C` twice quickly to exit OpsCLI immediately.

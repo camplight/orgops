@@ -257,15 +257,20 @@ export function createApp(config: AppConfig = {}) {
     const scoped = findActiveRunnerTokenByToken(orm, token);
     if (!scoped) return null;
     touchRunnerTokenLastUsed(orm, scoped.id);
+    const mode: "GLOBAL" | "SCOPED" =
+      scoped.runner_scope_mode === "GLOBAL" ? "GLOBAL" : "SCOPED";
     return {
       username: "runner",
       mustChangePassword: false,
       runnerScope: {
-        mode: "SCOPED" as const,
+        mode,
         tokenId: scoped.id,
-        allowedAgentName: scoped.allowed_agent_name ?? undefined,
-        allowedRunnerId: scoped.allowed_runner_id ?? undefined,
-        allowedChannelIds: parseRunnerScopeChannels(scoped.allowed_channel_ids_json),
+        allowedAgentName: mode === "SCOPED" ? scoped.allowed_agent_name ?? undefined : undefined,
+        allowedRunnerId: mode === "SCOPED" ? scoped.allowed_runner_id ?? undefined : undefined,
+        allowedChannelIds:
+          mode === "SCOPED"
+            ? parseRunnerScopeChannels(scoped.allowed_channel_ids_json)
+            : undefined,
         inviteId: scoped.invite_id ?? undefined,
       },
     };
@@ -1387,7 +1392,7 @@ export function createApp(config: AppConfig = {}) {
     orm,
     jsonResponse,
     access,
-    inviteBaseUrl: RUNNER_API_URL,
+    inviteBaseUrlFallback: RUNNER_API_URL,
   });
 
   registerModelsRoutes(app as any, { orm, jsonResponse, parseJson });
@@ -1527,6 +1532,7 @@ export function createApp(config: AppConfig = {}) {
     orm,
     bus,
     jsonResponse,
+    requireAuth,
     requireRunnerAuth,
     runnerToken: RUNNER_TOKEN,
     runnerApiUrl: RUNNER_API_URL,

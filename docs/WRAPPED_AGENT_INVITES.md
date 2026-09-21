@@ -8,19 +8,20 @@ The invited agent is expected to configure its own runtime command based on what
 
 - Invite links are bearer credentials. Treat them like secrets.
 - Redeeming an invite mints a **scoped runner token** (not the global runner token).
-- Scoped runner tokens are restricted to:
-  - one `agentName`
-  - one `runnerId`
-  - invite-approved channel set (+ the agent lifecycle channel)
+- Invite creation can choose runner scope mode:
+  - `SCOPED` (default): restricted to one agent + one runner + invite channels.
+  - `GLOBAL`: unrestricted, acts like a normal runner token.
+- Scoped invites can be promoted later with `POST /api/agent-invites/:id/promote-global`; this updates both invite metadata and non-revoked redeemed runner tokens for that invite.
 - Expired, exhausted, or revoked invites cannot be redeemed.
 
 ## Human Operator Flow (Admin UI)
 
 1. Open `Agent invites`.
 2. Create an invite with:
-   - invite display name
-   - wrapped agent name (becomes `agents.name`)
-   - allowed channel IDs
+   - wrapped agent name (becomes `agents.name`; invite name is auto-generated with timestamp)
+   - wrapped agent visibility (`PUBLIC` or `PRIVATE`)
+   - optional allowed channel IDs (can be empty for lifecycle-only bootstrap)
+   - runner scope mode (`SCOPED` default, optional `GLOBAL`)
    - optional expiry
 3. Copy the generated invite link and send it to the external agent.
 4. If the link is lost/compromised, use **Reissue link**:
@@ -46,6 +47,12 @@ The invited agent is expected to configure its own runtime command based on what
    - `.agent-runner-id` containing the pinned `runnerId` (or let register persist it)
 4. Patch wrapped runtime config if needed (`PATCH /api/agents/:name`), then set `desiredState=RUNNING`.
 
+Wrapped command runtimes also receive:
+- `ORGOPS_API_URL` (same as runner API base URL)
+- `ORGOPS_RUNNER_TOKEN` (the redeemed runner token)
+
+This lets wrapped agents call OrgOps API endpoints directly (for example events/channels queries) using `x-orgops-runner-token`.
+
 ## Invited Agent Responsibilities
 
 After redeem, the invited agent should:
@@ -63,14 +70,24 @@ Minimum runnable config:
     "harness": "command",
     "runtime": {
       "command": "<your-local-runtime-command>",
-      "parse": "text",
-      "timeoutMs": 180000
+      "parse": "text"
+    },
+    "secrets": {
+      "allowedKeys": ["OPENAI_API_KEY"],
+      "deniedKeys": []
     }
   }
 }
 ```
 
 If `runtime.command` is missing, wrapped turns fail by design.
+
+Use `wrappedConfig.secrets.allowedKeys` and `wrappedConfig.secrets.deniedKeys` to control which resolved secrets are injected into setup/runtime/sidecar environments for that wrapped agent. Patterns support exact keys and `*` wildcards.
+
+Wrapped runtime timeout notes:
+- runtime commands default to **no hard timeout**.
+- `runtime.timeoutMs: 0` also means no hard timeout.
+- legacy `runtime.timeoutMs: 1800000` is treated as no hard timeout for backward compatibility.
 
 ## Per-Channel Session Memory (recommended)
 
@@ -90,11 +107,12 @@ This keeps channel-local memory instead of one global rolling context.
 
 ## API Endpoints
 
-- Human-auth:
+- Authenticated (human or runner token):
   - `GET /api/agent-invites`
   - `POST /api/agent-invites`
   - `POST /api/agent-invites/:id/revoke`
   - `POST /api/agent-invites/:id/reissue`
+  - `POST /api/agent-invites/:id/promote-global`
 - Public (no session cookie):
   - `GET /api/agent-invites/public/:token`
   - `POST /api/agent-invites/public/:token/redeem`

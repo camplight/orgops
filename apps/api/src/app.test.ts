@@ -319,6 +319,83 @@ describe("api app", () => {
     }
   });
 
+  it("renames runners from admin endpoint", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const registerRes = await app.request("http://localhost/api/runners/register", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orgops-runner-token": "test-token",
+      },
+      body: JSON.stringify({
+        displayName: "runner-old-name",
+      }),
+    });
+    expect(registerRes.status).toBe(201);
+    const registerBody = (await registerRes.json()) as {
+      runner?: { id?: string };
+    };
+    const runnerId = registerBody.runner?.id ?? "";
+    expect(runnerId.length).toBeGreaterThan(0);
+
+    const runnerRenameRes = await app.request(
+      `http://localhost/api/runners/${encodeURIComponent(runnerId)}`,
+      {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          "x-orgops-runner-token": "test-token",
+        },
+        body: JSON.stringify({ displayName: "runner-new-name" }),
+      },
+    );
+    expect(runnerRenameRes.status).toBe(401);
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const invalidRenameRes = await app.request(
+      `http://localhost/api/runners/${encodeURIComponent(runnerId)}`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ displayName: "   " }),
+      },
+    );
+    expect(invalidRenameRes.status).toBe(400);
+
+    const renameRes = await app.request(
+      `http://localhost/api/runners/${encodeURIComponent(runnerId)}`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ displayName: "runner-new-name" }),
+      },
+    );
+    expect(renameRes.status).toBe(200);
+    const renameBody = (await renameRes.json()) as {
+      runner?: { id?: string; displayName?: string };
+    };
+    expect(renameBody.runner?.id).toBe(runnerId);
+    expect(renameBody.runner?.displayName).toBe("runner-new-name");
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("returns runner setup token only for authenticated humans", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");
@@ -412,6 +489,54 @@ describe("api app", () => {
     };
     expect(agent.soulContents).toBe("updated soul from db");
     expect(agent.allowOutsideWorkspace).toBe(false);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("rejects agent rename attempts via patch", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const createAgentRes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "rename-disabled-agent",
+        modelId: "openai:gpt-4o-mini",
+        workspacePath: ".orgops-data/workspaces/rename-disabled-agent",
+      }),
+    });
+    expect(createAgentRes.status).toBe(201);
+
+    const renameRes = await app.request("http://localhost/api/agents/rename-disabled-agent", {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ name: "new-name" }),
+    });
+    expect(renameRes.status).toBe(400);
+
+    const oldAgentRes = await app.request("http://localhost/api/agents/rename-disabled-agent", {
+      headers: { cookie },
+    });
+    expect(oldAgentRes.status).toBe(200);
+    const renamedRes = await app.request("http://localhost/api/agents/new-name", {
+      headers: { cookie },
+    });
+    expect(renamedRes.status).toBe(404);
 
     rmSync(dataDir, { recursive: true, force: true });
   });
@@ -3132,6 +3257,20 @@ describe("api app", () => {
     expect(futureRes.status).toBe(201);
     const futureEvent = (await futureRes.json()) as { id: string };
 
+    const pastScheduledRes = await app.request("http://localhost/api/events", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        type: "message.created",
+        payload: { text: "past scheduled message" },
+        source: "agent:agent-future",
+        channelId: channel.id,
+        deliverAt: Date.now() - 60_000,
+      }),
+    });
+    expect(pastScheduledRes.status).toBe(201);
+    const pastScheduledEvent = (await pastScheduledRes.json()) as { id: string };
+
     const uiFeedRes = await app.request(
       `http://localhost/api/events?channelId=${channel.id}&limit=50`,
       { headers: { cookie } },
@@ -3148,6 +3287,16 @@ describe("api app", () => {
     expect(scheduledRes.status).toBe(200);
     const scheduled = (await scheduledRes.json()) as Array<{ id: string }>;
     expect(scheduled.some((row) => row.id === futureEvent.id)).toBe(true);
+    expect(scheduled.some((row) => row.id === pastScheduledEvent.id)).toBe(false);
+
+    const scheduledAllRes = await app.request(
+      `http://localhost/api/events?channelId=${channel.id}&scheduled=1&includeConsumed=1&limit=50`,
+      { headers: { cookie } },
+    );
+    expect(scheduledAllRes.status).toBe(200);
+    const scheduledAll = (await scheduledAllRes.json()) as Array<{ id: string }>;
+    expect(scheduledAll.some((row) => row.id === futureEvent.id)).toBe(true);
+    expect(scheduledAll.some((row) => row.id === pastScheduledEvent.id)).toBe(true);
 
     rmSync(dataDir, { recursive: true, force: true });
   });
@@ -4255,6 +4404,15 @@ describe("api app", () => {
     });
     expect(createTeamRes.status).toBe(201);
     const team = (await createTeamRes.json()) as { id: string };
+    const addAdminToTeamRes = await app.request(
+      `http://localhost/api/teams/${encodeURIComponent(team.id)}/members`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: adminCookie },
+        body: JSON.stringify({ memberType: "HUMAN", memberId: "admin" }),
+      },
+    );
+    expect(addAdminToTeamRes.status).toBe(200);
 
     const addTeamMemberRes = await app.request(
       `http://localhost/api/teams/${team.id}/members`,
@@ -4285,6 +4443,229 @@ describe("api app", () => {
     expect(danaAfterTeamRes.status).toBe(200);
     const danaAfterTeam = (await danaAfterTeamRes.json()) as Array<{ id: string }>;
     expect(danaAfterTeam.some((row) => row.id === channel.id)).toBe(true);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("shares a private channel as read-only for a human viewer", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const adminLoginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(adminLoginRes.status).toBe(200);
+    const adminCookie = adminLoginRes.headers.get("set-cookie") ?? "";
+
+    const inviteRes = await app.request("http://localhost/api/humans/invite", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ username: "viewer" }),
+    });
+    expect(inviteRes.status).toBe(201);
+    const inviteBody = (await inviteRes.json()) as { temporaryPassword: string };
+
+    const viewerLoginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        username: "viewer",
+        password: inviteBody.temporaryPassword,
+      }),
+    });
+    expect(viewerLoginRes.status).toBe(200);
+    const viewerCookie = viewerLoginRes.headers.get("set-cookie") ?? "";
+    const viewerProfileRes = await app.request("http://localhost/api/auth/profile", {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie: viewerCookie },
+      body: JSON.stringify({
+        username: "viewer",
+        newPassword: "viewer-password-123",
+      }),
+    });
+    expect(viewerProfileRes.status).toBe(200);
+
+    const createPrivateChannelRes = await app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({
+        name: "readonly-shared-channel",
+        visibility: "PRIVATE",
+      }),
+    });
+    expect(createPrivateChannelRes.status).toBe(201);
+    const created = (await createPrivateChannelRes.json()) as { id: string };
+
+    const viewerBeforeShareRes = await app.request("http://localhost/api/channels", {
+      headers: { cookie: viewerCookie },
+    });
+    expect(viewerBeforeShareRes.status).toBe(200);
+    const viewerBeforeShare = (await viewerBeforeShareRes.json()) as Array<{ id: string }>;
+    expect(viewerBeforeShare.some((channel) => channel.id === created.id)).toBe(false);
+
+    const shareRes = await app.request(
+      `http://localhost/api/channels/${created.id}/share`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: adminCookie },
+        body: JSON.stringify({
+          viewerType: "HUMAN",
+          viewerId: "viewer",
+        }),
+      },
+    );
+    expect(shareRes.status).toBe(200);
+
+    const viewerAfterShareRes = await app.request("http://localhost/api/channels", {
+      headers: { cookie: viewerCookie },
+    });
+    expect(viewerAfterShareRes.status).toBe(200);
+    const viewerAfterShare = (await viewerAfterShareRes.json()) as Array<{
+      id: string;
+      canPost?: boolean;
+      canManage?: boolean;
+      shares?: Array<{ viewerType: string; viewerId: string }>;
+    }>;
+    const visibleShared = viewerAfterShare.find((channel) => channel.id === created.id);
+    expect(visibleShared).toBeTruthy();
+    expect(visibleShared?.canPost).toBe(false);
+    expect(visibleShared?.canManage).toBe(false);
+    expect(visibleShared?.shares).toEqual([{ viewerType: "HUMAN", viewerId: "viewer" }]);
+
+    const viewerPostRes = await app.request("http://localhost/api/events", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: viewerCookie },
+      body: JSON.stringify({
+        type: "message.created",
+        payload: { text: "should fail" },
+        source: "human:viewer",
+        channelId: created.id,
+      }),
+    });
+    expect(viewerPostRes.status).toBe(403);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("claims share links by authenticating then auto-adding human viewer", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const adminLoginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(adminLoginRes.status).toBe(200);
+    const adminCookie = adminLoginRes.headers.get("set-cookie") ?? "";
+
+    const inviteRes = await app.request("http://localhost/api/humans/invite", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ username: "boris" }),
+    });
+    expect(inviteRes.status).toBe(201);
+    const inviteBody = (await inviteRes.json()) as { temporaryPassword: string };
+
+    const borisLoginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        username: "boris",
+        password: inviteBody.temporaryPassword,
+      }),
+    });
+    expect(borisLoginRes.status).toBe(200);
+    const borisCookie = borisLoginRes.headers.get("set-cookie") ?? "";
+    const borisProfileRes = await app.request("http://localhost/api/auth/profile", {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie: borisCookie },
+      body: JSON.stringify({
+        username: "boris",
+        newPassword: "boris-password-123",
+      }),
+    });
+    expect(borisProfileRes.status).toBe(200);
+
+    const createChannelRes = await app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({
+        name: "share-link-channel",
+        visibility: "PRIVATE",
+      }),
+    });
+    expect(createChannelRes.status).toBe(201);
+    const channel = (await createChannelRes.json()) as { id: string };
+
+    const createShareLinkRes = await app.request(
+      `http://localhost/api/channels/${channel.id}/share-link`,
+      {
+        method: "POST",
+        headers: { cookie: adminCookie },
+      },
+    );
+    expect(createShareLinkRes.status).toBe(200);
+    const shareLink = (await createShareLinkRes.json()) as { token: string; channelId: string };
+    expect(shareLink.channelId).toBe(channel.id);
+    expect(typeof shareLink.token).toBe("string");
+    expect(shareLink.token.length).toBeGreaterThan(10);
+
+    const unauthClaimRes = await app.request(
+      `http://localhost/api/channel-share-links/${shareLink.token}/claim`,
+      {
+        method: "POST",
+      },
+    );
+    expect(unauthClaimRes.status).toBe(401);
+
+    const borisBeforeClaimRes = await app.request("http://localhost/api/channels", {
+      headers: { cookie: borisCookie },
+    });
+    expect(borisBeforeClaimRes.status).toBe(200);
+    const borisBeforeClaim = (await borisBeforeClaimRes.json()) as Array<{ id: string }>;
+    expect(borisBeforeClaim.some((entry) => entry.id === channel.id)).toBe(false);
+
+    const claimRes = await app.request(
+      `http://localhost/api/channel-share-links/${shareLink.token}/claim`,
+      {
+        method: "POST",
+        headers: { cookie: borisCookie },
+      },
+    );
+    expect(claimRes.status).toBe(200);
+    const claimBody = (await claimRes.json()) as { channelId: string };
+    expect(claimBody.channelId).toBe(channel.id);
+
+    const borisAfterClaimRes = await app.request("http://localhost/api/channels", {
+      headers: { cookie: borisCookie },
+    });
+    expect(borisAfterClaimRes.status).toBe(200);
+    const borisAfterClaim = (await borisAfterClaimRes.json()) as Array<{
+      id: string;
+      canPost?: boolean;
+      shares?: Array<{ viewerType: string; viewerId: string }>;
+    }>;
+    const claimedChannel = borisAfterClaim.find((entry) => entry.id === channel.id);
+    expect(claimedChannel).toBeTruthy();
+    expect(claimedChannel?.canPost).toBe(false);
+    expect(claimedChannel?.shares).toEqual([{ viewerType: "HUMAN", viewerId: "boris" }]);
 
     rmSync(dataDir, { recursive: true, force: true });
   });
@@ -4997,24 +5378,13 @@ describe("api app", () => {
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
 
-    const createChannelRes = await app.request("http://localhost/api/channels", {
+    const createInviteRes = await app.request("http://orgops.exe.xyz/api/agent-invites", {
       method: "POST",
       headers: { "content-type": "application/json", cookie },
       body: JSON.stringify({
-        name: "external-agents",
-        kind: "GROUP",
-      }),
-    });
-    expect(createChannelRes.status).toBe(201);
-    const createdChannel = (await createChannelRes.json()) as { id: string };
-
-    const createInviteRes = await app.request("http://localhost/api/agent-invites", {
-      method: "POST",
-      headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({
-        name: "claude-bootstrap",
         agentName: "claude-bridge",
-        channelIds: [createdChannel.id],
+        visibility: "PRIVATE",
+        channelIds: [],
       }),
     });
     expect(createInviteRes.status).toBe(201);
@@ -5023,10 +5393,19 @@ describe("api app", () => {
       inviteLink?: string;
       agentName: string;
       channelIds: string[];
+      visibility?: string;
+      runnerScopeMode?: string;
+      createdByType?: string;
+      createdById?: string;
     };
     expect(invite.agentName).toBe("claude-bridge");
-    expect(invite.channelIds).toEqual([createdChannel.id]);
+    expect(invite.channelIds).toEqual([]);
+    expect(invite.visibility).toBe("PRIVATE");
+    expect(invite.runnerScopeMode).toBe("SCOPED");
+    expect(invite.createdByType).toBe("HUMAN");
+    expect(invite.createdById).toBe("admin");
     expect(typeof invite.inviteLink).toBe("string");
+    expect(invite.inviteLink?.startsWith("http://orgops.exe.xyz/api/agent-invites/public/")).toBe(true);
 
     const inviteLink = invite.inviteLink ?? "";
     const token = decodeURIComponent(inviteLink.split("/public/")[1] ?? "");
@@ -5065,11 +5444,31 @@ describe("api app", () => {
     expect(redeemRes.status).toBe(200);
     const redeemed = (await redeemRes.json()) as {
       runner: { token: string; runnerId: string };
-      agent: { name: string; assignedRunnerId: string };
+      agent: { name: string; assignedRunnerId: string; visibility?: string };
     };
     expect(redeemed.runner.token.startsWith("org_rt_")).toBe(true);
     expect(redeemed.agent.name).toBe("claude-bridge");
+    expect(redeemed.agent.visibility).toBe("PRIVATE");
     expect(redeemed.agent.assignedRunnerId).toBe(redeemed.runner.runnerId);
+
+    const agentCreatedInviteRes = await app.request("http://localhost/api/agent-invites", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orgops-runner-token": "test-token",
+      },
+      body: JSON.stringify({
+        agentName: "runner-owned-agent",
+        createdByAgentName: "ops-bot",
+      }),
+    });
+    expect(agentCreatedInviteRes.status).toBe(201);
+    const runnerInvite = (await agentCreatedInviteRes.json()) as {
+      createdByType?: string;
+      createdById?: string;
+    };
+    expect(runnerInvite.createdByType).toBe("AGENT");
+    expect(runnerInvite.createdById).toBe("ops-bot");
 
     const wrongRunnerRegister = await app.request("http://localhost/api/runners/register", {
       method: "POST",
@@ -5118,6 +5517,517 @@ describe("api app", () => {
     const scopedEventsRows = (await scopedEventsWithoutAgent.json()) as unknown[];
     expect(scopedEventsRows).toEqual([]);
 
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("promotes scoped invite runner tokens to global scope", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+      runnerApiUrl: "http://localhost:8787",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const inviteRes = await app.request("http://localhost/api/agent-invites", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        agentName: "scoped-expand-agent",
+        visibility: "PRIVATE",
+        channelIds: [],
+        runnerScopeMode: "SCOPED",
+      }),
+    });
+    expect(inviteRes.status).toBe(201);
+    const invite = (await inviteRes.json()) as {
+      id: string;
+      inviteLink?: string;
+      runnerScopeMode?: string;
+    };
+    expect(invite.runnerScopeMode).toBe("SCOPED");
+    const inviteToken = decodeURIComponent((invite.inviteLink ?? "").split("/public/")[1] ?? "");
+    expect(inviteToken.startsWith("org_inv_")).toBe(true);
+
+    const redeemRes = await app.request(
+      `http://localhost/api/agent-invites/public/${encodeURIComponent(inviteToken)}/redeem`,
+      { method: "POST" },
+    );
+    expect(redeemRes.status).toBe(200);
+    const redeemed = (await redeemRes.json()) as { runner: { token: string } };
+
+    const scopedCreateOtherAgent = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orgops-runner-token": redeemed.runner.token,
+      },
+      body: JSON.stringify({
+        name: "another-agent-before-promote",
+        modelId: "openai:gpt-4o-mini",
+      }),
+    });
+    expect(scopedCreateOtherAgent.status).toBe(403);
+
+    const promoteRes = await app.request(
+      `http://localhost/api/agent-invites/${encodeURIComponent(invite.id)}/promote-global`,
+      {
+        method: "POST",
+        headers: { cookie },
+      },
+    );
+    expect(promoteRes.status).toBe(200);
+    const promoted = (await promoteRes.json()) as {
+      invite?: { runnerScopeMode?: string };
+      promotedScopedRunnerTokenCount?: number;
+    };
+    expect(promoted.invite?.runnerScopeMode).toBe("GLOBAL");
+    expect(promoted.promotedScopedRunnerTokenCount).toBeGreaterThanOrEqual(1);
+
+    const registerRes = await app.request("http://localhost/api/runners/register", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orgops-runner-token": redeemed.runner.token,
+      },
+      body: JSON.stringify({
+        existingRunnerId: "any-runner-id-after-promote",
+        displayName: "promoted-global-runner",
+      }),
+    });
+    expect(registerRes.status).toBe(201);
+
+    const eventsRes = await app.request("http://localhost/api/events", {
+      headers: { "x-orgops-runner-token": redeemed.runner.token },
+    });
+    expect(eventsRes.status).toBe(200);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("supports global-scope invite runner tokens for normal agent access", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+      runnerApiUrl: "http://localhost:8787",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const inviteRes = await app.request("http://localhost/api/agent-invites", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        agentName: "global-invite-agent",
+        visibility: "PRIVATE",
+        runnerScopeMode: "GLOBAL",
+        channelIds: [],
+      }),
+    });
+    expect(inviteRes.status).toBe(201);
+    const invite = (await inviteRes.json()) as {
+      inviteLink?: string;
+      runnerScopeMode?: string;
+    };
+    expect(invite.runnerScopeMode).toBe("GLOBAL");
+    const inviteToken = decodeURIComponent((invite.inviteLink ?? "").split("/public/")[1] ?? "");
+    expect(inviteToken.startsWith("org_inv_")).toBe(true);
+
+    const redeemRes = await app.request(
+      `http://localhost/api/agent-invites/public/${encodeURIComponent(inviteToken)}/redeem`,
+      { method: "POST" },
+    );
+    expect(redeemRes.status).toBe(200);
+    const redeemed = (await redeemRes.json()) as {
+      runner: { token: string; scopeMode?: string };
+    };
+    expect(redeemed.runner.scopeMode).toBe("GLOBAL");
+
+    const registerRes = await app.request("http://localhost/api/runners/register", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orgops-runner-token": redeemed.runner.token,
+      },
+      body: JSON.stringify({
+        existingRunnerId: "any-runner-id-works",
+        displayName: "global-token-runner",
+      }),
+    });
+    expect(registerRes.status).toBe(201);
+
+    const eventsRes = await app.request("http://localhost/api/events", {
+      headers: { "x-orgops-runner-token": redeemed.runner.token },
+    });
+    expect(eventsRes.status).toBe(200);
+    const events = (await eventsRes.json()) as unknown[];
+    expect(Array.isArray(events)).toBe(true);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("resolves secret env precedence as private > team > public > package", async () => {
+    const previousMasterKey = process.env.ORGOPS_MASTER_KEY;
+    process.env.ORGOPS_MASTER_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const createTeamRes = await app.request("http://localhost/api/teams", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ name: "Platform Team" }),
+    });
+    expect(createTeamRes.status).toBe(201);
+    const team = (await createTeamRes.json()) as { id: string };
+
+    const createChannelRes = await app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ name: `team-secret-${Date.now()}` }),
+    });
+    expect(createChannelRes.status).toBe(201);
+    const channel = (await createChannelRes.json()) as { id: string };
+
+    const createAgentARes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "agent-a",
+        modelId: "openai:gpt-4o-mini",
+        workspacePath: ".orgops-data/workspaces/agent-a",
+      }),
+    });
+    expect(createAgentARes.status).toBe(201);
+    const createAgentBRes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "agent-b",
+        modelId: "openai:gpt-4o-mini",
+        workspacePath: ".orgops-data/workspaces/agent-b",
+      }),
+    });
+    expect(createAgentBRes.status).toBe(201);
+
+    for (const subscriber of [
+      { subscriberType: "TEAM", subscriberId: team.id },
+      { subscriberType: "AGENT", subscriberId: "agent-a" },
+      { subscriberType: "AGENT", subscriberId: "agent-b" },
+    ]) {
+      const res = await app.request(
+        `http://localhost/api/channels/${encodeURIComponent(channel.id)}/subscribe`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", cookie },
+          body: JSON.stringify(subscriber),
+        },
+      );
+      expect(res.status).toBe(200);
+    }
+
+    const createSecrets = [
+      { name: "OPENAI_API_KEY", scopeType: "package", scopeId: "llm", value: "pkg-key" },
+      { name: "OPENAI_API_KEY", scopeType: "public", scopeId: null, value: "public-key" },
+      { name: "OPENAI_API_KEY", scopeType: "private", scopeId: "agent-a", value: "private-key-a" },
+      { name: "ANTHROPIC_API_KEY", scopeType: "public", scopeId: null, value: "anth-public" },
+    ];
+    for (const secret of createSecrets) {
+      const res = await app.request("http://localhost/api/secrets", {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify(secret),
+      });
+      expect(res.status).toBe(201);
+    }
+    const teamSecretRes = await app.request("http://localhost/api/secrets", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orgops-runner-token": "test-token",
+      },
+      body: JSON.stringify({
+        name: "OPENAI_API_KEY",
+        scopeType: "team",
+        scopeId: team.id,
+        value: "team-key",
+      }),
+    });
+    expect(teamSecretRes.status).toBe(201);
+
+    const envARes = await app.request("http://localhost/api/secrets/env", {
+      headers: {
+        "x-orgops-runner-token": "test-token",
+        "x-orgops-agent-name": "agent-a",
+        "x-orgops-channel-id": channel.id,
+      },
+    });
+    expect(envARes.status).toBe(200);
+    const envA = (await envARes.json()) as Record<string, string>;
+    expect(envA.OPENAI_API_KEY).toBe("private-key-a");
+    expect(envA.ANTHROPIC_API_KEY).toBe("anth-public");
+
+    const envBRes = await app.request("http://localhost/api/secrets/env", {
+      headers: {
+        "x-orgops-runner-token": "test-token",
+        "x-orgops-agent-name": "agent-b",
+        "x-orgops-channel-id": channel.id,
+      },
+    });
+    expect(envBRes.status).toBe(200);
+    const envB = (await envBRes.json()) as Record<string, string>;
+    expect(envB.OPENAI_API_KEY).toBe("team-key");
+
+    if (previousMasterKey === undefined) delete process.env.ORGOPS_MASTER_KEY;
+    else process.env.ORGOPS_MASTER_KEY = previousMasterKey;
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("resolves secrets env for agent names containing spaces", async () => {
+    const previousMasterKey = process.env.ORGOPS_MASTER_KEY;
+    process.env.ORGOPS_MASTER_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const createAgentRes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "agent with spaces",
+        modelId: "openai:gpt-4o-mini",
+        workspacePath: ".orgops-data/workspaces/agent-with-spaces",
+      }),
+    });
+    expect(createAgentRes.status).toBe(201);
+
+    const createSecretRes = await app.request("http://localhost/api/secrets", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "CURSOR_API_KEY",
+        scopeType: "public",
+        value: "cursor-token",
+      }),
+    });
+    expect(createSecretRes.status).toBe(201);
+
+    const envRes = await app.request("http://localhost/api/secrets/env", {
+      headers: {
+        "x-orgops-runner-token": "test-token",
+        "x-orgops-agent-name": "agent with spaces",
+      },
+    });
+    expect(envRes.status).toBe(200);
+    const env = (await envRes.json()) as Record<string, string>;
+    expect(env.CURSOR_API_KEY).toBe("cursor-token");
+
+    if (previousMasterKey === undefined) delete process.env.ORGOPS_MASTER_KEY;
+    else process.env.ORGOPS_MASTER_KEY = previousMasterKey;
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("restricts scoped runners to private/team secrets and filters visible secrets", async () => {
+    const previousMasterKey = process.env.ORGOPS_MASTER_KEY;
+    process.env.ORGOPS_MASTER_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+      runnerApiUrl: "http://localhost:8787",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const inviteRes = await app.request("http://localhost/api/agent-invites", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        agentName: "scoped-agent",
+        visibility: "PRIVATE",
+        channelIds: [],
+      }),
+    });
+    expect(inviteRes.status).toBe(201);
+    const inviteBody = (await inviteRes.json()) as { inviteLink?: string };
+    const inviteToken = decodeURIComponent((inviteBody.inviteLink ?? "").split("/public/")[1] ?? "");
+    expect(inviteToken.startsWith("org_inv_")).toBe(true);
+
+    const redeemRes = await app.request(
+      `http://localhost/api/agent-invites/public/${encodeURIComponent(inviteToken)}/redeem`,
+      { method: "POST" },
+    );
+    expect(redeemRes.status).toBe(200);
+    const redeemed = (await redeemRes.json()) as { runner: { token: string } };
+
+    const createPublicAsScopedRes = await app.request("http://localhost/api/secrets", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orgops-runner-token": redeemed.runner.token,
+      },
+      body: JSON.stringify({
+        name: "OPENAI_API_KEY",
+        scopeType: "public",
+        value: "blocked-public",
+      }),
+    });
+    expect(createPublicAsScopedRes.status).toBe(403);
+
+    const createPrivateAsScopedRes = await app.request("http://localhost/api/secrets", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orgops-runner-token": redeemed.runner.token,
+      },
+      body: JSON.stringify({
+        name: "OPENAI_API_KEY",
+        scopeType: "private",
+        scopeId: "scoped-agent",
+        value: "allowed-private",
+      }),
+    });
+    expect(createPrivateAsScopedRes.status).toBe(201);
+
+    const createPrivateOtherRes = await app.request("http://localhost/api/secrets", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orgops-runner-token": redeemed.runner.token,
+      },
+      body: JSON.stringify({
+        name: "OPENAI_API_KEY",
+        scopeType: "private",
+        scopeId: "other-agent",
+        value: "blocked-private",
+      }),
+    });
+    expect(createPrivateOtherRes.status).toBe(403);
+
+    const createOtherAgentRes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "other-agent",
+        modelId: "openai:gpt-4o-mini",
+        workspacePath: ".orgops-data/workspaces/other-agent",
+      }),
+    });
+    expect(createOtherAgentRes.status).toBe(201);
+
+    const adminPublicRes = await app.request("http://localhost/api/secrets", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "OPENROUTER_API_KEY",
+        scopeType: "public",
+        value: "admin-public",
+      }),
+    });
+    expect(adminPublicRes.status).toBe(201);
+
+    const adminOtherPrivateRes = await app.request("http://localhost/api/secrets", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "OPENAI_API_KEY",
+        scopeType: "private",
+        scopeId: "other-agent",
+        value: "admin-other-private",
+      }),
+    });
+    expect(adminOtherPrivateRes.status).toBe(201);
+
+    const secretsListRes = await app.request("http://localhost/api/secrets", {
+      headers: { "x-orgops-runner-token": redeemed.runner.token },
+    });
+    expect(secretsListRes.status).toBe(200);
+    const secretsList = (await secretsListRes.json()) as Array<{
+      name: string;
+      scope_type: string;
+      scope_id: string | null;
+    }>;
+    expect(secretsList).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "OPENAI_API_KEY",
+          scope_type: "private",
+          scope_id: "scoped-agent",
+        }),
+        expect.objectContaining({
+          name: "OPENROUTER_API_KEY",
+          scope_type: "public",
+        }),
+      ]),
+    );
+    expect(
+      secretsList.some(
+        (secret) => secret.scope_type === "private" && secret.scope_id === "other-agent",
+      ),
+    ).toBe(false);
+
+    if (previousMasterKey === undefined) delete process.env.ORGOPS_MASTER_KEY;
+    else process.env.ORGOPS_MASTER_KEY = previousMasterKey;
     rmSync(dataDir, { recursive: true, force: true });
   });
 });

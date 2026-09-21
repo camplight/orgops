@@ -22,7 +22,7 @@ This document describes the current implementation in this repository.
 apps/
   api/            Hono HTTP + WS server
   agent-runner/   Agent polling loop + tool/runtime execution
-  opscli/         Host bootstrap/maintenance CLI (RLM REPL loop)
+  opscli/         Host bootstrap/maintenance CLI (deterministic commands + optional chat)
   admin-ui/       React + Tailwind admin UI
   user-ui/        Lightweight user UI
 packages/
@@ -86,6 +86,10 @@ Example wrapped config:
     "parse": "json-payloads",
     "timeoutMs": 600000
   },
+  "secrets": {
+    "allowedKeys": ["OPENAI_*", "TAVILY_API_KEY"],
+    "deniedKeys": ["TAVILY_*"]
+  },
   "session": {
     "scope": "per-channel"
   }
@@ -102,6 +106,8 @@ Supported recipe fields:
 - `sidecars`: optional long-running commands started before turns, such as the OpenClaw Gateway.
 - `runtime.command`: required command for handling a turn.
 - `runtime.parse`: `json-payloads` extracts OpenClaw-style `payloads[].text`; `text` returns stdout; omitted tries JSON payloads and falls back to text.
+- `secrets.allowedKeys`: optional env-key allowlist (exact keys or `*` wildcard patterns) applied to wrapped secret injection.
+- `secrets.deniedKeys`: optional env-key denylist (exact keys or `*` wildcard patterns) applied after allowlist.
 - `session.scope`: `per-channel` (default) or `per-agent`.
 
 OpenClaw is an optional wrapped runtime and is not installed as an OrgOps dependency. A recipe must install it in the agent workspace during `setup` or provide an OpenClaw source checkout. OpenClaw recipes should configure the target agent's default model during setup rather than relying on OpenClaw package defaults. Runtime `--model` overrides are subject to the target agent's model allowlist and may be rejected unless setup has added that model first.
@@ -133,7 +139,7 @@ Commands run with the agent workspace/source directory as cwd unless overridden 
 - `ORGOPS_WRAPPED_TRIGGER_EVENT_ID` (turn commands)
 - `ORGOPS_WRAPPED_SOURCE_DIR` (when a source checkout is configured)
 
-Package secrets available to the agent/channel are also injected into setup and turn command environments.
+Resolved runtime secrets are injected into setup and turn command environments using precedence `private > team > public > package(legacy)`.
 
 Wrapper harness implementation:
 
@@ -166,6 +172,8 @@ Runner IDs are stable across restarts by persisting local `.agent-runner-id`.
 - `teams`, `team_memberships`
 - `channels`: includes `kind`, optional `metadata_json`, optional `direct_participant_key`
 - `channel_subscriptions`: channel participants/subscribers (`AGENT`, `HUMAN`, `TEAM`)
+- `channel_viewers`: read-only channel shares (`AGENT`, `HUMAN`)
+- `channel_share_links`: tokenized invite links that let an authenticated human self-claim read-only access
 - `conversations`, `threads`
 
 ### Events and Delivery
@@ -187,7 +195,7 @@ Runner IDs are stable across restarts by persisting local `.agent-runner-id`.
 
 ### Agent Invites / Runner Tokens
 
-- `agent_invites`: human-created wrapped-agent bootstrap invites (hashed token, scoped channel set, optional wrapped config, expiry, usage count)
+- `agent_invites`: wrapped-agent bootstrap invites (hashed token, optional scoped channel set, invite-time agent visibility, creator metadata for human/agent callers, optional wrapped config, expiry, usage count)
 - `runner_tokens`: hashed runner credentials, including invite-scoped tokens bound to a single `agent_name` and `runner_id`
 
 ## Inert Catalog Package Contract
@@ -1565,12 +1573,20 @@ an existing account.
   - the owner (`channels.owner_human_id`)
   - explicitly subscribed humans (`channel_subscriptions` with `subscriber_type=HUMAN`)
   - humans who belong to a subscribed team (`channel_subscriptions` with `subscriber_type=TEAM` + `team_memberships`)
+  - explicitly shared human viewers (`channel_viewers` with `viewer_type=HUMAN`)
+- `channel_viewers` grants read-only visibility. Shared viewers can read channel metadata/messages but cannot post events or mutate channel participants/settings.
+- `channel_share_links` are claim tokens. Visiting a link and calling the claim endpoint adds the authenticated human to `channel_viewers`.
 
 ### Runner Auth
 
 - Trusted runner token header: `x-orgops-runner-token`. Its presence is authoritative for shared authentication: an invalid or empty value returns `401` and cannot fall through to a human session cookie.
 - Runner-only endpoint for secret env injection: `GET /api/secrets/env`
-- Invite redemption can mint **scoped runner tokens**. Scoped tokens are restricted to one agent, one runner ID, and invite-approved channels.
+- Runner secret env requests must include `x-orgops-agent-name`; optional `x-orgops-channel-id` enables team-scope resolution for that channel context.
+- Invite redemption can mint runner tokens in either mode:
+  - `SCOPED` (default): restricted to one agent and one runner ID, and by default restricted to invite-approved channels.
+  - `GLOBAL`: behaves like a normal unrestricted runner token (full runner access).
+- `POST /api/agent-invites` accepts authenticated humans and runner-authenticated agents.
+- Scoped invites can later be promoted to global mode with `POST /api/agent-invites/:id/promote-global`; this updates the invite and any non-revoked redeemed runner tokens from that invite.
 
 ### Tool Filesystem Access
 
@@ -1605,6 +1621,8 @@ Server messages:
 { "type": "error", "message": "..." }
 ```
 
+For non-runner websocket clients, `event` messages with future `deliverAt` are deferred and delivered when due (`deliverAt <= now`) to match non-runner `GET /api/events` visibility while preserving realtime pacing for scheduled events. Runner-authenticated websocket clients still receive future scheduled events immediately.
+
 Published topics include:
 
 - `org:events`
@@ -1630,8 +1648,14 @@ Published topics include:
   - `POST /api/agent-invites`
   - `POST /api/agent-invites/:id/revoke`
   - `POST /api/agent-invites/:id/reissue` (rotates token; old link invalid)
+  - `POST /api/agent-invites/:id/promote-global` (switches scoped invite/tokens to global mode)
   - `GET /api/agent-invites/public/:token` (public)
   - `POST /api/agent-invites/public/:token/redeem` (public)
+  - `channelIds` is optional on create (invite may grant lifecycle-only bootstrap access)
+  - create payload supports `visibility` (`PUBLIC`/`PRIVATE`) applied to the wrapped agent at redeem time
+  - create payload supports `runnerScopeMode` (`SCOPED` default, or `GLOBAL`)
+  - invite list/create responses include creator metadata (`createdByType`, `createdById`)
+  - invite links are resolved from request origin (`x-forwarded-*` or request URL), not hardcoded localhost
   - public invite/redeem responses include bootstrap hints (`wrappedConfigSchema`, patch endpoint, and session-memory guidance)
 
 ### Embed / v1 (integration API keys)
@@ -1658,6 +1682,7 @@ Published topics include:
 - `POST /api/agents`
 - `GET /api/agents/:name`
 - `PATCH /api/agents/:name`
+  - changing an agent's `name` via patch is currently rejected (rename unsupported)
 - supports `assignedRunnerId` on create/update/read
 - supports `wrappedConfig` JSON object/string on create/update/read
 - supports `GET /api/agents?assignedRunnerId=<runnerId>` filtering
@@ -1680,8 +1705,16 @@ Published topics include:
   - membership: list/add/remove endpoints
 - channels:
   - CRUD/list/clear: `GET/POST/PATCH/DELETE /api/channels...`
+  - `GET /api/channels` includes `participants[]`, `shares[]`, plus per-request booleans `canPost` and `canManage`
   - `PATCH /api/channels/:id` supports `name`, `description`, `metadata`, and `visibility` (`PUBLIC`/`PRIVATE`)
   - participant management via subscribe/unsubscribe endpoints (`AGENT`, `HUMAN`, `TEAM`)
+  - read-only share management:
+    - `GET /api/channels/:id/shares`
+    - `POST /api/channels/:id/share` (`viewerType`: `AGENT`/`HUMAN`)
+    - `POST /api/channels/:id/unshare`
+  - tokenized share-link flow:
+    - `POST /api/channels/:id/share-link` (creates a claim token)
+    - `POST /api/channel-share-links/:token/claim` (authenticated human claims viewer access)
   - direct channel creation:
     - `POST /api/channels/direct`
     - `POST /api/channels/direct/human-agent`
@@ -1694,6 +1727,9 @@ Published topics include:
 
 - `POST /api/events`
 - `GET /api/events`
+  - query supports filters (`channelId`, `type`, `source`, `status`, `after`, `before`, `limit`, `order`)
+  - `scheduled=1` returns future pending scheduled events
+  - `scheduled=1&includeConsumed=1` returns scheduled history (both future and consumed)
 - `GET /api/events/:id`
 - `PATCH /api/events/:id` (future scheduled `PENDING` events only)
 - `POST /api/events/:id/ack`
@@ -1734,6 +1770,8 @@ Published topics include:
   - `DELETE /api/secrets/:id`
   - `DELETE /api/secrets` (by key/scope tuple)
   - `GET /api/secrets/env` (runner auth only)
+  - scope types: `public`, `team`, `private` (`package` remains supported as legacy compatibility scope)
+  - env resolution precedence: `private > team > public > package(legacy)`
 - skills:
   - `GET /api/skills` (authenticated legacy local-only compatibility shape)
   - `GET /api/skills/inventory` (authenticated, strict `agentId?`, `q?`, `origin=ALL|LOCAL|CATALOG`, and `availability=ALL|INSTALLED|AVAILABLE` query)
@@ -1753,7 +1791,10 @@ Source Library compatibility reads are `GET /api/library/packages`, `GET /api/li
 
 - `GET /api/runners`
 - `GET /api/runners/setup-config` (authenticated human users)
+- `POST /api/runners/invites` (authenticated human users; creates scoped runner bootstrap invite)
+- `GET /api/runners/invites/:token` (public invite bootstrap payload for opscli)
 - `POST /api/runners/register` (runner auth; register/re-register)
+- `PATCH /api/runners/:id` (authenticated human users; rename runner display name)
 - `POST /api/runners/:id/heartbeat` (runner auth)
 - `GET /api/runners/:runnerId/package-deployments` (runner auth)
 - `POST /api/runner-package-deployments/:deploymentId/claim` (runner auth)
@@ -1820,25 +1861,26 @@ Audit events are emitted around tool/process operations and RLM execution.
 
 ## OpsCLI Behavior
 
-`apps/opscli` is a lightweight standalone RLM runtime for bootstrap/maintenance.
+`apps/opscli` is a standalone host bootstrap/maintenance CLI with deterministic commands and an optional chat loop.
 
-- persistent Node VM runtime session
-- LLM emits one JS snippet per step
-- built-in REPL methods:
-  - `shell(command)`
-  - `print(...args)`
-  - `input(question)`
-  - `finish()`
-  - `clear()`
-  - `exit(code)`
-- supports empty initial goal and interactive goal gathering via `input(...)`
-- maintains rolling summarization and context-capped recent messages
-- reads the bundled docs payload in release builds, including this spec
-- can create wrapped agents through the `createWrappedAgent` tool, which calls `POST /api/agents` with `mode: "WRAPPED"`, `modelId: "wrapped:none"`, native soul fields, and generic `wrappedConfig`
-- can create and maintain wrapped agents through the documented HTTP API:
-  - `POST /api/agents` with `mode: "WRAPPED"` and `wrappedConfig`
-  - `PATCH /api/agents/:name` to edit `wrappedConfig` as JSON
-  - set `desiredState: "RUNNING"` to let the assigned runner clone/setup/start the wrapper lifecycle
+- deterministic commands:
+  - `install` (prereq checks + clone/pull repo + `npm ci` + component-scoped build/config)
+  - `upgrade` (safety backup + component-scoped stop/update + optional restart)
+  - `doctor` (host prerequisite check)
+  - `start` / `stop` / `status` for selected components (`api`, `runner`, `user-ui`, `admin-ui`)
+  - `admin open` / `admin stop` / `admin status` convenience wrappers for `admin-ui`
+  - install/upgrade support runner bootstrap via:
+    - explicit `--runner-api-url` + `--runner-token` (+ optional `--runner-name`)
+    - invite bootstrap URL from `GET /api/runners/invites/:token`
+- optional `chat` command:
+  - plain tool-calling loop (`shell`, `askPassword`, `getBundledDocs`, `exitOpscli`)
+  - rolling summarization + context-capped history
+  - prompts for provider API keys only in chat mode
+- release build embeds docs/build metadata for chat context (not a full source snapshot)
+- auto-start registration is OS-specific:
+  - macOS LaunchAgent
+  - Linux systemd user service
+  - Windows Scheduled Task
 
 Security note: wrapped `source`, `setup.command`, and `runtime.command` are host code execution. Native orgops agents and opscli should treat GitHub-derived wrapper recipes as privileged changes and should prefer explicit user approval or trusted repo allowlists before enabling them on shared hosts.
 
@@ -1874,6 +1916,7 @@ Security note: wrapped `source`, `setup.command`, and `runtime.command` are host
 - `ORGOPS_AGENT_INTENT_TIMEOUT_MS`
 - `ORGOPS_AGENT_INTENT_MAX_TIMEOUTS`
 - `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`
+  - for native/wrapped runtime execution with injected env, provider keys are loaded from resolved secrets and do not fall back to host process env
 - `OPENROUTER_BASE_URL`, `OPENROUTER_HTTP_REFERER`, `OPENROUTER_APP_TITLE`
 - `ORGOPS_GIT_BASH_PATH`
 - `ORGOPS_SHELL_PATH`, `ORGOPS_SHELL_ARGS`
@@ -1884,7 +1927,8 @@ Security note: wrapped `source`, `setup.command`, and `runtime.command` are host
   - optional runtime override: `window.__ORGOPS_UI_CONFIG__ = { apiBaseUrl, wsBaseUrl }`
 - User UI build/runtime config:
   - `VITE_API_BASE_URL`
-  - optional runtime override: `window.__ORGOPS_USER_UI_CONFIG__ = { apiBaseUrl }`
+  - `VITE_WS_BASE_URL`
+  - optional runtime override: `window.__ORGOPS_USER_UI_CONFIG__ = { apiBaseUrl, wsBaseUrl }`
 - RLM controls:
   - `ORGOPS_RLM_MAX_STEPS`
   - `ORGOPS_RLM_MAX_OUTPUT_CHARS`
@@ -1895,16 +1939,13 @@ Security note: wrapped `source`, `setup.command`, and `runtime.command` are host
   - `ORGOPS_RLM_MAX_SUBAGENTS_PER_EVENT`
 - OpsCLI controls:
   - `ORGOPS_OPSCLI_MODEL`
-  - `ORGOPS_OPSCLI_MAX_STEPS`
+  - `ORGOPS_OPSCLI_TOOL_LOOP_MAX_STEPS`
   - `ORGOPS_OPSCLI_COMMAND_TIMEOUT_MS`
-  - `ORGOPS_OPSCLI_EVAL_TIMEOUT_MS`
-  - `ORGOPS_OPSCLI_EVAL_CALLBACK_TIMEOUT_MS`
   - `ORGOPS_OPSCLI_MAX_CONTEXT_CHARS`
   - `ORGOPS_OPSCLI_MAX_SUMMARY_CHARS`
   - `ORGOPS_OPSCLI_SUMMARY_CHUNK_MESSAGES`
   - `ORGOPS_OPSCLI_MIN_RECENT_MESSAGES`
   - `ORGOPS_OPSCLI_MAX_SYSTEM_DOC_CHARS`
-  - `ORGOPS_OPSCLI_DEBUG`
   - `ORGOPS_OPSCLI_PROGRESS`
   - `ORGOPS_OPSCLI_SPINNER`
   - `ORGOPS_OPSCLI_LOG_PATH`

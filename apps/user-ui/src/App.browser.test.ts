@@ -131,6 +131,7 @@ describe("user workspace retired Library browser coverage", () => {
   });
 
   it("preserves password-change, logout, and login flows without a retired route", async () => {
+    await page.setViewportSize({ width: 1280, height: 900 });
     mustChangePassword = true;
     await page.goto(`${base}/${"library"}`, { waitUntil: "domcontentloaded" });
     await page.getByRole("heading", { name: "Set a new password" }).waitFor({ state: "visible" });

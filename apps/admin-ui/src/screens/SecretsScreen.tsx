@@ -1,26 +1,41 @@
 import { useState } from "react";
-import type { SecretRow } from "../types";
+import type { Agent, SecretRow, Team } from "../types";
 import { Button, Card, Input, Select } from "../components/ui";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 import { formatTimestamp } from "../utils/formatTimestamp";
 
+type SecretScopeType = "public" | "team" | "private" | "package";
+
 type SecretsScreenProps = {
   secrets: SecretRow[];
+  agents: Agent[];
+  teams: Team[];
   onAddSecret: (secret: {
     name: string;
-    scopeType: string;
+    scopeType: SecretScopeType;
     scopeId: string | null;
     value: string;
   }) => Promise<void>;
   onDeleteSecret: (id: string) => Promise<void>;
 };
 
-export function SecretsScreen({ secrets, onAddSecret, onDeleteSecret }: SecretsScreenProps) {
-  const [newSecret, setNewSecret] = useState({
+export function SecretsScreen({
+  secrets,
+  agents,
+  teams,
+  onAddSecret,
+  onDeleteSecret,
+}: SecretsScreenProps) {
+  const [newSecret, setNewSecret] = useState<{
+    name: string;
+    scopeType: SecretScopeType;
+    scopeId: string;
+    value: string;
+  }>({
     name: "",
-    scopeType: "package",
+    scopeType: "public",
     scopeId: "",
-    value: ""
+    value: "",
   });
   const [activeSecretId, setActiveSecretId] = useState<string | null>(null);
   const [createDrawerOpen, setCreateDrawerOpen] = useState(false);
@@ -38,6 +53,11 @@ export function SecretsScreen({ secrets, onAddSecret, onDeleteSecret }: SecretsS
     }
   });
 
+  const requiresScopeId =
+    newSecret.scopeType === "team" ||
+    newSecret.scopeType === "private" ||
+    newSecret.scopeType === "package";
+
   const handleSave = async () => {
     setError(null);
     if (!newSecret.name.trim()) {
@@ -48,14 +68,18 @@ export function SecretsScreen({ secrets, onAddSecret, onDeleteSecret }: SecretsS
       setError("Secret value is required.");
       return;
     }
+    if (requiresScopeId && !newSecret.scopeId.trim()) {
+      setError(`Scope ID is required for ${newSecret.scopeType} secrets.`);
+      return;
+    }
     try {
       await onAddSecret({
         name: newSecret.name.trim(),
         scopeType: newSecret.scopeType,
-        scopeId: newSecret.scopeId.trim() || null,
-        value: newSecret.value
+        scopeId: requiresScopeId ? newSecret.scopeId.trim() : null,
+        value: newSecret.value,
       });
-      setNewSecret({ name: "", scopeType: "package", scopeId: "", value: "" });
+      setNewSecret({ name: "", scopeType: "public", scopeId: "", value: "" });
       setCreateDrawerOpen(false);
     } catch (saveError) {
       const message = saveError instanceof Error ? saveError.message : "Failed to create secret.";
@@ -66,7 +90,7 @@ export function SecretsScreen({ secrets, onAddSecret, onDeleteSecret }: SecretsS
   const handleDeleteSecret = async (secret: SecretRow) => {
     setError(null);
     const confirmed = window.confirm(
-      `Delete secret "${secret.name}" (${secret.scope_type})? This cannot be undone.`
+      `Delete secret "${secret.name}" (${secret.scope_type})? This cannot be undone.`,
     );
     if (!confirmed) return;
     setDeletingSecretId(secret.id);
@@ -82,6 +106,8 @@ export function SecretsScreen({ secrets, onAddSecret, onDeleteSecret }: SecretsS
       setDeletingSecretId(null);
     }
   };
+
+  const isLegacyPackage = (secret: SecretRow) => secret.scope_type === "package";
 
   return (
     <div className="space-y-4">
@@ -113,6 +139,11 @@ export function SecretsScreen({ secrets, onAddSecret, onDeleteSecret }: SecretsS
                   <td className="whitespace-nowrap px-2 py-2 text-slate-400">
                     {secret.scope_type}
                     {secret.scope_id ? `:${secret.scope_id}` : ""}
+                    {isLegacyPackage(secret) ? (
+                      <span className="ml-2 rounded bg-amber-500/15 px-1.5 py-0.5 text-xs text-amber-300">
+                        legacy
+                      </span>
+                    ) : null}
                   </td>
                   <td className="whitespace-nowrap px-2 py-2 text-slate-500">
                     {formatTimestamp(secret.created_at)}
@@ -162,18 +193,56 @@ export function SecretsScreen({ secrets, onAddSecret, onDeleteSecret }: SecretsS
             />
             <Select
               value={newSecret.scopeType}
-              onChange={(e) => setNewSecret({ ...newSecret, scopeType: e.target.value })}
+              onChange={(e) =>
+                setNewSecret({
+                  ...newSecret,
+                  scopeType: e.target.value as SecretScopeType,
+                  scopeId: "",
+                })
+              }
             >
-              <option value="package">package</option>
-              <option value="app">app</option>
-              <option value="agent">agent</option>
+              <option value="public">public</option>
               <option value="team">team</option>
+              <option value="private">private (agent-specific)</option>
+              <option value="package">package (legacy)</option>
             </Select>
-            <Input
-              placeholder="Scope ID (optional)"
-              value={newSecret.scopeId}
-              onChange={(e) => setNewSecret({ ...newSecret, scopeId: e.target.value })}
-            />
+
+            {newSecret.scopeType === "private" ? (
+              <Select
+                value={newSecret.scopeId}
+                onChange={(e) => setNewSecret({ ...newSecret, scopeId: e.target.value })}
+              >
+                <option value="">Select agent</option>
+                {agents.map((agent) => (
+                  <option key={agent.name} value={agent.name}>
+                    {agent.name}
+                  </option>
+                ))}
+              </Select>
+            ) : null}
+
+            {newSecret.scopeType === "team" ? (
+              <Select
+                value={newSecret.scopeId}
+                onChange={(e) => setNewSecret({ ...newSecret, scopeId: e.target.value })}
+              >
+                <option value="">Select team</option>
+                {teams.map((team) => (
+                  <option key={team.id} value={team.id}>
+                    {team.name} ({team.id})
+                  </option>
+                ))}
+              </Select>
+            ) : null}
+
+            {newSecret.scopeType === "package" ? (
+              <Input
+                placeholder="Package scope ID (legacy)"
+                value={newSecret.scopeId}
+                onChange={(e) => setNewSecret({ ...newSecret, scopeId: e.target.value })}
+              />
+            ) : null}
+
             <Input
               placeholder="Value"
               value={newSecret.value}
@@ -204,7 +273,9 @@ export function SecretsScreen({ secrets, onAddSecret, onDeleteSecret }: SecretsS
               </h3>
               <p className="text-sm text-slate-500">
                 {selectedSecret
-                  ? `${selectedSecret.scope_type}${selectedSecret.scope_id ? `:${selectedSecret.scope_id}` : ""}`
+                  ? `${selectedSecret.scope_type}${
+                      selectedSecret.scope_id ? `:${selectedSecret.scope_id}` : ""
+                    }`
                   : "Select a secret to view details."}
               </p>
             </div>
@@ -239,8 +310,7 @@ export function SecretsScreen({ secrets, onAddSecret, onDeleteSecret }: SecretsS
                   <span className="text-slate-500">Scope:</span> {selectedSecret.scope_type}
                 </div>
                 <div className="break-all">
-                  <span className="text-slate-500">Scope ID:</span>{" "}
-                  {selectedSecret.scope_id ?? "-"}
+                  <span className="text-slate-500">Scope ID:</span> {selectedSecret.scope_id ?? "-"}
                 </div>
                 <div className="break-all">
                   <span className="text-slate-500">ID:</span> {selectedSecret.id}

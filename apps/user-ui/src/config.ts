@@ -1,8 +1,10 @@
 type RuntimeUserUiConfig = {
   apiBaseUrl?: string;
+  wsBaseUrl?: string;
 };
 
 const DEFAULT_API_BASE = "/api";
+const DEFAULT_WS_BASE = "/ws";
 
 function trimToUndefined(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
@@ -22,6 +24,38 @@ function isAbsoluteHttpUrl(value: string): boolean {
   return /^https?:\/\//i.test(value);
 }
 
+function isAbsoluteWsUrl(value: string): boolean {
+  return /^wss?:\/\//i.test(value);
+}
+
+function parseHttpUrl(value: string): URL | null {
+  try {
+    return new URL(value);
+  } catch {
+    return null;
+  }
+}
+
+function toWsProtocol(protocol: string): "ws:" | "wss:" {
+  return protocol === "https:" ? "wss:" : "ws:";
+}
+
+function deriveWsBaseFromApiBase(apiBaseUrl: string): string | undefined {
+  if (!isAbsoluteHttpUrl(apiBaseUrl)) return undefined;
+  const parsed = parseHttpUrl(apiBaseUrl);
+  if (!parsed) return undefined;
+  const normalizedPath = stripTrailingSlashes(parsed.pathname) || "/";
+  const wsPath =
+    normalizedPath === "/api"
+      ? "/ws"
+      : normalizedPath.endsWith("/api")
+        ? `${normalizedPath.slice(0, -4)}/ws`
+        : normalizedPath === "/"
+          ? "/ws"
+          : `${normalizedPath}/ws`;
+  return `${toWsProtocol(parsed.protocol)}//${parsed.host}${wsPath}`;
+}
+
 function resolveConfiguredApiBase(): string {
   const runtimeConfig = (globalThis as { __ORGOPS_USER_UI_CONFIG__?: RuntimeUserUiConfig })
     .__ORGOPS_USER_UI_CONFIG__;
@@ -32,7 +66,19 @@ function resolveConfiguredApiBase(): string {
   );
 }
 
+function resolveConfiguredWsBase(configuredApiBase: string): string {
+  const runtimeConfig = (globalThis as { __ORGOPS_USER_UI_CONFIG__?: RuntimeUserUiConfig })
+    .__ORGOPS_USER_UI_CONFIG__;
+  return (
+    trimToUndefined(runtimeConfig?.wsBaseUrl) ??
+    trimToUndefined(import.meta.env.VITE_WS_BASE_URL) ??
+    deriveWsBaseFromApiBase(configuredApiBase) ??
+    DEFAULT_WS_BASE
+  );
+}
+
 const configuredApiBase = resolveConfiguredApiBase();
+const configuredWsBase = resolveConfiguredWsBase(configuredApiBase);
 
 export function apiUrl(path: string): string {
   if (isAbsoluteHttpUrl(path)) return path;
@@ -43,4 +89,18 @@ export function apiUrl(path: string): string {
     return `${base}${pathWithoutApiPrefix}`;
   }
   return `${base}${normalizedPath}`;
+}
+
+export function wsUrl(): string {
+  if (isAbsoluteWsUrl(configuredWsBase)) return configuredWsBase;
+  if (isAbsoluteHttpUrl(configuredWsBase)) {
+    const parsed = parseHttpUrl(configuredWsBase);
+    if (parsed) {
+      return `${toWsProtocol(parsed.protocol)}//${parsed.host}${parsed.pathname}${parsed.search}`;
+    }
+  }
+  const wsPath = configuredWsBase.startsWith("/")
+    ? configuredWsBase
+    : `/${configuredWsBase}`;
+  return `${toWsProtocol(location.protocol)}//${location.host}${wsPath}`;
 }

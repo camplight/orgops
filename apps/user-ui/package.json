@@ -4,14 +4,16 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5190",
-    "build": "tsc -p tsconfig.json --noEmit && vite build && npm run verify-retirement",
+    "build": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json --noEmit && vite build && npm run verify-retirement",
     "verify-retirement": "node --import tsx scripts/verify-retirement.ts",
     "preview": "vite preview --host 0.0.0.0 --port 4190",
-    "lint": "tsc -p tsconfig.json --noEmit"
+    "lint": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@types/react": "^18.3.4",

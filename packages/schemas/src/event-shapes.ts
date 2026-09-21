@@ -8,7 +8,7 @@ export type EventDraft = {
   type: string;
   payload: unknown;
   source: string;
-  channelId?: string;
+  channelId?: string | null;
   parentEventId?: string;
   deliverAt?: number;
   idempotencyKey?: string;
@@ -563,6 +563,12 @@ const coreEventShapes: EventShapeDefinition[] = [
   {
     type: "audit.secret.accessed",
     description: "Audit record for secret access.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "audit.secret.deleted",
+    description: "Audit record for secret deletion.",
     source: "core",
     payloadSchema: z.record(z.string(), z.unknown()),
   },

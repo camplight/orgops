@@ -60,6 +60,21 @@ export type RunnerSetupConfig = {
   runnerApiUrl?: string;
 };
 
+export type RunnerInviteConfig = {
+  ok: boolean;
+  invite: {
+    name: string;
+    runnerId: string;
+    tokenPrefix: string;
+    expiresAt: number;
+    inviteUrl: string;
+  };
+  bootstrap: {
+    apiBaseUrl: string;
+    runnerNameHint?: string;
+  };
+};
+
 export type AgentWorkspaceEntry = {
   name: string;
   path: string;
@@ -198,8 +213,8 @@ export type ProcessOutputRow = {
 export type SecretRow = {
   id: string;
   name: string;
-  scope_type: string;
-  scope_id?: string;
+  scope_type: "public" | "team" | "private" | "package" | "app" | string;
+  scope_id?: string | null;
   created_at: number;
 };
 
@@ -219,10 +234,14 @@ export type AgentInvite = {
   id: string;
   name: string;
   agentName: string;
+  visibility?: "PUBLIC" | "PRIVATE";
+  runnerScopeMode?: "SCOPED" | "GLOBAL";
   tokenPrefix: string;
   channelIds: string[];
   maxUses: number;
   useCount: number;
+  createdByType?: "HUMAN" | "AGENT";
+  createdById?: string;
   createdByHumanId?: string | null;
   createdAt: number;
   expiresAt?: number | null;

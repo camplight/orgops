@@ -46,6 +46,9 @@ describe("llm", () => {
     mocks.createOpenAI.mockClear();
     mocks.createAnthropic.mockClear();
     delete process.env.ORGOPS_LLM_STUB;
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.OPENROUTER_API_KEY;
   });
 
   it("detects completion-only OpenAI model ids", () => {
@@ -71,16 +74,34 @@ describe("llm", () => {
     expect(result.toolResults).toEqual([]);
   });
 
-  it("falls back to process env when options.env is provided", async () => {
-    process.env.ORGOPS_LLM_STUB = "1";
-    const result = await generate(
+  it("does not fall back to process provider keys when env is injected", async () => {
+    process.env.ORGOPS_LLM_STUB = "0";
+    process.env.OPENAI_API_KEY = "host-key";
+    await generate(
       "openai:gpt-4o-mini",
       [{ role: "user", content: "hello" }],
       { env: {} },
     );
-    expect(result.text.length).toBeGreaterThan(0);
-    expect(result.toolCalls).toEqual([]);
-    expect(result.toolResults).toEqual([]);
+    expect(mocks.createOpenAI).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: undefined,
+      }),
+    );
+  });
+
+  it("uses injected provider keys when provided", async () => {
+    process.env.ORGOPS_LLM_STUB = "0";
+    process.env.OPENAI_API_KEY = "host-key";
+    await generate(
+      "openai:gpt-4o-mini",
+      [{ role: "user", content: "hello" }],
+      { env: { OPENAI_API_KEY: "scoped-key" } },
+    );
+    expect(mocks.createOpenAI).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: "scoped-key",
+      }),
+    );
   });
 
   it("rejects unsupported providers", async () => {
