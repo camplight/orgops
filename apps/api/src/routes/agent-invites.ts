@@ -299,6 +299,8 @@ export function registerAgentInviteRoutes(app: Hono<any>, deps: AgentInvitesDeps
 
   app.post("/api/agent-invites/public/:token/redeem", async (c) => {
     const token = c.req.param("token");
+    try {
+      return orm.$client.transaction(() => {
     const invite = findActiveInviteByToken(orm, token);
     if (!invite) return jsonResponse(c, { error: "Invite is invalid or expired" }, 404);
 
@@ -404,19 +406,12 @@ export function registerAgentInviteRoutes(app: Hono<any>, deps: AgentInvitesDeps
         })
         .run();
     } else {
-      orm
-        .update(schema.agents)
-        .set({
-          mode: "WRAPPED",
-          model_id: "wrapped:none",
-          memory_context_mode: "OFF",
-          wrapped_config_json: JSON.stringify(wrappedConfig),
-          assigned_runner_id: runnerId,
-          desired_state: existingAgent.desired_state ?? "STOPPED",
-          updated_at: now,
-        })
-        .where(eq(schema.agents.name, invite.agent_name))
-        .run();
+      const updated = orm.$client.prepare(`UPDATE agents SET mode='WRAPPED',model_id='wrapped:none',memory_context_mode='OFF',
+        wrapped_config_json=?,assigned_runner_id=?,desired_state=?,updated_at=?,revision=revision+1
+        WHERE name=? AND revision<2147483647`).run(
+        JSON.stringify(wrappedConfig), runnerId, existingAgent.desired_state ?? "STOPPED", now, invite.agent_name,
+      );
+      if (updated.changes !== 1) throw new Error("AGENT_REVISION_CONFLICT");
     }
 
     for (const channelId of channelIds) {
@@ -509,5 +504,12 @@ export function registerAgentInviteRoutes(app: Hono<any>, deps: AgentInvitesDeps
           "https://github.com/camplight/orgops/blob/main/docs/WRAPPED_AGENT_INVITES.md",
       },
     });
+      })();
+    } catch (error) {
+      if (error instanceof Error && error.message === "AGENT_REVISION_CONFLICT") {
+        return jsonResponse(c, { error: "Agent revision conflict" }, 409);
+      }
+      throw error;
+    }
   });
 }

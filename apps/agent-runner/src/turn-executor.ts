@@ -1,5 +1,5 @@
 import { arch, hostname, release } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { readFileSync } from "node:fs";
 import {
   generate,
@@ -9,10 +9,11 @@ import {
   type LlmUsage,
 } from "@orgops/llm";
 import { getModel } from "models-dev-db";
-import { listSkills, loadSkillEventShapes } from "@orgops/skills";
+import { listSkills, loadSkillEventShapes, type SkillMeta, type SkillRoot } from "@orgops/skills";
 import {
   type EventValidationResult,
   type EventTypeSummary,
+  type RuntimeGeneration,
   getCoreEventShapes,
   serializeEventShapes,
   validateEventAgainstShapes,
@@ -420,8 +421,52 @@ export async function reconcileLateInjectedMessages(input: {
   return true;
 }
 
+export async function resolveTurnSkillContext(input: {
+  legacySkillRoot: SkillRoot;
+  generation: RuntimeGeneration;
+  enabledSkills: readonly string[];
+  alwaysPreloadedSkills: readonly string[];
+}) {
+  const byName = (root: string) => new Map(listSkills({ path: root }).sort((left, right) => left.name.localeCompare(right.name))
+    .map(skill => [skill.name, skill] as const));
+  const legacyRoot = resolve(input.legacySkillRoot.path);
+  const generationRoots = [input.generation.skillRoot, input.generation.promptRoot, input.generation.eventShapeRoot].map(root => resolve(root));
+  const usesLegacyFallback = generationRoots.every(root => root === legacyRoot);
+  const legacy = byName(legacyRoot);
+  const packageSkills = usesLegacyFallback ? new Map<string, SkillMeta>() : byName(generationRoots[0]!);
+  const packagePrompts = usesLegacyFallback ? new Map<string, SkillMeta>() : byName(generationRoots[1]!);
+  const packageEventShapes = usesLegacyFallback ? new Map<string, SkillMeta>() : byName(generationRoots[2]!);
+  const inventory = (skills: Map<string, SkillMeta>) => [...skills.keys()].sort().join("\n");
+  if (inventory(packageSkills) !== inventory(packagePrompts) || inventory(packageSkills) !== inventory(packageEventShapes)) {
+    throw new Error("DIVERGENT_GENERATION_ROOTS");
+  }
+  const enabledNames = [...new Set(input.enabledSkills)].sort();
+  const preloadNames = new Set(input.alwaysPreloadedSkills);
+  const selected: Array<{ meta: SkillMeta; prompt: SkillMeta; eventShape: SkillMeta }> = [];
+  for (const name of enabledNames) {
+    const local = legacy.get(name);
+    const packaged = packageSkills.get(name);
+    if (local && packaged) throw new Error("AMBIGUOUS_SKILL_ROOT");
+    if (packaged) selected.push({ meta: packaged, prompt: packagePrompts.get(name)!, eventShape: packageEventShapes.get(name)! });
+    else if (local) selected.push({ meta: local, prompt: local, eventShape: local });
+  }
+  const selectedSkills = selected.map(item => item.meta);
+  const loadedSkillEventShapes = await loadSkillEventShapes(selected.map(item => item.eventShape));
+  return {
+    selectedSkills,
+    skillIndex: selectedSkills.map(skill => `${skill.name} | ${skill.description} | ${join(skill.path, "SKILL.md")}`).join("\n"),
+    preloadedSkillsContext: selected.filter(item => preloadNames.has(item.meta.name)).map(item => {
+      const contents = getSkillMarkdownContents(item.prompt.path);
+      return contents ? `# ${item.meta.name}\n${contents}` : null;
+    }).filter((entry): entry is string => Boolean(entry)).join("\n\n"),
+    eventShapes: loadedSkillEventShapes.shapes,
+    eventShapeErrors: loadedSkillEventShapes.errors,
+    extraAllowedRoots: selectedSkills.map(skill => skill.path),
+  };
+}
+
 export function createTurnExecutor(input: CreateTurnExecutorInput) {
-  return async function executeTurn(agent: Agent, events: Event[]) {
+  return async function executeTurn(agent: Agent, events: Event[], generation: RuntimeGeneration) {
     if (events.length === 0) return;
     const triggerEvent = events[events.length - 1]!;
     const channelId = triggerEvent?.channelId;
@@ -469,40 +514,26 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
     const injectionEnv = await input.api.getPackageSecretsEnv(agent.name, channelId);
     const channelRecord = await input.api.getChannelRecord(channelId);
     const soul = typeof agent.soulContents === "string" ? agent.soulContents : "";
-    const allSkills = listSkills(input.skillRoot);
-    const enabledSkillSet = new Set(agent.enabledSkills ?? []);
-    const alwaysPreloadedSkillSet = new Set(agent.alwaysPreloadedSkills ?? []);
-    const selectedSkills = allSkills.filter((skill: any) => enabledSkillSet.has(skill.name));
-    const alwaysPreloadedSkills = selectedSkills.filter((skill: any) =>
-      alwaysPreloadedSkillSet.has(skill.name),
-    );
-    const loadedSkillEventShapes = await loadSkillEventShapes(selectedSkills);
+    const skillContext = await resolveTurnSkillContext({
+      legacySkillRoot: input.skillRoot,
+      generation,
+      enabledSkills: agent.enabledSkills ?? [],
+      alwaysPreloadedSkills: agent.alwaysPreloadedSkills ?? [],
+    });
     const coreEventShapes = getCoreEventShapes();
-    const eventShapes = [...coreEventShapes, ...loadedSkillEventShapes.shapes];
+    const eventShapes = [...coreEventShapes, ...skillContext.eventShapes];
     const serializedEventTypes = serializeEventShapes(eventShapes);
     const coreEventTypes = queryEventTypes(serializedEventTypes, {
       source: "core",
     });
-    const skillIndex = selectedSkills
-      .map(
-        (skill: any) =>
-          `${skill.name} | ${skill.description} | ${join(skill.path, "SKILL.md")}`,
-      )
-      .join("\n");
-    const preloadedSkillsContext = alwaysPreloadedSkills
-      .map((skill: any) => {
-        const contents = getSkillMarkdownContents(skill.path);
-        if (!contents) return null;
-        return `# ${skill.name}\n${contents}`;
-      })
-      .filter((entry: unknown): entry is string => Boolean(entry))
-      .join("\n\n");
+    const skillIndex = skillContext.skillIndex;
+    const preloadedSkillsContext = skillContext.preloadedSkillsContext;
     const nowMs = Date.now();
     const nowIso = new Date(nowMs).toISOString();
     const runnerGuidance = buildRunnerGuidance(
       nowMs,
       nowIso,
-      input.skillRoot.path,
+      generation.skillRoot,
       coreEventTypes,
       {
         platform: process.platform,
@@ -695,7 +726,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       agent,
       triggerEvent,
       channelId,
-      extraAllowedRoots: selectedSkills.map((skill: any) => skill.path),
+      extraAllowedRoots: skillContext.extraAllowedRoots,
       injectionEnv,
       apiFetch: input.api.apiFetch,
       emitEvent: input.api.emitEvent,
@@ -724,8 +755,8 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         idempotencyKey?: string;
       }) => validateEventAgainstShapes(eventDraft, eventShapes),
     };
-    if (loadedSkillEventShapes.errors.length > 0) {
-      console.warn("skill event shape load errors", loadedSkillEventShapes.errors);
+    if (skillContext.eventShapeErrors.length > 0) {
+      console.warn("skill event shape load errors", skillContext.eventShapeErrors);
     }
     const tools = createRunnerTools({
       agent,

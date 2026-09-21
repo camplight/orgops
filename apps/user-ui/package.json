@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5190",
-    "build": "tsc -p tsconfig.json --noEmit && vite build",
+    "build": "tsc -p tsconfig.json --noEmit && vite build && npm run verify-retirement",
+    "verify-retirement": "node --import tsx scripts/verify-retirement.ts",
     "preview": "vite preview --host 0.0.0.0 --port 4190",
     "lint": "tsc -p tsconfig.json --noEmit"
   },

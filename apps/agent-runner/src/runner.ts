@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, lstatSync, mkdirSync, realpathSync } from "node:fs";
+import { dirname, join, relative, resolve, sep } from "node:path";
+import { PortableWrappedRecipeSchema, StartRequirementsResultSchema, type RequirementReason, type StartRequirementsResult } from "@orgops/schemas";
 import { resolveSkillRoot } from "@orgops/skills";
 import { stopAllRunningProcesses } from "./tools/shell";
 import { createChannelLoopManager } from "./channel-loop";
@@ -8,6 +9,7 @@ import { createMaintenanceLoop } from "./maintenance-loop";
 import { stopAllRlmChildren } from "./rlm-process";
 import { createRunnerState } from "./runner/state";
 import { createRunnerApi } from "./runner/api";
+import { listWrapperHarnesses } from "./wrapper-harness/registry";
 import {
   clearAgentIntentWatch,
   collectDueIntentTimeouts,
@@ -30,6 +32,8 @@ import {
   stopWrappedAgentRuntime,
 } from "./wrapped-runtime";
 import { buildModelMessages, selectRecentDeltaEventsForPrompt } from "./prompt-composer";
+import { createAgentRuntimeGeneration } from "./runtime-generation";
+import { createPackageDeploymentProcessor } from "./package-delivery";
 import type { Agent, Event } from "./types";
 
 const API_URL = process.env.ORGOPS_API_URL ?? "http://localhost:8787";
@@ -44,6 +48,9 @@ const SKILL_ROOT = resolveSkillRoot(PROJECT_ROOT);
 const RUNNER_ID_FILE = process.env.ORGOPS_RUNNER_ID_FILE
   ? resolve(PROJECT_ROOT, process.env.ORGOPS_RUNNER_ID_FILE)
   : resolve(PROJECT_ROOT, ".agent-runner-id");
+const RUNNER_PACKAGE_ROOT = process.env.ORGOPS_RUNNER_PACKAGE_ROOT
+  ? resolve(PROJECT_ROOT, process.env.ORGOPS_RUNNER_PACKAGE_ROOT)
+  : resolve(PROJECT_ROOT, ".orgops-data", "runner-packages");
 const HEARTBEAT_INTERVAL_MS = 5000;
 const DEFAULT_CHANNEL_RECENT_MEMORY_INTERVAL_MS = 10_000;
 const DEFAULT_CHANNEL_FULL_MEMORY_INTERVAL_MS = 60_000;
@@ -88,6 +95,7 @@ const AGENT_INTENT_MAX_TIMEOUTS = readPositiveIntEnv(
 );
 
 const state = createRunnerState();
+const runtimeGeneration = createAgentRuntimeGeneration({ packageRoot: RUNNER_PACKAGE_ROOT, fallbackRoot: SKILL_ROOT.path });
 const api = createRunnerApi({
   apiUrl: API_URL,
   runnerToken: process.env.ORGOPS_RUNNER_TOKEN ?? "dev-runner-token",
@@ -109,6 +117,10 @@ const handleTurn = createTurnExecutor({
     ensureLifecycleChannel: api.ensureLifecycleChannel,
   },
 });
+const packageDeploymentProcessor = createPackageDeploymentProcessor({
+  api,
+  runtime: runtimeGeneration,
+});
 const maintenanceLoop = createMaintenanceLoop({
   listChannels: api.listChannels,
   getPackageSecretsEnv: api.getPackageSecretsEnv,
@@ -120,7 +132,8 @@ const maintenanceLoop = createMaintenanceLoop({
 });
 
 const channelLoopManager = createChannelLoopManager({
-  processBatch: async (agent, channelId, channelEvents) => {
+  captureForTurn: runtimeGeneration.captureForTurn,
+  processBatch: async (agent, channelId, channelEvents, generation) => {
     const key = agentChannelKey(agent.name, channelId);
     const startedAt = Date.now();
     state.recentTurnWindows.set(key, {
@@ -128,7 +141,7 @@ const channelLoopManager = createChannelLoopManager({
       completedAt: startedAt,
     });
     try {
-      await handleTurn(agent, channelEvents);
+      await handleTurn(agent, channelEvents, generation);
     } finally {
       const existing = state.recentTurnWindows.get(key);
       if (!existing) return;
@@ -161,12 +174,110 @@ const channelLoopManager = createChannelLoopManager({
   },
 });
 
+function inside(root: string, target: string) {
+  const path = relative(root, target);
+  return path === "" || (path !== ".." && !path.startsWith(`..${sep}`) && !path.startsWith(sep));
+}
+
+export function validateCatalogAgentLocally(agent: Agent, projectRoot: string): StartRequirementsResult {
+  if (!agent.catalogDerived) return { ok: true };
+  const reasons: RequirementReason[] = [];
+  const add = (reason: RequirementReason) => { if (!reasons.some(existing => existing.code === reason.code)) reasons.push(reason); };
+  if (!agent.modelId?.trim()) {
+    add({ code: "MODEL_BINDING_MISSING" });
+  }
+  if ((agent.mode ?? "CLASSIC") === "WRAPPED") {
+    const parsed = PortableWrappedRecipeSchema.safeParse(agent.wrappedConfig);
+    if (!parsed.success || !listWrapperHarnesses().includes(parsed.data.harness)) add({ code: "WRAPPED_WIRING_MISSING" });
+  }
+  try {
+    const canonicalRoot = realpathSync(projectRoot);
+    const candidate = agent.workspacePath.startsWith("/") ? resolve(agent.workspacePath) : resolve(projectRoot, agent.workspacePath);
+    if (candidate === resolve(projectRoot) || !inside(resolve(projectRoot), candidate)) throw new Error("escape");
+    let ancestor = candidate;
+    while (!existsSync(ancestor)) {
+      const parent = dirname(ancestor);
+      if (parent === ancestor) throw new Error("missing ancestor");
+      ancestor = parent;
+    }
+    if (lstatSync(ancestor).isSymbolicLink() || !inside(canonicalRoot, realpathSync(ancestor))) throw new Error("unsafe ancestor");
+    if (existsSync(candidate) && (lstatSync(candidate).isSymbolicLink() || !inside(canonicalRoot, realpathSync(candidate)))) throw new Error("unsafe workspace");
+  } catch {
+    add({ code: "WORKSPACE_BINDING_MISSING" });
+  }
+  reasons.sort((left, right) => left.code.localeCompare(right.code));
+  return reasons.length ? { ok: false, code: "REQUIREMENTS_UNSATISFIED", reasons } : { ok: true };
+}
+
 async function ensureWorkspace(agent: Agent) {
   const workspacePath = agent.workspacePath.startsWith("/")
     ? agent.workspacePath
     : resolve(PROJECT_ROOT, agent.workspacePath);
   mkdirSync(workspacePath, { recursive: true });
   agent.workspacePath = workspacePath;
+}
+
+type AgentBootstrapDeps = {
+  projectRoot: string;
+  registeredRunnerId?: string;
+  bootstrappedAgents: Set<string>;
+  bootstrappedAgentKeys: Map<string, string>;
+  heartbeats: Map<string, number>;
+  getStartRequirements: (agentName: string) => Promise<unknown>;
+  validateLocal: (agent: Agent, projectRoot: string) => unknown;
+  ensureWorkspace: (agent: Agent) => Promise<void>;
+  patchRunning: (agent: Agent, now: number) => Promise<void>;
+  bootstrap: (agent: Agent) => Promise<void>;
+  scheduleMaintenance: (agent: Agent) => void;
+  now: () => number;
+  heartbeatIntervalMs: number;
+  warn: (...values: unknown[]) => void;
+  bootstrapFailed?: (agentName: string) => void;
+};
+
+/** The production bootstrap boundary: prerequisite denial returns before every host/runtime side effect. */
+export async function reconcileAgentBootstrap(agent: Agent, deps: AgentBootstrapDeps): Promise<boolean> {
+  if (deps.registeredRunnerId && agent.assignedRunnerId && agent.assignedRunnerId !== deps.registeredRunnerId) return false;
+  const bootstrapKey = (agent.mode ?? "CLASSIC") === "WRAPPED" ? JSON.stringify(agent.wrappedConfig ?? {}) : "classic";
+  const needsStartGate = !deps.bootstrappedAgents.has(agent.name)
+    || deps.bootstrappedAgentKeys.get(agent.name) !== bootstrapKey || agent.runtimeState !== "RUNNING";
+  if (needsStartGate) {
+    let apiResult: ReturnType<typeof StartRequirementsResultSchema.parse>;
+    let localResult: ReturnType<typeof StartRequirementsResultSchema.parse>;
+    try {
+      apiResult = StartRequirementsResultSchema.parse(await deps.getStartRequirements(agent.name));
+      localResult = StartRequirementsResultSchema.parse(deps.validateLocal(agent, deps.projectRoot));
+    } catch {
+      deps.warn("runner.agent.start_requirements_unavailable", { agentName: agent.name });
+      return false;
+    }
+    const reasons = [...(apiResult.ok ? [] : apiResult.reasons), ...(localResult.ok ? [] : localResult.reasons)]
+      .filter((reason, index, all) => all.findIndex(candidate => JSON.stringify(candidate) === JSON.stringify(reason)) === index)
+      .sort((left, right) => `${left.code}\0${left.packageReleaseId ?? ""}\0${left.requirementName ?? ""}`
+        .localeCompare(`${right.code}\0${right.packageReleaseId ?? ""}\0${right.requirementName ?? ""}`));
+    if (reasons.length) {
+      deps.warn("runner.agent.start_requirements_unsatisfied", { agentName: agent.name, reasonCodes: reasons.map(reason => reason.code) });
+      return false;
+    }
+  }
+  await deps.ensureWorkspace(agent);
+  const timestamp = deps.now();
+  const previousHeartbeatAt = deps.heartbeats.get(agent.name) ?? 0;
+  if (agent.runtimeState !== "RUNNING" || timestamp - previousHeartbeatAt >= deps.heartbeatIntervalMs) {
+    await deps.patchRunning(agent, timestamp);
+    deps.heartbeats.set(agent.name, timestamp);
+  }
+  if (!deps.bootstrappedAgents.has(agent.name) || deps.bootstrappedAgentKeys.get(agent.name) !== bootstrapKey) {
+    try {
+      await deps.bootstrap(agent);
+      deps.bootstrappedAgents.add(agent.name);
+      deps.bootstrappedAgentKeys.set(agent.name, bootstrapKey);
+    } catch { deps.bootstrapFailed?.(agent.name); }
+  }
+  if ((agent.mode ?? "CLASSIC") !== "WRAPPED" && resolveAgentMemoryContextMode(agent) === "PER_CHANNEL_CROSS_CHANNEL") {
+    deps.scheduleMaintenance(agent);
+  }
+  return true;
 }
 
 async function pollAgent(agent: Agent) {
@@ -191,55 +302,34 @@ async function pollAgent(agent: Agent) {
     }
     return;
   }
-  await ensureWorkspace(agent);
-  const now = Date.now();
-  const previousHeartbeatAt = state.heartbeats.get(agent.name) ?? 0;
-  const needsHeartbeat = now - previousHeartbeatAt >= HEARTBEAT_INTERVAL_MS;
-  if (agent.runtimeState !== "RUNNING" || needsHeartbeat) {
-    await api.patchAgentState(agent.name, {
-      runtimeState: "RUNNING",
-      lastHeartbeatAt: now,
-    });
-    state.heartbeats.set(agent.name, now);
-  }
-  const bootstrapKey =
-    (agent.mode ?? "CLASSIC") === "WRAPPED"
-      ? JSON.stringify(agent.wrappedConfig ?? {})
-      : "classic";
-  if (
-    !state.bootstrappedAgents.has(agent.name) ||
-    state.bootstrappedAgentKeys.get(agent.name) !== bootstrapKey
-  ) {
-    try {
-      if ((agent.mode ?? "CLASSIC") === "WRAPPED") {
-        await stopWrappedAgentRuntime(agent.name);
-        await ensureWrappedAgentReady(
-          {
-            projectRoot: PROJECT_ROOT,
-            api: {
-              apiFetch: api.apiFetch,
-              emitEvent: api.emitEvent,
-              ensureLifecycleChannel: api.ensureLifecycleChannel,
-              getPackageSecretsEnv: api.getPackageSecretsEnv,
-            },
-          },
-          agent,
-        );
-      } else {
-        await api.emitStartupEvent(agent);
-      }
-      state.bootstrappedAgents.add(agent.name);
-      state.bootstrappedAgentKeys.set(agent.name, bootstrapKey);
-    } catch (error) {
-      console.error(`failed to emit startup event for ${agent.name}`, error);
-    }
-  }
-  if (
-    (agent.mode ?? "CLASSIC") !== "WRAPPED" &&
-    resolveAgentMemoryContextMode(agent) === "PER_CHANNEL_CROSS_CHANNEL"
-  ) {
-    maintenanceLoop.schedule(agent);
-  }
+  const ready = await reconcileAgentBootstrap(agent, {
+    projectRoot: PROJECT_ROOT,
+    registeredRunnerId: state.registeredRunnerId ?? undefined,
+    bootstrappedAgents: state.bootstrappedAgents,
+    bootstrappedAgentKeys: state.bootstrappedAgentKeys,
+    heartbeats: state.heartbeats,
+    getStartRequirements: api.getAgentStartRequirements,
+    validateLocal: validateCatalogAgentLocally,
+    ensureWorkspace,
+    patchRunning: async (current, timestamp) => api.patchAgentState(current.name, {
+      runtimeState: "RUNNING", lastHeartbeatAt: timestamp,
+    }),
+    bootstrap: async current => {
+      if ((current.mode ?? "CLASSIC") === "WRAPPED") {
+        await stopWrappedAgentRuntime(current.name);
+        await ensureWrappedAgentReady({ projectRoot: PROJECT_ROOT, api: {
+          apiFetch: api.apiFetch, emitEvent: api.emitEvent, ensureLifecycleChannel: api.ensureLifecycleChannel,
+          getPackageSecretsEnv: api.getPackageSecretsEnv,
+        } }, current);
+      } else await api.emitStartupEvent(current);
+    },
+    scheduleMaintenance: maintenanceLoop.schedule,
+    now: Date.now,
+    heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
+    warn: console.warn,
+    bootstrapFailed: agentName => console.error("runner.agent.bootstrap_failed", { agentName }),
+  });
+  if (!ready) return;
   const channels = await api.listChannels();
   const subscribedChannelIds = channels
     .filter((channel) =>
@@ -341,6 +431,16 @@ export async function shouldHandleEvent(agent: Agent, event: Event) {
   return shouldHandleEventForAgent(agent, event);
 }
 
+export async function heartbeatDeliverThenList(deps: {
+  sendRunnerHeartbeat(): Promise<void>;
+  processPackageDeployments(): Promise<void>;
+  listAgents(): Promise<Agent[]>;
+}): Promise<Agent[]> {
+  await deps.sendRunnerHeartbeat();
+  await deps.processPackageDeployments();
+  return deps.listAgents();
+}
+
 export async function loop() {
   let shuttingDown = false;
   let shutdownSignal: NodeJS.Signals | null = null;
@@ -366,8 +466,11 @@ export async function loop() {
 
   while (!shuttingDown) {
     try {
-      await api.sendRunnerHeartbeat();
-      const agents = await api.listAgents();
+      const agents = await heartbeatDeliverThenList({
+        sendRunnerHeartbeat: api.sendRunnerHeartbeat,
+        processPackageDeployments: packageDeploymentProcessor.processPackageDeployments,
+        listAgents: api.listAgents,
+      });
       await reconcileRemovedAgents(agents);
       const results = await Promise.allSettled(agents.map(async (agent) => pollAgent(agent)));
       for (const result of results) {

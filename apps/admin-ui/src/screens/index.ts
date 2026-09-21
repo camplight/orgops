@@ -1,4 +1,6 @@
 export { AgentsScreen } from "./AgentsScreen";
+export { AgentSkillsTab } from "./AgentSkillsTab";
+export type { AgentSkillsTabProps, AgentSkillsManagement } from "./AgentSkillsTab";
 export { AgentInvitesScreen } from "./AgentInvitesScreen";
 export { ChannelsScreen } from "./ChannelsScreen";
 export { ChatScreen } from "./ChatScreen";
@@ -12,3 +14,4 @@ export { RunnersScreen } from "./RunnersScreen";
 export { SecretsScreen } from "./SecretsScreen";
 export { SkillsScreen } from "./SkillsScreen";
 export { TeamsScreen } from "./TeamsScreen";
+export { SourceLibraryScreen, ConnectedSourceLibraryScreen } from "./SourceLibraryScreen";

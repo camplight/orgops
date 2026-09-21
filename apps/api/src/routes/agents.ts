@@ -13,10 +13,14 @@ import {
   AGENT_VISIBILITY,
   isAgentVisibility,
   schema,
+  type OrgOpsDb,
   type OrgOpsDrizzleDb
 } from "@orgops/db";
 import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import type { EventBus } from "@orgops/event-bus";
+import { AgentStartReadinessSchema, type AuthenticatedPrincipal, type CatalogStartGate, type InventoryActor } from "@orgops/schemas";
+import type { AgentSkillManagement, LocalBatch } from "../unified-skills/management";
+import { CatalogStartGateError } from "../catalog-library/start-gate";
 import type { AccessControl, RequestUser } from "./access";
 
 type AgentsDeps = {
@@ -29,6 +33,13 @@ type AgentsDeps = {
   resolveWorkspacePath: (workspacePath: string) => string;
   insertEvent: (input: any) => any;
   access: AccessControl;
+  projectEffectiveSkills: (row: { id: string; enabled_skills_json: string; always_preloaded_skills_json: string }) => {
+    enabledSkills: readonly string[]; alwaysPreloadedSkills: readonly string[];
+  };
+  catalogStartGate: CatalogStartGate;
+  resolveStartActor: (user: RequestUser | undefined) => AuthenticatedPrincipal | undefined;
+  updateLocalBatchInTransaction?: (tx: OrgOpsDb, batch: LocalBatch, actor: InventoryActor) => unknown;
+  resolveSkillActor?: (user: RequestUser | undefined) => InventoryActor | undefined;
 };
 
 const AGENT_MEMORY_CONTEXT_MODES = new Set([
@@ -47,7 +58,12 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     getDefaultSoulPath,
     resolveWorkspacePath,
     insertEvent,
-    access
+    access,
+    projectEffectiveSkills,
+    catalogStartGate,
+    resolveStartActor,
+    updateLocalBatchInTransaction,
+    resolveSkillActor,
   } = deps;
   const publishDashboardRefresh = (reason: string, meta?: Record<string, unknown>) => {
     bus.publish("org:dashboard", {
@@ -283,6 +299,20 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       : Boolean(row.allow_outside_workspace);
   }
 
+  function catalogDerived(agentId: string): boolean {
+    const origin = orm.$client.prepare<[string], { derived: number }>("SELECT EXISTS(SELECT 1 FROM agent_template_origins WHERE agent_id=?) AS derived").get(agentId);
+    if (origin?.derived === 1) return true;
+    const assignments = orm.$client.prepare<[string], { removal_requested: number }>("SELECT removal_requested FROM agent_skill_assignments WHERE agent_id=? ORDER BY assignment_id").all(agentId);
+    if (assignments.some(row => ![0, 1].includes(row.removal_requested))) return true;
+    return assignments.some(row => row.removal_requested === 0);
+  }
+
+  function visibleSkills(row: any, user: RequestUser | undefined) {
+    return user?.username === "runner"
+      ? projectEffectiveSkills(row)
+      : { enabledSkills: parseStringArraySafe(row.enabled_skills_json), alwaysPreloadedSkills: parseStringArraySafe(row.always_preloaded_skills_json) };
+  }
+
   app.get("/api/agents", (c) => {
     const url = new URL(c.req.url);
     const assignedRunnerId = (url.searchParams.get("assignedRunnerId") ?? "").trim();
@@ -302,42 +332,41 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
           .all() as any[])
       : (orm.select().from(schema.agents).all() as any[]);
     const user = c.get("user") as RequestUser | undefined;
-    return jsonResponse(
-      c,
-      rows.map((row) => ({
-        id: row.id,
-        name: row.name,
-        icon: row.icon,
-        description: row.description,
-        modelId: row.model_id,
-        systemInstructions: row.system_instructions,
-        soulPath: row.soul_path,
-        soulContents: row.soul_contents ?? "",
-        enabledSkills: parseStringArraySafe(row.enabled_skills_json),
-        alwaysPreloadedSkills: parseStringArraySafe(row.always_preloaded_skills_json),
-        workspacePath: row.workspace_path,
-        allowOutsideWorkspace: getAgentAllowOutsideWorkspace(row),
-        llmCallTimeoutMs: row.llm_call_timeout_ms ?? null,
-        classicMaxModelSteps: row.classic_max_model_steps ?? null,
-        contextSessionGapMs: row.context_session_gap_ms ?? null,
-        emitAuditEvents: Boolean(row.emit_audit_events ?? 1),
-        memoryContextMode: getAgentMemoryContextMode(row),
-        mode: row.mode ?? "CLASSIC",
-        wrappedConfig: parseJsonRecordSafe(row.wrapped_config_json) ?? {},
-        assignedRunnerId: row.assigned_runner_id ?? null,
-        desiredState: row.desired_state,
-        runtimeState: row.runtime_state,
-        lastHeartbeatAt: row.last_heartbeat_at,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-        visibility:
-          row.visibility === AGENT_VISIBILITY.PRIVATE
-            ? AGENT_VISIBILITY.PRIVATE
-            : AGENT_VISIBILITY.PUBLIC,
-        ownerHumanId: row.owner_human_id ?? null,
-      }))
-        .filter((row) => access.canViewAgent(user, row.name))
-    );
+    const visibleRows = rows.filter(row => access.canViewAgent(user, row.name));
+    try {
+      return jsonResponse(c, visibleRows.map((row) => ({
+          id: row.id,
+          name: row.name,
+          icon: row.icon,
+          description: row.description,
+          modelId: row.model_id,
+          systemInstructions: row.system_instructions,
+          soulPath: row.soul_path,
+          soulContents: row.soul_contents ?? "",
+          ...visibleSkills(row, user),
+          workspacePath: row.workspace_path,
+          allowOutsideWorkspace: getAgentAllowOutsideWorkspace(row),
+          llmCallTimeoutMs: row.llm_call_timeout_ms ?? null,
+          classicMaxModelSteps: row.classic_max_model_steps ?? null,
+          contextSessionGapMs: row.context_session_gap_ms ?? null,
+          emitAuditEvents: Boolean(row.emit_audit_events ?? 1),
+          memoryContextMode: getAgentMemoryContextMode(row),
+          mode: row.mode ?? "CLASSIC",
+          wrappedConfig: parseJsonRecordSafe(row.wrapped_config_json) ?? {},
+          assignedRunnerId: row.assigned_runner_id ?? null,
+          desiredState: row.desired_state,
+          runtimeState: row.runtime_state,
+          lastHeartbeatAt: row.last_heartbeat_at,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+          visibility: row.visibility === AGENT_VISIBILITY.PRIVATE ? AGENT_VISIBILITY.PRIVATE : AGENT_VISIBILITY.PUBLIC,
+          ownerHumanId: row.owner_human_id ?? null,
+          revision: row.revision,
+          catalogDerived: catalogDerived(row.id),
+        })));
+    } catch {
+      return jsonResponse(c, { error: "Agent skill projection conflicts with current state", code: "STATE_CONFLICT" }, 409);
+    }
   });
 
   app.post("/api/agents", async (c) => {
@@ -468,7 +497,8 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         desired_state: body.desiredState ?? "RUNNING",
         runtime_state: body.runtimeState ?? "STOPPED",
         created_at: now,
-        updated_at: now
+        updated_at: now,
+        revision: 1,
       })
       .run();
     publishDashboardRefresh("agent.created", { agentName: body.name });
@@ -483,7 +513,8 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     }
     const row = orm.select().from(schema.agents).where(eq(schema.agents.name, name)).get() as any;
     if (!row) return jsonResponse(c, { error: "Not found" }, 404);
-    return jsonResponse(c, {
+    try {
+      return jsonResponse(c, {
       id: row.id,
       name: row.name,
       icon: row.icon,
@@ -492,8 +523,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       systemInstructions: row.system_instructions,
       soulPath: row.soul_path,
       soulContents: row.soul_contents ?? "",
-      enabledSkills: parseStringArraySafe(row.enabled_skills_json),
-      alwaysPreloadedSkills: parseStringArraySafe(row.always_preloaded_skills_json),
+      ...visibleSkills(row, user),
       workspacePath: row.workspace_path,
       allowOutsideWorkspace: getAgentAllowOutsideWorkspace(row),
       llmCallTimeoutMs: row.llm_call_timeout_ms ?? null,
@@ -514,7 +544,12 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
           ? AGENT_VISIBILITY.PRIVATE
           : AGENT_VISIBILITY.PUBLIC,
       ownerHumanId: row.owner_human_id ?? null,
-    });
+      revision: row.revision,
+      catalogDerived: catalogDerived(row.id),
+      });
+    } catch {
+      return jsonResponse(c, { error: "Agent skill projection conflicts with current state", code: "STATE_CONFLICT" }, 409);
+    }
   });
 
   app.patch("/api/agents/:name", async (c) => {
@@ -641,7 +676,27 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     if (body.visibility !== undefined && !visibility) {
       return jsonResponse(c, { error: "visibility must be PUBLIC or PRIVATE" }, 400);
     }
-    orm
+    const requestedOwnerHumanId = body.ownerHumanId !== undefined
+      ? typeof body.ownerHumanId === "string" && body.ownerHumanId.trim() ? body.ownerHumanId.trim() : null
+      : undefined;
+    const effectiveVisibility = visibility !== undefined ? visibility : (existing.visibility ?? AGENT_VISIBILITY.PUBLIC);
+    const ownerHumanId = effectiveVisibility === AGENT_VISIBILITY.PRIVATE
+      ? requestedOwnerHumanId !== undefined ? requestedOwnerHumanId : (existing.owner_human_id ?? user?.id ?? null)
+      : null;
+    if (effectiveVisibility === AGENT_VISIBILITY.PRIVATE && !ownerHumanId) {
+      return jsonResponse(c, { error: "ownerHumanId is required for private agents" }, 400);
+    }
+    const revisionFields = new Set([
+      "icon", "description", "modelId", "systemInstructions", "soulPath", "soulContents", "workspacePath",
+      "allowOutsideWorkspace", "llmCallTimeoutMs", "classicMaxModelSteps", "contextSessionGapMs", "emitAuditEvents",
+      "memoryContextMode", "mode", "wrappedConfig", "visibility", "ownerHumanId", "assignedRunnerId", "enabledSkills", "alwaysPreloadedSkills",
+    ]);
+    const skillActor = resolveSkillActor?.(user);
+    const delegatesLocalMutation = Boolean(updateLocalBatchInTransaction && skillActor && (Array.isArray(body.enabledSkills) || Array.isArray(body.alwaysPreloadedSkills)));
+    const changesAssignmentConfiguration = !delegatesLocalMutation && Object.keys(body).some(key => revisionFields.has(key));
+    const expectedUpdateRevision = delegatesLocalMutation ? existing.revision : changesAssignmentConfiguration ? existing.revision + 1 : existing.revision;
+    const updateAgent = () => {
+      const updated = orm
       .update(schema.agents)
       .set({
         icon: body.icon ?? existing.icon,
@@ -677,29 +732,67 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         wrapped_config_json: wrappedConfigParsed
           ? JSON.stringify(wrappedConfigParsed.value)
           : existing.wrapped_config_json,
-        visibility:
-          visibility !== undefined
-            ? visibility
-            : (existing.visibility ?? AGENT_VISIBILITY.PUBLIC),
-        owner_human_id:
-          visibility === AGENT_VISIBILITY.PRIVATE
-            ? (existing.owner_human_id ?? user?.id ?? null)
-            : visibility === AGENT_VISIBILITY.PUBLIC
-              ? null
-              : existing.owner_human_id,
+        visibility: effectiveVisibility,
+        owner_human_id: ownerHumanId,
         assigned_runner_id:
           effectiveAssignedRunnerId !== undefined
             ? effectiveAssignedRunnerId
             : existing.assigned_runner_id,
-        enabled_skills_json: enabledSkillsJson ?? existing.enabled_skills_json,
-        always_preloaded_skills_json: sanitizedAlwaysPreloadedSkillsJson,
-        desired_state: body.desiredState ?? existing.desired_state,
-        runtime_state: body.runtimeState ?? existing.runtime_state,
+        enabled_skills_json: delegatesLocalMutation ? existing.enabled_skills_json : (enabledSkillsJson ?? existing.enabled_skills_json),
+        always_preloaded_skills_json: delegatesLocalMutation ? existing.always_preloaded_skills_json : sanitizedAlwaysPreloadedSkillsJson,
+        runtime_state: body.desiredState !== undefined && body.desiredState !== existing.desired_state
+          ? existing.runtime_state : body.runtimeState ?? existing.runtime_state,
         last_heartbeat_at: body.lastHeartbeatAt ?? existing.last_heartbeat_at,
-        updated_at: Date.now()
+        updated_at: Date.now(),
       })
       .where(eq(schema.agents.name, name))
       .run();
+      if (updated.changes !== 1) throw new Error("AGENT_REVISION_CONFLICT");
+      return updated;
+    };
+    if (delegatesLocalMutation) {
+      try {
+        orm.$client.transaction(() => {
+          updateAgent();
+          updateLocalBatchInTransaction!(orm.$client, { agentId: existing.id, enabled: resolvedEnabledSkills, preloaded: JSON.parse(sanitizedAlwaysPreloadedSkillsJson), expectedAgentRevision: existing.revision }, skillActor!);
+        })();
+      } catch (error) {
+        if (error instanceof Error && "code" in error && (error as { code?: unknown }).code === "REVISION_CONFLICT") return jsonResponse(c, { error: "Agent revision conflict" }, 409);
+        throw error;
+      }
+    } else if (changesAssignmentConfiguration) {
+      try {
+        orm.$client.transaction(() => {
+          const advanced = orm.$client.prepare(
+            "UPDATE agents SET revision=revision+1 WHERE name=? AND revision<2147483647",
+          ).run(name);
+          if (advanced.changes !== 1) throw new Error("AGENT_REVISION_CONFLICT");
+          updateAgent();
+        })();
+      } catch (error) {
+        if (error instanceof Error && error.message === "AGENT_REVISION_CONFLICT") {
+          return jsonResponse(c, { error: "Agent revision conflict" }, 409);
+        }
+        throw error;
+      }
+    } else {
+      updateAgent();
+    }
+    if (body.desiredState !== undefined) c.header("Cache-Control", "no-store");
+    if (body.desiredState !== undefined && body.desiredState !== existing.desired_state) {
+      if (body.desiredState !== "RUNNING" && body.desiredState !== "STOPPED") {
+        return jsonResponse(c, { error: "Invalid desired state" }, 400);
+      }
+      const actor = resolveStartActor(user);
+      if (!actor) return jsonResponse(c, { error: "Forbidden" }, 403);
+      try {
+        const result = await catalogStartGate.setDesiredAgentState(existing.id, body.desiredState, actor);
+        if (!result.ok) return jsonResponse(c, { error: "Agent requirements are not satisfied", ...result }, 409);
+      } catch (error) {
+        const status = error instanceof CatalogStartGateError && error.code === "FORBIDDEN" ? 403 : 500;
+        return jsonResponse(c, { error: status === 403 ? "Forbidden" : "Catalog library operation failed" }, status);
+      }
+    }
     publishDashboardRefresh("agent.updated", { agentName: name });
     if (body.runtimeState) {
       bus.publish("org:agentStatus", {
@@ -809,11 +902,34 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     });
   });
 
-  app.post("/api/agents/:name/:action", (c) => {
+  app.get("/api/agents/:name/start-readiness", async (c) => {
+    c.header("Cache-Control", "no-store");
+    if (new URL(c.req.url).search || c.req.raw.body) return jsonResponse(c, { error: "Invalid request", code: "INVALID_REQUEST" }, 400);
+    const name = c.req.param("name");
+    const user = c.get("user") as RequestUser | undefined;
+    if (user?.username === "runner") return jsonResponse(c, { error: "Forbidden", code: "FORBIDDEN" }, 403);
+    if (!access.canManageAgent(user, name)) return jsonResponse(c, { error: "Not found", code: "NOT_FOUND" }, 404);
+    const agent = orm.$client.prepare<[string], { id: string }>("SELECT id FROM agents WHERE name=?").get(name);
+    if (!agent) return jsonResponse(c, { error: "Not found", code: "NOT_FOUND" }, 404);
+    const actor = resolveStartActor(user);
+    if (!actor) return jsonResponse(c, { error: "Forbidden", code: "FORBIDDEN" }, 403);
+    try {
+      const result = await catalogStartGate.validateCatalogStart(agent.id, actor);
+      const queuedDeployment = Boolean(orm.$client.prepare<[string], { present: number }>("SELECT 1 AS present FROM runner_package_deployments WHERE target_agent_id=? AND state IN ('QUEUED','CLAIMED','STAGED','WAITING_FOR_IDLE') LIMIT 1").get(agent.id));
+      const blockers = result.ok ? [] : result.reasons.map(reason => ({ code: reason.code, ...("requirementName" in reason && reason.requirementName ? { requirement: reason.requirementName } : {}) }));
+      return jsonResponse(c, AgentStartReadinessSchema.parse({ ready: result.ok && !queuedDeployment, queuedDeployment, blockers }));
+    } catch (error) {
+      const status = error instanceof CatalogStartGateError && error.code === "FORBIDDEN" ? 403 : 500;
+      return jsonResponse(c, status === 403 ? { error: "Forbidden", code: "FORBIDDEN" } : { error: "Start readiness unavailable", code: "STORAGE_FAILURE" }, status);
+    }
+  });
+
+  app.post("/api/agents/:name/:action", async (c) => {
+    c.header("Cache-Control", "no-store");
     const name = c.req.param("name");
     const user = c.get("user") as RequestUser | undefined;
     if (!access.canManageAgent(user, name)) {
-      return jsonResponse(c, { error: "Forbidden" }, 403);
+      return jsonResponse(c, { error: "Forbidden", code: "FORBIDDEN" }, 403);
     }
     const action = c.req.param("action");
     if (!["start", "stop", "restart", "reload-skills", "cleanup-workspace"].includes(action)) {
@@ -848,17 +964,22 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       });
       return jsonResponse(c, { ok: true });
     }
+    if (new URL(c.req.url).search || c.req.raw.body !== null) {
+      return jsonResponse(c, { error: "Invalid request" }, 400);
+    }
+    const agent = orm.select({ id: schema.agents.id }).from(schema.agents).where(eq(schema.agents.name, name)).get() as { id: string } | undefined;
+    if (!agent) return jsonResponse(c, { error: "Not found" }, 404);
     const desiredState = action === "stop" ? "STOPPED" : "RUNNING";
-    const runtimeState = action === "stop" ? "STOPPED" : action === "start" || action === "restart" ? "STARTING" : null;
-    orm
-      .update(schema.agents)
-      .set({
-        desired_state: desiredState,
-        runtime_state: runtimeState ?? undefined,
-        updated_at: Date.now()
-      })
-      .where(eq(schema.agents.name, name))
-      .run();
+    const runtimeState = desiredState === "STOPPED" ? "STOPPED" : "STARTING";
+    const actor = resolveStartActor(user);
+    if (!actor) return jsonResponse(c, { error: "Forbidden", code: "FORBIDDEN" }, 403);
+    try {
+      const result = await catalogStartGate.setDesiredAgentState(agent.id, desiredState, actor);
+      if (!result.ok) return jsonResponse(c, { ...result, error: "Agent requirements are not satisfied", code: "REQUIREMENTS_UNSATISFIED" }, 409);
+    } catch (error) {
+      const status = error instanceof CatalogStartGateError && error.code === "FORBIDDEN" ? 403 : 500;
+      return jsonResponse(c, status === 403 ? { error: "Forbidden", code: "FORBIDDEN" } : { error: "Catalog library operation failed", code: "STORAGE_FAILURE" }, status);
+    }
     publishDashboardRefresh(`agent.control.${action}`, { agentName: name });
     if (runtimeState) {
       bus.publish("org:agentStatus", {

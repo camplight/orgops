@@ -2,6 +2,39 @@
 @tailwind components;
 @tailwind utilities;
 
+@media (max-width: 640px) {
+  #root > div {
+    display: flex !important;
+    width: 100%;
+    min-width: 0;
+  }
+  #root > div > div {
+    width: calc(100% - 56px);
+    min-width: 0;
+    overflow-x: hidden;
+  }
+  main {
+    overflow-x: hidden;
+  }
+  aside {
+    width: 56px !important;
+    flex: 0 0 56px;
+    min-height: 100vh;
+    overflow: visible;
+  }
+  aside button {
+    width: 100%;
+    overflow: hidden;
+    white-space: nowrap;
+    font-size: 0.7rem;
+    line-height: 1rem;
+    height: auto !important;
+    min-height: 40px;
+    display: block;
+    text-overflow: ellipsis;
+  }
+}
+
 @media print {
   body * {
     visibility: hidden !important;

@@ -1,15 +1,26 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import type {
   Agent,
   AgentWorkspaceFileResponse,
   AgentWorkspaceListResponse,
+  AgentProvisioningReceipt,
+  AgentStartReadiness,
   EventRow,
+  ProvisionAgentHttpInput,
+  ProvisioningTemplateOptions,
   RunnerNode,
-  SkillMeta
+  SealedSecretBinding,
+  SkillInventoryItem,
+  SkillMeta,
+  SkillRef
 } from "../types";
+import { getAgentStartReadiness, getProvisioningTemplateOptions, provisionAgent } from "../api";
+import { UnifiedSkillPicker } from "../components/skills/UnifiedSkillPicker";
+import { AgentSkillsTab, type AgentSkillsManagement } from "./AgentSkillsTab";
 import { Button, Card, Input, Textarea } from "../components/ui";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 import { formatTimestamp } from "../utils/formatTimestamp";
+import { createStartReadinessOwner } from "./start-readiness-owner";
 
 type AgentForm = {
   name: string;
@@ -108,11 +119,287 @@ function formatAgentModelLabel(agent: Agent): string {
   return `wrapped: ${kind ?? name ?? harness ?? "custom"}`;
 }
 
+type CreateAgentStep = "ORIGIN" | "TEMPLATE" | "BINDINGS" | "SKILLS" | "REVIEW";
+type CreationOrigin = "BLANK" | "TEMPLATE";
+type CreationDraft = {
+  idempotencyKey: string;
+  origin: CreationOrigin | null;
+  packageReleaseId: string;
+  name: string;
+  visibility: "PUBLIC" | "PRIVATE";
+  mode: "CLASSIC" | "RLM_REPL" | "WRAPPED";
+  modelId: string;
+  workspacePath: string;
+  runnerId: string;
+  desiredState: "RUNNING" | "STOPPED";
+  secretBindings: readonly SealedSecretBinding[];
+  localSkills: readonly { name: string; preload: boolean }[];
+  catalogSkills: readonly { packageReleaseId: string; preload: boolean }[];
+  selectedSkills: readonly { ref: SkillRef; preload: boolean; mandatory: boolean; source: "TEMPLATE" | "USER" }[];
+};
+
+type CreateAgentFlowProps = {
+  runners: RunnerNode[];
+  skills: SkillMeta[];
+  principalKey?: string;
+  onProvisionAgent: (input: ProvisionAgentHttpInput, signal?: AbortSignal) => Promise<AgentProvisioningReceipt>;
+  loadProvisioningOptions?: (signal?: AbortSignal) => Promise<ProvisioningTemplateOptions>;
+  loadSkillInventory?: (signal?: AbortSignal) => Promise<SkillInventoryItem[]>;
+  loadStartReadiness?: (name: string, signal?: AbortSignal) => Promise<AgentStartReadiness>;
+  onStartAgent?: (name: string) => Promise<void>;
+  onDone: (receipt?: AgentProvisioningReceipt) => void;
+  onCancel: () => void;
+};
+
+const emptyCreationDraft = (): CreationDraft => ({
+  idempotencyKey: crypto.randomUUID(), origin: null, packageReleaseId: "", name: "", visibility: "PUBLIC", mode: "CLASSIC",
+  modelId: "openai:gpt-4o-mini", workspacePath: ".orgops-data/workspaces/default", runnerId: "",
+  desiredState: "RUNNING", secretBindings: [], localSkills: [], catalogSkills: [], selectedSkills: []
+});
+function refKey(ref: SkillRef) { return ref.kind === "LOCAL" ? `LOCAL:${ref.localOrigin}:${ref.name}` : `CATALOG:${ref.packageReleaseId}`; }
+function refsForDraft(draft: CreationDraft): SkillRef[] { return draft.selectedSkills.map((skill) => skill.ref); }
+type StartChainToken = Readonly<{ principalKey: string | undefined; receiptAgentId: string; generation: number }>;
+function TemplateSummary({ template, heading }: { template: ProvisioningTemplateOptions["templates"][number]; heading: string }) {
+  const preloadValue = (template.exactConfig as { skillPreloads?: unknown }).skillPreloads;
+  const preloads = Array.isArray(preloadValue) ? preloadValue.filter((value): value is string => typeof value === "string") : [];
+  return <section className="min-w-0 rounded border border-slate-800 bg-slate-950 p-3 text-xs text-slate-400" aria-label={heading}>
+    <h5 className="mb-2 text-slate-200">{heading}</h5>
+    <dl className="grid gap-1 break-words"><div><dt>Template</dt><dd>{template.name} · {template.version}</dd></div><div><dt>Package release</dt><dd className="break-all">{template.packageReleaseId}</dd></div><div><dt>Digest</dt><dd className="break-all">{template.digest}</dd></div><div><dt>Description</dt><dd>{template.description}</dd></div><div><dt>Readiness</dt><dd>{template.readiness.state}{template.readiness.state === "BLOCKED" ? ` · ${template.readiness.blockers.map(blocker => blocker.requirement ? `${blocker.code}: ${blocker.requirement}` : blocker.code).join(", ")}` : ""}</dd></div></dl>
+    <div className="mt-2 text-slate-200">Exact portable configuration (read-only)</div><pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all">{JSON.stringify(template.exactConfig, null, 2)}</pre>
+    <div className="mt-2 text-slate-200">Exact dependency skill refs</div><div>Dependency skill refs: {template.skillRefs.length}</div><ul className="space-y-1 break-all">{template.skillRefs.length ? template.skillRefs.map(ref => <li key={refKey(ref)}>{ref.kind === "LOCAL" ? `${ref.name} · ${ref.localOrigin}` : `${ref.name} · ${ref.version} · ${ref.packageReleaseId} · ${ref.digest}`}</li>) : <li>None</li>}</ul>
+    <div className="mt-2">Exact preloads: {preloads.join(", ") || "None"}</div>
+  </section>;
+}
+
+function fixedProvisioningMessage(error: unknown): string {
+  const code = error && typeof error === "object" && "code" in error ? String((error as { code: unknown }).code) : "";
+  const messages: Record<string, string> = {
+    REQUIREMENTS_UNSATISFIED: "Required bindings are missing; no agent was created.",
+    GRANT_REQUIRED: "A current catalog grant is required; no agent was created.",
+    INSTALLATION_REQUIRED: "Install the selected catalog release before creating this agent.",
+    REVISION_CONFLICT: "The selected catalog data changed; reload before creating this agent.",
+    STORAGE_FAILURE: "The agent could not be saved; no agent was created."
+  };
+  return messages[code] ?? (error instanceof Error ? error.message : "The agent could not be created.");
+}
+
+export function CreateAgentFlow({ runners, skills, principalKey, onProvisionAgent, loadProvisioningOptions, loadSkillInventory, loadStartReadiness = getAgentStartReadiness, onStartAgent, onDone, onCancel }: CreateAgentFlowProps) {
+  const [step, setStep] = useState<CreateAgentStep>("ORIGIN");
+  const [draft, setDraft] = useState<CreationDraft>(emptyCreationDraft);
+  const [options, setOptions] = useState<ProvisioningTemplateOptions | null>(null);
+  const [inventory, setInventory] = useState<SkillInventoryItem[]>([]);
+  const [selectedTemplate, setSelectedTemplate] = useState<ProvisioningTemplateOptions["templates"][number] | null>(null);
+  const [reviewSnapshot, setReviewSnapshot] = useState<CreationDraft | null>(null);
+  const [receipt, setReceipt] = useState<AgentProvisioningReceipt | null>(null);
+  const [startReadiness, setStartReadiness] = useState<AgentStartReadiness | null>(null);
+  const [startReadinessOwnership, setStartReadinessOwnership] = useState<{ principalKey: string | undefined; agentId: string } | null>(null);
+  const [acknowledged, setAcknowledged] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const submitInFlightRef = useRef(false);
+  const mountedRef = useRef(true);
+  const generationRef = useRef(0);
+  const principalKeyRef = useRef(principalKey);
+  principalKeyRef.current = principalKey;
+  const startChainGenerationRef = useRef(0);
+  const startChainRef = useRef<StartChainToken | null>(null);
+  const startReadinessOwnerRef = useRef(createStartReadinessOwner());
+  const fallbackInventory = useMemo<SkillInventoryItem[]>(() => skills.map((skill) => ({ ref: { kind: "LOCAL", name: skill.name, localOrigin: "BUILT_IN" }, description: skill.description || skill.name, readiness: { state: "READY" }, provenance: "FULL_ADMIN", adminProvenance: { kind: "LOCAL" } })), [skills]);
+  const availableInventory = useMemo(() => {
+    const base = inventory.length > 0 ? inventory : fallbackInventory;
+    const known = new Set(base.map((item) => refKey(item.ref)));
+    const dependencies = (selectedTemplate?.skillRefs ?? []).filter((ref) => !known.has(refKey(ref))).map((ref) => ({ ref, description: "Template dependency", readiness: { state: "READY" as const }, provenance: "BOUNDED_HUMAN" as const }));
+    return [...base, ...dependencies];
+  }, [fallbackInventory, inventory, selectedTemplate]);
+  const templateRequirements = selectedTemplate?.requirements ?? [];
+  const hasCatalogSkills = draft.catalogSkills.length > 0;
+
+  const invalidateStartChain = () => {
+    startChainGenerationRef.current += 1;
+    startChainRef.current = null;
+    startReadinessOwnerRef.current.invalidate();
+    setStartReadiness(null);
+    setStartReadinessOwnership(null);
+  };
+  const isCurrentStartToken = (token: StartChainToken) => mountedRef.current
+    && principalKeyRef.current === token.principalKey
+    && startChainRef.current?.generation === token.generation
+    && startChainRef.current?.receiptAgentId === token.receiptAgentId;
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      abortRef.current?.abort();
+      startChainGenerationRef.current += 1;
+      startChainRef.current = null;
+      startReadinessOwnerRef.current.invalidate();
+    };
+  }, []);
+  useEffect(() => {
+    generationRef.current += 1;
+    abortRef.current?.abort();
+    abortRef.current = null;
+    submitInFlightRef.current = false;
+    invalidateStartChain();
+    setBusy(false);
+    setOptions(null);
+    setInventory([]);
+    setSelectedTemplate(null);
+    setReviewSnapshot(null);
+    setReceipt(null);
+    setAcknowledged(false);
+    setError(null);
+    setStep("ORIGIN");
+    setDraft(emptyCreationDraft());
+  }, [principalKey]);
+
+  const setField = <K extends keyof CreationDraft>(field: K, value: CreationDraft[K]) => setDraft((previous) => ({ ...previous, idempotencyKey: crypto.randomUUID(), [field]: value }));
+  const loadOptions = async () => {
+    if (options || !loadProvisioningOptions) return;
+    const generation = ++generationRef.current; const principal = principalKey; const controller = new AbortController(); abortRef.current?.abort(); abortRef.current = controller; setBusy(true); setError(null);
+    try { const nextOptions = await loadProvisioningOptions(controller.signal); if (generation === generationRef.current && principal === principalKey && mountedRef.current && !controller.signal.aborted) setOptions(nextOptions); }
+    catch (nextError) { if (generation === generationRef.current && principal === principalKey && !controller.signal.aborted && mountedRef.current) setError(fixedProvisioningMessage(nextError)); }
+    finally { if (generation === generationRef.current && principal === principalKey && mountedRef.current) setBusy(false); }
+  };
+  const loadSkills = async () => {
+    if (!loadSkillInventory || inventory.length > 0) return;
+    const generation = ++generationRef.current; const principal = principalKey; const controller = new AbortController(); abortRef.current?.abort(); abortRef.current = controller;
+    try { const nextInventory = await loadSkillInventory(controller.signal); if (generation === generationRef.current && principal === principalKey && mountedRef.current && !controller.signal.aborted) setInventory(nextInventory); } catch (nextError) { if (generation === generationRef.current && principal === principalKey && !controller.signal.aborted && mountedRef.current) setError(fixedProvisioningMessage(nextError)); }
+  };
+  const chooseOrigin = (origin: CreationOrigin) => {
+    setDraft((previous) => ({ ...previous, origin })); setError(null);
+    if (origin === "TEMPLATE") void loadOptions();
+  };
+  const chooseTemplate = (packageReleaseId: string) => {
+    const template = options?.templates.find((candidate) => candidate.packageReleaseId === packageReleaseId) ?? null;
+    const preloadValue = (template?.exactConfig as { skillPreloads?: unknown } | undefined)?.skillPreloads;
+    const mandatoryPreloads = new Set(Array.isArray(preloadValue) ? preloadValue.filter((item: unknown): item is string => typeof item === "string") : []);
+    const mandatoryRefs = new Set((template?.skillRefs ?? []).map(refKey));
+    const inventoryKeys = new Set((inventory.length > 0 ? inventory : fallbackInventory).map((item) => refKey(item.ref)));
+    const templateSkills = (template?.skillRefs ?? []).map((ref) => ({ ref, preload: ref.kind === "CATALOG" && mandatoryPreloads.has(ref.name), mandatory: true, source: "TEMPLATE" as const }));
+    setSelectedTemplate(template);
+    setDraft((previous) => {
+      const retainedUserSkills = previous.selectedSkills.filter((skill) => skill.source === "USER" && !mandatoryRefs.has(refKey(skill.ref)) && inventoryKeys.has(refKey(skill.ref)));
+      const selectedSkills = [...templateSkills, ...retainedUserSkills];
+      return {
+        ...previous,
+        idempotencyKey: crypto.randomUUID(),
+        packageReleaseId,
+        mode: template?.mode ?? previous.mode,
+        runnerId: "",
+        modelId: "",
+        secretBindings: [],
+        selectedSkills,
+        localSkills: selectedSkills.filter((skill) => skill.ref.kind === "LOCAL").map((skill) => ({ name: skill.ref.name, preload: skill.preload })),
+        catalogSkills: selectedSkills.filter((skill) => skill.ref.kind === "CATALOG").map((skill) => ({ packageReleaseId: skill.ref.kind === "CATALOG" ? skill.ref.packageReleaseId : "", preload: skill.preload })),
+      };
+    });
+    setReviewSnapshot(null);
+    setAcknowledged(false);
+    setReceipt(null);
+    setError(null);
+  };
+  const toggleSkill = (ref: SkillRef) => setDraft((previous) => {
+    const exists = previous.selectedSkills.some((skill) => refKey(skill.ref) === refKey(ref));
+    if (exists && previous.selectedSkills.some((skill) => refKey(skill.ref) === refKey(ref) && skill.mandatory)) return previous;
+    const selectedSkills = exists ? previous.selectedSkills.filter((skill) => refKey(skill.ref) !== refKey(ref)) : [...previous.selectedSkills, { ref, preload: false, mandatory: false, source: "USER" as const }];
+    return { ...previous, idempotencyKey: crypto.randomUUID(), selectedSkills, localSkills: selectedSkills.filter((skill) => skill.ref.kind === "LOCAL").map((skill) => ({ name: skill.ref.name, preload: skill.preload })), catalogSkills: selectedSkills.filter((skill) => skill.ref.kind === "CATALOG").map((skill) => ({ packageReleaseId: skill.ref.kind === "CATALOG" ? skill.ref.packageReleaseId : "", preload: skill.preload })) };
+  });
+  const setSkillPreload = (ref: SkillRef, preload: boolean) => setDraft((previous) => {
+    const selectedSkills = previous.selectedSkills.map((skill) => refKey(skill.ref) === refKey(ref) && !skill.mandatory ? { ...skill, preload } : skill);
+    return { ...previous, idempotencyKey: crypto.randomUUID(), selectedSkills, localSkills: selectedSkills.filter((skill) => skill.ref.kind === "LOCAL").map((skill) => ({ name: skill.ref.name, preload: skill.preload })), catalogSkills: selectedSkills.filter((skill) => skill.ref.kind === "CATALOG").map((skill) => ({ packageReleaseId: skill.ref.kind === "CATALOG" ? skill.ref.packageReleaseId : "", preload: skill.preload })) };
+  });
+  const buildCommand = (snapshot: CreationDraft): ProvisionAgentHttpInput => snapshot.origin === "TEMPLATE"
+    ? { kind: "TEMPLATE", idempotencyKey: snapshot.idempotencyKey, name: snapshot.name.trim(), visibility: snapshot.visibility, packageReleaseId: snapshot.packageReleaseId, modelId: snapshot.modelId.trim(), workspacePath: snapshot.workspacePath.trim(), runnerId: snapshot.runnerId, secretBindings: [...snapshot.secretBindings], localSkills: [...snapshot.localSkills], catalogSkills: [...snapshot.catalogSkills] }
+    : { kind: "BLANK", idempotencyKey: snapshot.idempotencyKey, name: snapshot.name.trim(), visibility: snapshot.visibility, mode: snapshot.mode, modelId: snapshot.modelId.trim(), workspacePath: snapshot.workspacePath.trim(), runnerId: snapshot.runnerId, desiredState: snapshot.catalogSkills.length > 0 ? "STOPPED" : snapshot.desiredState, localSkills: [...snapshot.localSkills], catalogSkills: [...snapshot.catalogSkills] };
+  const next = async () => {
+    setError(null);
+    if (step === "ORIGIN") { if (!draft.origin) return setError("Choose Blank agent or Installed template first."); return setStep(draft.origin === "TEMPLATE" ? "TEMPLATE" : "BINDINGS"); }
+    if (step === "TEMPLATE") { if (!selectedTemplate) return setError("Choose an installed template first."); return setStep("BINDINGS"); }
+    if (step === "BINDINGS") { if (!draft.name.trim() || !draft.runnerId || !draft.workspacePath.trim() || (!draft.modelId.trim() && draft.origin === "BLANK")) return setError("Name, runner, workspace, and model are required."); if (draft.origin === "TEMPLATE" && (!options?.runners.some((runner) => runner.id === draft.runnerId) || !options.models.some((model) => model.id === draft.modelId))) return setError("Choose a runner and model from the server-provided template options."); await loadSkills(); return setStep("SKILLS"); }
+    if (step === "SKILLS") { const snapshot = { ...draft, localSkills: [...draft.localSkills], catalogSkills: [...draft.catalogSkills], selectedSkills: [...draft.selectedSkills], secretBindings: [...draft.secretBindings] }; setReviewSnapshot(snapshot); setAcknowledged(false); return setStep("REVIEW"); }
+    if (step === "REVIEW" && !acknowledged) return setError("Acknowledge the reviewed configuration before creating the agent.");
+    await submit();
+  };
+  const submit = async () => {
+    if (busy || submitInFlightRef.current || !reviewSnapshot) return;
+    submitInFlightRef.current = true;
+    setBusy(true); setError(null);
+    const generation = ++generationRef.current; const principal = principalKey; const controller = new AbortController(); abortRef.current?.abort(); abortRef.current = controller;
+    try {
+      const command = buildCommand(reviewSnapshot);
+      const result = await onProvisionAgent(command, controller.signal);
+      if (generation === generationRef.current && principal === principalKey && mountedRef.current && !controller.signal.aborted) { invalidateStartChain(); setReceipt(result); }
+    } catch (nextError) { if (generation === generationRef.current && principal === principalKey && !controller.signal.aborted && mountedRef.current) setError(fixedProvisioningMessage(nextError)); }
+    finally { if (generation === generationRef.current && principal === principalKey) submitInFlightRef.current = false; if (generation === generationRef.current && principal === principalKey && mountedRef.current) setBusy(false); }
+  };
+  const stepIndex = ["ORIGIN", "TEMPLATE", "BINDINGS", "SKILLS", "REVIEW"].indexOf(step);
+  if (receipt) {
+    const ownsReadiness = startReadinessOwnership?.principalKey === principalKey && startReadinessOwnership?.agentId === receipt.id;
+    const blockers = ownsReadiness && startReadiness ? startReadiness.blockers : receipt.startBlockers.map(blocker => ({ code: blocker.code, ...(blocker.requirement ? { requirement: blocker.requirement } : {}) }));
+    const queued = ownsReadiness && startReadiness ? startReadiness.queuedDeployment : receipt.queuedDeploymentIds.length > 0;
+    const ready = ownsReadiness && startReadiness?.ready === true && !queued;
+    const createStartToken = (): StartChainToken => {
+      const token = Object.freeze({ principalKey, receiptAgentId: receipt.id, generation: ++startChainGenerationRef.current });
+      startChainRef.current = token;
+      return token;
+    };
+    const refreshReadiness = async (token = createStartToken()): Promise<boolean> => {
+      if (!isCurrentStartToken(token)) return false;
+      const operation = startReadinessOwnerRef.current.begin(token.principalKey, token.receiptAgentId);
+      setStartReadiness(null); setStartReadinessOwnership(null); setBusy(true); setError(null);
+      try {
+        const next = await loadStartReadiness(receipt.name, operation.signal);
+        if (!isCurrentStartToken(token) || !operation.isCurrent()) return false;
+        setStartReadiness(next); setStartReadinessOwnership({ principalKey: operation.principalKey, agentId: operation.agentId });
+        return true;
+      } catch (nextError) {
+        if (isCurrentStartToken(token) && operation.isCurrent()) setError(fixedProvisioningMessage(nextError));
+        return false;
+      } finally {
+        if (isCurrentStartToken(token) && operation.isCurrent()) setBusy(false);
+      }
+    };
+    const close = () => { invalidateStartChain(); setBusy(false); onDone(receipt); };
+    const start = async () => {
+      if (!ready || !ownsReadiness || !onStartAgent) return;
+      const token = createStartToken();
+      setBusy(true); setError(null);
+      try {
+        await onStartAgent(receipt.name);
+        if (!isCurrentStartToken(token)) return;
+        const refreshed = await refreshReadiness(token);
+        if (refreshed && isCurrentStartToken(token)) onDone(receipt);
+      } catch (nextError) {
+        if (isCurrentStartToken(token)) { setError(fixedProvisioningMessage(nextError)); setBusy(false); }
+      } finally {
+        if (isCurrentStartToken(token)) setBusy(false);
+      }
+    };
+    return <div className="space-y-4" role="status"><div className="rounded border border-emerald-800 bg-emerald-950/30 p-3 text-emerald-200">{receipt.desiredState === "STOPPED" ? "Created stopped; deployment queued" : "Agent created"}</div><div className="text-sm text-slate-300">Agent <strong>{receipt.name}</strong> {receipt.desiredState === "STOPPED" ? "is stopped until deployment and start requirements are ready." : "is ready for its requested runtime state."}</div>{queued ? <div className="text-xs text-slate-400">Deployment queued or pending.</div> : null}{blockers.length ? <div className="rounded border border-amber-800 bg-amber-950/30 p-3 text-sm text-amber-200">Start blockers: {blockers.map((blocker) => blocker.requirement ? `${blocker.code}: ${blocker.requirement}` : blocker.code).join(", ")}</div> : null}{error ? <div role="alert">{error}</div> : null}<div className="flex gap-2"><button type="button" className="rounded bg-slate-800 px-3 py-2 text-sm text-slate-200" disabled={busy} onClick={() => void refreshReadiness()}>Refresh readiness</button>{ready && onStartAgent ? <button type="button" className="rounded bg-blue-600 px-3 py-2 text-sm text-white" disabled={busy} onClick={() => void start()}>Start</button> : null}<button type="button" className="rounded bg-slate-800 px-3 py-2 text-sm text-slate-200" onClick={close}>Close</button></div></div>;
+  }
+  return <div className="space-y-4" aria-label="Create agent setup">
+    <div className="flex flex-wrap gap-2 text-xs text-slate-500" aria-label="Create agent steps">{["Origin", "Template", "Bindings", "Skills", "Review"].map((label, index) => <span key={label} className={index === stepIndex ? "font-semibold text-blue-300" : ""}>{index + 1}. {label}</span>)}</div>
+    {step === "ORIGIN" ? <div className="space-y-3"><h4 className="text-sm font-semibold text-slate-100">Choose agent origin</h4><div className="grid gap-3 sm:grid-cols-2"><button type="button" className={`rounded border p-3 text-left ${draft.origin === "BLANK" ? "border-blue-500" : "border-slate-800"}`} onClick={() => chooseOrigin("BLANK")}><strong className="block text-slate-200">Blank agent</strong><span className="text-xs text-slate-500">Use local configuration and optional catalog skills.</span></button><button type="button" className={`rounded border p-3 text-left ${draft.origin === "TEMPLATE" ? "border-blue-500" : "border-slate-800"}`} onClick={() => chooseOrigin("TEMPLATE")}><strong className="block text-slate-200">Installed template</strong><span className="text-xs text-slate-500">Use the server-provided exact template configuration.</span></button></div></div> : null}
+    {step === "TEMPLATE" ? <div className="space-y-3"><label className="block text-sm text-slate-300">Installed template<select value={draft.packageReleaseId} onChange={(event) => chooseTemplate(event.target.value)} disabled={busy} className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-3 py-2"><option value="">Choose a template</option>{options?.templates.map((template) => <option key={template.packageReleaseId} value={template.packageReleaseId}>{template.name} {template.version} · {template.packageReleaseId} · {template.digest} · {template.description} · {template.readiness.state} · {template.mode}</option>)}</select></label>{selectedTemplate ? <TemplateSummary template={selectedTemplate} heading="Selected template identity and configuration" /> : null}</div> : null}
+    {step === "BINDINGS" ? <div className="space-y-3"><label className="block text-sm text-slate-300">Agent name<Input value={draft.name} onChange={(event) => setField("name", event.target.value)} autoFocus placeholder="Agent name" /></label><label className="block text-sm text-slate-300">Visibility<select value={draft.visibility} onChange={(event) => setField("visibility", event.target.value === "PRIVATE" ? "PRIVATE" : "PUBLIC")} className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-3 py-2"><option value="PUBLIC">Public</option><option value="PRIVATE">Private</option></select></label>{draft.origin === "BLANK" ? <label className="block text-sm text-slate-300">Mode<select value={draft.mode} onChange={(event) => setField("mode", event.target.value as CreationDraft["mode"])} className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-3 py-2"><option>CLASSIC</option><option>RLM_REPL</option><option>WRAPPED</option></select></label> : <div className="text-sm text-slate-300">Mode: <strong>{selectedTemplate?.mode}</strong> (from exact template)</div>}{draft.origin === "TEMPLATE" ? <label className="block text-sm text-slate-300">Model<select value={draft.modelId} onChange={(event) => setField("modelId", event.target.value)} className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-3 py-2"><option value="">Choose a model</option>{options?.models.map((model) => <option key={model.id} value={model.id}>{model.id}</option>)}</select></label> : <label className="block text-sm text-slate-300">Model<Input value={draft.modelId} onChange={(event) => setField("modelId", event.target.value)} placeholder="Model ID" /></label>}<label className="block text-sm text-slate-300">Workspace directory<Input value={draft.workspacePath} onChange={(event) => setField("workspacePath", event.target.value)} /></label><label className="block text-sm text-slate-300">Assigned runner<select value={draft.runnerId} onChange={(event) => setField("runnerId", event.target.value)} className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-3 py-2"><option value="">Choose a runner</option>{(draft.origin === "TEMPLATE" ? options?.runners.map((runner) => ({ id: runner.id, displayName: runner.id })) ?? [] : runners).map((runner) => <option key={runner.id} value={runner.id}>{runner.displayName}</option>)}</select></label>{draft.origin === "TEMPLATE" ? templateRequirements.map((requirement) => <label key={requirement.name} className="block text-sm text-slate-300">{requirement.name}{requirement.required ? " (required)" : ""}<select value={draft.secretBindings.find((binding) => binding.requirementName === requirement.name)?.secretReferenceId ? String((options?.secretReferences.findIndex((secret) => secret.secretReferenceId === draft.secretBindings.find((binding) => binding.requirementName === requirement.name)?.secretReferenceId) ?? -1) + 1) : ""} onChange={(event) => { const secret = options?.secretReferences[Number(event.target.value) - 1]; if (!secret) return; setDraft((previous) => ({ ...previous, idempotencyKey: crypto.randomUUID(), secretBindings: [...previous.secretBindings.filter((binding) => binding.requirementName !== requirement.name), { requirementName: requirement.name, secretReferenceId: secret.secretReferenceId }] })); }} className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-3 py-2"><option value="">Choose a secret reference</option>{options?.secretReferences.map((secret, index) => <option key={secret.name} value={index + 1}>{secret.name}</option>)}</select></label>) : null}</div> : null}
+    {step === "SKILLS" ? <div className="space-y-3"><UnifiedSkillPicker items={availableInventory} selected={null} onChange={() => undefined} selectedRefs={refsForDraft(draft)} onToggle={toggleSkill} preloads={Object.fromEntries(draft.selectedSkills.map((skill) => [refKey(skill.ref), skill.preload]))} mandatoryRefs={draft.selectedSkills.filter((skill) => skill.mandatory).map((skill) => skill.ref)} onPreloadChange={setSkillPreload} disabled={busy} /><p className="text-xs text-slate-500">Local and catalog references are captured exactly. Catalog selections create this agent stopped.</p></div> : null}
+    {step === "REVIEW" && reviewSnapshot ? <div className="space-y-3"><h4 className="text-sm font-semibold text-slate-100">Review and confirm</h4><div className="rounded border border-slate-800 bg-slate-950 p-3 text-sm text-slate-300"><div>Name: {reviewSnapshot.name}</div><div>Origin: {reviewSnapshot.origin}</div><div>Mode: {reviewSnapshot.mode}</div><div>Runner: {reviewSnapshot.runnerId}</div><div>Workspace: {reviewSnapshot.workspacePath}</div><div>Local skills: {reviewSnapshot.localSkills.map((skill) => skill.name).join(", ") || "None"}</div><div>Selected skills: {reviewSnapshot.selectedSkills.map((skill) => `${skill.ref.kind === "LOCAL" ? `${skill.ref.name} (${skill.ref.localOrigin})` : `${skill.ref.name} ${skill.ref.version} ${skill.ref.digest}`}${skill.preload ? " · preload" : ""}`).join(", ") || "None"}</div></div>{selectedTemplate ? <><TemplateSummary template={selectedTemplate} heading="Reviewed template root and exact configuration" /><div className="rounded border border-slate-800 bg-slate-950 p-3 text-xs text-slate-400"><div>Requirements: {templateRequirements.map((requirement) => requirement.name).join(", ") || "None"}</div><div>Missing secret bindings: {templateRequirements.filter((requirement) => requirement.required && !reviewSnapshot.secretBindings.some((binding) => binding.requirementName === requirement.name)).map((requirement) => requirement.name).join(", ") || "None"}</div></div></> : null}{hasCatalogSkills ? <div className="rounded border border-amber-800 bg-amber-950/30 p-3 text-sm text-amber-200">Catalog selections create this agent stopped; deployment is queued and Start is a separate later action.</div> : null}<label className="flex items-start gap-2 text-sm text-slate-300"><input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} className="mt-1" /><span>I confirm this reviewed snapshot and understand that creation is the only action taken.</span></label></div> : null}
+    {error ? <div role="alert" className="rounded border border-rose-900/60 bg-rose-950/30 px-3 py-2 text-sm text-rose-300">{error}</div> : null}
+    <div className="flex flex-wrap justify-between gap-2"><button type="button" className="rounded bg-slate-800 px-3 py-2 text-sm text-slate-200" onClick={onCancel}>Cancel</button><div className="flex gap-2">{stepIndex > 0 ? <button type="button" className="rounded bg-slate-800 px-3 py-2 text-sm text-slate-200" onClick={() => setStep(["ORIGIN", "TEMPLATE", "BINDINGS", "SKILLS", "REVIEW"][stepIndex - 1] as CreateAgentStep)}>Back</button> : null}<button type="button" className="rounded bg-blue-600 px-3 py-2 text-sm text-white" disabled={busy || (step === "TEMPLATE" && !options) || (step === "REVIEW" && !acknowledged)} onClick={() => void next()}>{busy ? "Working..." : step === "REVIEW" ? "Create agent" : "Continue"}</button></div></div>
+  </div>;
+}
+
 type AgentsScreenProps = {
   agents: Agent[];
   runners: RunnerNode[];
   skills: SkillMeta[];
-  onCreateAgent: (agent: AgentForm) => Promise<void>;
+  principalKey?: string;
+  onProvisionAgent: (input: ProvisionAgentHttpInput, signal?: AbortSignal) => Promise<AgentProvisioningReceipt>;
+  loadProvisioningOptions?: (signal?: AbortSignal) => Promise<ProvisioningTemplateOptions>;
+  loadSkillInventory?: (signal?: AbortSignal) => Promise<SkillInventoryItem[]>;
   onUpdateAgent: (name: string, agent: Omit<AgentForm, "name">) => Promise<void>;
   onDeleteAgent: (name: string) => Promise<void>;
   onStartAgent: (name: string) => Promise<void>;
@@ -145,13 +432,18 @@ type AgentsScreenProps = {
   focusAgentName?: string | null;
   onFocusAgentApplied?: () => void;
   drawerOnly?: boolean;
+  skillManagement?: AgentSkillsManagement;
+  onRefreshAgents?: () => void | Promise<void>;
 };
 
 export function AgentsScreen({
   agents,
   runners,
   skills,
-  onCreateAgent,
+  principalKey,
+  onProvisionAgent,
+  loadProvisioningOptions,
+  loadSkillInventory,
   onUpdateAgent,
   onDeleteAgent,
   onStartAgent,
@@ -165,11 +457,15 @@ export function AgentsScreen({
   onDownloadAgentWorkspaceFile,
   focusAgentName,
   onFocusAgentApplied,
-  drawerOnly = false
+  drawerOnly = false,
+  skillManagement,
+  onRefreshAgents
 }: AgentsScreenProps) {
   const [selectedAgentName, setSelectedAgentName] = useState<string | null>(null);
+  const createInvokerRef = useRef<HTMLButtonElement | null>(null);
+  const drawerPanelRef = useRef<HTMLElement | null>(null);
   const [isCreating, setIsCreating] = useState(false);
-  const [activeTab, setActiveTab] = useState<"details" | "events" | "workspace">(
+  const [activeTab, setActiveTab] = useState<"details" | "skills" | "events" | "workspace">(
     "details"
   );
   const [form, setForm] = useState<AgentForm>(DEFAULT_AGENT_FORM);
@@ -191,6 +487,11 @@ export function AgentsScreen({
   const [fileLoadingPath, setFileLoadingPath] = useState<string | null>(null);
   const [openFile, setOpenFile] = useState<AgentWorkspaceFileResponse | null>(null);
   const [panelError, setPanelError] = useState<string | null>(null);
+  const [agentSkillItems, setAgentSkillItems] = useState<SkillInventoryItem[]>([]);
+  const [agentSkillRevision, setAgentSkillRevision] = useState<number | null>(null);
+  const [agentSkillsLoading, setAgentSkillsLoading] = useState(false);
+  const skillLoadGeneration = useRef(0);
+  const skillLoadAbort = useRef<AbortController | null>(null);
   const [crossMemoryDrawerOpen, setCrossMemoryDrawerOpen] = useState(false);
   const [systemPromptDrawerOpen, setSystemPromptDrawerOpen] = useState(false);
   const [systemPromptLoading, setSystemPromptLoading] = useState(false);
@@ -312,8 +613,33 @@ export function AgentsScreen({
     onFocusAgentApplied?.();
   }, [agents, focusAgentName, onFocusAgentApplied]);
 
+  const loadSelectedAgentSkills = async () => {
+    const capturedAgentId = selectedAgent?.id;
+    const capturedPrincipal = principalKey;
+    if (!capturedAgentId || !skillManagement?.listForAgent || activeTab !== "skills") return;
+    skillLoadAbort.current?.abort();
+    const controller = new AbortController();
+    skillLoadAbort.current = controller;
+    const request = ++skillLoadGeneration.current;
+    setAgentSkillsLoading(true);
+    try {
+      const result = await skillManagement.listForAgent(capturedAgentId, { query: "", origin: "ALL", availability: "ALL" }, controller.signal);
+      if (controller.signal.aborted || request !== skillLoadGeneration.current || selectedAgent?.id !== capturedAgentId || principalKey !== capturedPrincipal || activeTab !== "skills") return;
+      if (result.ok) { setAgentSkillItems(result.value.items); setAgentSkillRevision(result.value.agentRevision); }
+      else setPanelError(result.error.message);
+    } catch (error) {
+      if (!controller.signal.aborted && request === skillLoadGeneration.current && selectedAgent?.id === capturedAgentId && principalKey === capturedPrincipal) setPanelError(error instanceof Error ? error.message : "Failed to load agent skills.");
+    } finally {
+      if (request === skillLoadGeneration.current) setAgentSkillsLoading(false);
+    }
+  };
+
   useEffect(() => {
-    if (!selectedAgent || isCreating) {
+    skillLoadAbort.current?.abort();
+    skillLoadGeneration.current += 1;
+    setAgentSkillItems([]);
+    setAgentSkillRevision(null);
+    if (!selectedAgent || isCreating || activeTab !== "skills") {
       setAgentEvents([]);
       setSelectedEventId(null);
       setWorkspaceData(null);
@@ -330,7 +656,9 @@ export function AgentsScreen({
       return;
     }
     setPanelError(null);
-  }, [selectedAgent, isCreating]);
+    void loadSelectedAgentSkills();
+    return () => { skillLoadAbort.current?.abort(); skillLoadGeneration.current += 1; };
+  }, [selectedAgent?.id, principalKey, isCreating, activeTab, skillManagement]);
 
   const handleNewAgent = () => {
     setSelectedAgentName(null);
@@ -375,6 +703,23 @@ export function AgentsScreen({
     setSelectedEventId(null);
     setOpenFile(null);
     setCrossMemoryDrawerOpen(false);
+    window.setTimeout(() => createInvokerRef.current?.focus(), 0);
+  };
+
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const panel = drawerPanelRef.current;
+    const first = panel?.querySelector<HTMLElement>("button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])");
+    first?.focus();
+  }, [drawerOpen]);
+
+  const trapDrawerFocus = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key !== "Tab") return;
+    const focusable = Array.from(drawerPanelRef.current?.querySelectorAll<HTMLElement>("button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex=\"-1\"])") ?? []);
+    if (!focusable.length) return;
+    const first = focusable[0]!; const last = focusable[focusable.length - 1]!;
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
   };
 
   useEscapeKey(
@@ -571,38 +916,6 @@ export function AgentsScreen({
       const enabledSkills = isWrappedMode ? [] : form.enabledSkills;
       const alwaysPreloadedSkills = isWrappedMode ? [] : form.alwaysPreloadedSkills;
       const allowOutsideWorkspace = isWrappedMode ? false : form.allowOutsideWorkspace;
-      if (isCreating) {
-        const normalizedName = form.name.trim();
-        await onCreateAgent({
-          ...form,
-          name: normalizedName,
-          modelId,
-          visibility: form.visibility,
-          mode: form.mode,
-          memoryContextMode,
-          emitAuditEvents,
-          llmCallTimeoutMs: llmCallTimeoutMs === null ? "" : String(llmCallTimeoutMs),
-          contextSessionGapMs:
-            contextSessionGapMs === null ? "" : String(contextSessionGapMs),
-          workspacePath: form.workspacePath.trim(),
-          allowOutsideWorkspace,
-          assignedRunnerId: form.assignedRunnerId.trim(),
-          soulContents,
-          enabledSkills,
-          alwaysPreloadedSkills,
-          wrappedConfigJson: JSON.stringify(wrappedConfig),
-          wrappedConfig
-        });
-        setIsCreating(false);
-        setSelectedAgentName(normalizedName);
-        setActiveTab("details");
-        setIsFormDirty(false);
-        setSaveStatus({
-          kind: "success",
-          message: `Agent "${normalizedName}" was saved successfully.`
-        });
-        return;
-      }
       if (!selectedAgent) return;
       await onUpdateAgent(selectedAgent.name, {
         modelId,
@@ -795,7 +1108,7 @@ export function AgentsScreen({
           <div className="text-xs text-slate-500">
             Click an agent row to open details, events, and workspace.
           </div>
-          <Button onClick={handleNewAgent}>New agent</Button>
+          <Button onClick={(event) => { createInvokerRef.current = event.currentTarget; handleNewAgent(); }}>New agent</Button>
         </div>
         <div className="space-y-6 overflow-x-auto">
           <div>
@@ -874,12 +1187,18 @@ export function AgentsScreen({
         className={`fixed bottom-0 right-0 top-0 z-50 w-full max-w-4xl border-l border-slate-800 bg-slate-950 shadow-2xl transition-transform duration-300 ${
           drawerOpen ? "translate-x-0" : "translate-x-full"
         }`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="agent-drawer-title"
         aria-hidden={!drawerOpen}
+        tabIndex={-1}
+        ref={drawerPanelRef}
+        onKeyDown={trapDrawerFocus}
       >
         <div className="relative flex h-full flex-col">
           <div className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-800 px-4 py-3">
             <div>
-              <h3 className="text-sm font-semibold text-slate-100">
+              <h3 id="agent-drawer-title" className="text-sm font-semibold text-slate-100">
                 {isCreating
                   ? "Create Agent"
                   : selectedAgent
@@ -914,26 +1233,20 @@ export function AgentsScreen({
               ) : null}
             </div>
             <div className="flex items-center gap-2">
-              {activeTab === "details" && (isCreating || selectedAgent) ? (
+              {activeTab === "details" && !isCreating && selectedAgent ? (
                 <>
                   <Button
                     onClick={handleSubmit}
                     disabled={
                       isSubmitting ||
-                      (!isCreating && !isFormDirty) ||
+                      !isFormDirty ||
                       !form.name.trim() ||
                       (!isWrappedMode && !form.modelId.trim()) ||
                       !form.workspacePath.trim() ||
                       Boolean(wrappedConfigValidationMessage)
                     }
                   >
-                    {isSubmitting
-                      ? isCreating
-                        ? "Creating..."
-                        : "Saving..."
-                      : isCreating
-                        ? "Create Agent"
-                        : "Save Details"}
+                    {isSubmitting ? "Saving..." : "Save Details"}
                   </Button>
                   {!isCreating && selectedAgent && (
                     <Button
@@ -972,6 +1285,14 @@ export function AgentsScreen({
               Details
             </Button>
             <Button
+              variant={activeTab === "skills" ? "primary" : "secondary"}
+              className="px-3 py-1 text-xs"
+              onClick={() => setActiveTab("skills")}
+              disabled={!selectedAgent || !skillManagement}
+            >
+              Skills
+            </Button>
+            <Button
               variant={activeTab === "events" ? "primary" : "secondary"}
               className="px-3 py-1 text-xs"
               onClick={openEventsTab}
@@ -990,9 +1311,30 @@ export function AgentsScreen({
           </div>
 
           <div className="min-h-0 flex-1 overflow-auto px-4 py-4">
-            {activeTab === "details" && (
+            {activeTab === "details" && isCreating && (
+              <CreateAgentFlow
+                runners={runners}
+                skills={skills}
+                principalKey={principalKey}
+                onProvisionAgent={onProvisionAgent}
+                loadProvisioningOptions={loadProvisioningOptions}
+                loadSkillInventory={loadSkillInventory}
+                loadStartReadiness={getAgentStartReadiness}
+                onStartAgent={onStartAgent}
+                onDone={(createdReceipt) => {
+                  setIsCreating(false);
+                  setSelectedAgentName(createdReceipt?.name ?? null);
+                  setForm(DEFAULT_AGENT_FORM);
+                  setIsFormDirty(false);
+                  setSaveStatus({ kind: "success", message: createdReceipt ? "Created stopped; deployment queued" : "Agent was saved successfully." });
+                }}
+                onCancel={closeDrawer}
+              />
+            )}
+
+            {activeTab === "details" && !isCreating && (
               <div className="space-y-4">
-                {!isCreating && !selectedAgent ? (
+                {!selectedAgent ? (
                   <div className="text-sm text-slate-500">
                     Select an existing agent or create a new one.
                   </div>
@@ -1392,6 +1734,20 @@ export function AgentsScreen({
                   </>
                 )}
               </div>
+            )}
+
+            {activeTab === "skills" && selectedAgent && (
+              selectedAgent.id && skillManagement && agentSkillRevision !== null ?
+                <AgentSkillsTab
+                  agentId={selectedAgent.id}
+                  agentRevision={agentSkillRevision}
+                  items={agentSkillItems}
+                  localEnabled={selectedAgent.enabledSkills ?? []}
+                  localPreloaded={selectedAgent.alwaysPreloadedSkills ?? []}
+                  management={skillManagement}
+                  busy={agentSkillsLoading}
+                  onReload={async () => { await loadSelectedAgentSkills(); await onRefreshAgents?.(); }}
+                /> : <div className="text-sm text-slate-500">Skill inventory is unavailable until this agent has a canonical id and revision.</div>
             )}
 
             {activeTab === "events" && (

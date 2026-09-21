@@ -1,8 +1,10 @@
 import type { Hono } from "hono";
+import type { AdminPrincipal } from "../admin-access";
 import { randomUUID } from "node:crypto";
 import { asc, eq } from "drizzle-orm";
 
 type HumansDeps = {
+  canManageCatalogs: (principal: AdminPrincipal | undefined) => boolean;
   orm: any;
   jsonResponse: (c: any, data: unknown, status?: number) => Response;
   humanSchema: any;
@@ -16,7 +18,7 @@ function generateTemporaryPassword() {
 }
 
 export function registerHumansRoutes(app: Hono<any>, deps: HumansDeps) {
-  const { orm, jsonResponse, humanSchema, hashPassword } = deps;
+  const { canManageCatalogs, orm, jsonResponse, humanSchema, hashPassword } = deps;
 
   app.get("/api/humans", (c) => {
     const rows = orm
@@ -108,12 +110,16 @@ export function registerHumansRoutes(app: Hono<any>, deps: HumansDeps) {
     const existing = orm
       .select({
         id: humanSchema.id,
-        username: humanSchema.username
+        username: humanSchema.username,
+        is_admin: humanSchema.is_admin
       })
       .from(humanSchema)
       .where(eq(humanSchema.id, id))
-      .get() as { id: string; username: string } | undefined;
+      .get();
     if (!existing) return jsonResponse(c, { error: "Human not found" }, 404);
+    if (existing.is_admin === 1 && !canManageCatalogs(c.get("user"))) {
+      return jsonResponse(c, { error: "Administrator access required" }, 403);
+    }
 
     const now = Date.now();
     orm

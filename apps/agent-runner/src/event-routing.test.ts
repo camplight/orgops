@@ -58,6 +58,13 @@ describe("event routing", () => {
     ).toBe(false);
   });
 
+  it("never wakes an agent for catalog configuration audits even when targeted", () => {
+    expect(shouldHandleEventForAgent(agent, makeEvent({
+      type: "audit.catalog.configuration.changed", source: "system",
+      channelId: "chan-1", payload: { targetAgentName: "browser" },
+    }))).toBe(false);
+  });
+
   it("still allows normal channel events from others", () => {
     expect(
       shouldHandleEventForAgent(

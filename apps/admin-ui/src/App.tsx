@@ -3,8 +3,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 // Page size for Events Explorer loads (initial page and each "load older" step).
 const EVENTS_PAGE_LIMIT = 1000;
 import type { Screen } from "./types";
-import { apiFetch, apiJson, getApiHeaders } from "./api";
+import { apiFetch, apiJson, getApiHeaders, getProvisioningTemplateOptions, getSkillInventory, provisionAgent } from "./api";
 import { apiUrl } from "./config";
+import { createUnifiedSkillApi } from "./unified-skills/api";
+import { createUnifiedSkillController } from "./unified-skills/state";
 import { AppLayout } from "./components/layout";
 import { LoginForm } from "./components/auth";
 import { DashboardDrawers } from "./components/drawers/DashboardDrawers";
@@ -19,6 +21,7 @@ import {
   ProcessesScreen,
   RunnersScreen,
   SkillsScreen,
+  ConnectedSourceLibraryScreen,
   SecretsScreen,
   IntegrationKeysScreen,
   HumansScreen,
@@ -68,6 +71,44 @@ function isSlackBridgeChannel(channel: { kind?: string }) {
 
 function isAgentLifecycleChannel(channel: { name?: string }) {
   return (channel.name ?? "").startsWith("agent.lifecycle.");
+}
+
+const VALID_SCREENS: readonly Screen[] = ["dashboard", "agents", "runners", "teams", "channels", "chat", "events", "processes", "skills", "source-library", "secrets", "api-keys", "agent-invites", "humans", "profile"];
+export function normalizeAdminScreen(candidate: string | null): Screen {
+  if (candidate === "catalogs") return "source-library";
+  return candidate && VALID_SCREENS.includes(candidate as Screen) ? candidate as Screen : "dashboard";
+}
+
+export function buildAdminPrincipalKey(input: {
+  userId: string | null;
+  username: string | null;
+  isAdmin: boolean;
+  mustChangePassword: boolean;
+  authenticated: boolean;
+}): string {
+  return `${input.userId ?? "anonymous"}:${input.username ?? ""}:admin=${input.isAdmin ? 1 : 0}:password=${input.mustChangePassword ? 1 : 0}:authenticated=${input.authenticated ? 1 : 0}`;
+}
+function screenFromUrl(): Screen {
+  if (typeof window === "undefined") return "dashboard";
+  const url = new URL(window.location.href);
+  const candidate = url.searchParams.get("screen");
+  const screen = normalizeAdminScreen(candidate);
+  if (candidate === "catalogs") { url.searchParams.set("screen", screen); window.history.replaceState({}, "", url); }
+  return screen;
+}
+
+function ConnectedSkillsScreen({ principalKey }: { principalKey: string }) {
+  const controllerRef = useRef<ReturnType<typeof createUnifiedSkillController> | null>(null);
+  if (!controllerRef.current) controllerRef.current = createUnifiedSkillController({ api: createUnifiedSkillApi() });
+  const controller = controllerRef.current;
+  const [state, setState] = useState(controller.snapshot());
+  useEffect(() => {
+    controller.setPrincipal(principalKey);
+    const unsubscribe = controller.subscribe(() => setState(controller.snapshot()));
+    void controller.load(controller.snapshot().filters);
+    return () => { unsubscribe(); controller.cancelPending(); controller.dispose(); };
+  }, [controller, principalKey]);
+  return <SkillsScreen state={state} actions={controller} />;
 }
 
 const DEFAULT_EVENT_FILTERS = {
@@ -143,7 +184,12 @@ function buildEventQueryParams(filters: EventFilters) {
 }
 
 export default function App() {
-  const [activeScreen, setActiveScreen] = useState<Screen>("dashboard");
+  const [selectedScreen, setSelectedScreen] = useState<Screen>(screenFromUrl);
+  const setActiveScreen = useCallback((screen: Screen) => {
+    setSelectedScreen(screen);
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href); url.searchParams.set("screen", screen); window.history.pushState({}, "", url);
+  }, []);
   const [activeProcessId, setActiveProcessId] = useState<string | null>(null);
   const [focusAgentName, setFocusAgentName] = useState<string | null>(null);
   const [focusEventId, setFocusEventId] = useState<string | null>(null);
@@ -157,15 +203,22 @@ export default function App() {
   const processesRefreshTimerRef = useRef<number | null>(null);
   const dashboardEventsRefreshTimerRef = useRef<number | null>(null);
   const dashboardDataRefreshTimerRef = useRef<number | null>(null);
+  const agentSkillManagementRef = useRef(createUnifiedSkillApi());
 
-  const { authChecked, authenticated, username, mustChangePassword, refreshAuth, logout } = useAuth();
+  const { authChecked, authenticated, username, userId, isAdmin, mustChangePassword, refreshAuth, invalidateCatalogAuthority, logout } = useAuth();
+  const activeScreen = mustChangePassword ? "profile" : selectedScreen;
+  const principalKey = buildAdminPrincipalKey({ userId, username, isAdmin, mustChangePassword, authenticated });
+  const canManageCatalogs = authenticated && !mustChangePassword && isAdmin && userId !== null;
   const data = useOrgOpsData(authenticated && !mustChangePassword);
 
   useEffect(() => {
-    if (mustChangePassword) {
-      setActiveScreen("profile");
-    }
-  }, [mustChangePassword]);
+    if (mustChangePassword) setActiveScreen("profile");
+  }, [mustChangePassword, setActiveScreen]);
+  useEffect(() => {
+    const onPopState = () => setSelectedScreen(screenFromUrl());
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
 
   const upsertEvent = useCallback((list: EventRow[], incoming: EventRow) => {
     const existingIndex = list.findIndex((event) => event.id === incoming.id);
@@ -484,7 +537,7 @@ export default function App() {
         data.refreshChannels();
       }
       if (screen === "humans") data.refreshHumans();
-      if (screen === "skills") data.refreshSkills();
+
       if (screen === "events") {
         fetchLatestExplorerEvents(new URLSearchParams()).then(data.setEvents);
         data.refreshChannels();
@@ -623,6 +676,12 @@ export default function App() {
     [handleApplyEventFilters]
   );
 
+  const handleProvisionAgent = useCallback(async (input: Parameters<typeof provisionAgent>[0], signal?: AbortSignal) => {
+    const receipt = await provisionAgent(input, signal);
+    await data.refreshDashboard();
+    return receipt;
+  }, [data.refreshDashboard]);
+
   if (!authChecked) {
     return (
       <div className="min-h-screen flex items-center justify-center text-slate-400">
@@ -632,11 +691,13 @@ export default function App() {
   }
 
   if (!authenticated) {
-    return <LoginForm onSuccess={refreshAuth} />;
+    return <LoginForm onSuccess={async () => { await refreshAuth(); }} />;
   }
 
   return (
     <AppLayout
+      canManageCatalogs={canManageCatalogs}
+      canManageSourceLibrary={canManageCatalogs}
       activeScreen={activeScreen}
       onScreenChange={setActiveScreen}
       onScreenFocus={onScreenFocus}
@@ -644,6 +705,9 @@ export default function App() {
       onOpenProfile={() => setActiveScreen("profile")}
       onLogout={logout}
     >
+      {activeScreen === "source-library" && (canManageCatalogs && userId ? (
+        <ConnectedSourceLibraryScreen expectedUserId={userId} refreshAuth={refreshAuth} invalidateAuthority={() => invalidateCatalogAuthority(userId)} />
+      ) : <p role="status">Administrator access is required. Recheck your sign-in and password status.</p>)}
       {activeScreen === "dashboard" && (
         <>
           <DashboardScreen
@@ -664,6 +728,8 @@ export default function App() {
             agents={data.agents}
             runners={data.runners}
             skills={data.skills}
+            principalKey={principalKey}
+            onProvisionAgent={handleProvisionAgent}
             events={data.events}
             channels={data.channels}
             eventTypes={data.eventTypes}
@@ -680,14 +746,6 @@ export default function App() {
               if (id) {
                 await data.loadProcessOutput(id);
               }
-            }}
-            onCreateAgent={async (agent) => {
-              await data.apiFetch("/api/agents", {
-                method: "POST",
-                headers: data.getApiHeaders(),
-                body: JSON.stringify(agent)
-              });
-              data.refreshDashboard();
             }}
             onUpdateAgent={async (name, agent) => {
               await data.apiFetch(`/api/agents/${name}`, {
@@ -824,14 +882,12 @@ export default function App() {
           agents={data.agents}
           runners={data.runners}
           skills={data.skills}
-          onCreateAgent={async (agent) => {
-            await data.apiFetch("/api/agents", {
-              method: "POST",
-              headers: data.getApiHeaders(),
-              body: JSON.stringify(agent)
-            });
-            data.refreshDashboard();
-          }}
+          principalKey={principalKey}
+          onProvisionAgent={handleProvisionAgent}
+          loadProvisioningOptions={getProvisioningTemplateOptions}
+          loadSkillInventory={getSkillInventory}
+          skillManagement={agentSkillManagementRef.current}
+          onRefreshAgents={data.refreshDashboard}
           onUpdateAgent={async (name, agent) => {
             await data.apiFetch(`/api/agents/${name}`, {
               method: "PATCH",
@@ -1199,7 +1255,7 @@ export default function App() {
         />
       )}
 
-      {activeScreen === "skills" && <SkillsScreen skills={data.skills} />}
+      {activeScreen === "skills" && <ConnectedSkillsScreen principalKey={principalKey} />}
 
       {activeScreen === "secrets" && (
         <SecretsScreen

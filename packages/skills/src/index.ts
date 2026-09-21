@@ -151,3 +151,50 @@ export async function loadSkillEventShapes(skills: SkillMeta[]): Promise<{
   }
   return { shapes, errors };
 }
+
+export {
+  computePackageSetDigest, computeArtifactSemanticDigest, packageNamespace, resolveImmutablePackageClosure,
+  type ImmutablePackage, type ImmutableClosureLookup,
+} from "./catalogs/deployment-integrity";
+export {
+  canonicalManifestBytes, computePackageDigest, inspectPackage,
+  type ContentEntry, type InspectedFile, type ExecutionPreview, type PackageSnapshot,
+} from "./catalogs/content";
+export { parseSkillDocument } from "./catalogs/skill-document";
+export {
+  resolvePackages, type CatalogSnapshot, type SuppliedPackage, type InstalledSkill,
+  type ResolveInput, type ResolvedPackage, type Resolution,
+} from "./catalogs/resolve";
+export {
+  exportAgentPackage, exportSkillPackage,
+  type AgentExportOptions, type SkillExportOptions, type ExportCandidate,
+} from "./catalogs/export";
+export { inspectGitPackage, readGitCatalogIndex } from "./catalogs/git-inspection";
+export {
+  OFFLINE_GIT_LIMITS, type OfflineGitRepository, type GitInspectionOptions,
+  type GitPackageInput, type GitIndexInput, type OfflineGitIssue, type OfflineGitResult,
+} from "./catalogs/git-session";
+export {
+  readGitPublicationEvidence, OFFLINE_GIT_EVIDENCE_LIMITS,
+  type GitPublicationEvidenceInput, type GitPublicationEvidence,
+} from "./catalogs/git-publication-evidence";
+export { preparePublication } from "./catalogs/publication";
+export {
+  PUBLICATION_LIMITS, type PublicationTreeEntry, type PublicationBase, type PublicationSource,
+  type PublicationSelection, type PublicationInput, type PublicationIssue, type PublicationResult,
+  type PublicationBytes, type PublicationChange, type PublicationPreconditions, type PublicationRevision,
+  type PublicationIdentity, type PublicationRelease, type PublicationFinding, type PublicationProposal,
+} from "./catalogs/publication-types";
+export { prepareImport } from "./catalogs/import";
+export {
+  IMPORT_LIMITS, type ImportSource, type ImportLocalEntry, type ImportInstalledEntry,
+  type ImportInput, type ImportIssue, type ImportResult, type ImportReviewFile,
+  type ImportReviewPackage, type ImportPreview,
+} from "./catalogs/import-types";
+export { readLocalSkillEvidence } from "./catalogs/local-skill-evidence";
+export {
+  OFFLINE_LOCAL_SKILL_LIMITS,
+  type LocalSkillEvidenceInput, type LocalSkillEvidenceOptions,
+  type LocalSkillNamespaceEntry, type LocalSkillSubtree, type LocalSkillEvidence,
+  type LocalSkillEvidenceIssue, type LocalSkillEvidenceResult,
+} from "./catalogs/local-skill-evidence-types";

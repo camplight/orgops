@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { CatalogConfigurationAuditSchema } from "./catalogs/configuration";
+import { CatalogAssignmentAuditEventSchema, CatalogAuditEventSchema } from "./catalogs/source-library";
+import { SkillAuditEventSchema } from "./unified-skills";
 import { zodToJsonSchema } from "zod-to-json-schema";
 
 export type EventDraft = {
@@ -10,6 +13,8 @@ export type EventDraft = {
   deliverAt?: number;
   idempotencyKey?: string;
 };
+
+export const IMMUTABLE_EVENT_SCHEMA_JSON = Symbol("orgops.immutableEventSchemaJson");
 
 export type EventShapeDefinition = {
   type: string;
@@ -87,6 +92,12 @@ const auditToolPayloadSchema = z
   .passthrough();
 
 const coreEventShapes: EventShapeDefinition[] = [
+  {
+    type: "audit.skill.changed",
+    description: "Typed, append-only audit record for a local agent skill mutation.",
+    source: "core",
+    eventSchema: SkillAuditEventSchema,
+  },
   {
     type: "noop",
     description:
@@ -508,6 +519,36 @@ const coreEventShapes: EventShapeDefinition[] = [
     }),
   },
   {
+    type: "audit.catalog.configuration.changed",
+    description: "Catalog configuration mutation audit.",
+    source: "core",
+    payloadSchema: CatalogConfigurationAuditSchema,
+  },
+  ...[
+    ["audit.catalog.source.changed", "Catalog source mutation audit."],
+    ["audit.catalog.sync.completed", "Catalog source synchronization completion audit."],
+    ["audit.catalog.sync.failed", "Catalog source synchronization failure audit."],
+    ["audit.catalog.release.reviewed", "Catalog release review audit."],
+    ["audit.catalog.grant.changed", "Catalog release grant mutation audit."],
+    ["audit.catalog.installation.changed", "Catalog package installation audit."],
+    ["audit.catalog.api_activation.changed", "Catalog API event-shape approval and activation audit."],
+    ["audit.catalog.template.instantiated", "Catalog template instantiation audit."],
+    ["audit.catalog.secret_binding.changed", "Catalog agent secret-binding mutation audit."],
+    ["audit.catalog.rollout.changed", "Catalog rollout mutation audit."],
+    ["audit.catalog.deployment.reported", "Catalog runner deployment report audit."],
+  ].map(([type, description]) => ({
+    type,
+    description,
+    source: "core" as const,
+    eventSchema: CatalogAuditEventSchema,
+  })),
+  {
+    type: "audit.catalog.assignment.changed",
+    description: "Catalog skill assignment mutation audit.",
+    source: "core",
+    eventSchema: CatalogAssignmentAuditEventSchema,
+  },
+  {
     type: "audit.events.cleared",
     description: "Audit record for event clear operation.",
     source: "core",
@@ -691,7 +732,7 @@ function formatIssues(prefix: string, result: z.SafeParseError<unknown>): string
 
 export function validateEventAgainstShapes(
   event: EventDraft,
-  definitions: EventShapeDefinition[],
+  definitions: readonly EventShapeDefinition[],
 ): EventValidationResult {
   const matching = definitions.filter((definition) => definition.type === event.type);
   if (matching.length === 0) {
@@ -710,24 +751,27 @@ export function validateEventAgainstShapes(
 
   const collected: EventValidationIssue[] = [];
   for (const definition of matching) {
-    const definitionSource = definition.source ?? "core";
-    if (definition.eventSchema) {
-      const parsed = definition.eventSchema.safeParse(event);
-      if (parsed.success) return { ok: true, matchedDefinitions: matching.length };
-      for (const message of formatIssues("", parsed)) {
+    let definitionSource = "core";
+    try {
+      definitionSource = definition.source ?? "core";
+      const schema = definition.eventSchema ?? definition.payloadSchema;
+      if (!schema) return { ok: true, matchedDefinitions: matching.length };
+      const parsed: unknown = schema.safeParse(definition.eventSchema ? event : event.payload);
+      if (!parsed || typeof parsed !== "object" || typeof (parsed as { success?: unknown }).success !== "boolean") {
+        throw new Error("malformed schema result");
+      }
+      if ((parsed as { success: boolean }).success) {
+        if (!("data" in parsed)) throw new Error("malformed schema result");
+        return { ok: true, matchedDefinitions: matching.length };
+      }
+      const error = (parsed as { error?: { issues?: unknown } }).error;
+      if (!error || !Array.isArray(error.issues)) throw new Error("malformed schema result");
+      for (const message of formatIssues(definition.eventSchema ? "" : "payload.", parsed as z.SafeParseError<unknown>)) {
         collected.push({ source: definitionSource, message });
       }
-      continue;
+    } catch {
+      collected.push({ source: definitionSource, message: "Schema validation failed" });
     }
-    if (definition.payloadSchema) {
-      const parsed = definition.payloadSchema.safeParse(event.payload);
-      if (parsed.success) return { ok: true, matchedDefinitions: matching.length };
-      for (const message of formatIssues("payload.", parsed)) {
-        collected.push({ source: definitionSource, message });
-      }
-      continue;
-    }
-    return { ok: true, matchedDefinitions: matching.length };
   }
 
   return {
@@ -739,7 +783,7 @@ export function validateEventAgainstShapes(
 }
 
 export function serializeEventShapes(
-  definitions: EventShapeDefinition[],
+  definitions: readonly EventShapeDefinition[],
 ): EventTypeSummary[] {
   const schemaName = (type: string, kind: "event" | "payload") =>
     `${type.replace(/[^a-zA-Z0-9_]/g, "_")}_${kind}`;
@@ -749,7 +793,8 @@ export function serializeEventShapes(
     kind: "event" | "payload",
   ): unknown => {
     try {
-      return zodToJsonSchema(schema, schemaName(type, kind));
+      const immutable = (schema as unknown as { [IMMUTABLE_EVENT_SCHEMA_JSON]?: unknown })[IMMUTABLE_EVENT_SCHEMA_JSON];
+      return immutable ?? zodToJsonSchema(schema, schemaName(type, kind));
     } catch {
       return { error: "schema_serialization_failed" };
     }

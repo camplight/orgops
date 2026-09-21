@@ -3,6 +3,8 @@ import { asc, eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { schema, type OrgOpsDrizzleDb } from "@orgops/db";
 import type { EventBus } from "@orgops/event-bus";
+import { DeploymentReportSchema, type CatalogLibraryErrorCode, type RunnerArtifactDelivery, type RunnerStartGateDelivery } from "@orgops/schemas";
+import { RunnerDeliveryError } from "../catalog-library/runner-delivery";
 
 type RunnerRecord = {
   id: string;
@@ -24,6 +26,21 @@ type RunnersDeps = {
   requireRunnerAuth: (c: any, next: any) => Response | Promise<Response>;
   runnerToken: string;
   runnerApiUrl: string;
+  runnerArtifactDelivery?: RunnerArtifactDelivery;
+  runnerStartGateDelivery?: RunnerStartGateDelivery;
+};
+
+const runnerErrorStatus: Partial<Record<CatalogLibraryErrorCode, number>> = {
+  INVALID_REQUEST: 400, PAYLOAD_TOO_LARGE: 413, FORBIDDEN: 403, NOT_FOUND: 404,
+  REVISION_CONFLICT: 409, STATE_CONFLICT: 409, DEPLOYMENT_SUPERSEDED: 409,
+  INSPECTION_FAILED: 422, STORAGE_FAILURE: 500,
+};
+const runnerErrorMessage: Partial<Record<CatalogLibraryErrorCode, string>> = {
+  INVALID_REQUEST: "Invalid catalog library request", PAYLOAD_TOO_LARGE: "Catalog library request too large",
+  FORBIDDEN: "Administrator access required", NOT_FOUND: "Catalog library resource not found",
+  REVISION_CONFLICT: "Catalog library changed; reload metadata", STATE_CONFLICT: "Catalog library operation conflicts with current state",
+  DEPLOYMENT_SUPERSEDED: "Runner deployment was superseded", INSPECTION_FAILED: "Package inspection failed; last-known-good content is unchanged",
+  STORAGE_FAILURE: "Catalog library operation failed",
 };
 
 function parseMetadataSafe(input: string | null | undefined): Record<string, unknown> {
@@ -58,7 +75,7 @@ function toApiRunner(row: RunnerRecord, onlineThresholdMs: number) {
 }
 
 export function registerRunnersRoutes(app: Hono<any>, deps: RunnersDeps) {
-  const { orm, bus, jsonResponse, requireRunnerAuth, runnerToken, runnerApiUrl } = deps;
+  const { orm, bus, jsonResponse, requireRunnerAuth, runnerToken, runnerApiUrl, runnerArtifactDelivery, runnerStartGateDelivery } = deps;
   const ONLINE_THRESHOLD_MS = Number(
     process.env.ORGOPS_RUNNER_ONLINE_THRESHOLD_MS ?? 15_000
   );
@@ -72,6 +89,83 @@ export function registerRunnersRoutes(app: Hono<any>, deps: RunnersDeps) {
       }
     });
   };
+
+  app.use("/api/runners/:runnerId/package-deployments", async (c, next) => { c.header("Cache-Control", "no-store"); await next(); });
+  app.use("/api/runners/:runnerId/agents/:agentName/start-requirements", async (c, next) => { c.header("Cache-Control", "no-store"); await next(); });
+  app.use("/api/runner-package-deployments/*", async (c, next) => { c.header("Cache-Control", "no-store"); await next(); });
+
+  const hasQuery = (c: any) => new URL(c.req.url).search.length > 0;
+  const deliveryContext = (c: any, explicitRunnerId?: string) => {
+    const user = c.get("user") as { runnerScope?: { mode?: string; allowedRunnerId?: string; allowedAgentName?: string } } | undefined;
+    const scope = user?.runnerScope;
+    const runnerId = explicitRunnerId ?? c.req.header("x-orgops-runner-id")?.trim() ?? "";
+    if (!scope || !runnerId) return { ok: false as const, status: 400 };
+    if (scope.mode === "SCOPED" && scope.allowedRunnerId !== runnerId) return { ok: false as const, status: 403 };
+    return { ok: true as const, value: { runnerId, ...(scope.mode === "SCOPED" && scope.allowedAgentName
+      ? { allowedAgentName: scope.allowedAgentName } : {}) } };
+  };
+  const deliveryFailure = (c: any, error: unknown) => {
+    const code = error instanceof RunnerDeliveryError ? error.code : "STORAGE_FAILURE";
+    return c.json({ error: runnerErrorMessage[code] ?? runnerErrorMessage.STORAGE_FAILURE, code }, (runnerErrorStatus[code] ?? 500) as never);
+  };
+  const startRequirementsForbidden = (c: any) => c.json({ error: "Forbidden", code: "FORBIDDEN" }, 403);
+  const readReport = async (c: any) => {
+    if (c.req.header("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !== "application/json" || !c.req.raw.body) return { ok: false as const, code: "INVALID_REQUEST" as const };
+    const reader = c.req.raw.body.getReader(); const chunks: Uint8Array[] = []; let size = 0;
+    try {
+      while (true) { const { done, value } = await reader.read(); if (done) break; size += value.byteLength;
+        if (size > 16 * 1024) { try { await reader.cancel(); } catch { /* bounded rejection */ } return { ok: false as const, code: "PAYLOAD_TOO_LARGE" as const }; }
+        chunks.push(value); }
+      const bytes = new Uint8Array(size); let offset = 0; for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+      const parsed = DeploymentReportSchema.safeParse(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)));
+      return parsed.success ? { ok: true as const, value: parsed.data } : { ok: false as const, code: "INVALID_REQUEST" as const };
+    } catch { return { ok: false as const, code: "INVALID_REQUEST" as const }; }
+  };
+
+  app.get("/api/runners/:runnerId/agents/:agentName/start-requirements", requireRunnerAuth, async c => {
+    if (hasQuery(c) || c.req.raw.body !== null || !runnerStartGateDelivery) {
+      return deliveryFailure(c, new RunnerDeliveryError(!runnerStartGateDelivery ? "STORAGE_FAILURE" : "INVALID_REQUEST"));
+    }
+    const context = deliveryContext(c, c.req.param("runnerId"));
+    if (!context.ok) return context.status === 403 ? startRequirementsForbidden(c) : deliveryFailure(c, new RunnerDeliveryError("INVALID_REQUEST"));
+    try {
+      return c.json(await runnerStartGateDelivery.getStartRequirements({ ...context.value, agentName: c.req.param("agentName") }));
+    } catch (error) {
+      return error instanceof RunnerDeliveryError && error.code === "FORBIDDEN"
+        ? startRequirementsForbidden(c) : deliveryFailure(c, error);
+    }
+  });
+
+  app.get("/api/runners/:runnerId/package-deployments", requireRunnerAuth, async c => {
+    if (hasQuery(c) || !runnerArtifactDelivery) return deliveryFailure(c, new RunnerDeliveryError(hasQuery(c) ? "INVALID_REQUEST" : "STORAGE_FAILURE"));
+    const context = deliveryContext(c, c.req.param("runnerId"));
+    if (!context.ok) return context.status === 403 ? c.json({ error: "Forbidden runner id for token scope" }, 403) : deliveryFailure(c, new RunnerDeliveryError("INVALID_REQUEST"));
+    try { return c.json(await runnerArtifactDelivery.poll(context.value)); } catch (error) { return deliveryFailure(c, error); }
+  });
+
+  app.post("/api/runner-package-deployments/:deploymentId/claim", requireRunnerAuth, async c => {
+    if (hasQuery(c) || c.req.raw.body !== null || !runnerArtifactDelivery) return deliveryFailure(c, new RunnerDeliveryError(!runnerArtifactDelivery ? "STORAGE_FAILURE" : "INVALID_REQUEST"));
+    const context = deliveryContext(c); if (!context.ok) return context.status === 403 ? c.json({ error: "Forbidden runner id for token scope" }, 403) : deliveryFailure(c, new RunnerDeliveryError("INVALID_REQUEST"));
+    try { return c.json(await runnerArtifactDelivery.claim({ ...context.value, deploymentId: c.req.param("deploymentId") })); }
+    catch (error) { return deliveryFailure(c, error); }
+  });
+
+  app.get("/api/runner-package-deployments/:deploymentId/artifact", requireRunnerAuth, async c => {
+    if (hasQuery(c) || !runnerArtifactDelivery) return deliveryFailure(c, new RunnerDeliveryError(!runnerArtifactDelivery ? "STORAGE_FAILURE" : "INVALID_REQUEST"));
+    const context = deliveryContext(c); const attemptToken = c.req.header("x-orgops-deployment-attempt-token")?.trim() ?? "";
+    if (!context.ok || !attemptToken) return context.ok || context.status !== 403 ? deliveryFailure(c, new RunnerDeliveryError("INVALID_REQUEST")) : c.json({ error: "Forbidden runner id for token scope" }, 403);
+    try { return c.json(await runnerArtifactDelivery.getArtifact({ ...context.value, deploymentId: c.req.param("deploymentId"), attemptToken })); }
+    catch (error) { return deliveryFailure(c, error); }
+  });
+
+  app.post("/api/runner-package-deployments/:deploymentId/report", requireRunnerAuth, async c => {
+    if (hasQuery(c) || !runnerArtifactDelivery) return deliveryFailure(c, new RunnerDeliveryError(!runnerArtifactDelivery ? "STORAGE_FAILURE" : "INVALID_REQUEST"));
+    const context = deliveryContext(c); const attemptToken = c.req.header("x-orgops-deployment-attempt-token")?.trim() ?? "";
+    if (!context.ok || !attemptToken) return context.ok || context.status !== 403 ? deliveryFailure(c, new RunnerDeliveryError("INVALID_REQUEST")) : c.json({ error: "Forbidden runner id for token scope" }, 403);
+    const body = await readReport(c); if (!body.ok) return deliveryFailure(c, new RunnerDeliveryError(body.code));
+    try { return c.json(await runnerArtifactDelivery.report({ ...context.value, deploymentId: c.req.param("deploymentId"), attemptToken }, body.value)); }
+    catch (error) { return deliveryFailure(c, error); }
+  });
 
   app.get("/api/runners", (c) => {
     const rows = orm
@@ -226,22 +320,25 @@ export function registerRunnersRoutes(app: Hono<any>, deps: RunnersDeps) {
       return jsonResponse(c, { error: "Runner not found" }, 404);
     }
 
-    const assignedAgents = orm
-      .select({ name: schema.agents.name })
-      .from(schema.agents)
-      .where(eq(schema.agents.assigned_runner_id, runnerId))
-      .all() as Array<{ name: string }>;
-
-    orm
-      .update(schema.agents)
-      .set({
-        assigned_runner_id: null,
-        updated_at: Date.now()
-      })
-      .where(eq(schema.agents.assigned_runner_id, runnerId))
-      .run();
-
-    orm.delete(schema.runnerNodes).where(eq(schema.runnerNodes.id, runnerId)).run();
+    let assignedAgents: Array<{ name: string; revision: number }>;
+    try {
+      assignedAgents = orm.$client.transaction(() => {
+        const agents = orm.$client.prepare(
+          "SELECT name,revision FROM agents WHERE assigned_runner_id=? ORDER BY name",
+        ).all(runnerId) as Array<{ name: string; revision: number }>;
+        if (agents.some(agent => agent.revision >= 2147483647)) throw new Error("AGENT_REVISION_CONFLICT");
+        const updated = orm.$client.prepare(`UPDATE agents SET assigned_runner_id=NULL,updated_at=?,revision=revision+1
+          WHERE assigned_runner_id=? AND revision<2147483647`).run(Date.now(), runnerId);
+        if (updated.changes !== agents.length) throw new Error("AGENT_REVISION_CONFLICT");
+        orm.$client.prepare("DELETE FROM runner_nodes WHERE id=?").run(runnerId);
+        return agents;
+      })();
+    } catch (error) {
+      if (error instanceof Error && error.message === "AGENT_REVISION_CONFLICT") {
+        return jsonResponse(c, { error: "Agent revision conflict" }, 409);
+      }
+      throw error;
+    }
     publishDashboardRefresh("runner.deregistered", { runnerId });
 
     return jsonResponse(c, {

@@ -9,11 +9,23 @@ import {
   resolveAgentLlmCallTimeoutMs,
   selectRecentDeltaEventsForPrompt,
   shouldHandleEvent,
+  heartbeatDeliverThenList,
 } from "./runner";
 import { stopAllRunningProcesses } from "./tools/shell";
 import type { Agent, Event } from "./types";
 
 describe("agent runner", () => {
+  it("processes package deployments immediately after heartbeat and before listing agents", async () => {
+    const calls: string[] = [];
+    const agents = await heartbeatDeliverThenList({
+      sendRunnerHeartbeat: async () => { calls.push("heartbeat"); },
+      processPackageDeployments: async () => { calls.push("deployments"); },
+      listAgents: async () => { calls.push("agents"); return []; },
+    });
+    expect(agents).toEqual([]);
+    expect(calls).toEqual(["heartbeat", "deployments", "agents"]);
+  });
+
   it("exposes runner tools for LLM", () => {
     const tools = createRunnerTools({
       agent: {

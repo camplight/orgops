@@ -3,6 +3,23 @@ import { arch, hostname, release } from "node:os";
 import { ChannelRecord, isAgentSubscribed } from "../models/channel";
 import type { Agent, Event } from "../types";
 import type { RunnerState } from "./state";
+import {
+  CatalogLibraryErrorCodeSchema,
+  DeploymentClaimSchema,
+  DeploymentCommandSchema,
+  DeploymentReceiptSchema,
+  DeploymentReportSchema,
+  StartRequirementsResultSchema,
+  VerifiedArtifactEnvelopeSchema,
+  type CatalogLibraryErrorCode,
+  type DeploymentClaim,
+  type DeploymentCommand,
+  type DeploymentReceipt,
+  type DeploymentReport,
+  type StartRequirementsResult,
+  type VerifiedArtifactEnvelope,
+} from "@orgops/schemas";
+import { z } from "zod";
 
 type RunnerApiDeps = {
   apiUrl: string;
@@ -10,11 +27,19 @@ type RunnerApiDeps = {
   heartbeatIntervalMs: number;
   runnerIdFile: string;
   runnerState: RunnerState;
+  fetch?: typeof fetch;
 };
 
 type RunnerIdentityPayload = { runner?: { id?: string } };
 
 let apiFetchRequestCounter = 0;
+
+export class RunnerApiHttpError extends Error {
+  constructor(readonly status: number, readonly code: CatalogLibraryErrorCode | undefined, path: string) {
+    super(`API ${path} failed: ${status}`);
+    this.name = "RunnerApiHttpError";
+  }
+}
 
 function getErrorSummary(error: unknown) {
   const err = error as
@@ -79,23 +104,24 @@ export function createRunnerApi(deps: RunnerApiDeps) {
     const requestId = `${Date.now()}-${++apiFetchRequestCounter}`;
     const startedAt = Date.now();
     try {
-      const res = await fetch(url, { ...init, headers });
+      const res = await (deps.fetch ?? fetch)(url, { ...init, headers });
       if (!res.ok) {
         const text = await res.text();
         const elapsedMs = Date.now() - startedAt;
+        let code: CatalogLibraryErrorCode | undefined;
+        try {
+          const parsed = z.object({ code: CatalogLibraryErrorCodeSchema }).safeParse(JSON.parse(text));
+          if (parsed.success) code = parsed.data.code;
+        } catch { /* Malformed error bodies remain status-only and retryable. */ }
         console.error("runner.apiFetch.http_error", {
           requestId,
           method,
           path,
           status: res.status,
+          ...(code ? { code } : {}),
           elapsedMs,
-          responseBodyPreview: text.slice(0, 1000),
         });
-        const httpError = new Error(`API ${path} failed: ${res.status} ${text}`) as Error & {
-          status?: number;
-        };
-        httpError.status = res.status;
-        throw httpError;
+        throw new RunnerApiHttpError(res.status, code, path);
       }
       return res;
     } catch (error) {
@@ -163,6 +189,51 @@ export function createRunnerApi(deps: RunnerApiDeps) {
     const query = `assignedRunnerId=${encodeURIComponent(runnerId)}`;
     const res = await apiFetch(`/api/agents?${query}`);
     return res.json();
+  }
+
+  function deploymentHeaders(attemptToken?: string): HeadersInit {
+    const runnerId = deps.runnerState.registeredRunnerId;
+    if (!runnerId) throw new Error("Runner is not registered.");
+    return {
+      "x-orgops-runner-id": runnerId,
+      ...(attemptToken ? { "x-orgops-deployment-attempt-token": attemptToken } : {}),
+    };
+  }
+
+  async function getAgentStartRequirements(agentName: string): Promise<StartRequirementsResult> {
+    const runnerId = deps.runnerState.registeredRunnerId;
+    if (!runnerId) throw new Error("Runner is not registered.");
+    const response = await apiFetch(`/api/runners/${encodeURIComponent(runnerId)}/agents/${encodeURIComponent(agentName)}/start-requirements`);
+    return StartRequirementsResultSchema.parse(await response.json());
+  }
+
+  async function listPackageDeployments(): Promise<DeploymentCommand[]> {
+    const runnerId = deps.runnerState.registeredRunnerId;
+    if (!runnerId) return [];
+    const response = await apiFetch(`/api/runners/${encodeURIComponent(runnerId)}/package-deployments`);
+    return z.array(DeploymentCommandSchema).max(32).parse(await response.json());
+  }
+
+  async function claimPackageDeployment(deploymentId: string): Promise<DeploymentClaim> {
+    const response = await apiFetch(`/api/runner-package-deployments/${encodeURIComponent(deploymentId)}/claim`, {
+      method: "POST", headers: deploymentHeaders(),
+    });
+    return DeploymentClaimSchema.parse(await response.json());
+  }
+
+  async function getPackageArtifact(deploymentId: string, attemptToken: string): Promise<VerifiedArtifactEnvelope> {
+    const response = await apiFetch(`/api/runner-package-deployments/${encodeURIComponent(deploymentId)}/artifact`, {
+      headers: deploymentHeaders(attemptToken),
+    });
+    return VerifiedArtifactEnvelopeSchema.parse(await response.json());
+  }
+
+  async function reportPackageDeployment(deploymentId: string, attemptToken: string, rawReport: DeploymentReport): Promise<DeploymentReceipt> {
+    const report = DeploymentReportSchema.parse(rawReport);
+    const response = await apiFetch(`/api/runner-package-deployments/${encodeURIComponent(deploymentId)}/report`, {
+      method: "POST", headers: { ...deploymentHeaders(attemptToken), "content-type": "application/json" }, body: JSON.stringify(report),
+    });
+    return DeploymentReceiptSchema.parse(await response.json());
   }
 
   async function listPendingEventsForAgentChannel(
@@ -312,6 +383,11 @@ export function createRunnerApi(deps: RunnerApiDeps) {
     registerRunnerIdentity,
     sendRunnerHeartbeat,
     listAgents,
+    getAgentStartRequirements,
+    listPackageDeployments,
+    claimPackageDeployment,
+    getPackageArtifact,
+    reportPackageDeployment,
     listPendingEventsForAgentChannel,
     patchAgentState,
     emitEvent,

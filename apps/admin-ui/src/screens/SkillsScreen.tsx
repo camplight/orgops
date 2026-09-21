@@ -1,27 +1,46 @@
-import type { SkillMeta } from "../types";
-import { Card } from "../components/ui";
+import { useState } from "react";
+import type { AdminSkillProvenance, SkillInventoryItem, SkillRef } from "@orgops/schemas";
+import type { UnifiedSkillActions, UnifiedSkillState } from "../unified-skills/state";
 
-type SkillsScreenProps = {
-  skills: SkillMeta[];
-};
+export type SkillsScreenProps = { state: UnifiedSkillState; actions: Pick<UnifiedSkillActions, "setFilters" | "select" | "setAgentId" | "load"> };
+function origin(item: SkillInventoryItem) { return item.ref.kind === "LOCAL" ? "Local" : "Catalog"; }
+function name(item: SkillInventoryItem) { return item.ref.name; }
+function refKey(ref: SkillRef) { return ref.kind === "LOCAL" ? `LOCAL:${ref.localOrigin}:${ref.name}` : `CATALOG:${ref.packageReleaseId}`; }
+function readiness(item: SkillInventoryItem) { return item.readiness.state === "READY" ? "Ready" : item.readiness.blockers.some(blocker => blocker.code === "INSTALLATION_REQUIRED") ? "Available after installation" : "Blocked"; }
+function blockerText(item: SkillInventoryItem) { return item.readiness.state === "READY" ? "" : item.readiness.blockers.map(blocker => blocker.requirement ? `${blocker.code}: ${blocker.requirement}` : blocker.code).join(", "); }
 
-export function SkillsScreen({ skills }: SkillsScreenProps) {
-  return (
-    <Card title="Skills">
-      <div className="space-y-2 text-sm">
-        {skills.length === 0 && (
-          <div className="text-slate-500">
-            No skills discovered. Check API process cwd or ORGOPS_PROJECT_ROOT.
-          </div>
-        )}
-        {skills.map((skill) => (
-          <div key={skill.name} className="border-b border-slate-800 pb-2">
-            <div className="text-slate-200">{skill.name}</div>
-            <div className="text-slate-500">{skill.description}</div>
-            <div className="text-slate-600 text-xs">{skill.path}</div>
-          </div>
-        ))}
-      </div>
-    </Card>
-  );
+function SkillMaster({ items, selected, onSelect }: { items: SkillInventoryItem[]; selected: SkillRef | null; onSelect: (ref: SkillRef) => void }) {
+  return <section aria-label="Skills inventory" className="min-w-0 rounded border border-slate-800 bg-slate-900/40 p-3"><h2 className="mb-2 text-sm font-semibold text-slate-200">Inventory</h2>{items.length === 0 ? <p className="break-words text-sm text-slate-500">No skills are available for this account.</p> : <ul className="space-y-1">{items.map(item => <li key={refKey(item.ref)}><button type="button" className={`w-full min-w-0 rounded px-3 py-2 text-left hover:bg-slate-800 ${selected && refKey(selected) === refKey(item.ref) ? "bg-slate-800 text-white" : "text-slate-300"}`} aria-label={`Select ${name(item)}`} aria-pressed={selected ? refKey(selected) === refKey(item.ref) : false} onClick={() => onSelect(item.ref)}><span className="block truncate">{name(item)}</span><span className="block text-xs text-slate-500">{origin(item)}{item.version ? ` · ${item.version}` : ""} · {readiness(item)}{blockerText(item) ? ` · ${blockerText(item)}` : ""}</span></button></li>)}</ul>}</section>;
+}
+
+function CatalogProvenance({ value, digest }: { value: Extract<AdminSkillProvenance, { kind: "CATALOG" }>; digest: string }) {
+  const compatibility = value.compatibility;
+  return <div className="mt-4 space-y-3 text-xs text-slate-500">
+    <dl className="grid gap-1 break-words">
+      <div><dt>Authority Source</dt><dd>{value.authoritySourceId}</dd></div>
+      <div><dt>Content Source</dt><dd>{value.contentSourceId}</dd></div>
+      <div><dt>Catalog commit</dt><dd className="break-all">{value.catalogCommit}</dd></div>
+      <div><dt>Package commit</dt><dd className="break-all">{value.packageCommit}</dd></div>
+      <div><dt>Package path</dt><dd className="break-all">{value.packagePath}</dd></div>
+      <div><dt>Review / install / Source</dt><dd>{value.reviewState} · {value.installationState} · {value.sourceReadiness}</dd></div>
+      <div><dt>API activation</dt><dd>{value.apiActivation.approvalState} / {value.apiActivation.runtimeState}</dd></div>
+      <div><dt>Current grants</dt><dd>{value.grantCount}</dd></div>
+      <div><dt>Compatibility</dt><dd>OrgOps {compatibility.orgops.min}{compatibility.orgops.maxExclusive ? ` – ${compatibility.orgops.maxExclusive}` : ""}</dd><dd>Platforms: {compatibility.platforms.join(", ") || "None"}</dd><dd>Tools: {compatibility.tools.join(", ") || "None"}</dd></div>
+      <div><dt>Digest</dt><dd className="break-all">{digest}</dd></div>
+    </dl>
+    <nav aria-label="Exact Source Library release" className="flex flex-wrap gap-3"><a className="text-cyan-300 underline" href={value.links.overview}>Overview</a><a className="text-cyan-300 underline" href={value.links.contents}>Contents</a><a className="text-cyan-300 underline" href={value.links.security}>Security</a></nav>
+  </div>;
+}
+
+function SkillDetail({ item }: { item: SkillInventoryItem | null }) {
+  if (!item) return <section aria-label="Skill details" className="min-w-0 rounded border border-slate-800 p-4 text-sm text-slate-500">Select a skill to view its safe summary.</section>;
+  const provenance = item.provenance === "FULL_ADMIN" ? item.adminProvenance : undefined;
+  return <section aria-label="Skill details" className="min-w-0 overflow-hidden rounded border border-slate-800 p-4"><h2 className="break-words text-lg font-semibold text-slate-100">{name(item)}</h2><p className="mt-1 break-words text-sm text-slate-400">{item.description}</p><dl className="mt-4 grid min-w-0 gap-2 text-sm sm:grid-cols-2"><div><dt className="text-slate-500">Origin</dt><dd>{origin(item)}</dd></div><div><dt className="text-slate-500">Readiness</dt><dd>{readiness(item)}</dd></div><div><dt className="text-slate-500">Version</dt><dd>{item.version ?? (item.ref.kind === "CATALOG" ? item.ref.version : "Local")}</dd></div></dl>{item.readiness.state === "BLOCKED" && <div className="mt-4 rounded border border-amber-900/60 bg-amber-950/20 p-3" aria-describedby="skill-blockers"><h3 className="font-medium text-amber-200">Blockers</h3><ul id="skill-blockers" className="mt-1 list-disc break-words pl-5 text-sm text-amber-100">{item.readiness.blockers.map((blocker, index) => <li key={`${blocker.code}-${index}`}>{blocker.code === "INSTALLATION_REQUIRED" ? "Available after installation" : blocker.code === "GRANT_REQUIRED" ? "Administrator approval is required" : blocker.requirement ? `${blocker.code}: ${blocker.requirement}` : blocker.code}</li>)}</ul></div>}{provenance?.kind === "CATALOG" && item.ref.kind === "CATALOG" ? <CatalogProvenance value={provenance} digest={item.ref.digest} /> : provenance?.kind === "LOCAL" ? <p className="mt-4 text-xs text-slate-500">Local skill</p> : null}</section>;
+}
+
+export function SkillsScreen({ state, actions }: SkillsScreenProps) {
+  const [readinessFilter, setReadinessFilter] = useState<"ALL" | "READY" | "BLOCKED">("ALL");
+  const visibleItems = state.items.filter(item => readinessFilter === "ALL" || item.readiness.state === readinessFilter);
+  const selectedItem = state.selectedItem && visibleItems.some(item => refKey(item.ref) === refKey(state.selectedItem!.ref)) ? state.selectedItem : null;
+  return <main className="min-w-0 max-w-full space-y-4 overflow-hidden" aria-busy={state.busy}><div><h1 className="text-2xl font-semibold text-slate-100">Skills</h1><p className="mt-1 break-words text-sm text-slate-400">Local skills and approved catalog skills available to this account.</p></div><div role="status" aria-live="polite" className="min-h-5 text-sm text-slate-400">{state.status || (state.busy ? "Loading Skills…" : state.error?.message ?? "")}</div><form className="grid min-w-0 gap-3 sm:grid-cols-4" onSubmit={event => { event.preventDefault(); void actions.load(state.filters); }}><label className="min-w-0 text-sm text-slate-300" htmlFor="skills-query">Search<input id="skills-query" className="mt-1 w-full min-w-0 rounded border border-slate-700 bg-slate-950 px-3 py-2" value={state.filters.query} onChange={event => actions.setFilters({ query: event.target.value })} /></label><label className="min-w-0 text-sm text-slate-300" htmlFor="skills-origin">Origin<select id="skills-origin" className="mt-1 w-full min-w-0 rounded border border-slate-700 bg-slate-950 px-3 py-2" value={state.filters.origin} onChange={event => actions.setFilters({ origin: event.target.value as typeof state.filters.origin })}><option value="ALL">All origins</option><option value="LOCAL">Local</option><option value="CATALOG">Catalog</option></select></label><label className="min-w-0 text-sm text-slate-300" htmlFor="skills-availability">Availability<select id="skills-availability" className="mt-1 w-full min-w-0 rounded border border-slate-700 bg-slate-950 px-3 py-2" value={state.filters.availability} onChange={event => actions.setFilters({ availability: event.target.value as typeof state.filters.availability })}><option value="ALL">All availability</option><option value="INSTALLED">Installed</option><option value="AVAILABLE">Available</option></select></label><label className="min-w-0 text-sm text-slate-300" htmlFor="skills-readiness">Readiness<select id="skills-readiness" className="mt-1 w-full min-w-0 rounded border border-slate-700 bg-slate-950 px-3 py-2" value={readinessFilter} onChange={event => setReadinessFilter(event.target.value as typeof readinessFilter)}><option value="ALL">All readiness</option><option value="READY">Ready</option><option value="BLOCKED">Blocked</option></select></label><label className="min-w-0 text-sm text-slate-300" htmlFor="skills-agent">Agent context<input id="skills-agent" className="mt-1 w-full min-w-0 rounded border border-slate-700 bg-slate-950 px-3 py-2" value={state.selection.agentId ?? ""} onChange={event => void actions.setAgentId(event.target.value || null)} /></label><button type="submit" className="w-fit rounded bg-slate-700 px-3 py-2 text-sm text-white disabled:opacity-50" disabled={state.busy}>Reload Skills</button></form><div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(16rem,24rem)_minmax(0,1fr)]"><SkillMaster items={visibleItems} selected={state.selection.skill as SkillRef | null} onSelect={actions.select} /><SkillDetail item={selectedItem} /></div></main>;
 }

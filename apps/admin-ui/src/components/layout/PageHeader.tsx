@@ -14,14 +14,14 @@ export function PageHeader({
   onLogout
 }: PageHeaderProps) {
   return (
-    <header className="border-b border-slate-800 p-6 flex items-start justify-between gap-4">
+    <header className="border-b border-slate-800 p-6 max-[640px]:p-3 flex flex-wrap items-start justify-between gap-4 min-w-0">
       <div>
         <h1 className="text-2xl font-semibold capitalize text-slate-100">
           {title.replace("-", " ")}
         </h1>
         <p className="text-slate-400 text-sm">{subtitle}</p>
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2 max-w-full">
         <div className="text-sm text-slate-300 px-2 py-1 rounded bg-slate-900 border border-slate-800">
           {username ?? "Unknown user"}
         </div>

@@ -10,7 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { createDrizzleDb, migrate, openDb, schema } from "@orgops/db";
 import { createApp } from "./app";
@@ -285,6 +285,40 @@ describe("api app", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("treats every present runner credential as authoritative without changing human or valid runner auth", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-auth-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({ db, dataDir, adminUser: "admin", adminPass: "admin", runnerToken: "test-token" });
+    try {
+      const loginRes = await app.request("http://localhost/api/auth/login", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ username: "admin", password: "admin" }),
+      });
+      expect(loginRes.status).toBe(200);
+      const cookie = loginRes.headers.get("set-cookie") ?? "";
+      const admin = db.prepare<[], { id: string }>("SELECT id FROM humans WHERE username='admin'").get()!;
+      const scopedToken = "org_rt_shared_auth";
+      db.prepare(`INSERT INTO runner_tokens
+        (id,name,token_hash,token_prefix,allowed_channel_ids_json,created_by_human_id,created_at)
+        VALUES ('shared-auth','Shared auth',?,?,'[]',?,1)`)
+        .run(createHash("sha256").update(scopedToken).digest("hex"), scopedToken.slice(0, 16), admin.id);
+
+      expect((await app.request("http://localhost/api/agents", { headers: { cookie } })).status).toBe(200);
+      expect((await app.request("http://localhost/api/agents", { headers: { "x-orgops-runner-token": "test-token" } })).status).toBe(200);
+      expect((await app.request("http://localhost/api/agents", { headers: { "x-orgops-runner-token": scopedToken } })).status).toBe(200);
+      for (const token of ["invalid-token", ""]) {
+        const response = await app.request("http://localhost/api/agents", {
+          headers: { cookie, "x-orgops-runner-token": token },
+        });
+        expect(response.status).toBe(401);
+        expect(await response.json()).toEqual({ error: "Unauthorized" });
+      }
+    } finally {
+      db.close();
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it("returns runner setup token only for authenticated humans", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");
@@ -454,6 +488,8 @@ describe("api app", () => {
     };
     expect(patchedAgent.enabledSkills).toEqual(["secrets"]);
     expect(patchedAgent.alwaysPreloadedSkills).toEqual(["secrets"]);
+    expect(db.prepare("SELECT revision FROM agents WHERE name='skills-agent'").get()).toEqual({ revision: 2 });
+    expect(db.prepare("SELECT count(*) AS count FROM events WHERE type='audit.skill.changed'").get()).toEqual({ count: 2 });
 
     rmSync(dataDir, { recursive: true, force: true });
   });
@@ -3482,6 +3518,17 @@ describe("api app", () => {
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
 
+    const createAgentRes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "test-agent",
+        modelId: "openai:gpt-4o-mini",
+        workspacePath: dataDir,
+      }),
+    });
+    expect(createAgentRes.status).toBe(201);
+
     const child = spawn("/bin/bash", ["-lc", "sleep 30"]);
     const processId = randomUUID();
     try {
@@ -3501,7 +3548,7 @@ describe("api app", () => {
           }),
         },
       );
-      expect(createProcessRes.status).toBe(201);
+      expect(createProcessRes.status, await createProcessRes.clone().text()).toBe(201);
 
       const exitRes = await app.request(
         `http://localhost/api/processes/${processId}`,
@@ -3543,6 +3590,17 @@ describe("api app", () => {
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
 
+    const createAgentRes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "wrapper-output-test",
+        modelId: "openai:gpt-4o-mini",
+        workspacePath: dataDir,
+      }),
+    });
+    expect(createAgentRes.status).toBe(201);
+
     const channelId = randomUUID();
     const processId = randomUUID();
     const now = Date.now();
@@ -3581,7 +3639,7 @@ describe("api app", () => {
         state: "RUNNING",
       }),
     });
-    expect(createProcessRes.status).toBe(201);
+    expect(createProcessRes.status, await createProcessRes.clone().text()).toBe(201);
 
     const outputRes = await app.request(
       `http://localhost/api/processes/${processId}/output`,
@@ -3639,6 +3697,17 @@ describe("api app", () => {
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
 
+    const createAgentRes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "test-agent",
+        modelId: "openai:gpt-4o-mini",
+        workspacePath: dataDir,
+      }),
+    });
+    expect(createAgentRes.status).toBe(201);
+
     const child = spawn("/bin/bash", ["-lc", "sleep 30"]);
     const processId = randomUUID();
     try {
@@ -3658,7 +3727,7 @@ describe("api app", () => {
           }),
         },
       );
-      expect(createProcessRes.status).toBe(201);
+      expect(createProcessRes.status, await createProcessRes.clone().text()).toBe(201);
 
       if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGKILL");
@@ -3709,6 +3778,17 @@ describe("api app", () => {
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
 
+    const createAgentRes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "test-agent",
+        modelId: "openai:gpt-4o-mini",
+        workspacePath: dataDir,
+      }),
+    });
+    expect(createAgentRes.status).toBe(201);
+
     const processId = randomUUID();
     const createProcessRes = await app.request(
       "http://localhost/api/processes",
@@ -3726,7 +3806,7 @@ describe("api app", () => {
         }),
       },
     );
-    expect(createProcessRes.status).toBe(201);
+    expect(createProcessRes.status, await createProcessRes.clone().text()).toBe(201);
 
     const exitRes = await app.request(
       `http://localhost/api/processes/${processId}`,
@@ -3781,6 +3861,17 @@ describe("api app", () => {
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
 
+    const createAgentRes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "test-agent",
+        modelId: "openai:gpt-4o-mini",
+        workspacePath: dataDir,
+      }),
+    });
+    expect(createAgentRes.status).toBe(201);
+
     const runningId = randomUUID();
     const exitedId = randomUUID();
     const completedId = randomUUID();
@@ -3802,7 +3893,7 @@ describe("api app", () => {
         }),
       },
     );
-    expect(createRunningRes.status).toBe(201);
+    expect(createRunningRes.status, await createRunningRes.clone().text()).toBe(201);
 
     const createExitedRes = await app.request(
       "http://localhost/api/processes",
@@ -3821,7 +3912,7 @@ describe("api app", () => {
         }),
       },
     );
-    expect(createExitedRes.status).toBe(201);
+    expect(createExitedRes.status, await createExitedRes.clone().text()).toBe(201);
 
     const createCompletedRes = await app.request(
       "http://localhost/api/processes",
@@ -3840,7 +3931,7 @@ describe("api app", () => {
         }),
       },
     );
-    expect(createCompletedRes.status).toBe(201);
+    expect(createCompletedRes.status, await createCompletedRes.clone().text()).toBe(201);
 
     const clearRes = await app.request(
       "http://localhost/api/processes?scope=exited",

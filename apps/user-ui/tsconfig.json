@@ -5,5 +5,5 @@
     "types": ["vite/client", "node"],
     "resolveJsonModule": true
   },
-  "include": ["src", "vite.config.ts"]
+  "include": ["src", "scripts", "vite.config.ts"]
 }

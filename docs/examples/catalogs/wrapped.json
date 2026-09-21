@@ -1,0 +1,60 @@
+{
+  "formatVersion": 1,
+  "name": "echo-wrapper",
+  "version": "1.0.0",
+  "description": "Inert command recipe example.",
+  "author": "Example Authors",
+  "license": "MIT",
+  "compatibility": {
+    "orgops": {
+      "min": "0.0.1",
+      "maxExclusive": "0.1.0"
+    },
+    "platforms": [
+      "linux",
+      "darwin",
+      "win32"
+    ],
+    "tools": [
+      "node"
+    ]
+  },
+  "secrets": [],
+  "dependencies": [],
+  "files": [],
+  "executables": [],
+  "kind": "wrapped-agent",
+  "wrapped": {
+    "kind": "custom",
+    "harness": "command",
+    "setup": {
+      "command": "printf setup",
+      "checkCommand": "test -f ready",
+      "cwd": ".",
+      "timeoutMs": 60000
+    },
+    "sidecars": [
+      {
+        "name": "helper",
+        "command": "node -e 'setInterval(() => {}, 1000)'",
+        "cwd": ".",
+        "restart": false,
+        "restartDelayMs": 2000
+      }
+    ],
+    "runtime": {
+      "command": "printf",
+      "args": [
+        "acknowledged"
+      ],
+      "cwd": ".",
+      "timeoutMs": 60000,
+      "parse": "text"
+    },
+    "session": {
+      "scope": "per-channel"
+    },
+    "resourceWiring": "none"
+  },
+  "digest": "sha256:19c6e488fa0f29398bb03a4bade14ab0ce8de8d899d1540ee1dd12158aae04ba"
+}

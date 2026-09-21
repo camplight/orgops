@@ -10,6 +10,13 @@ import {
 import { apiFetch, apiJson, getApiHeaders } from "./api";
 import type { Agent, AuthMe, Channel, ChannelParticipant, EventRow, Team } from "./types";
 
+export function normalizeRetiredLibraryPath() {
+  const url = new URL(window.location.href);
+  if (url.pathname.replace(/^\/+|\/+$/g, "") !== "library") return;
+  url.pathname = "/";
+  window.history.replaceState(null, "", url);
+}
+
 function formatTime(value?: number) {
   if (!value) return "";
   const date = new Date(value);
@@ -948,6 +955,7 @@ export default function App() {
   }
 
   useEffect(() => {
+    normalizeRetiredLibraryPath();
     document.title = "OrgOps User UI";
     void loadSession();
   }, []);
@@ -1011,6 +1019,7 @@ export default function App() {
   useEffect(() => {
     if (!authenticated || mustChangePassword) return;
     function handlePopState() {
+      normalizeRetiredLibraryPath();
       const linkedChannelId = readLinkedChannelId();
       const linkedChannel = channels.find(
         (channel) =>
@@ -1643,6 +1652,8 @@ export default function App() {
             ) : null}
           </div>
         </section>
+
+        <nav className="main-nav" aria-label="Main navigation"><button type="button" className="active" aria-current="page">Conversations</button></nav>
 
         <section className="sidebar-section start-conversation">
           <button className="new-conversation-button" onClick={() => setShowConversationDialog(true)}>
