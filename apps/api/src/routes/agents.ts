@@ -114,31 +114,21 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
   }
 
   function resolveAgentWorkspacePath(agentName: string) {
-    const row = resolveAgentByIdentifier(agentName);
+    const row = orm
+      .select({
+        workspacePath: schema.agents.workspace_path
+      })
+      .from(schema.agents)
+      .where(eq(schema.agents.name, agentName))
+      .get() as { workspacePath: string } | undefined;
     if (!row) {
       return { error: "Not found", status: 404 as const };
     }
-    const workspacePath = resolveWorkspacePath(String(row.workspace_path ?? ""));
+    const workspacePath = resolveWorkspacePath(row.workspacePath ?? "");
     if (!workspacePath.trim()) {
       return { error: "Workspace path is not configured", status: 400 as const };
     }
     return { workspacePath };
-  }
-
-  function resolveAgentByIdentifier(identifier: string) {
-    const trimmed = String(identifier ?? "").trim();
-    if (!trimmed) return undefined;
-    const byId = orm
-      .select()
-      .from(schema.agents)
-      .where(eq(schema.agents.id, trimmed))
-      .get() as any | undefined;
-    if (byId) return byId;
-    return orm
-      .select()
-      .from(schema.agents)
-      .where(eq(schema.agents.name, trimmed))
-      .get() as any | undefined;
   }
 
   function lifecycleChannelName(agentName: string) {
@@ -481,14 +471,13 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
   });
 
   app.get("/api/agents/:name", (c) => {
-    const agentRef = c.req.param("name");
-    const row = resolveAgentByIdentifier(agentRef);
-    if (!row) return jsonResponse(c, { error: "Not found" }, 404);
-    const name = String(row.name ?? "");
+    const name = c.req.param("name");
     const user = c.get("user") as RequestUser | undefined;
     if (!access.canViewAgent(user, name)) {
       return jsonResponse(c, { error: "Not found" }, 404);
     }
+    const row = orm.select().from(schema.agents).where(eq(schema.agents.name, name)).get() as any;
+    if (!row) return jsonResponse(c, { error: "Not found" }, 404);
     return jsonResponse(c, {
       id: row.id,
       name: row.name,
@@ -524,10 +513,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
   });
 
   app.patch("/api/agents/:name", async (c) => {
-    const agentRef = c.req.param("name");
-    const existing = resolveAgentByIdentifier(agentRef);
-    if (!existing) return jsonResponse(c, { error: "Not found" }, 404);
-    const name = String(existing.name ?? "");
+    const name = c.req.param("name");
     const user = c.get("user") as RequestUser | undefined;
     const scopedRunner =
       user?.username === "runner" && user.runnerScope?.mode === "SCOPED"
@@ -540,6 +526,8 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       return jsonResponse(c, { error: "Forbidden" }, 403);
     }
     const body = await c.req.json();
+    const existing = orm.select().from(schema.agents).where(eq(schema.agents.name, name)).get() as any;
+    if (!existing) return jsonResponse(c, { error: "Not found" }, 404);
     if (
       body.name !== undefined &&
       String(body.name ?? "").trim() &&
@@ -726,11 +714,14 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
   });
 
   app.delete("/api/agents/:name", (c) => {
-    const agentRef = c.req.param("name");
-    const resolved = resolveAgentByIdentifier(agentRef);
-    if (!resolved) return jsonResponse(c, { error: "Not found" }, 404);
-    const name = String(resolved.name ?? "");
+    const name = c.req.param("name");
     const user = c.get("user") as RequestUser | undefined;
+    const existing = orm
+      .select({ name: schema.agents.name })
+      .from(schema.agents)
+      .where(eq(schema.agents.name, name))
+      .get() as { name: string } | undefined;
+    if (!existing) return jsonResponse(c, { error: "Not found" }, 404);
     if (!access.canManageAgent(user, name)) {
       return jsonResponse(c, { error: "Forbidden" }, 403);
     }
@@ -821,10 +812,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
   });
 
   app.post("/api/agents/:name/:action", (c) => {
-    const agentRef = c.req.param("name");
-    const resolved = resolveAgentByIdentifier(agentRef);
-    if (!resolved) return jsonResponse(c, { error: "Not found" }, 404);
-    const name = String(resolved.name ?? "");
+    const name = c.req.param("name");
     const user = c.get("user") as RequestUser | undefined;
     if (!access.canManageAgent(user, name)) {
       return jsonResponse(c, { error: "Forbidden" }, 403);
@@ -890,10 +878,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
   });
 
   app.get("/api/agents/:name/debug/system-prompt", (c) => {
-    const agentRef = c.req.param("name");
-    const resolved = resolveAgentByIdentifier(agentRef);
-    if (!resolved) return jsonResponse(c, { error: "Not found" }, 404);
-    const name = String(resolved.name ?? "");
+    const name = c.req.param("name");
     const user = c.get("user") as RequestUser | undefined;
     if (!access.canViewAgent(user, name)) {
       return jsonResponse(c, { error: "Not found" }, 404);
@@ -955,10 +940,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
   });
 
   app.get("/api/agents/:name/workspace", (c) => {
-    const agentRef = c.req.param("name");
-    const resolved = resolveAgentByIdentifier(agentRef);
-    if (!resolved) return jsonResponse(c, { error: "Not found" }, 404);
-    const name = String(resolved.name ?? "");
+    const name = c.req.param("name");
     const user = c.get("user") as RequestUser | undefined;
     if (!access.canViewAgent(user, name)) {
       return jsonResponse(c, { error: "Not found" }, 404);
@@ -1017,10 +999,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
   });
 
   app.get("/api/agents/:name/workspace/file", (c) => {
-    const agentRef = c.req.param("name");
-    const resolved = resolveAgentByIdentifier(agentRef);
-    if (!resolved) return jsonResponse(c, { error: "Not found" }, 404);
-    const name = String(resolved.name ?? "");
+    const name = c.req.param("name");
     const user = c.get("user") as RequestUser | undefined;
     if (!access.canViewAgent(user, name)) {
       return jsonResponse(c, { error: "Not found" }, 404);
@@ -1063,10 +1042,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
   });
 
   app.get("/api/agents/:name/workspace/download", (c) => {
-    const agentRef = c.req.param("name");
-    const resolved = resolveAgentByIdentifier(agentRef);
-    if (!resolved) return jsonResponse(c, { error: "Not found" }, 404);
-    const name = String(resolved.name ?? "");
+    const name = c.req.param("name");
     const user = c.get("user") as RequestUser | undefined;
     if (!access.canViewAgent(user, name)) {
       return jsonResponse(c, { error: "Not found" }, 404);

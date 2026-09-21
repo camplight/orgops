@@ -338,7 +338,6 @@ Published topics include:
 - `POST /api/agents`
 - `GET /api/agents/:name`
 - `PATCH /api/agents/:name`
-  - `:name` routes accept either agent name or agent id (id is preferred for callers)
   - changing an agent's `name` via patch is currently rejected (rename unsupported)
 - supports `assignedRunnerId` on create/update/read
 - supports `wrappedConfig` JSON object/string on create/update/read
@@ -376,7 +375,6 @@ Published topics include:
     - `POST /api/channels/direct`
     - `POST /api/channels/direct/human-agent`
     - `POST /api/channels/direct/agent-agent`
-    - direct participant keys hash agent identities by immutable agent id (with name fallback for legacy rows)
 - conversations/threads:
   - `GET /api/conversations`, `POST /api/conversations`
   - `GET /api/conversations/:id/threads`, `POST /api/conversations/:id/threads`

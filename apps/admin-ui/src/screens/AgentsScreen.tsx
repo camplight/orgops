@@ -604,8 +604,7 @@ export function AgentsScreen({
         return;
       }
       if (!selectedAgent) return;
-      const agentRef = selectedAgent.id ?? selectedAgent.name;
-      await onUpdateAgent(agentRef, {
+      await onUpdateAgent(selectedAgent.name, {
         modelId,
         visibility: form.visibility,
         mode: form.mode,
@@ -638,15 +637,14 @@ export function AgentsScreen({
 
   const handleToggleRuntime = async () => {
     if (!selectedAgent) return;
-    const agentRef = selectedAgent.id ?? selectedAgent.name;
     const isRunning = selectedAgent.runtimeState === "RUNNING";
     setIsTogglingRuntime(true);
     setSaveStatus(null);
     try {
       if (isRunning) {
-        await onStopAgent(agentRef);
+        await onStopAgent(selectedAgent.name);
       } else {
-        await onStartAgent(agentRef);
+        await onStartAgent(selectedAgent.name);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to update agent state.";
@@ -659,7 +657,6 @@ export function AgentsScreen({
   const handleDeleteAgent = async () => {
     if (!selectedAgent) return;
     const agentName = selectedAgent.name;
-    const agentRef = selectedAgent.id ?? selectedAgent.name;
     const confirmed = window.confirm(
       `Delete agent "${agentName}"? This removes its runtime state, memory, and channel memberships. This cannot be undone.`
     );
@@ -668,7 +665,7 @@ export function AgentsScreen({
     setSaveStatus(null);
     setPanelError(null);
     try {
-      await onDeleteAgent(agentRef);
+      await onDeleteAgent(agentName);
       crossMemoryCacheRef.current.delete(agentName);
       systemPromptCacheRef.current.delete(agentName);
       setSelectedAgentName(null);
@@ -1376,9 +1373,7 @@ export function AgentsScreen({
                               `Clean workspace for ${selectedAgent.name}? This deletes all files in ${form.workspacePath}.`
                             );
                             if (!confirmed) return;
-                            await onCleanupAgentWorkspace(
-                              selectedAgent.id ?? selectedAgent.name
-                            );
+                            await onCleanupAgentWorkspace(selectedAgent.name);
                             await openWorkspacePath(".");
                           }}
                         >
