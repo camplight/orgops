@@ -2,9 +2,9 @@
 
 `opscli` is a deterministic installer/launcher CLI for OrgOps hosts with an optional agentic chat mode.
 
-- Deterministic commands: `install`, `upgrade`, `doctor`, `start`, `stop`, `status`, `admin open`, `admin stop`, `admin status`
+- Deterministic commands: `install`, `upgrade`, `doctor`, `start`, `stop`, `status`, `admin open`, `admin stop`, `admin status`, `service register`, `service unregister`, `shortcut create`
 - Agentic mode: `chat` command only
-- `install` can optionally register an auto-start service and create a desktop shortcut for User UI
+- `service register`/`service unregister` and `shortcut create` are available as standalone deterministic commands (without install/upgrade)
 
 ## Run
 
@@ -16,6 +16,9 @@
 - `opscli start [--dir <path>] [--components <csv>] [--no-open]`
 - `opscli stop [--dir <path>] [--components <csv>]`
 - `opscli status [--dir <path>] [--components <csv>]`
+- `opscli service register [--dir <path>]`
+- `opscli service unregister [--dir <path>]`
+- `opscli shortcut create [--target user-ui|admin-ui] [--url <url>]`
 - `opscli admin open [--dir <path>]`
 - `opscli admin stop [--dir <path>]`
 - `opscli admin status [--dir <path>]`

@@ -3,6 +3,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { runChecked } from "./exec";
 
+export type ShortcutTarget = "user-ui" | "admin-ui";
+
 function isTruthyEnv(value: string | undefined) {
   if (!value) return false;
   const normalized = value.trim().toLowerCase();
@@ -33,11 +35,16 @@ export function openUrlInBrowser(url: string) {
 }
 
 export function createUserUiShortcut(url: string) {
+  return createUiShortcut("user-ui", url);
+}
+
+export function createUiShortcut(target: ShortcutTarget, url: string) {
   const desktop = desktopDir();
   mkdirSync(desktop, { recursive: true });
+  const title = target === "admin-ui" ? "OrgOps Admin UI" : "OrgOps User UI";
 
   if (process.platform === "darwin") {
-    const path = join(desktop, "OrgOps User UI.webloc");
+    const path = join(desktop, `${title}.webloc`);
     const xml = [
       '<?xml version="1.0" encoding="UTF-8"?>',
       "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">",
@@ -54,16 +61,16 @@ export function createUserUiShortcut(url: string) {
   }
 
   if (process.platform === "win32") {
-    const path = join(desktop, "OrgOps User UI.url");
+    const path = join(desktop, `${title}.url`);
     writeFileSync(path, `[InternetShortcut]\nURL=${url}\n`, "utf-8");
     return path;
   }
 
-  const path = join(desktop, "orgops-user-ui.desktop");
+  const path = join(desktop, target === "admin-ui" ? "orgops-admin-ui.desktop" : "orgops-user-ui.desktop");
   const entry = [
     "[Desktop Entry]",
     "Type=Application",
-    "Name=OrgOps User UI",
+    `Name=${title}`,
     `Exec=xdg-open ${url}`,
     "Terminal=false",
     "",

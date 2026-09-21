@@ -91,6 +91,9 @@ Command examples:
 - `opscli upgrade`
 - `opscli start` / `opscli stop` / `opscli status`
 - `opscli admin open` / `opscli admin stop` / `opscli admin status`
+- `opscli service register` (cross-OS auto-start registration without reinstalling)
+- `opscli service unregister` (cross-OS auto-start removal without reinstalling)
+- `opscli shortcut create` (cross-OS desktop shortcut for user-ui or admin-ui without reinstalling)
 - `opscli chat`
 
 OpsCLI keeps a rolling session summary and capped recent history to stay within model context limits.

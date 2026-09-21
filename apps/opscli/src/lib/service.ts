@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { runChecked } from "./exec";
@@ -119,4 +119,30 @@ export function stopAutostartService(installDir: string) {
   }
   runBestEffort("systemctl", ["--user", "stop", SERVICE_NAME]);
   return `systemd user service ${SERVICE_NAME} stop requested`;
+}
+
+export function unregisterAutostartService(installDir: string) {
+  if (process.platform === "darwin") {
+    const plistPath = join(resolve(homedir(), "Library", "LaunchAgents"), `${MACOS_LABEL}.plist`);
+    const uid = String(process.getuid?.() ?? 0);
+    runBestEffort("launchctl", ["disable", `gui/${uid}/${MACOS_LABEL}`]);
+    runBestEffort("launchctl", ["bootout", `gui/${uid}`, plistPath]);
+    if (existsSync(plistPath)) unlinkSync(plistPath);
+    return `LaunchAgent removed from ${plistPath}`;
+  }
+
+  if (process.platform === "win32") {
+    const scriptPath = resolve(installDir, ".orgops-start-user-stack.cmd");
+    runBestEffort("schtasks", ["/End", "/TN", WINDOWS_TASK_NAME]);
+    runBestEffort("schtasks", ["/Delete", "/TN", WINDOWS_TASK_NAME, "/F"]);
+    rmSync(scriptPath, { force: true });
+    return `Scheduled task ${WINDOWS_TASK_NAME} deleted`;
+  }
+
+  const systemdDir = resolve(homedir(), ".config", "systemd", "user");
+  const servicePath = join(systemdDir, `${SERVICE_NAME}.service`);
+  runBestEffort("systemctl", ["--user", "disable", "--now", SERVICE_NAME]);
+  rmSync(servicePath, { force: true });
+  runBestEffort("systemctl", ["--user", "daemon-reload"]);
+  return `systemd user service ${SERVICE_NAME} removed`;
 }
