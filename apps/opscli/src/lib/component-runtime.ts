@@ -141,28 +141,18 @@ export async function startComponents(options: {
       const runtimeDir = resolve(installDir, ".orgops-runtime");
       mkdirSync(runtimeDir, { recursive: true });
       const logPath = resolve(runtimeDir, `${component}.log`);
-      const child =
-        process.platform === "win32"
-          ? spawn(npmCommandForHost(), ["run", COMPONENT_START_COMMAND[component]], {
-              cwd: installDir,
-              detached: true,
-              stdio: "ignore",
-              env: process.env,
-              shell: true,
-            })
-          : (() => {
-              const outFd = openSync(logPath, "a");
-              const errFd = openSync(logPath, "a");
-              const spawned = spawn(npmCommandForHost(), ["run", COMPONENT_START_COMMAND[component]], {
-                cwd: installDir,
-                detached: true,
-                stdio: ["ignore", outFd, errFd],
-                env: process.env,
-              });
-              closeSync(outFd);
-              closeSync(errFd);
-              return spawned;
-            })();
+      const outFd = openSync(logPath, "a");
+      const errFd = openSync(logPath, "a");
+      const child = spawn(npmCommandForHost(), ["run", COMPONENT_START_COMMAND[component]], {
+        cwd: installDir,
+        detached: true,
+        stdio: ["ignore", outFd, errFd],
+        env: process.env,
+        shell: process.platform === "win32",
+        windowsHide: true,
+      });
+      closeSync(outFd);
+      closeSync(errFd);
       child.unref();
       if (typeof child.pid !== "number") {
         throw new Error(`Failed to start ${component} process.`);
@@ -195,6 +185,7 @@ export function stopComponents(options: { installDir?: string; components: Insta
       spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], {
         shell: true,
         stdio: "ignore",
+        windowsHide: true,
       });
     } else {
       try {

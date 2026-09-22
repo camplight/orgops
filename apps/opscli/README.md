@@ -16,8 +16,8 @@
 - `opscli start [--dir <path>] [--components <csv>] [--no-open]`
 - `opscli stop [--dir <path>] [--components <csv>]`
 - `opscli status [--dir <path>] [--components <csv>]`
-- `opscli service register [--dir <path>]`
-- `opscli service unregister [--dir <path>]`
+- `opscli service register [--dir <path>] [--components <csv>]`
+- `opscli service unregister [--dir <path>] [--components <csv>]`
 - `opscli shortcut create [--target user-ui|admin-ui] [--url <url>]`
 - `opscli admin open [--dir <path>]`
 - `opscli admin stop [--dir <path>]`
@@ -38,6 +38,8 @@ When `runner` is installed/upgraded, OpsCLI can bootstrap config from either:
 - explicit `--runner-api-url` + `--runner-token` (+ optional `--runner-name`)
 
 During `upgrade`, OpsCLI creates a safety backup of `.orgops-data`/`files`/`.env` (if present), updates selected components, and optionally restarts only components that were running before upgrade.
+
+`service register` / `service unregister` operate per component and can target any subset of `api`, `runner`, `user-ui`, `admin-ui`. Without `--components`, OpsCLI defaults to saved service components, then installed components, then the default component set.
 
 ## Build standalone executable
 

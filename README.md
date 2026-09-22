@@ -91,8 +91,8 @@ Command examples:
 - `opscli upgrade`
 - `opscli start` / `opscli stop` / `opscli status`
 - `opscli admin open` / `opscli admin stop` / `opscli admin status`
-- `opscli service register` (cross-OS auto-start registration without reinstalling)
-- `opscli service unregister` (cross-OS auto-start removal without reinstalling)
+- `opscli service register --components <csv>` (cross-OS per-component auto-start registration without reinstalling)
+- `opscli service unregister --components <csv>` (cross-OS per-component auto-start removal without reinstalling)
 - `opscli shortcut create` (cross-OS desktop shortcut for user-ui or admin-ui without reinstalling)
 - `opscli chat`
 

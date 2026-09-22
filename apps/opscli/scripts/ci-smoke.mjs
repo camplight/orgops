@@ -60,7 +60,6 @@ function writeFixtureRuntimePackage(installDir) {
     scripts: {
       "start:api:env": "node .opscli-smoke-api-server.mjs",
       "start:runner:env": "node .opscli-smoke-runner-process.mjs",
-      "start:user-stack:env": "node .opscli-smoke-user-ui-server.mjs",
       "start:user-ui:preview:env": "node .opscli-smoke-user-ui-server.mjs",
       "start:admin-ui:preview:env": "node .opscli-smoke-admin-ui-server.mjs",
     },

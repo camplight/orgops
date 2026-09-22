@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { npmCommandForHost, runChecked } from "./exec";
 import { ensurePrerequisites } from "./prereqs";
 import { createUserUiShortcut, openUrlInBrowser } from "./browser";
-import { registerAutostartService } from "./service";
+import { registerAutostartServices } from "./service";
 import { loadState, saveState } from "./runtime-state";
 import {
   formatComponents,
@@ -127,7 +127,7 @@ export async function runInstall(rawOptions: InstallOptions) {
   if (rawOptions.registerService) {
     serviceMessage = smokeMockEnabled
       ? "Service registration skipped (install smoke mock mode)."
-      : registerAutostartService(installDir);
+      : registerAutostartServices(installDir, components).join("; ");
   }
 
   let shortcutPath = "";
@@ -139,12 +139,16 @@ export async function runInstall(rawOptions: InstallOptions) {
   const serviceRegistered = rawOptions.registerService
     ? true
     : Boolean(prior.serviceRegistered);
+  const serviceComponents = rawOptions.registerService
+    ? components
+    : (Array.isArray(prior.serviceComponents) ? prior.serviceComponents : []);
   saveState({
     ...prior,
     installDir,
     repoRef,
     repoUrl,
     serviceRegistered,
+    serviceComponents,
     installedComponents: components,
   });
 

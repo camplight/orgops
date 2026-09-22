@@ -59,28 +59,18 @@ export async function startAndOpenAdminUi(options?: { installDir?: string; openB
     const runtimeDir = resolve(installDir, ".orgops-runtime");
     mkdirSync(runtimeDir, { recursive: true });
     const logPath = resolve(runtimeDir, "admin-ui.log");
-    const child =
-      process.platform === "win32"
-        ? spawn(npmCommandForHost(), ["run", "start:admin-ui:preview:env"], {
-            cwd: installDir,
-            detached: true,
-            stdio: "ignore",
-            env: process.env,
-            shell: true,
-          })
-        : (() => {
-            const outFd = openSync(logPath, "a");
-            const errFd = openSync(logPath, "a");
-            const spawned = spawn(npmCommandForHost(), ["run", "start:admin-ui:preview:env"], {
-              cwd: installDir,
-              detached: true,
-              stdio: ["ignore", outFd, errFd],
-              env: process.env,
-            });
-            closeSync(outFd);
-            closeSync(errFd);
-            return spawned;
-          })();
+    const outFd = openSync(logPath, "a");
+    const errFd = openSync(logPath, "a");
+    const child = spawn(npmCommandForHost(), ["run", "start:admin-ui:preview:env"], {
+      cwd: installDir,
+      detached: true,
+      stdio: ["ignore", outFd, errFd],
+      env: process.env,
+      shell: process.platform === "win32",
+      windowsHide: true,
+    });
+    closeSync(outFd);
+    closeSync(errFd);
     child.unref();
     if (typeof child.pid !== "number") {
       throw new Error("Failed to start Admin UI process.");
@@ -114,6 +104,7 @@ export function stopAdminUi(installDirFromArg?: string) {
     spawnSync("taskkill", ["/PID", String(existing.pid), "/T", "/F"], {
       shell: true,
       stdio: "ignore",
+      windowsHide: true,
     });
   } else {
     try {

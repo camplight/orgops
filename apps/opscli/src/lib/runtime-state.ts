@@ -11,6 +11,7 @@ export type OpsCliState = {
   repoUrl?: string;
   repoRef?: string;
   serviceRegistered?: boolean;
+  serviceComponents?: InstallComponent[];
   installedComponents?: InstallComponent[];
 };
 

@@ -22,7 +22,6 @@
     "start:runner:env": "node --env-file=.env --import tsx apps/agent-runner/src/index.ts",
     "start:admin-ui:preview:env": "node --env-file=.env ./node_modules/vite/bin/vite.js preview --config apps/admin-ui/vite.config.ts --host 0.0.0.0 --port 4173",
     "start:user-ui:preview:env": "node --env-file=.env ./node_modules/vite/bin/vite.js preview --config apps/user-ui/vite.config.ts --host 0.0.0.0 --port 4190",
-    "start:user-stack:env": "dotenv -e .env -- concurrently -k \"npm run start:api:env\" \"npm run start:runner:env\" \"npm run start:user-ui:preview:env\"",
     "test": "vitest run",
     "lint": "npm run lint:all",
     "lint:all": "npm run --workspace @orgops/api lint && npm run --workspace @orgops/agent-runner lint && npm run --workspace @orgops/opscli lint && npm run --workspace @orgops/admin-ui lint && npm run --workspace @orgops/user-ui lint && npm run --workspace @orgops/db lint && npm run --workspace @orgops/schemas lint && npm run --workspace @orgops/event-bus lint && npm run --workspace @orgops/llm lint && npm run --workspace @orgops/crypto lint && npm run --workspace @orgops/skills lint && npm run --workspace @orgops/events-scenario-tests lint",

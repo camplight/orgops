@@ -508,8 +508,8 @@ Audit events are emitted around tool/process operations and RLM execution.
   - `doctor` (host prerequisite check)
   - `start` / `stop` / `status` for selected components (`api`, `runner`, `user-ui`, `admin-ui`)
   - `admin open` / `admin stop` / `admin status` convenience wrappers for `admin-ui`
-  - `service register` to register/start OS-specific auto-start for user stack without install/upgrade
-  - `service unregister` to remove OS-specific auto-start for user stack without install/upgrade
+  - `service register` to register/start OS-specific auto-start per component (`api`, `runner`, `user-ui`, `admin-ui`) without install/upgrade
+  - `service unregister` to remove OS-specific auto-start per component without install/upgrade
   - `shortcut create` to create a cross-OS desktop shortcut for `user-ui` or `admin-ui` without install/upgrade
   - install/upgrade support runner bootstrap via:
     - explicit `--runner-api-url` + `--runner-token` (+ optional `--runner-name`)

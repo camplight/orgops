@@ -1,24 +1,31 @@
 import { resolve } from "node:path";
 import { createUiShortcut, type ShortcutTarget } from "./browser";
 import { ADMIN_UI_URL } from "./admin-ui";
+import type { InstallComponent } from "./components";
 import { USER_UI_URL } from "./install";
 import { loadState, saveState } from "./runtime-state";
-import { registerAutostartService, unregisterAutostartService } from "./service";
+import { registerAutostartServices, unregisterAutostartServices } from "./service";
 
 function resolveInstallDir(inputDir?: string) {
   return resolve(inputDir ?? loadState().installDir ?? "orgops");
 }
 
-export function registerServiceAction(options?: { installDir?: string }) {
+export function registerServiceAction(options: { installDir?: string; components: InstallComponent[] }) {
   const installDir = resolveInstallDir(options?.installDir);
-  const message = registerAutostartService(installDir);
+  const messages = registerAutostartServices(installDir, options.components);
   const prior = loadState();
   saveState({
     ...prior,
     installDir,
-    serviceRegistered: true,
+    serviceRegistered: options.components.length > 0,
+    serviceComponents: options.components,
   });
-  return { installDir, serviceRegistered: true, message };
+  return {
+    installDir,
+    serviceRegistered: options.components.length > 0,
+    serviceComponents: options.components,
+    messages,
+  };
 }
 
 export function createShortcutAction(options?: { url?: string; target?: ShortcutTarget }) {
@@ -29,14 +36,23 @@ export function createShortcutAction(options?: { url?: string; target?: Shortcut
   return { target, url, shortcutPath };
 }
 
-export function unregisterServiceAction(options?: { installDir?: string }) {
+export function unregisterServiceAction(options: { installDir?: string; components: InstallComponent[] }) {
   const installDir = resolveInstallDir(options?.installDir);
-  const message = unregisterAutostartService(installDir);
+  const messages = unregisterAutostartServices(installDir, options.components);
   const prior = loadState();
+  const remaining = (prior.serviceComponents ?? []).filter(
+    (component) => !options.components.includes(component)
+  );
   saveState({
     ...prior,
     installDir,
-    serviceRegistered: false,
+    serviceRegistered: remaining.length > 0,
+    serviceComponents: remaining,
   });
-  return { installDir, serviceRegistered: false, message };
+  return {
+    installDir,
+    serviceRegistered: remaining.length > 0,
+    serviceComponents: remaining,
+    messages,
+  };
 }
