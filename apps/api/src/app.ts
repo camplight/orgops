@@ -191,6 +191,14 @@ export function createApp(config: AppConfig = {}) {
     return jsonResponse(c, { error: "Internal Server Error" }, 500);
   });
 
+  app.get("/health", (c) =>
+    jsonResponse(c, {
+      status: "ok",
+      service: "orgops-api",
+      now: Date.now(),
+    }),
+  );
+
   function resolveRunnerUserFromToken(token: string | undefined) {
     if (!token) return null;
     if (RUNNER_TOKEN && token === RUNNER_TOKEN) {

@@ -1,0 +1,10 @@
+.git
+.github
+node_modules
+.orgops-data
+files
+coverage
+**/*.log
+apps/**/node_modules
+packages/**/node_modules
+terminals

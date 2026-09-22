@@ -77,6 +77,59 @@ If you deploy the UIs separately, they use same-origin `/api` and `/ws` paths in
 builds. Put each UI and API behind the same public origin (or reverse proxy these paths to
 the API service) so browser auth cookies and WebSocket traffic work correctly.
 
+### Single-image container deployment
+
+OrgOps now ships a root `Dockerfile` that builds one reusable image containing API, runner,
+admin UI, and user UI. The container entrypoint starts whichever components you choose via
+`ORGOPS_COMPONENTS`.
+
+Build:
+
+```bash
+docker build -t orgops:local .
+```
+
+Run API + runner + user UI (default):
+
+```bash
+docker run --rm -p 8787:8787 \
+  -e ORGOPS_COMPONENTS=api,runner,user-ui \
+  -e ORGOPS_MASTER_KEY='<32-byte-base64>' \
+  -v orgops-data:/app/.orgops-data \
+  -v orgops-files:/app/files \
+  orgops:local
+```
+
+Run API only:
+
+```bash
+docker run --rm -p 8787:8787 \
+  -e ORGOPS_COMPONENTS=api \
+  -e ORGOPS_MASTER_KEY='<32-byte-base64>' \
+  -v orgops-data:/app/.orgops-data \
+  -v orgops-files:/app/files \
+  orgops:local
+```
+
+Run runner only (against an external API):
+
+```bash
+docker run --rm \
+  -e ORGOPS_COMPONENTS=runner \
+  -e ORGOPS_API_URL='https://orgops.example.com' \
+  -e ORGOPS_RUNNER_TOKEN='<runner-token>' \
+  -e ORGOPS_MASTER_KEY='<32-byte-base64>' \
+  -v orgops-data:/app/.orgops-data \
+  -v orgops-files:/app/files \
+  orgops:local
+```
+
+Container networking is fronted by HAProxy on port `8787`:
+
+- `/api`, `/ws`, and `/health` -> API
+- `/admin` -> admin UI (when enabled)
+- `/` -> user UI (when enabled), then admin UI, then API fallback
+
 ## OpsCLI
 
 `apps/opscli` is the bootstrap and maintenance CLI for OrgOps hosts.

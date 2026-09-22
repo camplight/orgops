@@ -16,6 +16,25 @@ import { createDrizzleDb, migrate, openDb, schema } from "@orgops/db";
 import { createApp } from "./app";
 
 describe("api app", () => {
+  it("serves an unauthenticated health endpoint", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+    });
+
+    const res = await app.request("http://localhost/health");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { status?: string; service?: string };
+    expect(body.status).toBe("ok");
+    expect(body.service).toBe("orgops-api");
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("does not inject admin when any human already exists", async () => {
     const db = openDb(":memory:");
     migrate(db);

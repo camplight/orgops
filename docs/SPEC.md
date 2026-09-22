@@ -290,6 +290,10 @@ Published topics include:
 
 ## HTTP API Surface
 
+### Infra
+
+- `GET /health` (unauthenticated API liveness endpoint)
+
 ### Auth / Humans
 
 - `POST /api/auth/login`
@@ -534,6 +538,17 @@ Security note: wrapped `source`, `setup.command`, and `runtime.command` are host
 - scheduled delivery via `deliverAt`
 - failure escalation via `/api/events/:id/fail` until dead-letter (`event.deadlettered`) at configured threshold
 
+## Container Runtime (Single Image)
+
+- Root `Dockerfile` builds a single reusable image containing `api`, `agent-runner`, `admin-ui`, and `user-ui`.
+- `docker/entrypoint.sh` supports runtime component selection through `ORGOPS_COMPONENTS` (CSV of `api`, `runner`, `admin-ui`, `user-ui`).
+- When any HTTP-serving component is enabled, HAProxy runs in-container as the public listener (default port `8787`) and routes:
+  - `/api`, `/ws`, `/health` -> API backend
+  - `/admin` -> admin UI preview backend
+  - `/` -> user UI preview backend (fallback order: user UI -> admin UI -> API)
+- Runner startup waits for local API readiness only when both `api` and `runner` are enabled in the same container.
+- Runtime state persists through `/app/.orgops-data` and `/app/files` volumes.
+
 ## Environment Variables (Implemented)
 
 - `PORT`
@@ -566,11 +581,19 @@ Security note: wrapped `source`, `setup.command`, and `runtime.command` are host
 - Admin UI build/runtime config:
   - `VITE_API_BASE_URL`
   - `VITE_WS_BASE_URL`
+  - `VITE_UI_BASE_PATH`
   - optional runtime override: `window.__ORGOPS_UI_CONFIG__ = { apiBaseUrl, wsBaseUrl }`
 - User UI build/runtime config:
   - `VITE_API_BASE_URL`
   - `VITE_WS_BASE_URL`
+  - `VITE_UI_BASE_PATH`
   - optional runtime override: `window.__ORGOPS_USER_UI_CONFIG__ = { apiBaseUrl, wsBaseUrl }`
+- Container entrypoint controls:
+  - `ORGOPS_COMPONENTS`
+  - `ORGOPS_PROXY_PORT`
+  - `ORGOPS_INTERNAL_API_PORT`
+  - `ORGOPS_INTERNAL_ADMIN_UI_PORT`
+  - `ORGOPS_INTERNAL_USER_UI_PORT`
 - RLM controls:
   - `ORGOPS_RLM_MAX_STEPS`
   - `ORGOPS_RLM_MAX_OUTPUT_CHARS`
