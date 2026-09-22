@@ -8,9 +8,12 @@ import type {
   ProcessOutputRow,
   ProcessRow,
   RunnerNode,
-  SkillMeta
+  SkillMeta,
+  AgentProvisioningReceipt,
+  ProvisionAgentHttpInput
 } from "../../types";
 import { AgentsScreen, EventsScreen, ProcessesScreen } from "../../screens";
+import { getProvisioningTemplateOptions, getSkillInventory } from "../../api";
 
 type EventFilters = {
   agentName: string;
@@ -47,6 +50,8 @@ type DashboardDrawersProps = {
   agents: Agent[];
   runners: RunnerNode[];
   skills: SkillMeta[];
+  principalKey?: string;
+  onProvisionAgent: (input: ProvisionAgentHttpInput, signal?: AbortSignal) => Promise<AgentProvisioningReceipt>;
   events: EventRow[];
   channels: Channel[];
   eventTypes: EventTypeInfo[];
@@ -59,7 +64,6 @@ type DashboardDrawersProps = {
   onFocusAgentApplied: () => void;
   onFocusEventApplied: () => void;
   onSelectProcess: (id: string | null) => void;
-  onCreateAgent: (agent: AgentForm) => Promise<void>;
   onUpdateAgent: (name: string, agent: Omit<AgentForm, "name">) => Promise<void>;
   onDeleteAgent: (name: string) => Promise<void>;
   onStartAgent: (name: string) => Promise<void>;
@@ -109,6 +113,8 @@ export function DashboardDrawers({
   agents,
   runners,
   skills,
+  principalKey,
+  onProvisionAgent,
   events,
   channels,
   eventTypes,
@@ -121,7 +127,6 @@ export function DashboardDrawers({
   onFocusAgentApplied,
   onFocusEventApplied,
   onSelectProcess,
-  onCreateAgent,
   onUpdateAgent,
   onDeleteAgent,
   onStartAgent,
@@ -152,7 +157,10 @@ export function DashboardDrawers({
         agents={agents}
         runners={runners}
         skills={skills}
-        onCreateAgent={onCreateAgent}
+        principalKey={principalKey}
+        onProvisionAgent={onProvisionAgent}
+        loadProvisioningOptions={getProvisioningTemplateOptions}
+        loadSkillInventory={getSkillInventory}
         onUpdateAgent={onUpdateAgent}
         onDeleteAgent={onDeleteAgent}
         onStartAgent={onStartAgent}

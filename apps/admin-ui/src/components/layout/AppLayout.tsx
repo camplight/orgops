@@ -4,6 +4,8 @@ import { PageHeader } from "./PageHeader";
 import { Sidebar } from "./Sidebar";
 
 type AppLayoutProps = {
+  canManageCatalogs?: boolean;
+  canManageSourceLibrary?: boolean;
   activeScreen: Screen;
   onScreenChange: (screen: Screen) => void;
   onScreenFocus?: (screen: Screen) => void;
@@ -15,6 +17,8 @@ type AppLayoutProps = {
 
 export function AppLayout({
   activeScreen,
+  canManageCatalogs = false,
+  canManageSourceLibrary = canManageCatalogs,
   onScreenChange,
   onScreenFocus,
   username,
@@ -35,6 +39,8 @@ export function AppLayout({
         />
       ) : null}
       <Sidebar
+        canManageCatalogs={canManageCatalogs}
+        canManageSourceLibrary={canManageSourceLibrary}
         activeScreen={activeScreen}
         onScreenChange={(screen) => {
           onScreenChange(screen);
@@ -52,7 +58,7 @@ export function AppLayout({
           onLogout={onLogout}
           onOpenMobileNav={() => setMobileNavOpen(true)}
         />
-        <main className="p-3 md:p-6 space-y-6">{children}</main>
+        <main className="p-3 md:p-6 space-y-6 min-w-0">{children}</main>
       </div>
     </div>
   );

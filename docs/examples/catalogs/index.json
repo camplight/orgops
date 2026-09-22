@@ -1,0 +1,57 @@
+{
+  "formatVersion": 1,
+  "entries": [
+    {
+      "kind": "skill",
+      "name": "echo-skill",
+      "version": "1.0.0",
+      "digest": "sha256:83dafd61312f34e2d3aee6630783ecf2b611a632adde9aff318d2fad39ead800",
+      "location": {
+        "type": "catalog",
+        "path": "packages/echo-skill",
+        "revision": {
+          "type": "catalog-revision"
+        }
+      }
+    },
+    {
+      "kind": "native-agent",
+      "name": "echo-agent",
+      "version": "1.0.0",
+      "digest": "sha256:89dcf3abfc6f0942947a17fac61f9f6153d4b122f447853ed47734d2a093caa1",
+      "location": {
+        "type": "catalog",
+        "path": "packages/echo-agent",
+        "revision": {
+          "type": "catalog-revision"
+        }
+      }
+    },
+    {
+      "kind": "native-agent",
+      "name": "echo-repl",
+      "version": "1.0.0",
+      "digest": "sha256:48beb1f660ea3d2ba0ae061631b6ab06dce3cf820f71e18db593ea9550b43f87",
+      "location": {
+        "type": "catalog",
+        "path": "packages/echo-repl",
+        "revision": {
+          "type": "catalog-revision"
+        }
+      }
+    },
+    {
+      "kind": "wrapped-agent",
+      "name": "echo-wrapper",
+      "version": "1.0.0",
+      "digest": "sha256:19c6e488fa0f29398bb03a4bade14ab0ce8de8d899d1540ee1dd12158aae04ba",
+      "location": {
+        "type": "catalog",
+        "path": "packages/echo-wrapper",
+        "revision": {
+          "type": "catalog-revision"
+        }
+      }
+    }
+  ]
+}

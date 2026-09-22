@@ -220,4 +220,3 @@ export async function getComponentsStatus(options: {
   }
   return { installDir, statuses };
 }
-

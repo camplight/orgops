@@ -46,6 +46,7 @@ export type EventRow = {
 export type AuthMe = {
   id?: string | null;
   username?: string | null;
+  isAdmin?: boolean;
   mustChangePassword?: boolean;
 };
 

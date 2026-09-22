@@ -22,6 +22,7 @@ export type Agent = {
   desiredState: string;
   runtimeState: string;
   assignedRunnerId?: string | null;
+  catalogDerived?: boolean;
 };
 
 export type Event = {

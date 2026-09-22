@@ -1,8 +1,10 @@
 import type { Hono } from "hono";
+import type { AdminPrincipal } from "../admin-access";
 import { randomUUID } from "node:crypto";
 import { and, eq, ne } from "drizzle-orm";
 
 type AuthDeps = {
+  canManageCatalogs: (principal: AdminPrincipal | undefined) => boolean;
   orm: any;
   humanSchema: any;
   RUNNER_TOKEN: string;
@@ -62,6 +64,7 @@ function buildSessionCookie(c: any, sessionId: string, maxAge: number | null = n
 
 export function registerAuthRoutes(app: Hono<any>, deps: AuthDeps) {
   const {
+    canManageCatalogs,
     orm,
     humanSchema,
     sessions,
@@ -130,6 +133,7 @@ export function registerAuthRoutes(app: Hono<any>, deps: AuthDeps) {
     };
     return jsonResponse(c, {
       id: user.id ?? null,
+      isAdmin: canManageCatalogs(user),
       username: user.username,
       mustChangePassword: Boolean(user.mustChangePassword)
     });

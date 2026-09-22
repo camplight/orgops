@@ -44,4 +44,3 @@ export function includesComponent(
 ) {
   return components.includes(component);
 }
-

@@ -71,9 +71,13 @@ export function useOrgOpsData(authenticated: boolean) {
       scheduled: 0,
     });
 
-  const refreshDashboard = useCallback(() => {
-    apiJson<Agent[]>("/api/agents").then(setAgents);
-    apiJson<RunnerNode[]>("/api/runners").then(setRunners);
+  const refreshDashboard = useCallback(async () => {
+    const [nextAgents, nextRunners] = await Promise.all([
+      apiJson<Agent[]>("/api/agents"),
+      apiJson<RunnerNode[]>("/api/runners")
+    ]);
+    setAgents(nextAgents);
+    setRunners(nextRunners);
   }, []);
   const refreshSkills = useCallback(
     () => apiJson<SkillMeta[]>("/api/skills").then(setSkills),
@@ -147,7 +151,6 @@ export function useOrgOpsData(authenticated: boolean) {
   useEffect(() => {
     if (!authenticated) return;
     refreshDashboard();
-    refreshSkills();
     refreshDashboardEvents();
     refreshEventTypes();
     refreshChannels();
@@ -161,7 +164,6 @@ export function useOrgOpsData(authenticated: boolean) {
   }, [
     authenticated,
     refreshDashboard,
-    refreshSkills,
     refreshDashboardEvents,
     refreshEventTypes,
     refreshChannels,

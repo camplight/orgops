@@ -59,3 +59,35 @@ export const AuthLoginSchema = z.object({
 export type EventInput = z.infer<typeof EventSchema>;
 export type AgentInput = z.infer<typeof AgentSchema>;
 export type ModelInput = z.infer<typeof ModelSchema>;
+
+export {
+  CATALOG_LIMITS, PackageNameSchema, SourceIdSchema, CatalogIdSchema,
+  RelativePathSchema, VersionSchema, DigestSchema, CommitSchema, validateCatalogJson,
+  type PackageName, type SourceId, type CatalogId, type RelativePath, type Version, type Digest, type Commit,
+  type ContractIssue, type ContractResult, type ReviewWarning,
+} from "./catalogs/primitives";
+export {
+  PackageManifestSchema, DependencyPinSchema, PortableWrappedRecipeSchema,
+  CompatibilitySchema, SecretRequirementSchema, FileInventoryEntrySchema, ExecutableDeclarationSchema,
+  PackageMetadataSchema, NativeTemplateSchema, PortableCommandSchema,
+  validatePackageManifest, parsePackageManifest,
+  type Compatibility, type SecretRequirement, type DependencyPin, type FileInventoryEntry,
+  type ExecutableDeclaration, type PackageMetadata, type PackageBase, type SkillManifest,
+  type NativeTemplate, type NativeAgentManifest, type PortableCommand, type PortableWrappedRecipe,
+  type WrappedAgentManifest, type PackageManifest,
+} from "./catalogs/manifest";
+export {
+  CatalogIndexSchema, ResolvedIdentitySchema, validateCatalogIndex, parseCatalogIndex,
+  type CatalogEntry, type CatalogIndex, type ResolvedIdentity,
+} from "./catalogs/index";
+export * from "./catalogs/source-library";
+export * from "./unified-skills";
+
+export {
+  SourceUpdateSchema, CatalogCreateSchema, CatalogUpdateSchema,
+  RevisionRequestSchema, ReadCredentialSetSchema, GitRepositorySchema, CatalogRefSchema,
+  CatalogConfigurationAuditSchema, CatalogSyncRequestSchema,
+  type SourceUpdate, type CatalogCreate, type CatalogUpdate,
+  type RevisionRequest, type ReadCredentialSet, type GitRepository, type CatalogRef,
+  type CatalogConfigurationAudit, type CatalogSyncRequest,
+} from "./catalogs/configuration";

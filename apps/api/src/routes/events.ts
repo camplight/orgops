@@ -1,6 +1,5 @@
 import type { Hono } from "hono";
 import { openDb, schema, type OrgOpsDrizzleDb } from "@orgops/db";
-import type { SkillMeta, SkillRoot } from "@orgops/skills";
 import type { EventShapeDefinition } from "@orgops/schemas";
 import { z } from "zod";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -40,12 +39,12 @@ type EventsDeps = {
   EventSchema: {
     safeParse: (data: unknown) => { success: boolean; data?: any };
   };
-  SKILL_ROOT: SkillRoot;
-  listSkills: (root: SkillRoot) => SkillMeta[];
-  loadSkillEventShapes: (
-    skills: SkillMeta[],
-  ) => Promise<{ shapes: EventShapeDefinition[]; errors: Array<{ skill: string; error: string }> }>;
-  getCoreEventShapes: () => EventShapeDefinition[];
+  eventShapeProvider: {
+    getSnapshot(): Promise<{
+      shapes: readonly EventShapeDefinition[];
+      loadErrors: readonly { skill: string; error: string }[];
+    }>;
+  };
   validateEventAgainstShapes: (
     event: {
       type: string;
@@ -56,12 +55,12 @@ type EventsDeps = {
       deliverAt?: number;
       idempotencyKey?: string;
     },
-    shapes: EventShapeDefinition[],
+    shapes: readonly EventShapeDefinition[],
   ) =>
     | { ok: true; matchedDefinitions: number }
     | { ok: false; type: string; matchedDefinitions: number; issues: Array<{ source: string; message: string }> };
   serializeEventShapes: (
-    shapes: EventShapeDefinition[],
+    shapes: readonly EventShapeDefinition[],
   ) => Array<{ type: string; description: string; source: string; payloadExample?: unknown }>;
   access: AccessControl;
 };
@@ -73,23 +72,12 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     eventRowToApi,
     insertEvent,
     publishEventRow,
-    SKILL_ROOT,
-    listSkills,
-    loadSkillEventShapes,
-    getCoreEventShapes,
+    eventShapeProvider,
     validateEventAgainstShapes,
     serializeEventShapes,
     access,
   } = deps;
   const EventSchema = deps.EventSchema;
-  const EVENT_SHAPES_CACHE_TTL_MS = Number(process.env.ORGOPS_EVENT_SHAPES_CACHE_TTL_MS ?? 3000);
-  let eventShapesCache:
-    | {
-        expiresAt: number;
-        shapes: EventShapeDefinition[];
-        loadErrors: Array<{ skill: string; error: string }>;
-      }
-    | undefined;
   const scheduledEventUpdateSchema = z
     .object({
       type: z.string().min(1).optional(),
@@ -113,21 +101,6 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
         });
       }
     });
-
-  async function getEventShapes() {
-    const now = Date.now();
-    if (eventShapesCache && eventShapesCache.expiresAt > now) {
-      return eventShapesCache;
-    }
-    const availableSkills = listSkills(SKILL_ROOT);
-    const loaded = await loadSkillEventShapes(availableSkills);
-    eventShapesCache = {
-      expiresAt: now + EVENT_SHAPES_CACHE_TTL_MS,
-      shapes: [...getCoreEventShapes(), ...loaded.shapes],
-      loadErrors: loaded.errors,
-    };
-    return eventShapesCache;
-  }
 
   function scheduledTriggerMembershipError(
     type: string,
@@ -695,7 +668,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       return jsonResponse(c, { error: "Forbidden" }, 403);
     }
 
-    const eventShapes = await getEventShapes();
+    const eventShapes = await eventShapeProvider.getSnapshot();
     const validationResult = validateEventAgainstShapes(
       {
         type,
@@ -876,7 +849,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
         : (existing.parent_event_id ?? undefined);
     const nextDeliverAt = parsed.data.deliverAt ?? existing.deliver_at;
 
-    const eventShapes = await getEventShapes();
+    const eventShapes = await eventShapeProvider.getSnapshot();
     const validationResult = validateEventAgainstShapes(
       {
         type: nextType,
@@ -1151,7 +1124,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
   });
 
   app.get("/api/event-types", async (c) => {
-    const eventShapes = await getEventShapes();
+    const eventShapes = await eventShapeProvider.getSnapshot();
     return jsonResponse(c, {
       eventTypes: serializeEventShapes(eventShapes.shapes),
       loadErrors: eventShapes.loadErrors,

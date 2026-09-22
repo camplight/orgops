@@ -1,3 +1,17 @@
+export type {
+  SkillRef,
+  SkillInventoryItem,
+  SkillReadiness,
+  SkillAssignmentProjection,
+  AdminSkillProvenance,
+  InventoryFilters,
+  ProvisionAgentHttpInput,
+  ProvisioningTemplateOptions,
+  AgentProvisioningReceipt,
+  AgentStartReadiness,
+  SealedSecretBinding,
+} from "@orgops/schemas";
+
 export type Agent = {
   id?: string;
   name: string;
@@ -24,6 +38,7 @@ export type Agent = {
   visibility?: "PUBLIC" | "PRIVATE";
   ownerHumanId?: string | null;
   assignedRunnerId?: string | null;
+  revision?: number;
 };
 
 export type RunnerNode = {
@@ -162,6 +177,7 @@ export type AuthMe = {
   id?: string | null;
   username?: string | null;
   mustChangePassword?: boolean;
+  isAdmin?: boolean;
 };
 
 export type TeamMember = {
@@ -244,6 +260,7 @@ export type Screen =
   | "events"
   | "processes"
   | "skills"
+  | "source-library"
   | "secrets"
   | "api-keys"
   | "agent-invites"

@@ -1,6 +1,8 @@
 import type { Screen } from "../../types";
 
 type SidebarProps = {
+  canManageCatalogs?: boolean;
+  canManageSourceLibrary?: boolean;
   activeScreen: Screen;
   onScreenChange: (screen: Screen) => void;
   onScreenFocus?: (screen: Screen) => void;
@@ -18,6 +20,7 @@ const NAV_ITEMS: { screen: Screen; label: string }[] = [
   { screen: "events", label: "Events Explorer" },
   { screen: "processes", label: "Processes" },
   { screen: "skills", label: "Skills" },
+  { screen: "source-library", label: "Source Library" },
   { screen: "secrets", label: "Secrets" },
   { screen: "api-keys", label: "API keys" },
   { screen: "agent-invites", label: "Agent invites" },
@@ -29,6 +32,8 @@ export function Sidebar({
   activeScreen,
   onScreenChange,
   onScreenFocus,
+  canManageCatalogs = false,
+  canManageSourceLibrary = canManageCatalogs,
   mobileOpen = false,
   onCloseMobile
 }: SidebarProps) {
@@ -55,10 +60,11 @@ export function Sidebar({
         </button>
       </div>
       <nav className="flex flex-col gap-2 overflow-y-auto max-h-[calc(100dvh-5rem)]">
-        {NAV_ITEMS.map(({ screen, label }) => (
+        {NAV_ITEMS.filter(item => item.screen !== "source-library" || canManageSourceLibrary).map(({ screen, label }) => (
           <button
             key={screen}
             type="button"
+            aria-label={label}
             className={`text-left w-full px-3 py-2 rounded text-sm ${
               activeScreen === screen
                 ? "bg-slate-800 text-white"

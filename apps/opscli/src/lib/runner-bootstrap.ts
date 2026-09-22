@@ -84,4 +84,3 @@ export function readRunnerEnvConfig(installDir: string): RunnerBootstrapConfig |
   if (!apiUrl || !runnerToken) return null;
   return { apiUrl, runnerToken, runnerName: runnerName || undefined };
 }
-

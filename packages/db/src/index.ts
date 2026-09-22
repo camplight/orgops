@@ -63,8 +63,15 @@ export function migrate(db: OrgOpsDb, migrationsDir = join(THIS_DIR, "..", "migr
   for (const file of files) {
     if (appliedIds.has(file)) continue;
     const sql = readFileSync(join(migrationsDir, file), "utf-8");
-    db.exec(sql);
-    insert.run(file, now);
+    try {
+      db.exec(sql);
+      db.pragma("foreign_keys=ON");
+      insert.run(file, now);
+    } catch (error) {
+      if (db.inTransaction) db.exec("ROLLBACK");
+      db.pragma("foreign_keys=ON");
+      throw error;
+    }
   }
 }
 

@@ -1,0 +1,49 @@
+{
+  "formatVersion": 1,
+  "name": "echo-skill",
+  "version": "1.0.0",
+  "description": "Echo instructions.",
+  "author": "Example Authors",
+  "license": "MIT",
+  "compatibility": {
+    "orgops": {
+      "min": "0.0.1",
+      "maxExclusive": "0.1.0"
+    },
+    "platforms": [
+      "linux",
+      "darwin",
+      "win32"
+    ],
+    "tools": [
+      "node"
+    ]
+  },
+  "secrets": [],
+  "dependencies": [],
+  "files": [
+    {
+      "path": "SKILL.md",
+      "size": 102,
+      "digest": "sha256:d1e1ad27fad5df70172dc3dd6595a6a2cc4192b5dcc3f52587458e564f80b7d1",
+      "executable": false
+    },
+    {
+      "path": "event-shapes.ts",
+      "size": 48,
+      "digest": "sha256:9c345d9d0d5348cad82dfc0b82a56508c97bda41ff299a8b0b684b18c40c3f97",
+      "executable": false
+    }
+  ],
+  "executables": [
+    {
+      "path": "event-shapes.ts",
+      "execution": "api-event-shapes"
+    }
+  ],
+  "kind": "skill",
+  "skill": {
+    "entrypoint": "SKILL.md"
+  },
+  "digest": "sha256:83dafd61312f34e2d3aee6630783ecf2b611a632adde9aff318d2fad39ead800"
+}

@@ -1771,3 +1771,20 @@ button {
     max-height: calc(100dvh - 24px);
   }
 }
+
+.main-nav {
+  display: grid;
+  gap: 8px;
+}
+
+.main-nav button {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid rgba(203, 213, 225, 0.18);
+  border-radius: 12px;
+  background: #1e293b;
+  color: #fff;
+  font-weight: 900;
+  text-align: left;
+}

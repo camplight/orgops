@@ -1,3 +1,4 @@
+import type { RuntimeGeneration, TurnLease } from "@orgops/schemas";
 import type { Agent, Event } from "./types";
 
 type WorkerState = {
@@ -10,7 +11,8 @@ type WorkerState = {
 };
 
 type CreateChannelLoopManagerInput = {
-  processBatch: (agent: Agent, channelId: string, events: Event[]) => Promise<void>;
+  captureForTurn: (agentId: string) => Promise<TurnLease>;
+  processBatch: (agent: Agent, channelId: string, events: Event[], generation: RuntimeGeneration) => Promise<void>;
   onBatchError?: (
     agent: Agent,
     channelId: string,
@@ -21,6 +23,18 @@ type CreateChannelLoopManagerInput = {
 
 function workerKey(agentName: string, channelId: string) {
   return `${agentName}::${channelId}`;
+}
+
+function freezeSnapshot(value: unknown): void {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return;
+  for (const nested of Object.values(value)) freezeSnapshot(nested);
+  Object.freeze(value);
+}
+
+function snapshotAgent(agent: Agent): Agent {
+  const snapshot = structuredClone(agent);
+  freezeSnapshot(snapshot);
+  return snapshot;
 }
 
 export function createChannelLoopManager(input: CreateChannelLoopManagerInput) {
@@ -35,19 +49,30 @@ export function createChannelLoopManager(input: CreateChannelLoopManagerInput) {
     workerStartCounts.set(key, (workerStartCounts.get(key) ?? 0) + 1);
     void (async () => {
       while (true) {
+        if (state.queue.size === 0) break;
+        const batchAgent = snapshotAgent(state.agent);
+        const batchChannelId = state.channelId;
         const batch = [...state.queue.values()].sort((left, right) => {
           const leftTs = left.createdAt ?? 0;
           const rightTs = right.createdAt ?? 0;
           return leftTs - rightTs;
         });
         state.queue.clear();
-        if (batch.length === 0) break;
+        let lease: TurnLease | undefined;
         try {
-          await input.processBatch(state.agent, state.channelId, batch);
+          if (!batchAgent.id) throw new Error("Agent ID is required for runtime generation capture.");
+          lease = await input.captureForTurn(batchAgent.id);
+          await input.processBatch(batchAgent, batchChannelId, batch, lease.generation);
         } catch (error) {
           if (input.onBatchError) {
-            await input.onBatchError(state.agent, state.channelId, batch, error);
+            try {
+              await input.onBatchError(batchAgent, batchChannelId, batch, error);
+            } catch {
+              // Batch error reporting is best-effort; lease release and worker cleanup remain mandatory.
+            }
           }
+        } finally {
+          lease?.release();
         }
       }
     })().finally(() => {

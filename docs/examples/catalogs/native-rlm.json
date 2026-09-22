@@ -1,0 +1,50 @@
+{
+  "formatVersion": 1,
+  "name": "echo-repl",
+  "version": "1.0.0",
+  "description": "Native recursive acknowledgement agent.",
+  "author": "Example Authors",
+  "license": "MIT",
+  "compatibility": {
+    "orgops": {
+      "min": "0.0.1",
+      "maxExclusive": "0.1.0"
+    },
+    "platforms": [
+      "linux",
+      "darwin",
+      "win32"
+    ],
+    "tools": [
+      "node"
+    ]
+  },
+  "secrets": [],
+  "dependencies": [
+    {
+      "catalogId": "team",
+      "sourceId": "team-source",
+      "name": "echo-skill",
+      "version": "1.0.0",
+      "revision": {
+        "type": "same-package-revision"
+      },
+      "digest": "sha256:83dafd61312f34e2d3aee6630783ecf2b611a632adde9aff318d2fad39ead800"
+    }
+  ],
+  "files": [],
+  "executables": [],
+  "kind": "native-agent",
+  "native": {
+    "mode": "RLM_REPL",
+    "systemInstructions": "Return done(\"acknowledged\").",
+    "runtime": {
+      "llmCallTimeoutMs": 60000,
+      "memoryContextMode": "OFF"
+    },
+    "alwaysPreloadedSkills": [
+      "echo-skill"
+    ]
+  },
+  "digest": "sha256:48beb1f660ea3d2ba0ae061631b6ab06dce3cf820f71e18db593ea9550b43f87"
+}
