@@ -434,6 +434,7 @@ Published topics include:
   - env resolution precedence: `private > team > public > package(legacy)`
 - skills:
   - `GET /api/skills`
+  - the API resolves the skill root from `ORGOPS_PROJECT_ROOT` when set, otherwise from the API module location; `createApp({ projectRoot })` provides an explicit embedding/test override
 
 ### Runners
 
