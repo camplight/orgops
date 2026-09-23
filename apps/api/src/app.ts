@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import { createNodeWebSocket } from "@hono/node-ws";
-import { existsSync, mkdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { mkdirSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   randomBytes,
   randomUUID,
@@ -61,6 +62,7 @@ export type AppConfig = {
   adminPass?: string;
   runnerToken?: string;
   runnerApiUrl?: string;
+  projectRoot?: string;
 };
 
 type AppEnv = {
@@ -72,13 +74,11 @@ type AppEnv = {
 export function createApp(config: AppConfig = {}) {
   const app = new Hono<AppEnv>();
   const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
-  const PROJECT_ROOT = (() => {
-    const envRoot = process.env.ORGOPS_PROJECT_ROOT;
-    if (envRoot) return envRoot;
-    const cwd = process.cwd();
-    const candidate = resolve(cwd, "../..");
-    return existsSync(join(candidate, "package.json")) ? candidate : cwd;
-  })();
+  const PROJECT_ROOT = resolve(
+    config.projectRoot ??
+      process.env.ORGOPS_PROJECT_ROOT ??
+      resolve(dirname(fileURLToPath(import.meta.url)), "../../.."),
+  );
   const DATA_DIR = (() => {
     if (!config.dataDir) return join(PROJECT_ROOT, ".orgops-data");
     return config.dataDir.startsWith("/")

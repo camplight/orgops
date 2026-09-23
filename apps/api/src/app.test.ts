@@ -15,6 +15,25 @@ import { and, eq } from "drizzle-orm";
 import { createDrizzleDb, migrate, openDb, schema } from "@orgops/db";
 import { createApp } from "./app";
 
+type TestApp = ReturnType<typeof createApp>["app"];
+
+async function createProcessTestAgent(
+  app: TestApp,
+  cookie: string,
+  agentName: string,
+) {
+  const response = await app.request("http://localhost/api/agents", {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie },
+    body: JSON.stringify({
+      name: agentName,
+      modelId: "openai:gpt-4o-mini",
+      workspacePath: `.orgops-data/workspaces/${agentName}`,
+    }),
+  });
+  expect(response.status).toBe(201);
+}
+
 describe("api app", () => {
   it("serves an unauthenticated health endpoint", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
@@ -1282,6 +1301,46 @@ describe("api app", () => {
     ).toBe(true);
 
     rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("loads skill event shapes from an explicit project root", async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), "orgops-project-"));
+    const skillDir = join(projectRoot, "skills", "fixture");
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(
+      join(skillDir, "SKILL.md"),
+      "---\nname: fixture\ndescription: Test fixture skill\n---\n",
+    );
+    writeFileSync(
+      join(skillDir, "event-shapes.ts"),
+      "export const eventShapes = [{ type: 'fixture.created', description: 'Fixture event' }];\n",
+    );
+
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      projectRoot,
+      runnerToken: "test-token",
+    });
+
+    const eventTypesRes = await app.request("http://localhost/api/event-types", {
+      headers: { "x-orgops-runner-token": "test-token" },
+    });
+    expect(eventTypesRes.status).toBe(200);
+    const body = (await eventTypesRes.json()) as {
+      eventTypes: Array<{ type: string; source: string }>;
+    };
+    expect(body.eventTypes).toContainEqual(
+      expect.objectContaining({
+        type: "fixture.created",
+        source: "skill:fixture",
+      }),
+    );
+
+    rmSync(dataDir, { recursive: true, force: true });
+    rmSync(projectRoot, { recursive: true, force: true });
   });
 
   it("invites humans with temporary passwords and enforces first-login reset", async () => {
@@ -3649,6 +3708,7 @@ describe("api app", () => {
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
+    await createProcessTestAgent(app, cookie, "test-agent");
 
     const child = spawn("/bin/bash", ["-lc", "sleep 30"]);
     const processId = randomUUID();
@@ -3710,6 +3770,7 @@ describe("api app", () => {
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
+    await createProcessTestAgent(app, cookie, "wrapper-output-test");
 
     const channelId = randomUUID();
     const processId = randomUUID();
@@ -3806,6 +3867,7 @@ describe("api app", () => {
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
+    await createProcessTestAgent(app, cookie, "test-agent");
 
     const child = spawn("/bin/bash", ["-lc", "sleep 30"]);
     const processId = randomUUID();
@@ -3876,6 +3938,7 @@ describe("api app", () => {
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
+    await createProcessTestAgent(app, cookie, "test-agent");
 
     const processId = randomUUID();
     const createProcessRes = await app.request(
@@ -3948,6 +4011,7 @@ describe("api app", () => {
     });
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
+    await createProcessTestAgent(app, cookie, "test-agent");
 
     const runningId = randomUUID();
     const exitedId = randomUUID();
