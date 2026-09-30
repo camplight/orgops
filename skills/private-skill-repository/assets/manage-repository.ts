@@ -16,6 +16,7 @@ type CommandOptions = {
   lockMkdir?: (path: string) => Promise<void>;
   lockRm?: (path: string) => Promise<void>;
   lockRename?: (from: string, to: string) => Promise<void>;
+  lockWrite?: (path: string, data: string, options: { mode: number }) => Promise<void>;
 };
 
 const safeMessages: Record<RepositoryErrorCode, string> = {
@@ -93,15 +94,16 @@ async function acquireLock(config: RepositoryConfig, options: CommandOptions): P
   const mkdirImpl = options.lockMkdir ?? ((path: string) => mkdir(path));
   const removeImpl = options.lockRm ?? ((path: string) => rmdir(path));
   const renameImpl = options.lockRename ?? ((from: string, to: string) => rename(from, to));
+  const writeImpl = options.lockWrite ?? ((path: string, data: string, writeOptions: { mode: number }) => writeFile(path, data, writeOptions));
   let created = false;
   try {
     await mkdirImpl(lock);
     created = true;
-    await writeFile(marker, token, { mode: 0o600 });
+    await writeImpl(marker, token, { mode: 0o600 });
   } catch (error) {
-    if (created) {
-      try { await rmdir(lock); } catch { /* bounded cleanup of our empty lock */ }
-    }
+    // Once mkdir succeeds, ownership is not established until the marker write succeeds.
+    // Never remove that canonical directory: it may have been replaced concurrently.
+    if (created) throw new RepositoryError("LOCK_OWNERSHIP");
     if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new RepositoryError("BUSY");
     throw new RepositoryError("GIT_FAILED");
   }

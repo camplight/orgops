@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runRepositoryCommand } from "./manage-repository";
@@ -103,6 +103,21 @@ describe("runRepositoryCommand", () => {
     const env = { PRIVATE_SKILLS_REPO_URL: remote, PRIVATE_SKILLS_REPO_PATH: checkout, PRIVATE_SKILLS_REPO_BRANCH: "main", ORGOPS_SKILL_ROOTS: join(checkout, "skills") };
     expect(await runRepositoryCommand(["status"], { env })).toMatchObject({ ok: true, data: { remote: "origin", conflicted: true, clean: false } });
     expect(await runRepositoryCommand(["sync"], { env })).toMatchObject({ ok: false, code: "CONFLICTED" });
+  });
+
+  it("fails closed when marker creation fails and preserves a replacement lock", async () => {
+    const root = mkdtempSync(join(tmpdir(), "orgops-lock-acquire-"));
+    const checkout = join(root, "checkout");
+    const lock = `${checkout}.orgops-private-skills.lock`;
+    const env = { PRIVATE_SKILLS_REPO_URL: join(root, "remote.git"), PRIVATE_SKILLS_REPO_PATH: checkout, PRIVATE_SKILLS_REPO_BRANCH: "main", ORGOPS_SKILL_ROOTS: join(checkout, "skills") };
+    const lockWrite = async () => {
+      rmdirSync(lock);
+      mkdirSync(lock);
+      throw new Error("marker write failed");
+    };
+    const result = await runRepositoryCommand(["sync"], { env, lockWrite });
+    expect(result).toMatchObject({ ok: false, code: "LOCK_OWNERSHIP" });
+    expect(() => writeFileSync(join(lock, "sentinel"), "replacement")).not.toThrow();
   });
 
   it("never deletes a replacement lock during atomic release", async () => {
