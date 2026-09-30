@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { resolveSkillRoot } from "@orgops/skills";
+import { resolveSkillRoots } from "@orgops/skills";
 import { stopAllRunningProcesses } from "./tools/shell";
 import { createChannelLoopManager } from "./channel-loop";
 import { shouldHandleEventForAgent } from "./event-routing";
@@ -40,7 +40,7 @@ const PROJECT_ROOT = (() => {
   const candidate = resolve(cwd, "../..");
   return existsSync(join(candidate, "package.json")) ? candidate : cwd;
 })();
-const SKILL_ROOT = resolveSkillRoot(PROJECT_ROOT);
+const SKILL_ROOTS = resolveSkillRoots(PROJECT_ROOT);
 const RUNNER_ID_FILE = process.env.ORGOPS_RUNNER_ID_FILE
   ? resolve(PROJECT_ROOT, process.env.ORGOPS_RUNNER_ID_FILE)
   : resolve(PROJECT_ROOT, ".agent-runner-id");
@@ -97,7 +97,7 @@ const api = createRunnerApi({
 });
 const handleTurn = createTurnExecutor({
   projectRoot: PROJECT_ROOT,
-  skillRoot: SKILL_ROOT,
+  skillRoots: SKILL_ROOTS,
   llmCallTimeoutMs: LLM_CALL_TIMEOUT_MS,
   runtimeAuth: {
     apiBaseUrl: API_URL,

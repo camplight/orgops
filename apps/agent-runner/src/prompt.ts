@@ -40,16 +40,21 @@ function formatRunnerHostInfoSection(hostInfo: RunnerHostInfo) {
 export function buildRunnerGuidance(
   nowMs: number,
   nowIso: string,
-  skillRootPath: string,
+  skillRootPaths: string[],
   coreEventTypes: EventTypeSummary[],
   hostInfo: RunnerHostInfo,
 ) {
+  const sortedSkillRootPaths = [...skillRootPaths].sort();
+  const skillRootsSection = [
+    "- Skills root folders:",
+    ...sortedSkillRootPaths.map((path) => `  - ${path}`),
+  ].join("\n");
   return [
     "- You are running inside OrgOps' agent-runner and receive events per channels.",
     "- The runner executes your tool calls on the agent-runner's host machine.",
     "- The runner does not orchestrate your collaboration.",
     "- The runner maps relative paths as your own workspace-relative.",
-    `- Skills root folder path for resolving skill-relative references: ${skillRootPath}`,
+    skillRootsSection,
     "- When creating/updating skills, `SKILL.md` must start with YAML frontmatter at the very first line (`---` as the first bytes in the file).",
     "- `SKILL.md` frontmatter requires `name` and `description`.",
     "- Skill `name` must exactly match the skill directory basename.",

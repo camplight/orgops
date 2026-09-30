@@ -9,7 +9,7 @@ import {
   type LlmUsage,
 } from "@orgops/llm";
 import { getModel } from "models-dev-db";
-import { listSkills, loadSkillEventShapes } from "@orgops/skills";
+import { discoverSkills, loadSkillEventShapes, type SkillRoot } from "@orgops/skills";
 import {
   type EventValidationResult,
   type EventTypeSummary,
@@ -24,6 +24,7 @@ import { getReservedEventTypeError } from "./event-type-guard";
 import { buildRunnerGuidance } from "./prompt";
 import { runRlmEventInChild } from "./rlm-process";
 import { runWrappedAgentTurn } from "./wrapped-runtime";
+import { resolvePrivateSkillRepositoryAccess } from "./private-skill-repository-access";
 import {
   buildChannelRecentDeltaSystemMessage,
   buildSystemMemoryMessage,
@@ -65,7 +66,7 @@ type ModelEventDraft = {
 
 type CreateTurnExecutorInput = {
   projectRoot: string;
-  skillRoot: { path: string };
+  skillRoots: SkillRoot[];
   llmCallTimeoutMs: number;
   runtimeAuth?: {
     apiBaseUrl?: string;
@@ -493,10 +494,19 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
     const injectionEnv = await input.api.getPackageSecretsEnv(agent.name, channelId);
     const channelRecord = await input.api.getChannelRecord(channelId);
     const soul = typeof agent.soulContents === "string" ? agent.soulContents : "";
-    const allSkills = listSkills(input.skillRoot);
+    const discovery = discoverSkills(input.skillRoots);
     const enabledSkillSet = new Set(agent.enabledSkills ?? []);
     const alwaysPreloadedSkillSet = new Set(agent.alwaysPreloadedSkills ?? []);
-    const selectedSkills = allSkills.filter((skill: any) => enabledSkillSet.has(skill.name));
+    const selectedSkills = discovery.skills.filter((skill) => enabledSkillSet.has(skill.name));
+    const managementAccess = resolvePrivateSkillRepositoryAccess({
+      selectedSkills,
+      roots: input.skillRoots,
+      repositoryPath: process.env.PRIVATE_SKILLS_REPO_PATH,
+    });
+    const extraAllowedRoots = [
+      ...selectedSkills.map((skill) => skill.path),
+      ...(managementAccess.ok ? [managementAccess.skillsPath] : []),
+    ];
     const alwaysPreloadedSkills = selectedSkills.filter((skill: any) =>
       alwaysPreloadedSkillSet.has(skill.name),
     );
@@ -526,7 +536,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
     const runnerGuidance = buildRunnerGuidance(
       nowMs,
       nowIso,
-      input.skillRoot.path,
+      input.skillRoots.map((root) => root.path),
       coreEventTypes,
       {
         platform: process.platform,
@@ -719,7 +729,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       agent,
       triggerEvent,
       channelId,
-      extraAllowedRoots: selectedSkills.map((skill: any) => skill.path),
+      extraAllowedRoots,
       injectionEnv,
       apiFetch: input.api.apiFetch,
       emitEvent: input.api.emitEvent,
