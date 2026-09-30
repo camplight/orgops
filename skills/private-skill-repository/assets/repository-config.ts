@@ -20,7 +20,8 @@ export type RepositoryErrorCode =
   | "AUTH_FAILED"
   | "GIT_FAILED"
   | "NO_CHANGES"
-  | "DIRECT_REQUIRED";
+  | "DIRECT_REQUIRED"
+  | "LOCK_OWNERSHIP";
 
 export class RepositoryError extends Error {
   readonly code: RepositoryErrorCode;
@@ -44,7 +45,7 @@ function validBranch(branch: string): boolean {
     !branch.startsWith("-") &&
     !branch.endsWith("/") &&
     !branch.endsWith(".") &&
-    !branch.endsWith(".lock") &&
+    !branch.split("/").some((part) => part.endsWith(".lock")) &&
     !/[\s\\\x00-\x1f\x7f]/.test(branch) &&
     !branch.includes("..") &&
     !branch.includes("@{") &&

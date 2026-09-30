@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parsePorcelainPaths, validateChangedSkills } from "./skill-changes";
@@ -30,6 +30,21 @@ describe("skill change validation", () => {
   it("parses untracked and rename records without whitespace splitting", () => {
     const parsed = parsePorcelainPaths("?? skills/demo/a file.ts\0R  skills/demo/new.ts\0skills/demo/old.ts\0");
     expect(parsed.map((entry) => entry.path)).toEqual(["skills/demo/a file.ts", "skills/demo/new.ts", "skills/demo/old.ts"]);
+  });
+
+  it("validates both paths of a rename and complete skill deletion", () => {
+    const config = fixture();
+    expect(validateChangedSkills(config, [
+      { path: "skills/demo/new-name.ts", status: "R" },
+      { path: "skills/demo/old-name.ts", status: "D" },
+    ])).toMatchObject({ ok: true, skillNames: ["demo"] });
+    mkdirSync(join(config.skillsPath, "gone"), { recursive: true });
+    writeFileSync(join(config.skillsPath, "gone", "SKILL.md"), "---\nname: gone\ndescription: Gone\n---\n");
+    unlinkSync(join(config.skillsPath, "gone", "SKILL.md"));
+    expect(validateChangedSkills(config, [
+      { path: "skills/gone/SKILL.md", status: "D" },
+      { path: "skills/gone/assets.ts", status: "D" },
+    ])).toMatchObject({ ok: true, skillNames: ["gone"] });
   });
 
   it("returns a fixed no changes error", () => {

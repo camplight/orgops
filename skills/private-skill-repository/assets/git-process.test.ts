@@ -4,8 +4,11 @@ import { createGitRunner } from "./git-process";
 describe("createGitRunner", () => {
   it("invokes git with shell disabled and redacts authentication material", async () => {
     const calls: Array<{ args: string[]; options: any }> = [];
+    const removed: string[] = [];
     const runner = createGitRunner({
       env: { PATH: "/bin", PRIVATE_SKILLS_GIT_TOKEN: "fixture-token", PRIVATE_SKILLS_GIT_USERNAME: "fixture-user" },
+      mkdtempImpl: async () => "/tmp/success-askpass", writeFileImpl: async () => undefined, chmodImpl: async () => undefined,
+      rmImpl: async (path) => { removed.push(path); },
       spawnImpl: ((_: string, args: string[], options: any) => {
         calls.push({ args, options });
         const listeners: Record<string, (...args: any[]) => void> = {};
@@ -23,6 +26,7 @@ describe("createGitRunner", () => {
     expect(calls[0].args).not.toContain("fixture-token");
     expect(calls[0].options.shell).toBe(false);
     expect(result.stdout).toBe("[REDACTED]");
+    expect(removed).toEqual(["/tmp/success-askpass"]);
   });
 
   it("preserves host environment and disables terminal prompts without a token", async () => {
@@ -30,6 +34,7 @@ describe("createGitRunner", () => {
     const runner = createGitRunner({
       env: { PATH: "/host/bin", HOST_GIT_HELPER: "available" },
       spawnImpl: ((_: string, _args: string[], options: any) => {
+        expect(options.shell).toBe(false);
         received = options;
         const listeners: Record<string, (...args: any[]) => void> = {};
         const child: any = {
@@ -57,7 +62,8 @@ describe("createGitRunner", () => {
       writeFileImpl: async (_path, data, options) => { script = data; expect(options.mode).toBe(0o700); },
       chmodImpl: async (_path, value) => expect(value).toBe(0o700),
       rmImpl: async (path) => { removed.push(path); },
-      spawnImpl: ((_: string, _args: string[], _options: any) => {
+      spawnImpl: ((_: string, _args: string[], options: any) => {
+        expect(options.shell).toBe(false);
         const listeners: Record<string, (...args: any[]) => void> = {};
         const child: any = { stdout: { on: () => undefined }, stderr: { on: (e: string, cb: (...a: any[]) => void) => { listeners[`stderr:${e}`] = cb; } }, on: (e: string, cb: (...a: any[]) => void) => { listeners[e] = cb; }, kill: () => true };
         queueMicrotask(() => { listeners["stderr:data"]?.(Buffer.from("HTTP 403 secret-token /tmp/orgops-askpass-fixture")); listeners.close?.(1, null); });
@@ -80,7 +86,8 @@ describe("createGitRunner", () => {
     const runner = createGitRunner({
       env: { PRIVATE_SKILLS_GIT_TOKEN: "token" },
       mkdtempImpl: async () => "/tmp/askpass", writeFileImpl: async () => undefined, chmodImpl: async () => undefined, rmImpl: async (path) => { removed.push(path); },
-      spawnImpl: ((_: string, _args: string[], _options: any) => {
+      spawnImpl: ((_: string, _args: string[], options: any) => {
+        expect(options.shell).toBe(false);
         const listeners: Record<string, (...args: any[]) => void> = {};
         const child: any = { stdout: { on: (e: string, cb: (...a: any[]) => void) => { listeners[`stdout:${e}`] = cb; } }, stderr: { on: () => undefined }, on: (e: string, cb: (...a: any[]) => void) => { listeners[e] = cb; }, kill: () => { killCount += 1; return true; } };
         queueMicrotask(() => listeners["stdout:data"]?.(huge));
@@ -101,7 +108,7 @@ describe("createGitRunner", () => {
       env: { PRIVATE_SKILLS_GIT_TOKEN: "timeout-token" },
       mkdtempImpl: async () => "/tmp/timeout-askpass", writeFileImpl: async () => undefined, chmodImpl: async () => undefined,
       rmImpl: async (path) => { removed.push(path); },
-      spawnImpl: (() => ({ stdout: { on: () => undefined }, stderr: { on: () => undefined }, on: () => undefined, kill: () => { killed = true; return true; } })) as any,
+      spawnImpl: ((_: string, _args: string[], options: any) => { expect(options.shell).toBe(false); return { stdout: { on: () => undefined }, stderr: { on: () => undefined }, on: () => undefined, kill: () => { killed = true; return true; } }; }) as any,
     });
     const result = await runner.run(["fetch"], { timeoutMs: 1 });
     expect(result.code).toBe("GIT_TIMEOUT");

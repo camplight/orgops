@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runRepositoryCommand } from "./manage-repository";
@@ -55,7 +55,18 @@ describe("runRepositoryCommand", () => {
     execFileSync("git", ["add", "--", "skills/demo/SKILL.md"], { cwd: seed });
     execFileSync("git", ["commit", "-m", "remote update"], { cwd: seed });
     execFileSync("git", ["push", "origin", "main"], { cwd: seed });
-    writeFileSync(join(checkout, "skills", "demo", "SKILL.md"), "---\nname: demo\ndescription: Local\n---\n");
+    expect(await runRepositoryCommand(["sync"], { env })).toMatchObject({ ok: true });
+    writeFileSync(join(checkout, "skills", "demo", "SKILL.md"), "---\nname: demo\ndescription: Local commit\n---\n");
+    execFileSync("git", ["add", "--", "skills/demo/SKILL.md"], { cwd: checkout });
+    execFileSync("git", ["commit", "-m", "local divergence"], { cwd: checkout });
+    execFileSync("git", ["fetch", "origin", "main"], { cwd: seed });
+    execFileSync("git", ["merge", "--ff-only", "origin/main"], { cwd: seed });
+    writeFileSync(join(seed, "skills", "demo", "SKILL.md"), "---\nname: demo\ndescription: Remote divergence\n---\n");
+    execFileSync("git", ["add", "--", "skills/demo/SKILL.md"], { cwd: seed });
+    execFileSync("git", ["commit", "-m", "remote divergence"], { cwd: seed });
+    execFileSync("git", ["push", "origin", "main"], { cwd: seed });
+    expect(await runRepositoryCommand(["sync"], { env })).toMatchObject({ ok: false, code: "DIVERGED" });
+    writeFileSync(join(checkout, "skills", "demo", "SKILL.md"), "---\nname: demo\ndescription: Local uncommitted\n---\n");
     expect(await runRepositoryCommand(["publish", "--direct", "--message", "must refuse divergence"], { env })).toMatchObject({ ok: false, code: "DIVERGED" });
     writeFileSync(join(checkout, "README.md"), "not allowed");
     expect(await runRepositoryCommand(["validate"], { env })).toMatchObject({ ok: false, code: "PATH_OUTSIDE_SKILLS" });
@@ -90,7 +101,39 @@ describe("runRepositoryCommand", () => {
     execFileSync("git", ["fetch", "origin", "main"], { cwd: checkout });
     try { execFileSync("git", ["merge", "origin/main"], { cwd: checkout, stdio: "ignore" }); } catch { /* expected conflict */ }
     const env = { PRIVATE_SKILLS_REPO_URL: remote, PRIVATE_SKILLS_REPO_PATH: checkout, PRIVATE_SKILLS_REPO_BRANCH: "main", ORGOPS_SKILL_ROOTS: join(checkout, "skills") };
+    expect(await runRepositoryCommand(["status"], { env })).toMatchObject({ ok: true, data: { remote: "origin", conflicted: true, clean: false } });
     expect(await runRepositoryCommand(["sync"], { env })).toMatchObject({ ok: false, code: "CONFLICTED" });
+  });
+
+  it("never deletes a replacement lock during atomic release", async () => {
+    const root = mkdtempSync(join(tmpdir(), "orgops-lock-race-"));
+    const checkout = join(root, "checkout");
+    const lock = `${checkout}.orgops-private-skills.lock`;
+    const env = { PRIVATE_SKILLS_REPO_URL: join(root, "remote.git"), PRIVATE_SKILLS_REPO_PATH: checkout, PRIVATE_SKILLS_REPO_BRANCH: "main", ORGOPS_SKILL_ROOTS: join(checkout, "skills") };
+    const lockRename = async (from: string, to: string) => {
+      renameSync(from, to);
+      mkdirSync(from);
+      writeFileSync(join(from, "owner"), "foreign-owner");
+    };
+    await runRepositoryCommand(["sync"], { env, lockRename });
+    expect(() => writeFileSync(join(lock, "sentinel"), "still-owned")).not.toThrow();
+  });
+
+  it("leaves a foreign quarantined lock and returns bounded ownership failure", async () => {
+    const root = mkdtempSync(join(tmpdir(), "orgops-lock-foreign-"));
+    const checkout = join(root, "checkout");
+    const lock = `${checkout}.orgops-private-skills.lock`;
+    const env = { PRIVATE_SKILLS_REPO_URL: join(root, "remote.git"), PRIVATE_SKILLS_REPO_PATH: checkout, PRIVATE_SKILLS_REPO_BRANCH: "main", ORGOPS_SKILL_ROOTS: join(checkout, "skills") };
+    let quarantine = "";
+    const lockRename = async (from: string, to: string) => {
+      quarantine = to;
+      renameSync(from, to);
+      writeFileSync(join(to, "owner"), "foreign-owner");
+    };
+    const result = await runRepositoryCommand(["sync"], { env, lockRename });
+    expect(result).toMatchObject({ ok: false, code: "LOCK_OWNERSHIP" });
+    expect(readFileSync(join(quarantine, "owner"), "utf8")).toBe("foreign-owner");
+    expect(() => writeFileSync(join(lock, "sentinel"), "replacement")).toThrow();
   });
 
   it("refuses a lock owned by another process", async () => {

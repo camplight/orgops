@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, rmdir, unlink, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rename, rmdir, unlink, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { parseRepositoryConfig, normalizeRemoteUrl, RepositoryError, isSafeBranchName, type RepositoryConfig, type RepositoryErrorCode } from "./repository-config";
@@ -15,6 +15,7 @@ type CommandOptions = {
   git?: GitRunner;
   lockMkdir?: (path: string) => Promise<void>;
   lockRm?: (path: string) => Promise<void>;
+  lockRename?: (from: string, to: string) => Promise<void>;
 };
 
 const safeMessages: Record<RepositoryErrorCode, string> = {
@@ -31,6 +32,7 @@ const safeMessages: Record<RepositoryErrorCode, string> = {
   GIT_FAILED: "Git operation failed.",
   NO_CHANGES: "No skill changes found.",
   DIRECT_REQUIRED: "Direct publication requires --direct.",
+  LOCK_OWNERSHIP: "Repository lock ownership changed.",
 };
 
 function fail(operation: string, code: RepositoryErrorCode): RepositoryCommandResult {
@@ -90,6 +92,7 @@ async function acquireLock(config: RepositoryConfig, options: CommandOptions): P
   const token = randomUUID();
   const mkdirImpl = options.lockMkdir ?? ((path: string) => mkdir(path));
   const removeImpl = options.lockRm ?? ((path: string) => rmdir(path));
+  const renameImpl = options.lockRename ?? ((from: string, to: string) => rename(from, to));
   let created = false;
   try {
     await mkdirImpl(lock);
@@ -106,12 +109,21 @@ async function acquireLock(config: RepositoryConfig, options: CommandOptions): P
   return async () => {
     if (released) return;
     released = true;
+    const quarantine = `${lock}.releasing-${token}`;
     try {
-      const owner = await readFile(marker, "utf8");
-      if (owner !== token) return;
-      await unlink(marker);
-      await removeImpl(lock);
-    } catch { /* ownership changed or lock already recovered; never delete recursively */ }
+      // Rename is the ownership handoff: a replacement canonical lock cannot be removed by us.
+      await renameImpl(lock, quarantine);
+    } catch { throw new RepositoryError("LOCK_OWNERSHIP"); }
+    try {
+      const quarantineMarker = `${quarantine}/owner`;
+      const owner = await readFile(quarantineMarker, "utf8");
+      if (owner !== token) throw new RepositoryError("LOCK_OWNERSHIP");
+      await unlink(quarantineMarker);
+      await removeImpl(quarantine);
+    } catch (error) {
+      if (error instanceof RepositoryError) throw error;
+      throw new RepositoryError("LOCK_OWNERSHIP");
+    }
   };
 }
 
