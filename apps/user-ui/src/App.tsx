@@ -231,11 +231,59 @@ function traceDetail(event: EventRow) {
       .filter(Boolean)
       .join("\n");
   }
-  if (event.type === "agent.turn.failed") {
-    const error = typeof payload.error === "string" ? payload.error : "";
-    return error || "No failure details";
-  }
   return shortJson(event.payload);
+}
+
+function turnFailureText(event: EventRow) {
+  const payload = event.payload && typeof event.payload === "object" ? (event.payload as Record<string, unknown>) : {};
+  const error = typeof payload.error === "string" ? payload.error.trim() : "";
+  return error || event.lastError?.trim() || "Agent turn failed.";
+}
+
+// Raw failure text comes from provider SDKs and external CLIs we don't control,
+// so rules match loose keywords. Order matters: the first matching rule wins.
+const TURN_FAILURE_RULES: Array<{ pattern: RegExp; title: string; message: string }> = [
+  {
+    pattern: /api[ _-]?key|authenticat|unauthori[sz]ed|\b40[13]\b/i,
+    title: "Authentication failed",
+    message: "The agent could not connect to its AI service because access is not configured. Contact your administrator."
+  },
+  {
+    pattern: /invalid modelid|unsupported provider|nosuchmodel|model\b.*\b(does not exist|not found)|unsupported wrapped harness|missing wrappedconfig/i,
+    title: "Invalid configuration",
+    message: "The agent is not set up correctly and cannot respond. Contact your administrator."
+  },
+  {
+    pattern: /\b429\b|rate limit|quota|insufficient|credit balance/i,
+    title: "Usage limit reached",
+    message:
+      "The agent's AI service has reached its usage limit. Try again later. If the problem persists, contact your administrator."
+  },
+  {
+    pattern: /\b(500|502|503|504|529)\b|overloaded|service unavailable|econnrefused|enotfound|fetch failed|cannot connect|retryerror/i,
+    title: "Service unavailable",
+    message: "The agent's AI service is temporarily unavailable. Try again in a few minutes."
+  },
+  {
+    pattern: /timed out|timeout/i,
+    title: "Request timed out",
+    message: "The agent took too long to respond. Try again or simplify your request."
+  },
+  {
+    pattern: /wrapped (runtime|setup)|source (checkout|update) failed|terminated unexpectedly/i,
+    title: "Runtime error",
+    message: "The agent's runtime stopped with an error. Contact your administrator."
+  }
+];
+
+function classifyTurnFailure(rawText: string) {
+  const rule = TURN_FAILURE_RULES.find((candidate) => candidate.pattern.test(rawText));
+  return {
+    title: rule?.title ?? "Unexpected error",
+    message:
+      rule?.message ??
+      "The agent could not complete your request. Try again. If the problem persists, contact your administrator."
+  };
 }
 
 function traceChipCode(event: EventRow) {
@@ -618,7 +666,7 @@ export default function App() {
     const flushTraceBuffer = () => {
       if (traceBuffer.length === 0) return;
       const tone: "agent" | "system" = traceBuffer.some(
-        (entry) => entry.type === "agent.turn.failed" || entry.type === "tool.failed"
+        (entry) => entry.type === "tool.failed" || entry.type === "wrapper.turn.failed"
       )
         ? "system"
         : "agent";
@@ -633,7 +681,7 @@ export default function App() {
     };
 
     for (const event of visibleTimelineEvents) {
-      if (event.type === "message.created") {
+      if (event.type === "message.created" || event.type === "agent.turn.failed") {
         flushTraceBuffer();
         items.push({ kind: "message", id: event.id, event });
       } else {
@@ -644,6 +692,14 @@ export default function App() {
     return items;
   }, [visibleTimelineEvents]);
   const isConversationEmpty = !messagesLoading && timelineItems.length === 0;
+
+  const offlineAgentNames = useMemo(
+    () =>
+      (activeChannel?.participants ?? [])
+        .filter((participant) => participantAgentStatus(participant, agents) === "off")
+        .map((participant) => participant.subscriberId),
+    [activeChannel, agents]
+  );
 
   const agentIsThinking = useMemo(() => {
     let activeTurns = 0;
@@ -2161,6 +2217,25 @@ export default function App() {
               </div>
             ) : (
               timelineItems.map((item) => {
+                if (item.kind === "message" && item.event.type === "agent.turn.failed") {
+                  const event = item.event;
+                  const rawText = turnFailureText(event);
+                  const failure = classifyTurnFailure(rawText);
+                  return (
+                    <article className="message message-error" key={item.id}>
+                      <div className="message-meta">
+                        <strong>System · {sourceLabel(event.source)}</strong>
+                        <span>{formatTime(event.createdAt)}</span>
+                      </div>
+                      <h3 className="message-error-title">{failure.title}</h3>
+                      <p>{failure.message}</p>
+                      <details className="turn-failure-details">
+                        <summary>Technical details</summary>
+                        <pre>{rawText}</pre>
+                      </details>
+                    </article>
+                  );
+                }
                 if (item.kind === "message") {
                   const event = item.event;
                   const role = messageRole(event.source);
@@ -2281,6 +2356,12 @@ export default function App() {
             className="composer-file-input"
             onChange={handlePickFiles}
           />
+          {offlineAgentNames.length > 0 ? (
+            <p className="composer-offline-hint">
+              {offlineAgentNames.join(", ")} {offlineAgentNames.length === 1 ? "is" : "are"} off — will reply once
+              started.
+            </p>
+          ) : null}
           {pendingAttachments.length > 0 ? (
             <div className="composer-attachments">
               {pendingAttachments.map((attachment) => (

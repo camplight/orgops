@@ -867,6 +867,48 @@ button {
   background: #fffbeb;
 }
 
+.message-error {
+  border-color: #fecdd3;
+  background: #fff1f2;
+}
+
+.message-error .message-meta strong,
+.message-error-title {
+  color: #be123c;
+}
+
+.message-error-title {
+  margin: 8px 0 0;
+  font-size: 16px;
+  font-weight: 900;
+}
+
+.message.message-error p {
+  margin-top: 4px;
+}
+
+.turn-failure-details {
+  margin-top: 10px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.turn-failure-details summary {
+  width: fit-content;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.turn-failure-details pre {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.04);
+  color: #475569;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .message-meta {
   display: flex;
   justify-content: space-between;
@@ -1048,6 +1090,14 @@ button {
 
 .composer-file-input {
   display: none;
+}
+
+.composer-offline-hint {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #b45309;
+  font-size: 13px;
+  font-weight: 800;
 }
 
 .composer-attachments {
