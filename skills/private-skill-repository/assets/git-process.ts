@@ -92,11 +92,20 @@ export function createGitRunner(deps: GitRunnerDependencies = {}): GitRunner {
             void cleanup().finally(() => resolve({ ...result, stdout: redact(result.stdout, secrets), stderr: redact(result.stderr, secrets) }));
           };
           const append = (target: "stdout" | "stderr", chunk: Buffer | string) => {
-            const value = String(chunk);
-            if (target === "stdout") stdout += value; else stderr += value;
-            if (Buffer.byteLength(stdout) > OUTPUT_LIMIT || Buffer.byteLength(stderr) > OUTPUT_LIMIT) {
+            const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+            const current = target === "stdout" ? Buffer.byteLength(stdout) : Buffer.byteLength(stderr);
+            const remaining = OUTPUT_LIMIT - current;
+            if (remaining <= 0) {
               try { child?.kill("SIGKILL"); } catch { /* bounded */ }
-              finish(failure("GIT_FAILED", stdout.slice(0, OUTPUT_LIMIT), stderr.slice(0, OUTPUT_LIMIT), secrets));
+              finish(failure("GIT_FAILED", stdout, stderr, secrets));
+              return;
+            }
+            const bounded = bytes.length > remaining ? bytes.subarray(0, remaining) : bytes;
+            const value = bounded.toString();
+            if (target === "stdout") stdout += value; else stderr += value;
+            if (bytes.length > remaining) {
+              try { child?.kill("SIGKILL"); } catch { /* bounded */ }
+              finish(failure("GIT_FAILED", stdout, stderr, secrets));
             }
           };
           child?.stdout?.on("data", (chunk) => append("stdout", chunk));
@@ -106,7 +115,7 @@ export function createGitRunner(deps: GitRunnerDependencies = {}): GitRunner {
             if (settled) return;
             if (code === 0 && !signal) finish({ ok: true, code: undefined, stdout: redact(stdout, secrets), stderr: redact(stderr, secrets), exitCode: code });
             else {
-              const auth = /authentication failed|could not read username|permission denied|access denied/i.test(stderr);
+              const auth = /authentication failed|could not read (?:username|password)|permission denied|access denied|unauthori[sz]ed|forbidden|terminal prompts disabled|no such device or address|\b401\b|\b403\b/i.test(stderr);
               finish(failure(auth ? "AUTH_FAILED" : "GIT_FAILED", stdout, stderr, secrets));
             }
           });

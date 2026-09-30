@@ -48,6 +48,8 @@ function validBranch(branch: string): boolean {
     !/[\s\\\x00-\x1f\x7f]/.test(branch) &&
     !branch.includes("..") &&
     !branch.includes("@{") &&
+    branch !== "@" &&
+    !/[~^:?*\[\]]/.test(branch) &&
     !branch.split("/").some((part) => part.length === 0 || part.startsWith(".") || part.endsWith("."));
 }
 

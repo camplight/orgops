@@ -30,7 +30,7 @@ describe("parseRepositoryConfig", () => {
     expect(() => parseRepositoryConfig(env)).toThrowError(/CONFIG_INVALID/);
   });
 
-  it.each(["-main", "bad branch", "bad..branch", "main@{x}", "main/", "main.lock", "main\\x"]) (
+  it.each(["-main", "bad branch", "bad..branch", "main@{x}", "main/", "main.lock", "main\\x", "main~x", "main^x", "main:x", "main?x", "main*x", "main[x]", "@"]) (
     "rejects unsafe branch %s",
     (branch) => expect(() => parseRepositoryConfig({ ...base, PRIVATE_SKILLS_REPO_BRANCH: branch })).toThrowError(/CONFIG_INVALID/),
   );

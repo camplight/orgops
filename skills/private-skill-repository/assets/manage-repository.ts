@@ -1,4 +1,5 @@
-import { access, mkdir, rm } from "node:fs/promises";
+import { access, mkdir, readFile, rmdir, unlink, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { parseRepositoryConfig, normalizeRemoteUrl, RepositoryError, isSafeBranchName, type RepositoryConfig, type RepositoryErrorCode } from "./repository-config";
 import { createGitRunner, type GitResult, type GitRunner } from "./git-process";
@@ -69,8 +70,10 @@ async function worktree(config: RepositoryConfig, git: GitRunner) {
   const branch = requireGit(await run(git, ["branch", "--show-current"], config.repositoryPath));
   let ahead = 0;
   let behind = 0;
+  let upstreamName: string | undefined;
   const upstream = await run(git, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], config.repositoryPath);
   if (upstream.ok) {
+    upstreamName = upstream.stdout.trim();
     const counts = await run(git, ["rev-list", "--left-right", "--count", "HEAD...@{upstream}"], config.repositoryPath);
     if (counts.ok) {
       const values = counts.stdout.trim().split(/\s+/).map(Number);
@@ -78,22 +81,37 @@ async function worktree(config: RepositoryConfig, git: GitRunner) {
       behind = Number.isFinite(values[1]) ? values[1] : 0;
     }
   }
-  return { entries, branch, clean: entries.length === 0, conflicted, ahead, behind };
+  return { entries, branch, clean: entries.length === 0, conflicted, ahead, behind, remote: "origin", upstream: upstreamName };
 }
 
 async function acquireLock(config: RepositoryConfig, options: CommandOptions): Promise<() => Promise<void>> {
   const lock = `${config.repositoryPath}.orgops-private-skills.lock`;
+  const marker = `${lock}/owner`;
+  const token = randomUUID();
   const mkdirImpl = options.lockMkdir ?? ((path: string) => mkdir(path));
-  const rmImpl = options.lockRm ?? ((path: string) => rm(path, { recursive: true, force: true }));
-  try { await mkdirImpl(lock); } catch (error) {
+  const removeImpl = options.lockRm ?? ((path: string) => rmdir(path));
+  let created = false;
+  try {
+    await mkdirImpl(lock);
+    created = true;
+    await writeFile(marker, token, { mode: 0o600 });
+  } catch (error) {
+    if (created) {
+      try { await rmdir(lock); } catch { /* bounded cleanup of our empty lock */ }
+    }
     if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new RepositoryError("BUSY");
     throw new RepositoryError("GIT_FAILED");
   }
-  let owned = true;
+  let released = false;
   return async () => {
-    if (!owned) return;
-    owned = false;
-    try { await rmImpl(lock); } catch { /* never remove an unknown lock */ }
+    if (released) return;
+    released = true;
+    try {
+      const owner = await readFile(marker, "utf8");
+      if (owner !== token) return;
+      await unlink(marker);
+      await removeImpl(lock);
+    } catch { /* ownership changed or lock already recovered; never delete recursively */ }
   };
 }
 
@@ -128,6 +146,18 @@ async function synchronize(config: RepositoryConfig, git: GitRunner): Promise<vo
   else await cloneRepository(config, git);
 }
 
+async function inspectPublishRemote(config: RepositoryConfig, git: GitRunner, branch: string): Promise<void> {
+  const fetched = await run(git, ["fetch", "--prune", "origin", branch], config.repositoryPath);
+  if (!fetched.ok && !/couldn't find remote ref|no such ref/i.test(fetched.stderr)) throw gitError(fetched);
+  const remoteRef = await run(git, ["show-ref", "--verify", "--quiet", `refs/remotes/origin/${branch}`], config.repositoryPath);
+  if (!remoteRef.ok) return;
+  const counts = await run(git, ["rev-list", "--left-right", "--count", `HEAD...origin/${branch}`], config.repositoryPath);
+  if (!counts.ok) throw gitError(counts);
+  const values = counts.stdout.trim().split(/\s+/).map(Number);
+  const behind = Number.isFinite(values[1]) ? values[1] : 0;
+  if (behind > 0) throw new RepositoryError("DIVERGED");
+}
+
 async function changed(config: RepositoryConfig, git: GitRunner) {
   const state = await worktree(config, git);
   if (state.conflicted) throw new RepositoryError("CONFLICTED");
@@ -149,7 +179,7 @@ export async function runRepositoryCommand(input: string[] | string, options: Co
     const git = options.git ?? createGitRunner({ env: options.env });
     if (operation === "status") {
       const state = await worktree(config, git);
-      return { ok: true, operation, data: { branch: state.branch, clean: state.clean, conflicted: state.conflicted, ahead: state.ahead, behind: state.behind } };
+      return { ok: true, operation, data: { branch: state.branch, remote: state.remote, upstream: state.upstream ?? null, clean: state.clean, conflicted: state.conflicted, ahead: state.ahead, behind: state.behind } };
     }
     if (!["sync", "begin", "validate", "publish"].includes(operation)) return fail(operation, "CONFIG_INVALID");
     if (operation === "sync") {
@@ -186,6 +216,7 @@ export async function runRepositoryCommand(input: string[] | string, options: Co
       const branch = result.state.branch;
       if (branch === config.defaultBranch && !direct) throw new RepositoryError("DIRECT_REQUIRED");
       if (direct && branch !== config.defaultBranch) throw new RepositoryError("DIRECT_REQUIRED");
+      await inspectPublishRemote(config, git, branch);
       const added = await run(git, ["add", "--", ...result.validation.paths], config.repositoryPath);
       if (!added.ok) throw gitError(added);
       const committed = await run(git, ["commit", "-m", message], config.repositoryPath);
