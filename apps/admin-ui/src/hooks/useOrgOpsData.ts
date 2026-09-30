@@ -13,6 +13,9 @@ import type {
   SecretRow,
   IntegrationKey,
   SkillMeta,
+  SkillConflict,
+  SkillRootDiagnostic,
+  SkillDiscovery,
   RunnerNode,
   Team,
   Thread,
@@ -45,6 +48,8 @@ export function useOrgOpsData(authenticated: boolean) {
   const [events, setEvents] = useState<EventRow[]>([]);
   const [eventTypes, setEventTypes] = useState<EventTypeInfo[]>([]);
   const [skills, setSkills] = useState<SkillMeta[]>([]);
+  const [skillConflicts, setSkillConflicts] = useState<SkillConflict[]>([]);
+  const [skillDiagnostics, setSkillDiagnostics] = useState<SkillRootDiagnostic[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
   const [humans, setHumans] = useState<Human[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -76,7 +81,12 @@ export function useOrgOpsData(authenticated: boolean) {
     apiJson<RunnerNode[]>("/api/runners").then(setRunners);
   }, []);
   const refreshSkills = useCallback(
-    () => apiJson<SkillMeta[]>("/api/skills").then(setSkills),
+    () =>
+      apiJson<SkillDiscovery>("/api/skills").then((discovery) => {
+        setSkills(discovery.skills ?? []);
+        setSkillConflicts(discovery.conflicts ?? []);
+        setSkillDiagnostics(discovery.diagnostics ?? []);
+      }),
     [],
   );
   const refreshEvents = useCallback(
@@ -223,6 +233,8 @@ export function useOrgOpsData(authenticated: boolean) {
     eventTypes,
     setEventTypes,
     skills,
+    skillConflicts,
+    skillDiagnostics,
     teams,
     setTeams,
     humans,

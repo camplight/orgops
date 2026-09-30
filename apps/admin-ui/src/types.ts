@@ -97,12 +97,34 @@ export type EventRow = {
   lastError?: string;
 };
 
+export type SkillRoot = {
+  path: string;
+  kind: "BUILT_IN" | "EXTERNAL";
+};
+
 export type SkillMeta = {
   name: string;
   description: string;
   license?: string;
   metadata?: Record<string, unknown>;
   path: string;
+  root: SkillRoot;
+};
+
+export type SkillConflict = {
+  name: string;
+  paths: string[];
+};
+
+export type SkillRootDiagnostic = {
+  path: string;
+  code: "MISSING" | "UNREADABLE";
+};
+
+export type SkillDiscovery = {
+  skills: SkillMeta[];
+  conflicts: SkillConflict[];
+  diagnostics: SkillRootDiagnostic[];
 };
 
 export type EventTypeInfo = {

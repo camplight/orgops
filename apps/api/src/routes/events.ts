@@ -1,6 +1,6 @@
 import type { Hono } from "hono";
 import { openDb, schema, type OrgOpsDrizzleDb } from "@orgops/db";
-import type { SkillMeta, SkillRoot } from "@orgops/skills";
+import type { SkillMeta, SkillRoot, SkillDiscovery } from "@orgops/skills";
 import type { EventShapeDefinition } from "@orgops/schemas";
 import { z } from "zod";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -40,8 +40,8 @@ type EventsDeps = {
   EventSchema: {
     safeParse: (data: unknown) => { success: boolean; data?: any };
   };
-  SKILL_ROOT: SkillRoot;
-  listSkills: (root: SkillRoot) => SkillMeta[];
+  SKILL_ROOTS: SkillRoot[];
+  discoverSkills: (roots: SkillRoot[]) => SkillDiscovery;
   loadSkillEventShapes: (
     skills: SkillMeta[],
   ) => Promise<{ shapes: EventShapeDefinition[]; errors: Array<{ skill: string; error: string }> }>;
@@ -73,8 +73,8 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     eventRowToApi,
     insertEvent,
     publishEventRow,
-    SKILL_ROOT,
-    listSkills,
+    SKILL_ROOTS,
+    discoverSkills,
     loadSkillEventShapes,
     getCoreEventShapes,
     validateEventAgainstShapes,
@@ -119,7 +119,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     if (eventShapesCache && eventShapesCache.expiresAt > now) {
       return eventShapesCache;
     }
-    const availableSkills = listSkills(SKILL_ROOT);
+    const availableSkills = discoverSkills(SKILL_ROOTS).skills;
     const loaded = await loadSkillEventShapes(availableSkills);
     eventShapesCache = {
       expiresAt: now + EVENT_SHAPES_CACHE_TTL_MS,

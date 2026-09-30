@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { createDrizzleDb, migrate, openDb, schema } from "@orgops/db";
 import { createApp } from "./app";
+import type { SkillRoot } from "@orgops/skills";
 
 type TestApp = ReturnType<typeof createApp>["app"];
 
@@ -1341,6 +1342,106 @@ describe("api app", () => {
 
     rmSync(dataDir, { recursive: true, force: true });
     rmSync(projectRoot, { recursive: true, force: true });
+  });
+
+  it("returns external skills and omits duplicate skills from discovery", async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), "orgops-project-"));
+    const externalRoot = mkdtempSync(join(tmpdir(), "orgops-skills-"));
+    const duplicateRoot = mkdtempSync(join(tmpdir(), "orgops-skills-"));
+    const writeSkill = (root: string, name: string) => {
+      const skillDir = join(root, name);
+      mkdirSync(skillDir, { recursive: true });
+      writeFileSync(
+        join(skillDir, "SKILL.md"),
+        `---\nname: ${name}\ndescription: ${name} fixture\n---\n`,
+      );
+    };
+    writeSkill(join(projectRoot, "skills"), "built-in");
+    writeSkill(externalRoot, "private");
+    writeSkill(externalRoot, "duplicate");
+    writeSkill(duplicateRoot, "duplicate");
+
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const skillRoots: SkillRoot[] = [
+      { path: join(projectRoot, "skills"), kind: "BUILT_IN" },
+      { path: externalRoot, kind: "EXTERNAL" },
+      { path: duplicateRoot, kind: "EXTERNAL" },
+    ];
+    const { app } = createApp({ db, dataDir, skillRoots });
+
+    const response = await app.request("http://localhost/api/skills", {
+      headers: { "x-orgops-runner-token": "dev-runner-token" },
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      skills: Array<{ name: string; root: SkillRoot }>;
+      conflicts: Array<{ name: string; paths: string[] }>;
+      diagnostics: Array<{ path: string; code: string }>;
+    };
+    expect(body.skills.map((skill) => skill.name)).toEqual(["built-in", "private"]);
+    expect(body.skills.find((skill) => skill.name === "private")?.root.kind).toBe(
+      "EXTERNAL",
+    );
+    expect(body.conflicts).toEqual([
+      {
+        name: "duplicate",
+        paths: [join(externalRoot, "duplicate"), join(duplicateRoot, "duplicate")].sort(),
+      },
+    ]);
+    expect(body.diagnostics).toEqual([]);
+
+    rmSync(dataDir, { recursive: true, force: true });
+    rmSync(projectRoot, { recursive: true, force: true });
+    rmSync(externalRoot, { recursive: true, force: true });
+    rmSync(duplicateRoot, { recursive: true, force: true });
+  });
+
+  it("accepts events from external skill shapes", async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), "orgops-project-"));
+    const externalRoot = mkdtempSync(join(tmpdir(), "orgops-skills-"));
+    const skillDir = join(externalRoot, "private");
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(
+      join(skillDir, "SKILL.md"),
+      "---\nname: private\ndescription: Private fixture skill\n---\n",
+    );
+    writeFileSync(
+      join(skillDir, "event-shapes.ts"),
+      "export const eventShapes = [{ type: 'private.created', description: 'Private event' }];\n",
+    );
+
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const { app } = createApp({
+      db: openDb(":memory:"),
+      dataDir,
+      skillRoots: [
+        { path: join(projectRoot, "skills"), kind: "BUILT_IN" },
+        { path: externalRoot, kind: "EXTERNAL" },
+      ],
+      runnerToken: "test-token",
+    });
+
+    const response = await app.request("http://localhost/api/events", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orgops-runner-token": "test-token",
+      },
+      body: JSON.stringify({
+        type: "private.created",
+        payload: { value: "external" },
+        source: "runner:test",
+      }),
+    });
+    expect(response.status).toBe(201);
+    expect((await response.json()) as { type: string }).toEqual(
+      expect.objectContaining({ type: "private.created" }),
+    );
+
+    rmSync(dataDir, { recursive: true, force: true });
+    rmSync(projectRoot, { recursive: true, force: true });
+    rmSync(externalRoot, { recursive: true, force: true });
   });
 
   it("invites humans with temporary passwords and enforces first-login reset", async () => {

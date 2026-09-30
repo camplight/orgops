@@ -28,9 +28,10 @@ import {
   validateEventAgainstShapes,
 } from "@orgops/schemas";
 import {
-  listSkills,
+  discoverSkills,
   loadSkillEventShapes,
-  resolveSkillRoot,
+  resolveSkillRoots,
+  type SkillRoot,
 } from "@orgops/skills";
 import { registerAuthRoutes } from "./routes/auth";
 import { registerModelsRoutes } from "./routes/models";
@@ -63,6 +64,7 @@ export type AppConfig = {
   runnerToken?: string;
   runnerApiUrl?: string;
   projectRoot?: string;
+  skillRoots?: SkillRoot[];
 };
 
 type AppEnv = {
@@ -114,7 +116,9 @@ export function createApp(config: AppConfig = {}) {
     `http://localhost:${process.env.PORT ?? "8787"}`;
 
   const FILES_DIR = join(PROJECT_ROOT, "files");
-  const SKILL_ROOT = resolveSkillRoot(PROJECT_ROOT);
+  const SKILL_ROOTS =
+    config.skillRoots ??
+    resolveSkillRoots(PROJECT_ROOT, process.env.ORGOPS_SKILL_ROOTS);
   let lastEventCreatedAt = 0;
 
   mkdirSync(FILES_DIR, { recursive: true });
@@ -465,8 +469,8 @@ export function createApp(config: AppConfig = {}) {
     insertEvent,
     publishEventRow: publishEvent,
     EventSchema,
-    SKILL_ROOT,
-    listSkills,
+    SKILL_ROOTS,
+    discoverSkills,
     loadSkillEventShapes: async (skills) => {
       const loaded = await loadSkillEventShapes(skills);
       return {
@@ -491,7 +495,11 @@ export function createApp(config: AppConfig = {}) {
     access,
   });
 
-  registerSkillsRoutes(app as any, { SKILL_ROOT, jsonResponse, listSkills });
+  registerSkillsRoutes(app as any, {
+    SKILL_ROOTS,
+    discoverSkills,
+    jsonResponse,
+  });
 
   registerSecretsRoutes(app as any, {
     orm,

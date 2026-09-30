@@ -1,16 +1,19 @@
 import type { Hono } from "hono";
-import type { SkillRoot } from "@orgops/skills";
+import type {
+  SkillDiscovery,
+  SkillRoot,
+} from "@orgops/skills";
 
 type SkillsDeps = {
-  SKILL_ROOT: SkillRoot;
+  SKILL_ROOTS: SkillRoot[];
+  discoverSkills: (roots: SkillRoot[]) => SkillDiscovery;
   jsonResponse: (c: any, data: unknown, status?: number) => Response;
-  listSkills: (root: SkillRoot) => any;
 };
 
 export function registerSkillsRoutes(app: Hono<any>, deps: SkillsDeps) {
-  const { SKILL_ROOT, jsonResponse, listSkills } = deps;
+  const { SKILL_ROOTS, discoverSkills, jsonResponse } = deps;
 
   app.get("/api/skills", (c) => {
-    return jsonResponse(c, listSkills(SKILL_ROOT));
+    return jsonResponse(c, discoverSkills(SKILL_ROOTS));
   });
 }

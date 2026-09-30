@@ -1217,7 +1217,13 @@ export default function App() {
         />
       )}
 
-      {activeScreen === "skills" && <SkillsScreen skills={data.skills} />}
+      {activeScreen === "skills" && (
+        <SkillsScreen
+          skills={data.skills}
+          conflicts={data.skillConflicts}
+          diagnostics={data.skillDiagnostics}
+        />
+      )}
 
       {activeScreen === "secrets" && (
         <SecretsScreen
