@@ -17,7 +17,7 @@ The implementation keeps built-in skills in the tracked OrgOps repository and lo
 - External roots must be absolute paths. Empty entries and exact duplicate paths are ignored. Missing or unreadable roots produce bounded discovery diagnostics without hiding valid roots.
 - API and runner processes use the same root resolver. A single-machine installation is the v1 deployment boundary; operators of split-host installations must configure and synchronize each host independently.
 - Skills from all roots appear in the existing Skills UI and agent selectors. No new administration screen or persisted source model is added.
-- Changes on disk are discovered on the next API request and next agent turn. There is no approval, installation, restart, watcher, or version-pinning lifecycle.
+- Changes on disk are discovered on the next `GET /api/skills` request and next agent turn. API event-shape validation retains its existing short cache TTL. There is no approval, installation, restart, watcher, or version-pinning lifecycle.
 - A skill name must be unique across every root. Every occurrence of a conflicting name is unavailable; root precedence never silently selects one.
 - One built-in `private-skill-repository` skill manages one configured repository per installation. Additional roots may be maintained manually.
 - An agent may operate the repository when the management skill is enabled and the agent has suitable Git authentication. An HTTPS token is an agent-private OrgOps secret; normal host Git/SSH authentication is also supported.
@@ -290,6 +290,6 @@ Update `.env.example`, API/runner READMEs, the root README deployment example, a
 - multi-root configuration;
 - single-machine boundary;
 - repository-management skill configuration and secret setup;
-- immediate next-request/next-turn refresh semantics;
+- immediate next-`GET /api/skills`/next-turn refresh semantics and the existing event-shape cache TTL;
 - duplicate-name behavior;
 - manual responsibility for split-host synchronization.
