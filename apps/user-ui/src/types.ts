@@ -41,6 +41,7 @@ export type EventRow = {
   channelId?: string;
   payload?: unknown;
   status?: string;
+  lastError?: string;
 };
 
 export type AuthMe = {
