@@ -63,22 +63,29 @@ describe("skills", () => {
         "utf-8",
       );
     };
-    writeSkill(externalRoot, "beta");
+    writeSkill(builtInRoot, "beta");
     writeSkill(builtInRoot, "alpha");
+    writeSkill(externalRoot, "gamma");
+    const originalReaddirSync = vi.mocked(fs.readdirSync).getMockImplementation()!;
+    const readdirSpy = vi.spyOn(fs, "readdirSync").mockImplementation((path, options) => {
+      const entries = originalReaddirSync(path, options) as unknown as Array<{ name: string; isDirectory: () => boolean }>;
+      return (resolve(String(path)) === resolve(builtInRoot) ? entries.reverse() : entries) as never;
+    });
 
     try {
       const result = discoverSkills([
         { path: builtInRoot, kind: "BUILT_IN" },
         { path: externalRoot, kind: "EXTERNAL" },
       ]);
-      expect(result.skills.map(({ name }) => name)).toEqual(["alpha", "beta"]);
-      expect(result.skills.find(({ name }) => name === "beta")?.root).toEqual({
+      expect(result.skills.map(({ name }) => name)).toEqual(["alpha", "beta", "gamma"]);
+      expect(result.skills.find(({ name }) => name === "gamma")?.root).toEqual({
         path: resolve(externalRoot),
         kind: "EXTERNAL",
       });
       expect(result.conflicts).toEqual([]);
       expect(result.diagnostics).toEqual([]);
     } finally {
+      readdirSpy.mockRestore();
       rmSync(builtInRoot, { recursive: true, force: true });
       rmSync(externalRoot, { recursive: true, force: true });
     }

@@ -423,6 +423,24 @@ Published topics include:
 
 ### Secrets / Skills
 
+Private skill repositories are separate operator-managed Git checkouts. Configure
+matching `ORGOPS_SKILL_ROOTS` values on the API and runner in v1, including the
+absolute `$PRIVATE_SKILLS_REPO_PATH/skills` root. `PRIVATE_SKILLS_REPO_URL`,
+`PRIVATE_SKILLS_REPO_PATH`, and `PRIVATE_SKILLS_REPO_BRANCH` identify the
+checkout managed by the built-in `private-skill-repository` skill. Its
+agent-private Git credentials are `PRIVATE_SKILLS_GIT_TOKEN` and optional
+`PRIVATE_SKILLS_GIT_USERNAME`; host SSH keys or a credential helper are the
+fallback. Host Git author name/email must already be configured for commits.
+
+The management workflow is status, sync, begin a review branch, edit only
+`$PRIVATE_SKILLS_REPO_PATH/skills`, validate, and review-first publish. Direct
+publication requires explicit human instruction. Busy, dirty, divergent,
+conflicted, mismatched, authentication-failed, or invalid repositories are
+reported without destructive recovery. Synchronization does not automatically
+enable a skill. The next `GET /api/skills` and next native turn refresh
+external discovery; duplicate names are unavailable. Split-host synchronization
+is operator-owned and there is no background sync.
+
 - secrets:
   - `GET /api/secrets`
   - `GET /api/secrets/keys`
@@ -433,8 +451,9 @@ Published topics include:
   - scope types: `public`, `team`, `private` (`package` remains supported as legacy compatibility scope)
   - env resolution precedence: `private > team > public > package(legacy)`
 - skills:
-  - `GET /api/skills`
-  - the API resolves the skill root from `ORGOPS_PROJECT_ROOT` when set, otherwise from the API module location; `createApp({ projectRoot })` provides an explicit embedding/test override
+  - `GET /api/skills` returns `{ skills, conflicts, diagnostics }`
+  - `skills` excludes duplicate names; `conflicts` identifies duplicate paths and `diagnostics` reports missing/unreadable roots without file contents
+  - the API resolves the built-in and configured external roots from `ORGOPS_PROJECT_ROOT` and `ORGOPS_SKILL_ROOTS`; `createApp({ projectRoot })` provides an explicit embedding/test override
 
 ### Runners
 
@@ -564,6 +583,9 @@ Security note: wrapped `source`, `setup.command`, and `runtime.command` are host
 - `ORGOPS_EVENT_SHAPES_CACHE_TTL_MS`
 - `ORGOPS_RUNNER_ONLINE_THRESHOLD_MS`
 - `ORGOPS_PROJECT_ROOT`
+- `ORGOPS_SKILL_ROOTS`
+- `PRIVATE_SKILLS_REPO_URL`, `PRIVATE_SKILLS_REPO_PATH`, `PRIVATE_SKILLS_REPO_BRANCH`
+- `PRIVATE_SKILLS_GIT_TOKEN`, `PRIVATE_SKILLS_GIT_USERNAME`
 - `ORGOPS_LLM_STUB`
 - `ORGOPS_LLM_CALL_TIMEOUT_MS`
 - `ORGOPS_HISTORY_MAX_EVENTS`, `ORGOPS_HISTORY_MAX_CHARS`

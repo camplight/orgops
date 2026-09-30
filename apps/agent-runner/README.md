@@ -27,6 +27,9 @@ npm run dev
 - `ORGOPS_RUNNER_TOKEN` (shared with API)
 - `ORGOPS_RUNNER_ID_FILE` (default: `.agent-runner-id`)
 - `ORGOPS_PROJECT_ROOT` (optional monorepo root override used for resolving skills/workspaces)
+- `ORGOPS_SKILL_ROOTS` (optional platform-delimited absolute external skill roots; must match the API in v1)
+- `PRIVATE_SKILLS_REPO_URL`, `PRIVATE_SKILLS_REPO_PATH`, and `PRIVATE_SKILLS_REPO_BRANCH` (private checkout managed by the built-in skill)
+- `PRIVATE_SKILLS_GIT_TOKEN` and optional `PRIVATE_SKILLS_GIT_USERNAME` (agent-private Git credentials)
 - `ORGOPS_LLM_STUB=1` to stub LLM calls
 - `OPENAI_API_KEY` (for OpenAI models)
 - `ANTHROPIC_API_KEY` (for Anthropic models)

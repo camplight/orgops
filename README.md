@@ -276,6 +276,28 @@ Built-in skills:
 
 For Playwright install steps, see the upstream docs: https://playwright.dev/docs/intro
 
+### Private skill repositories
+
+Private skills are an offline-friendly, operator-managed checkout. Configure the
+same `ORGOPS_SKILL_ROOTS` value (including the absolute
+`$PRIVATE_SKILLS_REPO_PATH/skills` root) for API and runner in v1. The built-in
+repository and private repository remain separate checkouts; synchronization
+never automatically enables a skill. After `sync`, the next `GET /api/skills`
+request and next runner turn refresh discovery. Duplicate names across roots are
+reported as conflicts and are unavailable.
+
+Enable the built-in `private-skill-repository` skill on the agent that manages
+the checkout. It receives only the narrow private `skills/` write root. Use its
+`status`, `sync`, `begin --branch ...`, `validate`, and review-first `publish`
+workflow; use `--direct` only with explicit human approval. Host Git author name
+and email must already be configured for commits.
+
+Git may authenticate with the agent-private `PRIVATE_SKILLS_GIT_TOKEN` and
+optional `PRIVATE_SKILLS_GIT_USERNAME`, or fall back to host SSH keys or a
+credential helper. Never print or persist credentials. If API and runner are on
+split hosts, synchronization and matching root configuration are operator-owned;
+the platform does not coordinate background sync.
+
 ## License
 
 This project is licensed under the Apache License 2.0.
