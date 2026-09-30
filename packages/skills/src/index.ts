@@ -1,10 +1,15 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { basename, join } from "node:path";
+import { existsSync, readFileSync, readdirSync, type Dirent } from "node:fs";
+import { basename, delimiter, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { EventShapeDefinition } from "@orgops/schemas";
 import YAML from "yaml";
 
-export type SkillMeta = {
+export type SkillRoot = {
+  path: string;
+  kind: "BUILT_IN" | "EXTERNAL";
+};
+
+export type SkillDocumentMeta = {
   name: string;
   description: string;
   license?: string;
@@ -12,8 +17,22 @@ export type SkillMeta = {
   path: string;
 };
 
-export type SkillRoot = {
+export type SkillMeta = SkillDocumentMeta & { root: SkillRoot };
+
+export type SkillConflict = {
+  name: string;
+  paths: string[];
+};
+
+export type SkillRootDiagnostic = {
   path: string;
+  code: "MISSING" | "UNREADABLE";
+};
+
+export type SkillDiscovery = {
+  skills: SkillMeta[];
+  conflicts: SkillConflict[];
+  diagnostics: SkillRootDiagnostic[];
 };
 
 const FRONTMATTER_RE = /^---\s*[\r\n]+([\s\S]*?)[\r\n]+---/;
@@ -43,11 +62,32 @@ function parseMetadata(value: unknown): Record<string, unknown> | undefined {
   return undefined;
 }
 
-export function resolveSkillRoot(projectRoot = process.cwd()): SkillRoot {
-  return { path: join(projectRoot, "skills") };
+export function resolveSkillRoots(
+  projectRoot: string,
+  configuredRoots = process.env.ORGOPS_SKILL_ROOTS ?? "",
+): SkillRoot[] {
+  const builtIn = resolve(projectRoot, "skills");
+  const seen = new Set([builtIn]);
+  const roots: SkillRoot[] = [{ path: builtIn, kind: "BUILT_IN" }];
+  for (const raw of configuredRoots.split(delimiter)) {
+    const value = raw.trim();
+    if (!value) continue;
+    if (!isAbsolute(value)) {
+      throw new Error("ORGOPS_SKILL_ROOTS entries must be absolute paths");
+    }
+    const path = resolve(value);
+    if (seen.has(path)) continue;
+    seen.add(path);
+    roots.push({ path, kind: "EXTERNAL" });
+  }
+  return roots;
 }
 
-export function loadSkillMeta(skillDir: string): SkillMeta | null {
+export function resolveSkillRoot(projectRoot = process.cwd()): SkillRoot {
+  return resolveSkillRoots(projectRoot, "")[0];
+}
+
+export function loadSkillMeta(skillDir: string): SkillDocumentMeta | null {
   const skillPath = join(skillDir, SKILL_FILENAME);
   if (!existsSync(skillPath)) return null;
   const content = readFileSync(skillPath, "utf-8");
@@ -73,19 +113,60 @@ export function loadSkillMeta(skillDir: string): SkillMeta | null {
   };
 }
 
-export function listSkills(root: SkillRoot): SkillMeta[] {
-  const seen = new Set<string>();
-  const skills: SkillMeta[] = [];
-  if (!existsSync(root.path)) return skills;
-  const entries = readdirSync(root.path, { withFileTypes: true });
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const skill = loadSkillMeta(join(root.path, entry.name));
-    if (!skill || seen.has(skill.name)) continue;
-    seen.add(skill.name);
-    skills.push(skill);
+export function discoverSkills(roots: SkillRoot[]): SkillDiscovery {
+  const byName = new Map<string, SkillMeta[]>();
+  const diagnostics: SkillRootDiagnostic[] = [];
+
+  for (const root of roots) {
+    let entries: Dirent<string>[];
+    try {
+      entries = readdirSync(root.path, { withFileTypes: true, encoding: "utf8" });
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException)?.code === "ENOENT"
+        ? "MISSING"
+        : "UNREADABLE";
+      diagnostics.push({ path: root.path, code });
+      continue;
+    }
+
+    for (const entry of entries
+      .filter((candidate) => candidate.isDirectory())
+      .sort((left, right) => left.name.localeCompare(right.name))) {
+      const skill = loadSkillMeta(join(root.path, entry.name));
+      if (!skill) continue;
+      const discovered = { ...skill, root };
+      const matches = byName.get(skill.name) ?? [];
+      matches.push(discovered);
+      byName.set(skill.name, matches);
+    }
   }
-  return skills;
+
+  const skills: SkillMeta[] = [];
+  const conflicts: SkillConflict[] = [];
+  for (const [name, matches] of [...byName.entries()].sort(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    if (matches.length > 1) {
+      conflicts.push({
+        name,
+        paths: matches.map(({ path }) => path).sort(),
+      });
+      continue;
+    }
+    skills.push(matches[0]);
+  }
+
+  return {
+    skills,
+    conflicts,
+    diagnostics: diagnostics.sort((left, right) =>
+      left.path.localeCompare(right.path) || left.code.localeCompare(right.code),
+    ),
+  };
+}
+
+export function listSkills(root: SkillRoot): SkillMeta[] {
+  return discoverSkills([root]).skills;
 }
 
 function parseEventShapesCandidate(
