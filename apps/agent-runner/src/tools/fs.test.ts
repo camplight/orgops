@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -15,6 +15,15 @@ const context = (workspacePath: string): ExecuteContext => ({
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
 describe("filesystem tool realpath containment", () => {
+  it("does not write through a broken symlink outside the workspace", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "orgops-fs-")); dirs.push(workspace);
+    const outside = mkdtempSync(join(tmpdir(), "orgops-fs-outside-")); dirs.push(outside);
+    const outsideTarget = join(outside, "created");
+    symlinkSync(outsideTarget, join(workspace, "broken-link"));
+    await expect(execute(context(workspace), "fs_write", { path: "broken-link", content: "must not escape" })).rejects.toThrow(/outside allowed roots/);
+    expect(existsSync(outsideTarget)).toBe(false);
+  });
+
   it("does not read or write through a symlink outside the workspace", async () => {
     const workspace = mkdtempSync(join(tmpdir(), "orgops-fs-")); dirs.push(workspace);
     const outside = mkdtempSync(join(tmpdir(), "orgops-fs-outside-")); dirs.push(outside);

@@ -2,6 +2,47 @@ import { describe, expect, it } from "vitest";
 import { createGitRunner } from "./git-process";
 
 describe("createGitRunner", () => {
+  it.each(["mkdtemp", "writeFile", "spawn"] as const)("cleans up and re-raises SIGTERM during %s setup", async (stage) => {
+    const listeners = new Map<string, (...args: any[]) => void>();
+    const removed: string[] = [];
+    const kills: string[] = [];
+    const processImpl = {
+      pid: 42,
+      on: (signal: string, listener: (...args: any[]) => void) => { listeners.set(signal, listener); },
+      removeListener: (signal: string) => { removed.push(signal); listeners.delete(signal); },
+      kill: (_pid: number, signal: string) => { kills.push(signal); return true; },
+      emit: (signal: string) => listeners.get(signal)?.(),
+    };
+    const removedPaths: string[] = [];
+    let childKill = "";
+    const child = {
+      stdout: { on: () => undefined }, stderr: { on: () => undefined }, on: () => undefined,
+      kill: (signal: string) => { childKill = signal; return true; },
+    };
+    const runner = createGitRunner({
+      env: { PRIVATE_SKILLS_GIT_TOKEN: "setup-token" }, processImpl: processImpl as any,
+      mkdtempImpl: async () => {
+        if (stage === "mkdtemp") processImpl.emit("SIGTERM");
+        return "/tmp/setup-window-askpass";
+      },
+      writeFileImpl: async () => { if (stage === "writeFile") processImpl.emit("SIGTERM"); },
+      chmodImpl: async () => undefined,
+      rmImpl: async (path) => { removedPaths.push(path); },
+      spawnImpl: (() => {
+        if (stage === "spawn") processImpl.emit("SIGTERM");
+        return child;
+      }) as any,
+    });
+    const result = await runner.run(["fetch"]);
+    expect(result.code).toBe("GIT_FAILED");
+    expect(removedPaths).toEqual(["/tmp/setup-window-askpass"]);
+    expect(removed).toEqual(expect.arrayContaining(["SIGINT", "SIGTERM"]));
+    expect(kills).toEqual(["SIGTERM"]);
+    if (stage === "spawn") expect(childKill).toBe("SIGTERM");
+    else expect(childKill).toBe("");
+    expect(listeners.size).toBe(0);
+  });
+
   it("scopes signal handlers, cleans askpass, terminates the child, and re-raises the signal", async () => {
     const listeners = new Map<string, (...args: any[]) => void>();
     const removed: string[] = [];

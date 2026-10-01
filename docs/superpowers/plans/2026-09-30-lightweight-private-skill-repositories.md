@@ -727,7 +727,7 @@ Use a temporary project root, private checkout path, and local bare Git remote. 
 2. Management helper `sync` creates the checkout.
 3. Discovery immediately returns the private skill.
 4. `resolvePrivateSkillRepositoryAccess` grants the external `skills/` root only for the canonical built-in management skill.
-5. A simulated next turn can preload the private skill and load its event shape.
+5. A simulated next CLASSIC turn can preload the private skill and load its event shape.
 6. A duplicate built-in/private name removes both from usable discovery.
 
 Keep the test local/offline; never require GitHub credentials or network.

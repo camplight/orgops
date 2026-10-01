@@ -437,8 +437,8 @@ The management workflow is status, sync, begin a review branch, edit only
 publication requires explicit human instruction. Busy, dirty, divergent,
 conflicted, mismatched, authentication-failed, or invalid repositories are
 reported without destructive recovery. Synchronization does not automatically
-enable a skill. The next `GET /api/skills` and next native turn refresh
-external discovery; duplicate names are unavailable. Split-host synchronization
+enable a skill. The next `GET /api/skills` and next CLASSIC turn refresh
+external discovery; WRAPPED turns bypass skill discovery and duplicate names are unavailable. Split-host synchronization
 is operator-owned and there is no background sync.
 
 - secrets:

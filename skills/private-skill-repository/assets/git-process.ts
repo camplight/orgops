@@ -74,44 +74,77 @@ export function createGitRunner(deps: GitRunnerDependencies = {}): GitRunner {
       let timer: NodeJS.Timeout | undefined;
       let child: Spawned | undefined;
       const signalHandlers = new Map<"SIGINT" | "SIGTERM", () => void>();
+      let interruptedSignal: "SIGINT" | "SIGTERM" | undefined;
+      let finish: ((result: GitResult) => void) | undefined;
+      let signalCompletion: Promise<void> | undefined;
+      let cleanupPromise: Promise<void> | undefined;
+      let setupFinishedResolve!: () => void;
+      const setupFinished = new Promise<void>((resolve) => { setupFinishedResolve = resolve; });
       const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT;
-      const cleanup = async () => {
-        if (timer) clearTimeout(timer);
-        for (const [signal, handler] of signalHandlers) {
-          processImpl.removeListener(signal, handler);
-        }
-        signalHandlers.clear();
-        if (askpassDir) {
-          try { await rmImpl(askpassDir, { recursive: true, force: true }); } catch { /* bounded cleanup */ }
-        }
+      const cleanup = () => {
+        if (cleanupPromise) return cleanupPromise;
+        cleanupPromise = (async () => {
+          if (timer) clearTimeout(timer);
+          for (const [signal, handler] of signalHandlers) {
+            processImpl.removeListener(signal, handler);
+          }
+          signalHandlers.clear();
+          if (askpassDir) {
+            try { await rmImpl(askpassDir, { recursive: true, force: true }); } catch { /* bounded cleanup */ }
+          }
+        })();
+        return cleanupPromise;
       };
+      const handleSignal = (signal: "SIGINT" | "SIGTERM") => {
+        if (interruptedSignal) return;
+        interruptedSignal = signal;
+        try { child?.kill(signal); } catch { /* bounded */ }
+        signalCompletion = (async () => {
+          await setupFinished;
+          try { child?.kill(signal); } catch { /* bounded */ }
+          await cleanup();
+          finish?.(failure("GIT_FAILED", stdout, stderr, secrets));
+          processImpl.kill(processImpl.pid, signal);
+        })();
+      };
+      for (const signal of ["SIGINT", "SIGTERM"] as const) {
+        const handler = () => handleSignal(signal);
+        signalHandlers.set(signal, handler);
+        processImpl.on(signal, handler);
+      }
       try {
         const childEnv: NodeJS.ProcessEnv = { ...environment, GIT_TERMINAL_PROMPT: "0" };
         if (token) {
           askpassDir = await mkdtempImpl(join(tmpdir(), "orgops-git-"));
+          if (interruptedSignal) throw new Error("interrupted");
           askpassPath = join(askpassDir, "askpass.sh");
           const script = "#!/bin/sh\ncase \"$1\" in\n  *[Uu]sername*) printf '%s\\n' \"$PRIVATE_SKILLS_GIT_USERNAME\" ;;\n  *) printf '%s\\n' \"$PRIVATE_SKILLS_GIT_TOKEN\" ;;\nesac\n";
           await writeFileImpl(askpassPath, script, { mode: 0o700 });
+          if (interruptedSignal) throw new Error("interrupted");
           await chmodImpl(askpassPath, 0o700);
+          if (interruptedSignal) throw new Error("interrupted");
           secrets.push(askpassDir, askpassPath);
           childEnv.GIT_ASKPASS = askpassPath;
           childEnv.PRIVATE_SKILLS_GIT_TOKEN = token;
           childEnv.PRIVATE_SKILLS_GIT_USERNAME = username;
         }
         child = spawnImpl("git", [...args], { cwd: options.cwd, env: childEnv, shell: false });
+        setupFinishedResolve();
+        if (interruptedSignal) throw new Error("interrupted");
         return await new Promise<GitResult>((resolve) => {
-          const finish = (result: GitResult) => {
+          const complete = (result: GitResult) => {
             if (settled) return;
             settled = true;
             void cleanup().finally(() => resolve({ ...result, stdout: redact(result.stdout, secrets), stderr: redact(result.stderr, secrets) }));
           };
+          finish = complete;
           const append = (target: "stdout" | "stderr", chunk: Buffer | string) => {
             const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
             const current = target === "stdout" ? Buffer.byteLength(stdout) : Buffer.byteLength(stderr);
             const remaining = OUTPUT_LIMIT - current;
             if (remaining <= 0) {
               try { child?.kill("SIGKILL"); } catch { /* bounded */ }
-              finish(failure("GIT_FAILED", stdout, stderr, secrets));
+              complete(failure("GIT_FAILED", stdout, stderr, secrets));
               return;
             }
             const bounded = bytes.length > remaining ? bytes.subarray(0, remaining) : bytes;
@@ -119,38 +152,28 @@ export function createGitRunner(deps: GitRunnerDependencies = {}): GitRunner {
             if (target === "stdout") stdout += value; else stderr += value;
             if (bytes.length > remaining) {
               try { child?.kill("SIGKILL"); } catch { /* bounded */ }
-              finish(failure("GIT_FAILED", stdout, stderr, secrets));
+              complete(failure("GIT_FAILED", stdout, stderr, secrets));
             }
           };
-          for (const signal of ["SIGINT", "SIGTERM"] as const) {
-            const handler = () => {
-              try { child?.kill(signal); } catch { /* bounded */ }
-              const reRaise = () => processImpl.kill(processImpl.pid, signal);
-              void cleanup().finally(() => {
-                finish(failure("GIT_FAILED", stdout, stderr, secrets));
-                reRaise();
-              });
-            };
-            signalHandlers.set(signal, handler);
-            processImpl.on(signal, handler);
-          }
           child?.stdout?.on("data", (chunk) => append("stdout", chunk));
           child?.stderr?.on("data", (chunk) => append("stderr", chunk));
-          child?.on("error", () => finish(failure("GIT_FAILED", stdout, stderr, secrets)));
+          child?.on("error", () => complete(failure("GIT_FAILED", stdout, stderr, secrets)));
           child?.on("close", (code, signal) => {
             if (settled) return;
-            if (code === 0 && !signal) finish({ ok: true, code: undefined, stdout: redact(stdout, secrets), stderr: redact(stderr, secrets), exitCode: code });
+            if (code === 0 && !signal) complete({ ok: true, code: undefined, stdout: redact(stdout, secrets), stderr: redact(stderr, secrets), exitCode: code });
             else {
               const auth = /authentication failed|could not read (?:username|password)|permission denied|access denied|unauthori[sz]ed|forbidden|terminal prompts disabled|no such device or address|\b401\b|\b403\b/i.test(stderr);
-              finish(failure(auth ? "AUTH_FAILED" : "GIT_FAILED", stdout, stderr, secrets));
+              complete(failure(auth ? "AUTH_FAILED" : "GIT_FAILED", stdout, stderr, secrets));
             }
           });
           timer = setTimeout(() => {
             try { child?.kill("SIGKILL"); } catch { /* bounded */ }
-            finish(failure("GIT_TIMEOUT", stdout, stderr, secrets));
+            complete(failure("GIT_TIMEOUT", stdout, stderr, secrets));
           }, timeoutMs);
         });
       } catch {
+        setupFinishedResolve();
+        await signalCompletion;
         await cleanup();
         return failure("GIT_FAILED", stdout, stderr, secrets);
       }

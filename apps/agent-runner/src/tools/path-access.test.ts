@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
@@ -28,6 +28,17 @@ describe("resolveAgentPath realpath containment", () => {
     symlinkSync(outside, join(root, "link"));
     const workspace = mkdtempSync(join(tmpdir(), "orgops-work-")); dirs.push(workspace);
     expect(() => resolveAgentPath(agent(workspace), join(root, "link/new"), [root])).toThrow(/outside allowed roots/);
+  });
+
+  it("rejects a broken symlink create path that points outside the allowed root", () => {
+    const root = mkdtempSync(join(tmpdir(), "orgops-path-")); dirs.push(root);
+    const outside = mkdtempSync(join(tmpdir(), "orgops-outside-")); dirs.push(outside);
+    const outsideMissing = join(outside, "created-by-escape");
+    const link = join(root, "broken-link");
+    symlinkSync(outsideMissing, link);
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(() => resolveAgentPath(agent(root), "broken-link")).toThrow(/outside allowed roots/);
+    expect(() => resolveAgentPath(agent(root), "broken-link/child")).toThrow(/outside allowed roots/);
   });
 
   it("keeps canonical valid workspace and external paths, including creates", () => {

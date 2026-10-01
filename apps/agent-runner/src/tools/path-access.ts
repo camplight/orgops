@@ -1,4 +1,4 @@
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import type { Agent } from "../types";
 
@@ -15,7 +15,27 @@ function canonicalRoot(root: string): string {
   }
 }
 
-function canonicalCandidate(candidate: string): string {
+function hasDisallowedSymlinkComponent(candidate: string, allowedRootPaths: string[]): boolean {
+  let current = candidate;
+  while (true) {
+    if (!allowedRootPaths.includes(current)) {
+      try {
+        if (lstatSync(current).isSymbolicLink()) return true;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT" && code !== "ENOTDIR") return true;
+      }
+    }
+    const next = dirname(current);
+    if (next === current) return false;
+    current = next;
+  }
+}
+
+function canonicalCandidate(candidate: string, allowedRootPaths: string[]): string {
+  if (hasDisallowedSymlinkComponent(candidate, allowedRootPaths)) {
+    throw new Error("Path contains a disallowed symbolic link");
+  }
   if (existsSync(candidate)) return realpathSync.native(candidate);
 
   const missing: string[] = [];
@@ -46,14 +66,22 @@ export function resolveAgentPath(
   const candidate = isAbsolute(value)
     ? resolve(value)
     : resolve(workspaceRoot, value);
-  const allowedRoots = [
+  const allowedRootPaths = [
     ...getAllowedRoots(agent),
     ...extraAllowedRoots
       .map((root) => root.trim())
       .filter(Boolean)
       .map((root) => resolve(root)),
-  ].map(canonicalRoot);
-  const canonicalPath = canonicalCandidate(candidate);
+  ];
+  const allowedRoots = allowedRootPaths.map(canonicalRoot);
+  let canonicalPath: string;
+  try {
+    canonicalPath = canonicalCandidate(candidate, allowedRootPaths);
+  } catch {
+    throw new Error(
+      `Path is outside allowed roots: ${value}. Allowed roots: ${allowedRoots.join(", ")}`,
+    );
+  }
   if (allowedRoots.some((root) => isInside(root, canonicalPath))) {
     return canonicalPath;
   }

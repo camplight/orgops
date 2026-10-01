@@ -283,7 +283,7 @@ same `ORGOPS_SKILL_ROOTS` value (including the absolute
 `$PRIVATE_SKILLS_REPO_PATH/skills` root) for API and runner in v1. The built-in
 repository and private repository remain separate checkouts; synchronization
 never automatically enables a skill. After `sync`, the next `GET /api/skills`
-request and next runner turn refresh discovery. Duplicate names across roots are
+request and next CLASSIC turn refresh discovery; WRAPPED turns bypass skill discovery. Duplicate names across roots are
 reported as conflicts and are unavailable.
 
 Enable the built-in `private-skill-repository` skill on the agent that manages
