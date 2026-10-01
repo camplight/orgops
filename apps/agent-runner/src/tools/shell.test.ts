@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -52,6 +52,16 @@ describe("shell tool env isolation", () => {
     })) as { stdout: string; stderr: string; exitCode: number };
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe("__missing__");
+  });
+
+  it("rejects a shell cwd symlink that escapes the workspace", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "orgops-shell-test-"));
+    const outside = mkdtempSync(join(tmpdir(), "orgops-shell-outside-"));
+    createdDirs.push(workspace, outside);
+    symlinkSync(outside, join(workspace, "link"));
+    await expect(execute(createTestContext(workspace, {}), "shell_run", {
+      cmd: "pwd", cwd: join(workspace, "link"),
+    })).rejects.toThrow(/outside allowed roots/);
   });
 
   it("passes provider keys from injected env", async () => {

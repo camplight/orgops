@@ -35,6 +35,10 @@ describe("parseRepositoryConfig", () => {
     (branch) => expect(() => parseRepositoryConfig({ ...base, PRIVATE_SKILLS_REPO_BRANCH: branch })).toThrowError(/CONFIG_INVALID/),
   );
 
+  it("rejects plaintext HTTP repository URLs", () => {
+    expect(() => parseRepositoryConfig({ ...base, PRIVATE_SKILLS_REPO_URL: "http://example.test/repo.git" })).toThrowError(/CONFIG_INVALID/);
+  });
+
   it("rejects URL credentials and a root mismatch", () => {
     expect(() => parseRepositoryConfig({ ...base, PRIVATE_SKILLS_REPO_URL: "https://user:secret@example.test/repo.git" })).toThrowError(/CONFIG_INVALID/);
     expect(() => parseRepositoryConfig({ ...base, ORGOPS_SKILL_ROOTS: "/other/skills" })).toThrowError(/ROOT_MISMATCH/);

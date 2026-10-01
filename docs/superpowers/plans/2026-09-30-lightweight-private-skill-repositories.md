@@ -767,7 +767,7 @@ Document in root/API/runner READMEs:
 - host SSH/credential-helper fallback;
 - management skill enablement and narrow write root;
 - host Git author name/email must already be configured for commits;
-- next-`GET /api/skills`/next-turn refresh;
+- next-`GET /api/skills`/next-CLASSIC-turn refresh (WRAPPED turns bypass skill discovery);
 - duplicate names unavailable;
 - split-host synchronization is operator-owned.
 

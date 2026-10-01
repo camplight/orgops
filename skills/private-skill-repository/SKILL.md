@@ -8,7 +8,7 @@ description: Synchronize and publish skills in the configured private Git reposi
 Use the repository management helper to inspect, synchronize, edit, validate, and
 publish skills. Synchronization makes a checkout available for discovery; it does
 **not** enable any skill on an agent. A human or agent configuration must enable a
-skill explicitly, and the next `GET /api/skills` or next turn refreshes discovery.
+skill explicitly, and the next `GET /api/skills` or next CLASSIC turn refreshes discovery (WRAPPED turns bypass skill discovery).
 
 ## Safe workflow
 

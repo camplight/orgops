@@ -499,6 +499,7 @@ export function createApp(config: AppConfig = {}) {
     SKILL_ROOTS,
     discoverSkills,
     jsonResponse,
+    requireAuth,
   });
 
   registerSecretsRoutes(app as any, {

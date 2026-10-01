@@ -25,8 +25,16 @@ export type GitRunner = {
   run(args: string[], options?: { cwd?: string; timeoutMs?: number }): Promise<GitResult>;
 };
 
+type SignalProcess = {
+  pid: number;
+  on(signal: "SIGINT" | "SIGTERM", listener: () => void): unknown;
+  removeListener(signal: "SIGINT" | "SIGTERM", listener: () => void): unknown;
+  kill(pid: number, signal: "SIGINT" | "SIGTERM"): boolean;
+};
+
 export type GitRunnerDependencies = {
   env?: NodeJS.ProcessEnv;
+  processImpl?: SignalProcess;
   spawnImpl?: (command: string, args: string[], options: Record<string, unknown>) => Spawned;
   mkdtempImpl?: (prefix: string) => Promise<string>;
   rmImpl?: (path: string, options: { recursive: boolean; force: boolean }) => Promise<void>;
@@ -51,6 +59,7 @@ export function createGitRunner(deps: GitRunnerDependencies = {}): GitRunner {
   const rmImpl = deps.rmImpl ?? ((path, options) => rm(path, options));
   const writeFileImpl = deps.writeFileImpl ?? ((path, data, options) => writeFile(path, data, options));
   const chmodImpl = deps.chmodImpl ?? ((path, mode) => chmod(path, mode));
+  const processImpl = deps.processImpl ?? process;
   const token = environment.PRIVATE_SKILLS_GIT_TOKEN ?? "";
   const username = environment.PRIVATE_SKILLS_GIT_USERNAME ?? "x-access-token";
   const secrets = [token, username];
@@ -64,9 +73,14 @@ export function createGitRunner(deps: GitRunnerDependencies = {}): GitRunner {
       let settled = false;
       let timer: NodeJS.Timeout | undefined;
       let child: Spawned | undefined;
+      const signalHandlers = new Map<"SIGINT" | "SIGTERM", () => void>();
       const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT;
       const cleanup = async () => {
         if (timer) clearTimeout(timer);
+        for (const [signal, handler] of signalHandlers) {
+          processImpl.removeListener(signal, handler);
+        }
+        signalHandlers.clear();
         if (askpassDir) {
           try { await rmImpl(askpassDir, { recursive: true, force: true }); } catch { /* bounded cleanup */ }
         }
@@ -108,6 +122,18 @@ export function createGitRunner(deps: GitRunnerDependencies = {}): GitRunner {
               finish(failure("GIT_FAILED", stdout, stderr, secrets));
             }
           };
+          for (const signal of ["SIGINT", "SIGTERM"] as const) {
+            const handler = () => {
+              try { child?.kill(signal); } catch { /* bounded */ }
+              const reRaise = () => processImpl.kill(processImpl.pid, signal);
+              void cleanup().finally(() => {
+                finish(failure("GIT_FAILED", stdout, stderr, secrets));
+                reRaise();
+              });
+            };
+            signalHandlers.set(signal, handler);
+            processImpl.on(signal, handler);
+          }
           child?.stdout?.on("data", (chunk) => append("stdout", chunk));
           child?.stderr?.on("data", (chunk) => append("stderr", chunk));
           child?.on("error", () => finish(failure("GIT_FAILED", stdout, stderr, secrets)));

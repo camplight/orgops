@@ -165,6 +165,31 @@ describe("skills", () => {
     }
   });
 
+  it("skips a skill whose document disappears while preserving healthy skills", () => {
+    const root = mkdtempSync(join(tmpdir(), "orgops-skills-race-"));
+    const healthyDir = join(root, "healthy");
+    const racedDir = join(root, "raced");
+    mkdirSync(healthyDir, { recursive: true });
+    mkdirSync(racedDir, { recursive: true });
+    const document = (name: string) => `---\nname: ${name}\ndescription: ${name}\n---\n`;
+    writeFileSync(join(healthyDir, "SKILL.md"), document("healthy"));
+    writeFileSync(join(racedDir, "SKILL.md"), document("raced"));
+    const actualReadFile = fs.readFileSync.bind(fs);
+    const readSpy = vi.spyOn(fs, "readFileSync").mockImplementation((path, ...args) => {
+      if (String(path).endsWith("raced/SKILL.md")) throw new Error("raced away");
+      if (String(path).endsWith("healthy/SKILL.md")) return document("healthy") as any;
+      return actualReadFile(path, ...(args as [any]));
+    });
+    try {
+      const result = discoverSkills([{ path: root, kind: "EXTERNAL" }]);
+      expect(result.skills.map(({ name }) => name)).toEqual(["healthy"]);
+      expect(result.diagnostics).toEqual([]);
+    } finally {
+      readSpy.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("skips malformed frontmatter and symlink children", () => {
     const root = mkdtempSync(join(tmpdir(), "orgops-skills-invalid-"));
     const validDir = join(root, "valid");

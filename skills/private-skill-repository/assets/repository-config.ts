@@ -59,7 +59,7 @@ function validUrl(raw: string): boolean {
   if (isAbsolute(raw)) return !/[\x00-\x20\x7f]/.test(raw);
   try {
     const parsed = new URL(raw);
-    return (parsed.protocol === "https:" || parsed.protocol === "http:" || parsed.protocol === "ssh:" || parsed.protocol === "file:") &&
+    return (parsed.protocol === "https:" || parsed.protocol === "ssh:" || parsed.protocol === "file:") &&
       !parsed.username && !parsed.password && !/[\x00-\x20\x7f]/.test(raw);
   } catch {
     return false;

@@ -151,7 +151,7 @@ The tracked bootstrap skill is:
 skills/private-skill-repository/
 ├── SKILL.md
 └── assets/
-    └── manage-repository.mjs
+    └── manage-repository.ts
 ```
 
 `SKILL.md` explains when to synchronize, inspect, edit, validate, and publish. The helper performs deterministic Git mechanics so the model does not repeatedly reconstruct sensitive commands.
@@ -270,7 +270,7 @@ Raw tokens, credential helper content, and unrestricted Git stderr are never ret
 ### Runner
 
 - external enabled skills appear in prompt/preload/event shapes and tool roots;
-- updates are observed on the next turn;
+- updates are observed on the next CLASSIC turn;
 - enabling the canonical management skill grants only the configured external `skills/` root;
 - similarly named external skills cannot impersonate the built-in management skill;
 - absent/mismatched management configuration grants no extra path.
@@ -290,6 +290,6 @@ Update `.env.example`, API/runner READMEs, the root README deployment example, a
 - multi-root configuration;
 - single-machine boundary;
 - repository-management skill configuration and secret setup;
-- immediate next-`GET /api/skills`/next-turn refresh semantics and the existing event-shape cache TTL;
+- immediate next-`GET /api/skills`/next-CLASSIC-turn refresh semantics (WRAPPED turns bypass skill discovery) and the existing event-shape cache TTL;
 - duplicate-name behavior;
 - manual responsibility for split-host synchronization.

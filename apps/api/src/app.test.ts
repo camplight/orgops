@@ -1344,6 +1344,21 @@ describe("api app", () => {
     rmSync(projectRoot, { recursive: true, force: true });
   });
 
+  it("requires human or runner authentication for skill discovery", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const app = createApp({ db: openDb(":memory:"), dataDir, adminUser: "admin", adminPass: "admin", runnerToken: "test-token" }).app;
+    expect((await app.request("http://localhost/api/skills")).status).toBe(401);
+    expect((await app.request("http://localhost/api/skills", { headers: { "x-orgops-runner-token": "test-token" } })).status).toBe(200);
+    const login = await app.request("http://localhost/api/auth/login", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    const cookie = login.headers.get("set-cookie") ?? "";
+    expect(login.status).toBe(200);
+    expect((await app.request("http://localhost/api/skills", { headers: { cookie } })).status).toBe(200);
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("returns external skills and omits duplicate skills from discovery", async () => {
     const projectRoot = mkdtempSync(join(tmpdir(), "orgops-project-"));
     const externalRoot = mkdtempSync(join(tmpdir(), "orgops-skills-"));

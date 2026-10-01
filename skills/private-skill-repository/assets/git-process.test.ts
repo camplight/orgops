@@ -2,6 +2,32 @@ import { describe, expect, it } from "vitest";
 import { createGitRunner } from "./git-process";
 
 describe("createGitRunner", () => {
+  it("scopes signal handlers, cleans askpass, terminates the child, and re-raises the signal", async () => {
+    const listeners = new Map<string, (...args: any[]) => void>();
+    const removed: string[] = [];
+    const kills: string[] = [];
+    const processImpl = {
+      pid: 42,
+      on: (signal: string, listener: (...args: any[]) => void) => { listeners.set(signal, listener); },
+      removeListener: (signal: string) => { removed.push(signal); listeners.delete(signal); },
+      kill: (_pid: number, signal: string) => { kills.push(signal); return true; },
+    };
+    let childKill = "";
+    const runner = createGitRunner({
+      env: { PRIVATE_SKILLS_GIT_TOKEN: "signal-token" }, processImpl: processImpl as any,
+      mkdtempImpl: async () => "/tmp/signal-askpass", writeFileImpl: async () => undefined,
+      chmodImpl: async () => undefined, rmImpl: async () => undefined,
+      spawnImpl: (() => ({ stdout: { on: () => undefined }, stderr: { on: () => undefined }, on: () => undefined, kill: (signal: string) => { childKill = signal; return true; } })) as any,
+    });
+    const pending = runner.run(["fetch"]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    listeners.get("SIGTERM")?.();
+    const result = await pending;
+    expect(result.code).toBe("GIT_FAILED");
+    expect(childKill).toBe("SIGTERM");
+    expect(removed).toEqual(expect.arrayContaining(["SIGINT", "SIGTERM"]));
+    expect(kills).toEqual(["SIGTERM"]);
+  });
   it("invokes git with shell disabled and redacts authentication material", async () => {
     const calls: Array<{ args: string[]; options: any }> = [];
     const removed: string[] = [];

@@ -90,7 +90,12 @@ export function resolveSkillRoot(projectRoot = process.cwd()): SkillRoot {
 export function loadSkillMeta(skillDir: string): SkillDocumentMeta | null {
   const skillPath = join(skillDir, SKILL_FILENAME);
   if (!existsSync(skillPath)) return null;
-  const content = readFileSync(skillPath, "utf-8");
+  let content: string;
+  try {
+    content = readFileSync(skillPath, "utf-8");
+  } catch {
+    return null;
+  }
   const match = content.match(FRONTMATTER_RE);
   if (!match) return null;
   let meta: Record<string, unknown>;
