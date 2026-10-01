@@ -1,15 +1,25 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
-import {
-  discoverSkills,
-  loadSkillEventShapes,
-  resolveSkillRoots,
-} from "@orgops/skills";
+import { describe, expect, it, vi } from "vitest";
+import { discoverSkills, resolveSkillRoots } from "@orgops/skills";
+import { generate } from "@orgops/llm";
+import { createTurnExecutor } from "./turn-executor";
+import type { Agent } from "./types";
 import { resolvePrivateSkillRepositoryAccess } from "./private-skill-repository-access";
 import { runRepositoryCommand } from "../../../skills/private-skill-repository/assets/manage-repository";
+
+vi.mock("@orgops/llm", () => ({ generate: vi.fn() }));
+
+const { executeToolMock, createRunnerToolsMock } = vi.hoisted(() => ({
+  executeToolMock: vi.fn(async () => ({ ok: true })),
+  createRunnerToolsMock: vi.fn((input: unknown) => input),
+}));
+vi.mock("./tools", () => ({
+  createRunnerTools: createRunnerToolsMock,
+  executeTool: executeToolMock,
+}));
 
 function writeSkill(root: string, name: string, description: string, eventType?: string) {
   const skillDir = join(root, name);
@@ -82,14 +92,83 @@ describe("private skill repository integration boundary", () => {
         repositoryPath: checkout,
       });
       expect(managementAccess).toEqual({ ok: true, skillsPath: resolve(repositorySkills) });
-      const privateSkill = afterSync.skills.find(({ name }) => name === "private-workflow");
-      expect(privateSkill).toBeDefined();
-      expect(readFileSync(join(privateSkill!.path, "SKILL.md"), "utf8")).toContain(
-        "name: private-workflow",
-      );
-      const loadedShapes = await loadSkillEventShapes([privateSkill!]);
-      expect(loadedShapes.errors).toEqual([]);
-      expect(loadedShapes.shapes.map(({ type }) => type)).toEqual(["private.workflow"]);
+      const generated = vi.mocked(generate);
+      generated.mockResolvedValue({
+        text: JSON.stringify({
+          type: "private.workflow",
+          payload: { ok: true },
+        }),
+      } as never);
+      const emitted: unknown[] = [];
+      const api = {
+        apiFetch: async () => Response.json([]),
+        emitEvent: async (event: unknown) => { emitted.push(event); },
+        listChannels: async () => [],
+        getChannelRecord: async () => ({ id: "private-channel" }),
+        getChannelParticipationValidationError: async () => null,
+        ensureLifecycleChannel: async () => "lifecycle",
+        getPackageSecretsEnv: async () => ({}),
+      };
+      const agent: Agent = {
+        name: "private-skill-agent",
+        systemInstructions: "Use the synced private workflow.",
+        soulPath: "",
+        workspacePath: projectRoot,
+        enabledSkills: ["private-skill-repository", "private-workflow", "duplicate"],
+        alwaysPreloadedSkills: ["private-workflow"],
+        memoryContextMode: "OFF",
+        modelId: "stub:model",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      };
+      const previousRepositoryPath = process.env.PRIVATE_SKILLS_REPO_PATH;
+      process.env.PRIVATE_SKILLS_REPO_PATH = checkout;
+      try {
+        const executeTurn = createTurnExecutor({
+          projectRoot,
+          skillRoots: roots,
+          llmCallTimeoutMs: 1_000,
+          api,
+        });
+        await executeTurn(agent, [{
+          id: "private-event",
+          type: "message.created",
+          payload: { text: "run the synced workflow" },
+          source: "human:test",
+          channelId: "private-channel",
+        }]);
+
+        expect(generated).toHaveBeenCalledOnce();
+        const [, messages] = generated.mock.calls[0]!;
+        const systemPrompt = String(messages[0]?.content);
+        expect(systemPrompt).toContain("# private-workflow");
+        expect(systemPrompt).toContain("Private workflow");
+        expect(systemPrompt).toContain(join(repositorySkills, "private-workflow", "SKILL.md"));
+        expect(systemPrompt).not.toContain("duplicate");
+        const runnerInput = createRunnerToolsMock.mock.calls[0]![0] as {
+          runTool: (tool: string, args: Record<string, unknown>) => Promise<unknown>;
+        };
+        await runnerInput.runTool("events_event_types", {});
+        const executeCall = (executeToolMock.mock.calls as unknown as Array<[
+          { extraAllowedRoots: string[]; listEventTypes: (input: { source: string }) => unknown[] },
+        ]>)[0]!;
+        const executeContext = executeCall[0];
+        expect(executeContext.extraAllowedRoots).toEqual([
+          resolve(builtInSkills, "private-skill-repository"),
+          resolve(repositorySkills, "private-workflow"),
+          resolve(repositorySkills),
+        ]);
+        expect(executeContext.listEventTypes({ source: "skill:private-workflow" })).toEqual([
+          expect.objectContaining({ type: "private.workflow" }),
+        ]);
+        expect(emitted).toContainEqual(expect.objectContaining({ type: "private.workflow" }));
+      } finally {
+        if (previousRepositoryPath === undefined) delete process.env.PRIVATE_SKILLS_REPO_PATH;
+        else process.env.PRIVATE_SKILLS_REPO_PATH = previousRepositoryPath;
+        generated.mockReset();
+        executeToolMock.mockReset();
+        createRunnerToolsMock.mockClear();
+      }
 
       const duplicateDiscovery = discoverSkills(roots);
       expect(duplicateDiscovery.skills.some(({ name }) => name === "duplicate")).toBe(false);
