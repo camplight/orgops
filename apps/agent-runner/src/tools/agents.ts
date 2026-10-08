@@ -41,6 +41,7 @@ const agentsCreateSchema = z.object({
   desiredState: desiredStateSchema.optional(),
   visibility: z.enum(["PUBLIC", "PRIVATE"]).optional(),
   allowOwnerHumanSecrets: z.boolean().optional(),
+  ownerHumanId: z.string().min(1).nullable().optional(),
   joinChannelId: z.string().min(1).optional(),
   joinCurrentChannel: z.boolean().optional(),
 });
@@ -72,6 +73,7 @@ const agentsUpdateSchema = z
     runtimeState: runtimeStateSchema.optional(),
     visibility: z.enum(["PUBLIC", "PRIVATE"]).optional(),
     allowOwnerHumanSecrets: z.boolean().optional(),
+    ownerHumanId: z.string().min(1).nullable().optional(),
   })
   .superRefine((value, ctx) => {
     const updateKeys = Object.keys(value).filter(
@@ -248,6 +250,7 @@ export async function execute(
       ...(parsed.allowOwnerHumanSecrets !== undefined
         ? { allowOwnerHumanSecrets: parsed.allowOwnerHumanSecrets }
         : {}),
+      ...(parsed.ownerHumanId !== undefined ? { ownerHumanId: parsed.ownerHumanId } : {}),
     };
 
     const response = await ctx.apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, {
@@ -321,6 +324,7 @@ export async function execute(
       ...(parsed.allowOwnerHumanSecrets !== undefined
         ? { allowOwnerHumanSecrets: parsed.allowOwnerHumanSecrets }
         : {}),
+      ...(parsed.ownerHumanId !== undefined ? { ownerHumanId: parsed.ownerHumanId } : {}),
     };
 
     const createResponse = await ctx.apiFetch("/api/agents", {

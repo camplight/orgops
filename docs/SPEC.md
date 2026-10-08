@@ -344,6 +344,7 @@ Published topics include:
 - `POST /api/agents`
 - `GET /api/agents/:name`
 - `PATCH /api/agents/:name`
+  - private agents accept optional `ownerHumanId`; callers may create/transfer private ownership to another human if the target human exists
   - changing an agent's `name` via patch is currently rejected (rename unsupported)
 - supports `assignedRunnerId` on create/update/read
 - supports `wrappedConfig` JSON object/string on create/update/read

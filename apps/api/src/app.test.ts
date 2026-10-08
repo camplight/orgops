@@ -4897,6 +4897,63 @@ describe("api app", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("creates a private agent owned by a different human when ownerHumanId is provided", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const orm = createDrizzleDb(db);
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const adminLoginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(adminLoginRes.status).toBe(200);
+    const adminCookie = adminLoginRes.headers.get("set-cookie") ?? "";
+
+    const inviteRes = await app.request("http://localhost/api/humans/invite", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ username: "delegated-owner", tempPassword: "owner-temp-pass-1" }),
+    });
+    expect(inviteRes.status).toBe(201);
+    const invited = (await inviteRes.json()) as { id: string; temporaryPassword: string };
+    expect(invited.id).toBeTruthy();
+    expect(invited.temporaryPassword).toBe("owner-temp-pass-1");
+
+    const createPrivateRes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({
+        name: "delegated-private-agent",
+        modelId: "openai:gpt-4o-mini",
+        workspacePath: ".orgops-data/workspaces/delegated-private-agent",
+        visibility: "PRIVATE",
+        ownerHumanId: invited.id,
+      }),
+    });
+    expect(createPrivateRes.status).toBe(201);
+
+    const row = orm
+      .select({
+        visibility: schema.agents.visibility,
+        ownerHumanId: schema.agents.owner_human_id,
+      })
+      .from(schema.agents)
+      .where(eq(schema.agents.name, "delegated-private-agent"))
+      .get() as { visibility: string; ownerHumanId: string | null } | undefined;
+    expect(row?.visibility).toBe("PRIVATE");
+    expect(row?.ownerHumanId).toBe(invited.id);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("allows private agent discoverability through team-linked channels", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");

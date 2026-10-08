@@ -278,6 +278,23 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       : Boolean(row.allow_outside_workspace);
   }
 
+  function normalizeOwnerHumanId(value: unknown): string | null | undefined {
+    if (value === undefined) return undefined;
+    if (value === null) return null;
+    if (typeof value !== "string") return null;
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  }
+
+  function humanExists(humanId: string): boolean {
+    const row = orm
+      .select({ id: schema.humans.id })
+      .from(schema.humans)
+      .where(eq(schema.humans.id, humanId))
+      .get() as { id: string } | undefined;
+    return Boolean(row?.id);
+  }
+
   function normalizeAdditionalSkillRoots(value: unknown): string[] {
     if (!Array.isArray(value)) return [];
     const roots: string[] = [];
@@ -443,9 +460,11 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     const visibility = isAgentVisibility(visibilityRaw)
       ? visibilityRaw
       : AGENT_VISIBILITY.PUBLIC;
+    const ownerHumanIdRequested = normalizeOwnerHumanId(body.ownerHumanId);
     const ownerHumanId =
       visibility === AGENT_VISIBILITY.PRIVATE
-        ? (user?.username && user.username !== "runner" ? user.id ?? null : null)
+        ? ownerHumanIdRequested ??
+          (user?.username && user.username !== "runner" ? user.id ?? null : null)
         : null;
     if (visibility === AGENT_VISIBILITY.PRIVATE && !ownerHumanId) {
       return jsonResponse(
@@ -453,6 +472,9 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         { error: "Authenticated human user required for private agents" },
         401,
       );
+    }
+    if (ownerHumanId && !humanExists(ownerHumanId)) {
+      return jsonResponse(c, { error: "ownerHumanId does not reference an existing human" }, 400);
     }
     const allowOwnerHumanSecrets =
       ownerHumanId && body.allowOwnerHumanSecrets !== undefined
@@ -673,18 +695,28 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     if (body.visibility !== undefined && !visibility) {
       return jsonResponse(c, { error: "visibility must be PUBLIC or PRIVATE" }, 400);
     }
+    const ownerHumanIdRequested = normalizeOwnerHumanId(body.ownerHumanId);
+    const nextVisibility =
+      visibility !== undefined
+        ? visibility
+        : isAgentVisibility(existing.visibility)
+          ? existing.visibility
+          : AGENT_VISIBILITY.PUBLIC;
     const nextOwnerHumanId =
-      visibility === AGENT_VISIBILITY.PRIVATE
-        ? (existing.owner_human_id ?? user?.id ?? null)
-        : visibility === AGENT_VISIBILITY.PUBLIC
-          ? null
-          : existing.owner_human_id;
-    if (visibility === AGENT_VISIBILITY.PRIVATE && !nextOwnerHumanId) {
+      nextVisibility === AGENT_VISIBILITY.PRIVATE
+        ? ownerHumanIdRequested !== undefined
+          ? ownerHumanIdRequested
+          : (existing.owner_human_id ?? user?.id ?? null)
+        : null;
+    if (nextVisibility === AGENT_VISIBILITY.PRIVATE && !nextOwnerHumanId) {
       return jsonResponse(
         c,
         { error: "Authenticated human user required for private agents" },
         401,
       );
+    }
+    if (nextOwnerHumanId && !humanExists(nextOwnerHumanId)) {
+      return jsonResponse(c, { error: "ownerHumanId does not reference an existing human" }, 400);
     }
     const allowOwnerHumanSecrets =
       body.allowOwnerHumanSecrets !== undefined
