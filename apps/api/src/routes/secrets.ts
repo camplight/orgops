@@ -19,12 +19,14 @@ type SecretsDeps = {
 const SCOPE_PUBLIC = "public";
 const SCOPE_TEAM = "team";
 const SCOPE_PRIVATE = "private";
+const SCOPE_HUMAN = "human";
 const SCOPE_PACKAGE = "package";
 const LEGACY_SCOPE_APP = "app";
 const KNOWN_SCOPE_TYPES = new Set([
   SCOPE_PUBLIC,
   SCOPE_TEAM,
   SCOPE_PRIVATE,
+  SCOPE_HUMAN,
   SCOPE_PACKAGE,
   LEGACY_SCOPE_APP,
 ]);
@@ -33,6 +35,7 @@ const ENV_SCOPE_TYPES = [
   SCOPE_PUBLIC,
   SCOPE_TEAM,
   SCOPE_PRIVATE,
+  SCOPE_HUMAN,
   SCOPE_PACKAGE,
   LEGACY_SCOPE_APP,
 ] as const;
@@ -141,6 +144,25 @@ export function registerSecretsRoutes(app: Hono<any>, deps: SecretsDeps) {
     return new Set(rows.map((row) => row.teamId));
   }
 
+  function getOwnerHumanIdForAgent(agentName: string): string | null {
+    if (!agentName) return null;
+    const row = orm
+      .select({
+        ownerHumanId: schema.agents.owner_human_id,
+      })
+      .from(schema.agents)
+      .where(eq(schema.agents.name, agentName))
+      .get() as { ownerHumanId: string | null } | undefined;
+    return row?.ownerHumanId ?? null;
+  }
+
+  function getScopedRunnerOwnerHumanId(user: RequestUser | undefined): string | null {
+    if (!isScopedRunner(user)) return null;
+    const allowedAgent = user.runnerScope?.allowedAgentName ?? "";
+    if (!allowedAgent) return null;
+    return getOwnerHumanIdForAgent(allowedAgent);
+  }
+
   function canReadSecretScope(
     user: RequestUser | undefined,
     scopeTypeRaw: string,
@@ -150,8 +172,10 @@ export function registerSecretsRoutes(app: Hono<any>, deps: SecretsDeps) {
     const scopeType = normalizeScopeType(scopeTypeRaw) ?? scopeTypeRaw;
     if (isScopedRunner(user)) {
       const allowedAgent = user.runnerScope?.allowedAgentName ?? "";
+      const ownerHumanId = getScopedRunnerOwnerHumanId(user);
       if (scopeType === SCOPE_PUBLIC || scopeType === SCOPE_PACKAGE) return true;
       if (scopeType === SCOPE_PRIVATE) return Boolean(scopeId && scopeId === allowedAgent);
+      if (scopeType === SCOPE_HUMAN) return Boolean(scopeId && ownerHumanId && scopeId === ownerHumanId);
       if (scopeType === SCOPE_TEAM) {
         if (!scopeId) return false;
         return listScopedRunnerTeamIds(user).has(scopeId);
@@ -162,6 +186,7 @@ export function registerSecretsRoutes(app: Hono<any>, deps: SecretsDeps) {
     if (scopeType === SCOPE_PUBLIC || scopeType === SCOPE_PACKAGE) return true;
     if (scopeType === SCOPE_TEAM) return Boolean(scopeId && listHumanTeamIds(user).has(scopeId));
     if (scopeType === SCOPE_PRIVATE) return Boolean(scopeId && access.canViewAgent(user, scopeId));
+    if (scopeType === SCOPE_HUMAN) return Boolean(scopeId && user.id && scopeId === user.id);
     return false;
   }
 
@@ -174,7 +199,9 @@ export function registerSecretsRoutes(app: Hono<any>, deps: SecretsDeps) {
     const scopeType = normalizeScopeType(scopeTypeRaw) ?? scopeTypeRaw;
     if (isScopedRunner(user)) {
       const allowedAgent = user.runnerScope?.allowedAgentName ?? "";
+      const ownerHumanId = getScopedRunnerOwnerHumanId(user);
       if (scopeType === SCOPE_PRIVATE) return Boolean(scopeId && scopeId === allowedAgent);
+      if (scopeType === SCOPE_HUMAN) return Boolean(scopeId && ownerHumanId && scopeId === ownerHumanId);
       if (scopeType === SCOPE_TEAM) {
         if (!scopeId) return false;
         return listScopedRunnerTeamIds(user).has(scopeId);
@@ -185,25 +212,31 @@ export function registerSecretsRoutes(app: Hono<any>, deps: SecretsDeps) {
     if (scopeType === SCOPE_PUBLIC || scopeType === SCOPE_PACKAGE) return true;
     if (scopeType === SCOPE_TEAM) return Boolean(scopeId && listHumanTeamIds(user).has(scopeId));
     if (scopeType === SCOPE_PRIVATE) return Boolean(scopeId && access.canManageAgent(user, scopeId));
+    if (scopeType === SCOPE_HUMAN) return Boolean(scopeId && user.id && scopeId === user.id);
     return false;
   }
 
-  function parseSecretInput(body: Record<string, unknown>) {
+  function parseSecretInput(body: Record<string, unknown>, user?: RequestUser) {
     const packageId = parseScopeId(body.package);
     const scopeTypeProvided = body.scopeType !== undefined && body.scopeType !== null;
     const explicitScopeType = normalizeScopeType(body.scopeType);
     if (scopeTypeProvided && !explicitScopeType) {
-      return { ok: false as const, error: "Invalid scopeType. Use public, team, private, or package." };
+      return {
+        ok: false as const,
+        error: "Invalid scopeType. Use public, team, private, human, or package.",
+      };
     }
     const scopeType = explicitScopeType ?? (packageId ? SCOPE_PACKAGE : SCOPE_PUBLIC);
     const rawScopeId = parseScopeId(body.scopeId) ?? packageId;
     let scopeId: string | null = rawScopeId;
     if (scopeType === SCOPE_PUBLIC) {
       scopeId = null;
+    } else if (scopeType === SCOPE_HUMAN && !scopeId && isHumanUser(user)) {
+      scopeId = user.id ?? null;
     } else if (!scopeId) {
       return {
         ok: false as const,
-        error: "scopeId is required for private, team, and package secrets",
+        error: "scopeId is required for private, team, human, and package secrets",
       };
     } else if (!SAFE_SCOPE_ID_PATTERN.test(scopeId)) {
       return { ok: false as const, error: "scopeId contains invalid characters" };
@@ -284,7 +317,7 @@ export function registerSecretsRoutes(app: Hono<any>, deps: SecretsDeps) {
     const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
     const value = body.value;
     if (value === undefined) return jsonResponse(c, { error: "Missing value" }, 400);
-    const parsedInput = parseSecretInput(body);
+    const parsedInput = parseSecretInput(body, user);
     if (!parsedInput.ok) return jsonResponse(c, { error: parsedInput.error }, 400);
     const { name, scopeType, scopeId } = parsedInput.value;
     if (!canWriteSecretScope(user, scopeType, scopeId)) {
@@ -376,7 +409,7 @@ export function registerSecretsRoutes(app: Hono<any>, deps: SecretsDeps) {
   app.delete("/api/secrets", requireAuth, async (c) => {
     const user = (c as any).get("user") as RequestUser | undefined;
     const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
-    const parsedInput = parseSecretInput(body);
+    const parsedInput = parseSecretInput(body, user);
     if (!parsedInput.ok) return jsonResponse(c, { error: parsedInput.error }, 400);
     const { name, scopeType, scopeId } = parsedInput.value;
     if (!canWriteSecretScope(user, scopeType, scopeId)) {
@@ -426,6 +459,16 @@ export function registerSecretsRoutes(app: Hono<any>, deps: SecretsDeps) {
     if (!access.canManageAgent(user, requestedByAgent)) {
       return jsonResponse(c, { error: "Forbidden" }, 403);
     }
+    const requestedAgent = orm
+      .select({
+        ownerHumanId: schema.agents.owner_human_id,
+        allowOwnerHumanSecrets: schema.agents.allow_owner_human_secrets,
+      })
+      .from(schema.agents)
+      .where(eq(schema.agents.name, requestedByAgent))
+      .get() as
+      | { ownerHumanId: string | null; allowOwnerHumanSecrets: number | null }
+      | undefined;
 
     const channelId =
       requestedChannelId && SAFE_SCOPE_ID_PATTERN.test(requestedChannelId)
@@ -459,6 +502,13 @@ export function registerSecretsRoutes(app: Hono<any>, deps: SecretsDeps) {
         row.scope_id !== null &&
         channelTeamIds.includes(row.scope_id),
     );
+    const humanRows = rows.filter(
+      (row) =>
+        row.scope_type === SCOPE_HUMAN &&
+        row.scope_id !== null &&
+        Boolean(requestedAgent?.allowOwnerHumanSecrets) &&
+        row.scope_id === (requestedAgent?.ownerHumanId ?? ""),
+    );
     const privateRows = rows.filter(
       (row) => row.scope_type === SCOPE_PRIVATE && row.scope_id === requestedByAgent,
     );
@@ -468,6 +518,7 @@ export function registerSecretsRoutes(app: Hono<any>, deps: SecretsDeps) {
       ...decryptRows(masterKey, packageRows),
       ...decryptRows(masterKey, publicRows),
       ...decryptRows(masterKey, teamRows),
+      ...decryptRows(masterKey, humanRows),
       ...decryptRows(masterKey, privateRows),
     };
 
@@ -484,6 +535,7 @@ export function registerSecretsRoutes(app: Hono<any>, deps: SecretsDeps) {
           package: packageRows.length,
           public: publicRows.length,
           team: teamRows.length,
+          human: humanRows.length,
           private: privateRows.length,
         },
       },

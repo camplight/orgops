@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { EventShapeDefinition } from "@orgops/schemas";
 import YAML from "yaml";
@@ -47,6 +47,33 @@ export function resolveSkillRoot(projectRoot = process.cwd()): SkillRoot {
   return { path: join(projectRoot, "skills") };
 }
 
+function parseSkillRootsEnv(value: string | undefined): string[] {
+  if (!value) return [];
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+export function resolveSkillRoots(
+  projectRoot = process.cwd(),
+  envValue = process.env.ORGOPS_SKILL_ROOTS,
+): SkillRoot[] {
+  const baseRoot = resolveSkillRoot(projectRoot);
+  const extraRoots = parseSkillRootsEnv(envValue).map((entry) => ({
+    path: isAbsolute(entry) ? resolve(entry) : resolve(projectRoot, entry),
+  }));
+  const seen = new Set<string>();
+  const roots: SkillRoot[] = [];
+  for (const root of [baseRoot, ...extraRoots]) {
+    const normalized = resolve(root.path);
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    roots.push({ path: normalized });
+  }
+  return roots;
+}
+
 export function loadSkillMeta(skillDir: string): SkillMeta | null {
   const skillPath = join(skillDir, SKILL_FILENAME);
   if (!existsSync(skillPath)) return null;
@@ -86,6 +113,20 @@ export function listSkills(root: SkillRoot): SkillMeta[] {
     skills.push(skill);
   }
   return skills;
+}
+
+export function listSkillsFromRoots(roots: SkillRoot[]): SkillMeta[] {
+  const merged: SkillMeta[] = [];
+  const seen = new Set<string>();
+  for (const root of roots) {
+    const skills = listSkills(root);
+    for (const skill of skills) {
+      if (seen.has(skill.name)) continue;
+      seen.add(skill.name);
+      merged.push(skill);
+    }
+  }
+  return merged;
 }
 
 function parseEventShapesCandidate(

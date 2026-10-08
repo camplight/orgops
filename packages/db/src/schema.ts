@@ -48,6 +48,12 @@ export const agents = sqliteTable("agents", {
   always_preloaded_skills_json: text("always_preloaded_skills_json")
     .notNull()
     .default("[]"),
+  additional_skill_roots_json: text("additional_skill_roots_json")
+    .notNull()
+    .default("[]"),
+  allow_owner_human_secrets: integer("allow_owner_human_secrets")
+    .notNull()
+    .default(0),
   wrapped_config_json: text("wrapped_config_json").notNull().default("{}")
 });
 
