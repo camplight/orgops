@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { listSkills, loadSkillEventShapes } from "./index";
+import { listSkills, listSkillsFromRoots, loadSkillEventShapes, resolveSkillRoots } from "./index";
 
 describe("skills", () => {
   it("reads built-in skills", () => {
@@ -90,6 +90,49 @@ describe("skills", () => {
       expect(
         loaded.shapes.find((shape) => shape.type === "bridge.event")?.source,
       ).toBe("skill:bridge");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves default and extra roots from ORGOPS_SKILL_ROOTS", () => {
+    const roots = resolveSkillRoots("/tmp/orgops", "skills-extra,/opt/custom-skills");
+    expect(roots.map((root) => root.path)).toEqual([
+      "/tmp/orgops/skills",
+      "/tmp/orgops/skills-extra",
+      "/opt/custom-skills",
+    ]);
+  });
+
+  it("merges skills from multiple roots with first-name-wins", () => {
+    const root = mkdtempSync(join(tmpdir(), "orgops-skills-multi-root-test-"));
+    const rootA = join(root, "a");
+    const rootB = join(root, "b");
+    const onlyA = join(rootA, "only-a");
+    const dupA = join(rootA, "dup");
+    const dupB = join(rootB, "dup");
+    mkdirSync(onlyA, { recursive: true });
+    mkdirSync(dupA, { recursive: true });
+    mkdirSync(dupB, { recursive: true });
+    writeFileSync(
+      join(onlyA, "SKILL.md"),
+      ["---", "name: only-a", 'description: "Only A"', "---"].join("\n"),
+      "utf-8",
+    );
+    writeFileSync(
+      join(dupA, "SKILL.md"),
+      ["---", "name: dup", 'description: "Dup A"', "---"].join("\n"),
+      "utf-8",
+    );
+    writeFileSync(
+      join(dupB, "SKILL.md"),
+      ["---", "name: dup", 'description: "Dup B"', "---"].join("\n"),
+      "utf-8",
+    );
+    try {
+      const merged = listSkillsFromRoots([{ path: rootA }, { path: rootB }]);
+      expect(merged.map((skill) => skill.name)).toEqual(["only-a", "dup"]);
+      expect(merged.find((skill) => skill.name === "dup")?.description).toBe("Dup A");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -9,7 +9,7 @@ import {
   type LlmUsage,
 } from "@orgops/llm";
 import { getModel } from "models-dev-db";
-import { listSkills, loadSkillEventShapes } from "@orgops/skills";
+import { listSkillsFromRoots, loadSkillEventShapes } from "@orgops/skills";
 import {
   type EventValidationResult,
   type EventTypeSummary,
@@ -65,7 +65,7 @@ type ModelEventDraft = {
 
 type CreateTurnExecutorInput = {
   projectRoot: string;
-  skillRoot: { path: string };
+  skillRoots: Array<{ path: string }>;
   llmCallTimeoutMs: number;
   runtimeAuth?: {
     apiBaseUrl?: string;
@@ -493,7 +493,24 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
     const injectionEnv = await input.api.getPackageSecretsEnv(agent.name, channelId);
     const channelRecord = await input.api.getChannelRecord(channelId);
     const soul = typeof agent.soulContents === "string" ? agent.soulContents : "";
-    const allSkills = listSkills(input.skillRoot);
+    const resolvedSkillRoots = (() => {
+      const rootSet = new Set<string>();
+      const roots: Array<{ path: string }> = [];
+      for (const root of input.skillRoots) {
+        const normalized = root.path.trim();
+        if (!normalized || rootSet.has(normalized)) continue;
+        rootSet.add(normalized);
+        roots.push({ path: normalized });
+      }
+      for (const root of agent.additionalSkillRoots ?? []) {
+        const normalized = root.trim();
+        if (!normalized || rootSet.has(normalized)) continue;
+        rootSet.add(normalized);
+        roots.push({ path: normalized });
+      }
+      return roots;
+    })();
+    const allSkills = listSkillsFromRoots(resolvedSkillRoots);
     const enabledSkillSet = new Set(agent.enabledSkills ?? []);
     const alwaysPreloadedSkillSet = new Set(agent.alwaysPreloadedSkills ?? []);
     const selectedSkills = allSkills.filter((skill: any) => enabledSkillSet.has(skill.name));
@@ -526,7 +543,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
     const runnerGuidance = buildRunnerGuidance(
       nowMs,
       nowIso,
-      input.skillRoot.path,
+      resolvedSkillRoots.map((root) => root.path),
       coreEventTypes,
       {
         platform: process.platform,

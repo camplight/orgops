@@ -27,6 +27,7 @@ const agentsCreateSchema = z.object({
   soulContents: z.string().optional(),
   enabledSkills: z.array(z.string()).optional(),
   alwaysPreloadedSkills: z.array(z.string()).optional(),
+  additionalSkillRoots: z.array(z.string()).optional(),
   workspacePath: z.string().min(1).optional(),
   allowOutsideWorkspace: z.boolean().optional(),
   llmCallTimeoutMs: z.number().int().positive().nullable().optional(),
@@ -39,6 +40,7 @@ const agentsCreateSchema = z.object({
   assignedRunnerId: z.string().optional(),
   desiredState: desiredStateSchema.optional(),
   visibility: z.enum(["PUBLIC", "PRIVATE"]).optional(),
+  allowOwnerHumanSecrets: z.boolean().optional(),
   joinChannelId: z.string().min(1).optional(),
   joinCurrentChannel: z.boolean().optional(),
 });
@@ -54,6 +56,7 @@ const agentsUpdateSchema = z
     soulContents: z.string().optional(),
     enabledSkills: z.array(z.string()).optional(),
     alwaysPreloadedSkills: z.array(z.string()).optional(),
+    additionalSkillRoots: z.array(z.string()).optional(),
     workspacePath: z.string().min(1).optional(),
     allowOutsideWorkspace: z.boolean().optional(),
     llmCallTimeoutMs: z.number().int().positive().nullable().optional(),
@@ -68,6 +71,7 @@ const agentsUpdateSchema = z
     desiredState: desiredStateSchema.optional(),
     runtimeState: runtimeStateSchema.optional(),
     visibility: z.enum(["PUBLIC", "PRIVATE"]).optional(),
+    allowOwnerHumanSecrets: z.boolean().optional(),
   })
   .superRefine((value, ctx) => {
     const updateKeys = Object.keys(value).filter(
@@ -212,6 +216,9 @@ export async function execute(
       ...(parsed.alwaysPreloadedSkills !== undefined
         ? { alwaysPreloadedSkills: parsed.alwaysPreloadedSkills }
         : {}),
+      ...(parsed.additionalSkillRoots !== undefined
+        ? { additionalSkillRoots: parsed.additionalSkillRoots }
+        : {}),
       ...(parsed.workspacePath !== undefined ? { workspacePath: parsed.workspacePath.trim() } : {}),
       ...(parsed.allowOutsideWorkspace !== undefined
         ? { allowOutsideWorkspace: parsed.allowOutsideWorkspace }
@@ -238,6 +245,9 @@ export async function execute(
       ...(parsed.desiredState !== undefined ? { desiredState: parsed.desiredState } : {}),
       ...(parsed.runtimeState !== undefined ? { runtimeState: parsed.runtimeState } : {}),
       ...(parsed.visibility !== undefined ? { visibility: parsed.visibility } : {}),
+      ...(parsed.allowOwnerHumanSecrets !== undefined
+        ? { allowOwnerHumanSecrets: parsed.allowOwnerHumanSecrets }
+        : {}),
     };
 
     const response = await ctx.apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, {
@@ -287,6 +297,9 @@ export async function execute(
       ...(parsed.alwaysPreloadedSkills !== undefined
         ? { alwaysPreloadedSkills: parsed.alwaysPreloadedSkills }
         : {}),
+      ...(parsed.additionalSkillRoots !== undefined
+        ? { additionalSkillRoots: parsed.additionalSkillRoots }
+        : {}),
       ...(allowOutsideWorkspace !== undefined
         ? { allowOutsideWorkspace }
         : {}),
@@ -305,6 +318,9 @@ export async function execute(
       ...(memoryContextMode !== undefined ? { memoryContextMode } : {}),
       ...(parsed.wrappedConfig !== undefined ? { wrappedConfig: parsed.wrappedConfig } : {}),
       ...(parsed.visibility !== undefined ? { visibility: parsed.visibility } : {}),
+      ...(parsed.allowOwnerHumanSecrets !== undefined
+        ? { allowOwnerHumanSecrets: parsed.allowOwnerHumanSecrets }
+        : {}),
     };
 
     const createResponse = await ctx.apiFetch("/api/agents", {

@@ -50,6 +50,8 @@ Stored in `agents`:
 - mode/state: `mode` (`CLASSIC` | `RLM_REPL` | `WRAPPED`), `desired_state`, `runtime_state`, `last_heartbeat_at`
 - host assignment: `assigned_runner_id` (nullable; when set, only matching runner executes the agent)
 - skills: `enabled_skills_json`, `always_preloaded_skills_json`
+- optional extra skill roots: `additional_skill_roots_json`
+- secret delegation toggle: `allow_owner_human_secrets` (when enabled and owner exists, user-scoped secrets are injected for native turns)
 - wrapped runtime config: `wrapped_config_json` (JSON object; used only by `WRAPPED` mode)
 
 `WRAPPED` agents are orgops-owned lifecycle records whose turns are delegated to an external runtime. They do not use orgops memory summaries, prompt composition, skills, model calls, or `allow_outside_workspace` for turn handling. The wrapped runtime owns its own session/memory/tool state and filesystem policy. The normal `soul_path` / `soul_contents` fields may still be stored on the agent row for humans, opscli, and native management agents; the wrapper runner does not automatically inject them. The creator of the wrapped agent should translate those native fields into the selected harness configuration/setup/runtime behavior when that harness needs a soul file or prompt seed.
@@ -250,7 +252,7 @@ Runner tools resolve paths through an allowlist:
 
 - default: agent workspace root only
 - if `allowOutsideWorkspace=true`: full host root allowed
-- extra allowed roots: enabled skill directories
+- extra allowed roots: enabled skill directories (from repo skill root, configured extra roots, and per-agent additional roots)
 
 This applies to native OrgOps tools only. `WRAPPED` agents do not use OrgOps tool filesystem access; their external runtime enforces its own filesystem policy.
 
@@ -430,8 +432,8 @@ Published topics include:
   - `DELETE /api/secrets/:id`
   - `DELETE /api/secrets` (by key/scope tuple)
   - `GET /api/secrets/env` (runner auth only)
-  - scope types: `public`, `team`, `private` (`package` remains supported as legacy compatibility scope)
-  - env resolution precedence: `private > team > public > package(legacy)`
+  - scope types: `public`, `team`, `private`, `human` (`package` remains supported as legacy compatibility scope)
+  - env resolution precedence: `private > human > team > public > package(legacy)`
 - skills:
   - `GET /api/skills`
   - the API resolves the skill root from `ORGOPS_PROJECT_ROOT` when set, otherwise from the API module location; `createApp({ projectRoot })` provides an explicit embedding/test override
@@ -564,6 +566,7 @@ Security note: wrapped `source`, `setup.command`, and `runtime.command` are host
 - `ORGOPS_EVENT_SHAPES_CACHE_TTL_MS`
 - `ORGOPS_RUNNER_ONLINE_THRESHOLD_MS`
 - `ORGOPS_PROJECT_ROOT`
+- `ORGOPS_SKILL_ROOTS` (optional comma-separated additional skill roots; repo `skills/` remains first)
 - `ORGOPS_LLM_STUB`
 - `ORGOPS_LLM_CALL_TIMEOUT_MS`
 - `ORGOPS_HISTORY_MAX_EVENTS`, `ORGOPS_HISTORY_MAX_CHARS`

@@ -3,14 +3,20 @@ import { buildRunnerGuidance } from "./prompt";
 
 describe("buildRunnerGuidance", () => {
   it("includes concrete runner host info for agent context", () => {
-    const guidance = buildRunnerGuidance(1_717_000_000_000, "2024-06-01T00:00:00.000Z", "/tmp/skills", [], {
+    const guidance = buildRunnerGuidance(
+      1_717_000_000_000,
+      "2024-06-01T00:00:00.000Z",
+      ["/tmp/skills"],
+      [],
+      {
       platform: "darwin",
       release: "24.6.0",
       arch: "arm64",
-      hostname: "my-macbook",
-      shell: "/bin/zsh",
-      nodeVersion: "v22.15.0",
-    });
+        hostname: "my-macbook",
+        shell: "/bin/zsh",
+        nodeVersion: "v22.15.0",
+      },
+    );
 
     expect(guidance).toContain("Runner host info (authoritative; do not guess):");
     expect(guidance).toContain("- platform: darwin");

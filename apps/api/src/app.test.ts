@@ -5869,6 +5869,90 @@ describe("api app", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("injects human scoped secrets only when agent owner delegation is enabled", async () => {
+    const previousMasterKey = process.env.ORGOPS_MASTER_KEY;
+    process.env.ORGOPS_MASTER_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+    const meRes = await app.request("http://localhost/api/auth/me", {
+      headers: { cookie },
+    });
+    expect(meRes.status).toBe(200);
+    const me = (await meRes.json()) as { id: string };
+
+    const privateAgentRes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "owner-agent",
+        modelId: "openai:gpt-4o-mini",
+        workspacePath: ".orgops-data/workspaces/owner-agent",
+        visibility: "PRIVATE",
+      }),
+    });
+    expect(privateAgentRes.status).toBe(201);
+
+    const createUserSecretRes = await app.request("http://localhost/api/secrets", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "SLACK_BOT_TOKEN",
+        scopeType: "human",
+        scopeId: me.id,
+        value: "xoxb-owner",
+      }),
+    });
+    expect(createUserSecretRes.status).toBe(201);
+
+    const envBeforeEnableRes = await app.request("http://localhost/api/secrets/env", {
+      headers: {
+        "x-orgops-runner-token": "test-token",
+        "x-orgops-agent-name": "owner-agent",
+      },
+    });
+    expect(envBeforeEnableRes.status).toBe(200);
+    const envBeforeEnable = (await envBeforeEnableRes.json()) as Record<string, string>;
+    expect(envBeforeEnable.SLACK_BOT_TOKEN).toBeUndefined();
+
+    const enableDelegationRes = await app.request("http://localhost/api/agents/owner-agent", {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        allowOwnerHumanSecrets: true,
+      }),
+    });
+    expect(enableDelegationRes.status).toBe(200);
+
+    const envAfterEnableRes = await app.request("http://localhost/api/secrets/env", {
+      headers: {
+        "x-orgops-runner-token": "test-token",
+        "x-orgops-agent-name": "owner-agent",
+      },
+    });
+    expect(envAfterEnableRes.status).toBe(200);
+    const envAfterEnable = (await envAfterEnableRes.json()) as Record<string, string>;
+    expect(envAfterEnable.SLACK_BOT_TOKEN).toBe("xoxb-owner");
+
+    if (previousMasterKey === undefined) delete process.env.ORGOPS_MASTER_KEY;
+    else process.env.ORGOPS_MASTER_KEY = previousMasterKey;
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("restricts scoped runners to private/team secrets and filters visible secrets", async () => {
     const previousMasterKey = process.env.ORGOPS_MASTER_KEY;
     process.env.ORGOPS_MASTER_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";

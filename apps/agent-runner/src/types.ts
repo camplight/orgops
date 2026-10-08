@@ -6,6 +6,7 @@ export type Agent = {
   soulContents?: string;
   enabledSkills?: string[];
   alwaysPreloadedSkills?: string[];
+  additionalSkillRoots?: string[];
   workspacePath: string;
   allowOutsideWorkspace?: boolean;
   llmCallTimeoutMs?: number | null;
@@ -22,6 +23,7 @@ export type Agent = {
   desiredState: string;
   runtimeState: string;
   assignedRunnerId?: string | null;
+  allowOwnerHumanSecrets?: boolean;
 };
 
 export type Event = {

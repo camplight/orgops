@@ -278,6 +278,22 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       : Boolean(row.allow_outside_workspace);
   }
 
+  function normalizeAdditionalSkillRoots(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+    const roots: string[] = [];
+    const seen = new Set<string>();
+    for (const entry of value) {
+      if (typeof entry !== "string") continue;
+      const raw = entry.trim();
+      if (!raw) continue;
+      const normalized = resolve(raw.startsWith("/") ? raw : resolve(PROJECT_ROOT, raw));
+      if (seen.has(normalized)) continue;
+      seen.add(normalized);
+      roots.push(normalized);
+    }
+    return roots;
+  }
+
   app.get("/api/agents", (c) => {
     const url = new URL(c.req.url);
     const assignedRunnerId = (url.searchParams.get("assignedRunnerId") ?? "").trim();
@@ -310,6 +326,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         soulContents: row.soul_contents ?? "",
         enabledSkills: parseStringArraySafe(row.enabled_skills_json),
         alwaysPreloadedSkills: parseStringArraySafe(row.always_preloaded_skills_json),
+        additionalSkillRoots: parseStringArraySafe(row.additional_skill_roots_json),
         workspacePath: row.workspace_path,
         allowOutsideWorkspace: getAgentAllowOutsideWorkspace(row),
         llmCallTimeoutMs: row.llm_call_timeout_ms ?? null,
@@ -330,6 +347,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
             ? AGENT_VISIBILITY.PRIVATE
             : AGENT_VISIBILITY.PUBLIC,
         ownerHumanId: row.owner_human_id ?? null,
+        allowOwnerHumanSecrets: Boolean(row.allow_owner_human_secrets),
       }))
         .filter((row) => access.canViewAgent(user, row.name))
     );
@@ -384,6 +402,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     const sanitizedAlwaysPreloadedSkills = enabledSkills.filter((name: string) =>
       alwaysPreloadedSkillsSet.has(name)
     );
+    const additionalSkillRoots = normalizeAdditionalSkillRoots(body.additionalSkillRoots);
     const mode = normalizeAgentMode(body.mode);
     const allowOutsideWorkspace = mode === "WRAPPED" ? false : Boolean(body.allowOutsideWorkspace);
     const llmCallTimeoutParsed = parseOptionalPositiveInt(body.llmCallTimeoutMs);
@@ -435,6 +454,10 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         401,
       );
     }
+    const allowOwnerHumanSecrets =
+      ownerHumanId && body.allowOwnerHumanSecrets !== undefined
+        ? Boolean(body.allowOwnerHumanSecrets)
+        : false;
     orm
       .insert(schema.agents)
       .values({
@@ -460,6 +483,8 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         assigned_runner_id: effectiveAssignedRunnerId,
         enabled_skills_json: JSON.stringify(enabledSkills),
         always_preloaded_skills_json: JSON.stringify(sanitizedAlwaysPreloadedSkills),
+        additional_skill_roots_json: JSON.stringify(additionalSkillRoots),
+        allow_owner_human_secrets: allowOwnerHumanSecrets ? 1 : 0,
         desired_state: body.desiredState ?? "RUNNING",
         runtime_state: body.runtimeState ?? "STOPPED",
         created_at: now,
@@ -489,6 +514,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       soulContents: row.soul_contents ?? "",
       enabledSkills: parseStringArraySafe(row.enabled_skills_json),
       alwaysPreloadedSkills: parseStringArraySafe(row.always_preloaded_skills_json),
+      additionalSkillRoots: parseStringArraySafe(row.additional_skill_roots_json),
       workspacePath: row.workspace_path,
       allowOutsideWorkspace: getAgentAllowOutsideWorkspace(row),
       llmCallTimeoutMs: row.llm_call_timeout_ms ?? null,
@@ -509,6 +535,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
           ? AGENT_VISIBILITY.PRIVATE
           : AGENT_VISIBILITY.PUBLIC,
       ownerHumanId: row.owner_human_id ?? null,
+      allowOwnerHumanSecrets: Boolean(row.allow_owner_human_secrets),
     });
   });
 
@@ -561,6 +588,9 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     const sanitizedAlwaysPreloadedSkillsJson = JSON.stringify(
       resolvedEnabledSkills.filter((name) => alwaysPreloadedSkillSet.has(name))
     );
+    const additionalSkillRootsJson = Array.isArray(body.additionalSkillRoots)
+      ? JSON.stringify(normalizeAdditionalSkillRoots(body.additionalSkillRoots))
+      : null;
     const allowOutsideWorkspace =
       body.allowOutsideWorkspace !== undefined
         ? (body.allowOutsideWorkspace ? 1 : 0)
@@ -643,6 +673,23 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     if (body.visibility !== undefined && !visibility) {
       return jsonResponse(c, { error: "visibility must be PUBLIC or PRIVATE" }, 400);
     }
+    const nextOwnerHumanId =
+      visibility === AGENT_VISIBILITY.PRIVATE
+        ? (existing.owner_human_id ?? user?.id ?? null)
+        : visibility === AGENT_VISIBILITY.PUBLIC
+          ? null
+          : existing.owner_human_id;
+    if (visibility === AGENT_VISIBILITY.PRIVATE && !nextOwnerHumanId) {
+      return jsonResponse(
+        c,
+        { error: "Authenticated human user required for private agents" },
+        401,
+      );
+    }
+    const allowOwnerHumanSecrets =
+      body.allowOwnerHumanSecrets !== undefined
+        ? Boolean(body.allowOwnerHumanSecrets) && Boolean(nextOwnerHumanId)
+        : Boolean(existing.allow_owner_human_secrets ?? 0) && Boolean(nextOwnerHumanId);
     orm
       .update(schema.agents)
       .set({
@@ -683,18 +730,16 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
           visibility !== undefined
             ? visibility
             : (existing.visibility ?? AGENT_VISIBILITY.PUBLIC),
-        owner_human_id:
-          visibility === AGENT_VISIBILITY.PRIVATE
-            ? (existing.owner_human_id ?? user?.id ?? null)
-            : visibility === AGENT_VISIBILITY.PUBLIC
-              ? null
-              : existing.owner_human_id,
+        owner_human_id: nextOwnerHumanId,
         assigned_runner_id:
           effectiveAssignedRunnerId !== undefined
             ? effectiveAssignedRunnerId
             : existing.assigned_runner_id,
         enabled_skills_json: enabledSkillsJson ?? existing.enabled_skills_json,
         always_preloaded_skills_json: sanitizedAlwaysPreloadedSkillsJson,
+        additional_skill_roots_json:
+          additionalSkillRootsJson ?? existing.additional_skill_roots_json,
+        allow_owner_human_secrets: allowOwnerHumanSecrets ? 1 : 0,
         desired_state: body.desiredState ?? existing.desired_state,
         runtime_state: body.runtimeState ?? existing.runtime_state,
         last_heartbeat_at: body.lastHeartbeatAt ?? existing.last_heartbeat_at,
