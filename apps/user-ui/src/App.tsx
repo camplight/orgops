@@ -10,6 +10,10 @@ import {
 import { apiFetch, apiJson, getApiHeaders } from "./api";
 import { wsUrl } from "./config";
 import type { Agent, AuthMe, Channel, ChannelParticipant, ChannelShare, EventRow, Team } from "./types";
+import { JsonRenderBlock } from "./JsonRenderBlock";
+import { OrgopsSecretInput } from "./OrgopsSecretInput";
+import { hasJsonRenderBlock, splitJsonRenderMarkdown } from "./jsonRenderMarkdown";
+import { hasSecretInputBlock, splitSecretInputMarkdown } from "./secretInputMarkdown";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -50,10 +54,20 @@ function messageText(event: EventRow) {
   return typeof text === "string" ? text : "";
 }
 
+function isHiddenUiActionMessage(event: EventRow) {
+  if (event.type !== "message.created") return false;
+  const payload = event.payload;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  const payloadRecord = payload as { eventType?: unknown; text?: unknown };
+  if (payloadRecord.eventType === "ui.json-render.action") return true;
+  const text = typeof payloadRecord.text === "string" ? payloadRecord.text.trim() : "";
+  return text.toLowerCase().startsWith("json-render action:");
+}
+
 function shouldRenderMarkdown(text: string) {
   const trimmed = text.trim();
   if (!trimmed) return false;
-  return MARKDOWN_HINT_RE.test(trimmed) || URL_RE.test(trimmed);
+  return hasJsonRenderBlock(trimmed) || hasSecretInputBlock(trimmed) || MARKDOWN_HINT_RE.test(trimmed) || URL_RE.test(trimmed);
 }
 
 function sourceLabel(source: string) {
@@ -651,7 +665,10 @@ export default function App() {
   }, [userId]);
 
   const visibleTimelineEvents = useMemo(
-    () => events.filter((event) => event.type === "message.created" || isTraceEvent(event)),
+    () =>
+      events.filter(
+        (event) => (event.type === "message.created" && !isHiddenUiActionMessage(event)) || isTraceEvent(event)
+      ),
     [events]
   );
 
@@ -926,6 +943,7 @@ export default function App() {
 
   function newestMessageTime(channelEvents: EventRow[]) {
     return channelEvents.reduce((newest, event) => {
+      if (isHiddenUiActionMessage(event)) return newest;
       if (event.type !== "message.created" && event.type !== "agent.turn.failed") return newest;
       return Math.max(newest, event.createdAt ?? 0);
     }, 0);
@@ -933,6 +951,7 @@ export default function App() {
 
   function newestTimelineEventTime(channelEvents: EventRow[]) {
     return channelEvents.reduce((newest, event) => {
+      if (isHiddenUiActionMessage(event)) return newest;
       if (event.type !== "message.created" && !isTraceEvent(event)) return newest;
       return Math.max(newest, event.createdAt ?? 0);
     }, 0);
@@ -1150,6 +1169,7 @@ export default function App() {
       const nextCounts: Record<string, number> = {};
       for (const event of nextEvents) {
         if (!event.channelId || event.channelId === activeId) continue;
+        if (isHiddenUiActionMessage(event)) continue;
         const channel = channels.find((candidate) => candidate.id === event.channelId);
         if (channel?.archivedAt) continue;
         if ((event.createdAt ?? 0) > (lastSeenByChannelRef.current[event.channelId] ?? 0)) {
@@ -1169,8 +1189,11 @@ export default function App() {
 
     const currentActiveId = activeChannelIdRef.current;
     if (eventChannelId === currentActiveId && (event.type === "message.created" || isTraceEvent(event))) {
+      const hiddenUiAction = isHiddenUiActionMessage(event);
       const shouldAutoScroll = isMessagesPanelNearBottom();
-      setEvents((current) => mergeEventsChronologically(current, [event]));
+      if (!hiddenUiAction) {
+        setEvents((current) => mergeEventsChronologically(current, [event]));
+      }
       if (event.type === "message.created" || event.type === "agent.turn.failed") {
         const eventCreatedAt = event.createdAt ?? 0;
         if (eventCreatedAt > 0) {
@@ -1197,6 +1220,7 @@ export default function App() {
         delete next[eventChannelId];
         return next;
       });
+      if (hiddenUiAction) return;
       if (shouldAutoScroll) {
         setHasNewMessagesBelow(false);
         scrollMessagesToBottom();
@@ -1207,6 +1231,7 @@ export default function App() {
     }
 
     if (event.type !== "message.created") return;
+    if (isHiddenUiActionMessage(event)) return;
     if (eventChannelId === currentActiveId) return;
 
     const channel = channelsRef.current.find((candidate) => candidate.id === eventChannelId);
@@ -2250,16 +2275,38 @@ export default function App() {
                       </div>
                       {markdown ? (
                         <div className="message-markdown">
-                          <ReactMarkdown
-                            remarkPlugins={[remarkGfm]}
-                            components={{
-                              a: ({ node: _node, ...props }) => (
-                                <a {...props} target="_blank" rel="noreferrer" />
+                          {splitJsonRenderMarkdown(text).map((jsonPart, jsonIndex) =>
+                            jsonPart.kind === "json-render" ? (
+                              <JsonRenderBlock
+                                canPost={activeChannelCanPost && !activeChannel?.archivedAt}
+                                channelId={activeChannelId}
+                                key={`${event.id}-json-render-${jsonIndex}`}
+                                specText={jsonPart.specText}
+                                username={username}
+                              />
+                            ) : (
+                              splitSecretInputMarkdown(jsonPart.text).map((secretPart, secretIndex) =>
+                                secretPart.kind === "secret-input" ? (
+                                  <OrgopsSecretInput
+                                    key={`${event.id}-secret-input-${jsonIndex}-${secretIndex}`}
+                                    spec={secretPart.spec}
+                                  />
+                                ) : (
+                                  <ReactMarkdown
+                                    remarkPlugins={[remarkGfm]}
+                                    components={{
+                                      a: ({ node: _node, ...props }) => (
+                                        <a {...props} target="_blank" rel="noreferrer" />
+                                      )
+                                    }}
+                                    key={`${event.id}-markdown-${jsonIndex}-${secretIndex}`}
+                                  >
+                                    {secretPart.text}
+                                  </ReactMarkdown>
+                                )
                               )
-                            }}
-                          >
-                            {text}
-                          </ReactMarkdown>
+                            )
+                          )}
                         </div>
                       ) : (
                         <p>{text}</p>
