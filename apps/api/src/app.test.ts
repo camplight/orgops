@@ -6163,4 +6163,85 @@ describe("api app", () => {
     else process.env.ORGOPS_MASTER_KEY = previousMasterKey;
     rmSync(dataDir, { recursive: true, force: true });
   });
+
+  it("encrypts sensitive message payloads and reveals them only after password verification", async () => {
+    const previousMasterKey = process.env.ORGOPS_MASTER_KEY;
+    process.env.ORGOPS_MASTER_KEY = Buffer.alloc(32, 7).toString("base64");
+
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const channelRes = await app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ name: "sensitive-demo" }),
+    });
+    expect(channelRes.status).toBe(201);
+    const channel = (await channelRes.json()) as { id: string };
+
+    const createEventRes = await app.request("http://localhost/api/events", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        type: "message.created",
+        source: "human:admin",
+        channelId: channel.id,
+        payload: {
+          text: "A sensitive response is available below.",
+          sensitive: {
+            plaintext: "root_password = hunter2",
+            hint: "Contains temporary credentials",
+          },
+        },
+      }),
+    });
+    expect(createEventRes.status).toBe(201);
+    const created = (await createEventRes.json()) as {
+      id: string;
+      payload?: { sensitive?: { ciphertextB64?: string; plaintext?: string } };
+    };
+    const ciphertextB64 = created.payload?.sensitive?.ciphertextB64 ?? "";
+    expect(ciphertextB64.length).toBeGreaterThan(16);
+    expect(created.payload?.sensitive?.plaintext).toBeUndefined();
+
+    const wrongPasswordRevealRes = await app.request(
+      `http://localhost/api/events/${encodeURIComponent(created.id)}/reveal-sensitive`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ password: "wrong-password" }),
+      },
+    );
+    expect(wrongPasswordRevealRes.status).toBe(401);
+
+    const revealRes = await app.request(
+      `http://localhost/api/events/${encodeURIComponent(created.id)}/reveal-sensitive`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ password: "admin" }),
+      },
+    );
+    expect(revealRes.status).toBe(200);
+    const revealBody = (await revealRes.json()) as { text?: string };
+    expect(revealBody.text).toBe("root_password = hunter2");
+
+    if (previousMasterKey === undefined) delete process.env.ORGOPS_MASTER_KEY;
+    else process.env.ORGOPS_MASTER_KEY = previousMasterKey;
+    rmSync(dataDir, { recursive: true, force: true });
+  });
 });

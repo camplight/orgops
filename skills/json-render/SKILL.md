@@ -115,3 +115,32 @@ Props:
 - Prefer `SecretInput` or `<orgops-secret-input ...>` over plain text instructions.
 - Never echo secret values back in messages.
 
+## Sensitive response pattern
+
+If an agent must return sensitive output (credentials, private keys, reset URLs), do not place that value in plain markdown or inside a `json-render` block.
+
+Use the event contract:
+
+- send `message.created.payload.text` as safe preview only
+- send actual secret in `message.created.payload.sensitive.plaintext`
+- include optional `payload.sensitive.hint` for context
+
+Example event shape:
+
+```json
+{
+  "type": "message.created",
+  "channelId": "<channel-id>",
+  "source": "agent:<name>",
+  "payload": {
+    "text": "Sensitive value available. Reveal with password.",
+    "sensitive": {
+      "plaintext": "DATABASE_URL=...",
+      "hint": "Temporary staging credential"
+    }
+  }
+}
+```
+
+UI can still use `json-render` for follow-up actions (copy flow guidance, rotate button, next steps), but the secret itself should travel via `payload.sensitive`.
+

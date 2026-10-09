@@ -208,6 +208,13 @@ Envelope fields used by API/runner:
 - scheduling: `deliverAt`
 - dedupe: `idempotencyKey`
 
+`message.created` accepts optional `payload.sensitive` metadata for protected content:
+
+- sender-safe preview remains in `payload.text`
+- secret text may be sent as `payload.sensitive.plaintext` (or pre-encrypted `ciphertextB64`)
+- API encrypts plaintext into `payload.sensitive.ciphertextB64` using `ORGOPS_MASTER_KEY` before persistence
+- reveal requires `POST /api/events/:id/reveal-sensitive` with the caller's current password
+
 Validation is dynamic and composed from:
 
 - core definitions: `packages/schemas/src/event-shapes.ts`
@@ -302,6 +309,7 @@ Published topics include:
 - `POST /api/auth/logout`
 - `GET /api/auth/me`
 - `PATCH /api/auth/profile`
+- password verification for sensitive reveals: `POST /api/events/:id/reveal-sensitive`
 - `GET /api/humans`
 - `POST /api/humans/invite`
 - `POST /api/humans/:id/reset-temp-password`
@@ -395,6 +403,7 @@ Published topics include:
   - `scheduled=1&includeConsumed=1` returns scheduled history (both future and consumed)
 - `GET /api/events/:id`
 - `PATCH /api/events/:id` (future scheduled `PENDING` events only)
+- `POST /api/events/:id/reveal-sensitive` (human auth + password check; decrypts `message.created.payload.sensitive`)
 - `POST /api/events/:id/ack`
 - `POST /api/events/:id/fail`
 - `DELETE /api/events` (filtered or all clear)

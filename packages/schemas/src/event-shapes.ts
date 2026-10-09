@@ -114,6 +114,15 @@ const coreEventShapes: EventShapeDefinition[] = [
         .object({
           text: z.string().min(1),
           eventType: z.string().min(1).optional(),
+          sensitive: z
+            .object({
+              ciphertextB64: z.string().min(1),
+              algorithm: z.string().min(1).optional(),
+              hint: z.string().min(1).optional(),
+              requiresPassword: z.boolean().optional(),
+            })
+            .passthrough()
+            .optional(),
           hopCount: z.number().int().nonnegative().optional(),
           inReplyTo: z.string().min(1).optional(),
           intent: z
@@ -528,6 +537,12 @@ const coreEventShapes: EventShapeDefinition[] = [
   {
     type: "audit.secret.deleted",
     description: "Audit record for secret deletion.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "audit.sensitive_message.revealed",
+    description: "Audit record for revealing encrypted sensitive message content.",
     source: "core",
     payloadSchema: z.record(z.string(), z.unknown()),
   },
