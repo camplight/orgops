@@ -629,3 +629,40 @@ Security note: wrapped `source`, `setup.command`, and `runtime.command` are host
   - `ORGOPS_OPSCLI_SPINNER`
   - `ORGOPS_OPSCLI_LOG_PATH`
   - `ORGOPS_OPSCLI_DOUBLE_SIGINT_MS`
+
+### Google Workspace identity
+
+Migration 037 adds `human_identities` (stable Google subject → human mapping) and
+`google_auth_settings` (one instance's domain, enabled flag and default team).
+Client ID, secret and the exact public callback URI are server environment values:
+`ORGOPS_GOOGLE_CLIENT_ID`, `ORGOPS_GOOGLE_CLIENT_SECRET`, `ORGOPS_GOOGLE_REDIRECT_URI`.
+Secrets are not stored in settings or returned over HTTP. Sign-in defaults off.
+
+Public endpoints, registered before the normal API auth middleware:
+
+- `GET /api/auth/google/config`: effective enabled flag and allowed Workspace domain.
+- `GET /api/auth/google/start`: authorization-code flow with PKCE S256, nonce,
+  five-minute single-use state and browser-bound HttpOnly SameSite=Lax cookie.
+  `returnTo` accepts only `/` or `/admin/`.
+- `GET /api/auth/google/callback`: exchanges the code and verifies the ID token
+  using Google's library (signature, issuer, audience and expiry), then verifies
+  nonce, verified email and exact hosted-domain/email-domain match. Failure redirects
+  with a fixed error code, never provider error details or tokens.
+- `GET/PUT /api/auth/google/settings`: authenticated instance owner only (first
+  seeded human), excluding runners. PUT JSON accepts `enabled`, `allowedDomain`,
+  `teamName`. Enabling requires server credentials and a valid callback URI.
+  Saving invalidates pending flows and all Google sessions; local sessions remain.
+
+A first valid login atomically creates a human and adds it to the configured team,
+creating the team if absent. Repeat logins map Google's subject, not email, to the
+same human. Email collisions with existing local accounts are rejected; no implicit
+account linking. Google-created humans cannot use local password login (including
+passwords reset by the existing admin API) or edit the local password/profile.
+The existing resource permissions apply; no new administrator role is assigned.
+
+Google sessions rotate on login and expire after eight hours; restart clears them
+as with local sessions. Password sign-in remains available to local accounts for
+recovery. No Directory API, directory synchronization, invitation emails, Google
+refresh tokens or automatic Workspace suspension handling are included. WebSocket connections recheck sessions before processing messages or delivering
+events, including deferred events. Expired/revoked connections close on their
+next activity; idle sockets are not proactively disconnected.

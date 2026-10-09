@@ -58,8 +58,16 @@ export function registerWsRoutes(app: Hono<any>, deps: WsDeps) {
       const subscriptions = new Set<string>();
       const unsubscribeByTopic = new Map<string, () => void>();
       const deferredSendTimers = new Map<string, ReturnType<typeof setTimeout>>();
-      const send = (ws: { send: (data: string) => void }, data: WsServerMessage) =>
-        ws.send(JSON.stringify(data));
+      type Socket = { send: (data: string) => void; close?: (code: number, reason: string) => void };
+      const validSession = (ws: Socket) => {
+        const current = resolveRequestUser(c);
+        if (user && current && current.username === user.username && current.id === user.id) return true;
+        ws.close?.(1008, "Session expired");
+        return false;
+      };
+      const send = (ws: Socket, data: WsServerMessage) => {
+        if (validSession(ws)) ws.send(JSON.stringify(data));
+      };
       const clearDeferredForTopic = (topic: string) => {
         for (const [key, timer] of deferredSendTimers.entries()) {
           if (!key.startsWith(`${topic}:`)) continue;
@@ -69,9 +77,8 @@ export function registerWsRoutes(app: Hono<any>, deps: WsDeps) {
       };
       return {
         onMessage: (event: { data: string | Uint8Array }, ws: { send: (data: string) => void }) => {
-          if (!user) {
-            return send(ws, { type: "error", message: "Unauthorized" });
-          }
+          if (!user) return ws.send(JSON.stringify({type: "error", message: "Unauthorized"}));
+          if (!validSession(ws)) return;
           const message = JSON.parse(event.data.toString()) as WsMessage;
           if (message.type === "ping") {
             return send(ws, { type: "subscribed", topic: "pong" });

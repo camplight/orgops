@@ -1,3 +1,4 @@
+import { registerGoogleAuthRoutes, type HumanSession } from './routes/google-auth';
 import { Hono } from "hono";
 import { createNodeWebSocket } from "@hono/node-ws";
 import { mkdirSync } from "node:fs";
@@ -96,10 +97,7 @@ export function createApp(config: AppConfig = {}) {
   const orm = createDrizzleDb(db);
 
   const bus = new EventBus<WsServerMessage>();
-  const sessions = new Map<
-    string,
-    { id?: string; username: string; mustChangePassword: boolean }
-  >();
+  const sessions = new Map<string, HumanSession>();
 
   const ADMIN_USER =
     config.adminUser ?? process.env.ORGOPS_ADMIN_USER ?? "admin";
@@ -241,7 +239,10 @@ export function createApp(config: AppConfig = {}) {
     const match = cookie.match(/orgops_session=([^;]+)/);
     if (!match) return jsonResponse(c, { error: "Unauthorized" }, 401);
     const session = sessions.get(match[1]);
-    if (!session) return jsonResponse(c, { error: "Unauthorized" }, 401);
+    if (!session || (session.expiresAt && session.expiresAt <= Date.now())) {
+      sessions.delete(match[1]);
+      return jsonResponse(c, { error: "Unauthorized" }, 401);
+    }
     c.set("user", session);
     return next();
   }
@@ -416,7 +417,10 @@ export function createApp(config: AppConfig = {}) {
 
   const access = createAccessControl({ orm });
 
+  registerGoogleAuthRoutes(app as any, {db, sessions, hashPassword, requireAuth});
+
   registerAuthRoutes(app as any, {
+    isGoogleHuman: (id) => Boolean(db.prepare("SELECT 1 FROM human_identities WHERE human_id=?").get(id)),
     orm,
     humanSchema: schema.humans,
     RUNNER_TOKEN,
@@ -513,7 +517,12 @@ export function createApp(config: AppConfig = {}) {
       const cookie = c.req.header("cookie") ?? "";
       const match = cookie.match(/orgops_session=([^;]+)/);
       if (!match) return null;
-      return sessions.get(match[1]) ?? null;
+      const session = sessions.get(match[1]);
+      if (!session || (session.expiresAt && session.expiresAt <= Date.now())) {
+        sessions.delete(match[1]);
+        return null;
+      }
+      return session;
     },
     access,
   });

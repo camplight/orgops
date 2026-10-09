@@ -6,6 +6,7 @@ type AuthDeps = {
   orm: any;
   humanSchema: any;
   RUNNER_TOKEN: string;
+  isGoogleHuman: (id: string) => boolean;
   sessions: Map<string, { id?: string; username: string; mustChangePassword: boolean }>;
   AuthLoginSchema: { safeParse: (data: unknown) => { success: boolean; data?: any } };
   jsonResponse: (c: any, data: unknown, status?: number) => Response;
@@ -44,7 +45,7 @@ function shouldUseSecureCookie(c: any): boolean {
   return isRequestHttps(c);
 }
 
-function buildSessionCookie(c: any, sessionId: string, maxAge: number | null = null) {
+export function buildSessionCookie(c: any, sessionId: string, maxAge: number | null = null) {
   const parts = [
     `orgops_session=${sessionId}`,
     "HttpOnly",
@@ -90,7 +91,7 @@ export function registerAuthRoutes(app: Hono<any>, deps: AuthDeps) {
           must_change_password: number;
         }
       | undefined;
-    if (!human || !verifyPassword(password, human.password_hash)) {
+    if (!human || deps.isGoogleHuman(human.id) || !verifyPassword(password, human.password_hash)) {
       return jsonResponse(c, { error: "Invalid credentials" }, 401);
     }
     const sessionId = randomUUID();
@@ -144,6 +145,7 @@ export function registerAuthRoutes(app: Hono<any>, deps: AuthDeps) {
     if (!user.id || user.username === "runner") {
       return jsonResponse(c, { error: "Authenticated human user required" }, 401);
     }
+    if (deps.isGoogleHuman(user.id)) return jsonResponse(c, { error: "Google manages this account profile" }, 403);
     const body = await c.req.json().catch(() => ({}));
     const nextUsername =
       typeof body.username === "string" ? body.username.trim() : user.username;
