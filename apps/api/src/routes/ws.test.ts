@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { RequestUser } from "./access";
 import {
+  registerWsRoutes,
   getDeferredWsDeliveryDelayMs,
   shouldForwardWsPayload,
   type WsServerMessage,
@@ -89,4 +90,28 @@ describe("ws scheduling visibility", () => {
     };
     expect(getDeferredWsDeliveryDelayMs(humanUser(), payload, 1000)).toBeNull();
   });
+});
+
+
+it("revalidates sessions before forwarding events on an existing socket", () => {
+  let current: RequestUser | null = {id: "human", username: "person", mustChangePassword: false};
+  let factory: any;
+  let deliver: (payload: WsServerMessage) => void = () => {};
+  const socket = {send: vi.fn(), close: vi.fn()};
+  registerWsRoutes({get: vi.fn()} as any, {
+    upgradeWebSocket: (fn: any) => { factory = fn; },
+    resolveRequestUser: () => current,
+    access: {canViewChannel: () => true} as any,
+    bus: {subscribe: (_topic: string, handler: typeof deliver) => {deliver = handler; return () => {};}} as any,
+  });
+  const handlers = factory({});
+  handlers.onMessage({data: JSON.stringify({type: "subscribe", topic: "channel:test"})}, socket);
+  expect(socket.send).toHaveBeenCalledTimes(1);
+  current = null;
+  deliver({type: "event", topic: "channel:test", data: {id: "private"}});
+  expect(socket.send).toHaveBeenCalledTimes(1);
+  expect(socket.close).toHaveBeenCalledWith(1008, "Session expired");
+  handlers.onMessage({data: JSON.stringify({type: "ping"})}, socket);
+  expect(socket.send).toHaveBeenCalledTimes(1);
+  handlers.onClose();
 });

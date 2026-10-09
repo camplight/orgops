@@ -177,6 +177,17 @@ export const humans = sqliteTable("humans", {
   invited_by_human_id: text("invited_by_human_id")
 });
 
+export const humanIdentities = sqliteTable("human_identities", {
+  provider: text("provider").notNull(), subject: text("subject").notNull(),
+  human_id: text("human_id").notNull().references(() => humans.id, {onDelete: "cascade"}),
+  email: text("email").notNull(), hosted_domain: text("hosted_domain").notNull(),
+  created_at: integer("created_at").notNull(), last_login_at: integer("last_login_at").notNull(),
+}, table => ({pk: primaryKey({columns: [table.provider, table.subject]}), identityHuman: uniqueIndex("identity_human").on(table.provider, table.human_id)}));
+export const googleAuthSettings = sqliteTable("google_auth_settings", {
+  id: integer("id").primaryKey(), enabled: integer("enabled").notNull().default(0),
+  allowed_domain: text("allowed_domain").notNull(), team_name: text("team_name").notNull(), updated_at: integer("updated_at").notNull(),
+});
+
 export const teamMemberships = sqliteTable(
   "team_memberships",
   {
@@ -504,6 +515,8 @@ export const schema = {
   runnerNodes,
   teams,
   humans,
+  humanIdentities,
+  googleAuthSettings,
   integrationKeys,
   agentInvites,
   runnerTokens,
