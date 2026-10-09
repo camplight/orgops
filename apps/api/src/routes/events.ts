@@ -2,6 +2,7 @@ import type { Hono } from "hono";
 import { openDb, schema, type OrgOpsDrizzleDb } from "@orgops/db";
 import type { SkillMeta, SkillRoot } from "@orgops/skills";
 import type { EventShapeDefinition } from "@orgops/schemas";
+import { decryptSecret, encryptSecret, parseMasterKey } from "@orgops/crypto";
 import { z } from "zod";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -64,6 +65,7 @@ type EventsDeps = {
     shapes: EventShapeDefinition[],
   ) => Array<{ type: string; description: string; source: string; payloadExample?: unknown }>;
   access: AccessControl;
+  verifyPassword: (password: string, hashed: string) => boolean;
 };
 
 export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
@@ -80,6 +82,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     validateEventAgainstShapes,
     serializeEventShapes,
     access,
+    verifyPassword,
   } = deps;
   const EventSchema = deps.EventSchema;
   const EVENT_SHAPES_CACHE_TTL_MS = Number(process.env.ORGOPS_EVENT_SHAPES_CACHE_TTL_MS ?? 3000);
@@ -113,6 +116,71 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
         });
       }
     });
+
+  type SensitiveMessageInput = {
+    ciphertextB64?: unknown;
+    plaintext?: unknown;
+    text?: unknown;
+    value?: unknown;
+    previewText?: unknown;
+    hint?: unknown;
+    requiresPassword?: unknown;
+  };
+
+  function stringValue(value: unknown) {
+    return typeof value === "string" ? value.trim() : "";
+  }
+
+  function getMasterKeyOrThrow() {
+    const raw = process.env.ORGOPS_MASTER_KEY ?? "";
+    if (!raw.trim()) {
+      throw new Error("Sensitive messages require ORGOPS_MASTER_KEY to be configured.");
+    }
+    return parseMasterKey(raw);
+  }
+
+  function normalizeSensitiveMessagePayload(type: string, payload: unknown) {
+    if (type !== "message.created") return payload;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return payload;
+    const payloadRecord = { ...(payload as Record<string, unknown>) };
+    const sensitiveRaw = payloadRecord.sensitive;
+    if (!sensitiveRaw || typeof sensitiveRaw !== "object" || Array.isArray(sensitiveRaw)) {
+      return payloadRecord;
+    }
+
+    const sensitive = sensitiveRaw as SensitiveMessageInput;
+    const plaintext =
+      stringValue(sensitive.plaintext) ||
+      stringValue(sensitive.text) ||
+      stringValue(sensitive.value);
+    let ciphertextB64 = stringValue(sensitive.ciphertextB64);
+    if (!ciphertextB64 && plaintext) {
+      ciphertextB64 = encryptSecret(getMasterKeyOrThrow(), plaintext);
+    }
+    if (!ciphertextB64) return payloadRecord;
+
+    const hint = stringValue(sensitive.hint);
+    const previewText = stringValue(sensitive.previewText);
+    const existingText = stringValue(payloadRecord.text);
+
+    payloadRecord.sensitive = {
+      ciphertextB64,
+      algorithm: "aes-256-gcm",
+      requiresPassword: sensitive.requiresPassword !== false,
+      ...(hint ? { hint } : {}),
+    };
+    if (!existingText) {
+      payloadRecord.text = previewText || "Sensitive message locked. Reveal with your password.";
+    }
+    return payloadRecord;
+  }
+
+  function extractSensitiveCiphertext(payload: unknown) {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return "";
+    const sensitiveRaw = (payload as { sensitive?: unknown }).sensitive;
+    if (!sensitiveRaw || typeof sensitiveRaw !== "object" || Array.isArray(sensitiveRaw)) return "";
+    return stringValue((sensitiveRaw as { ciphertextB64?: unknown }).ciphertextB64);
+  }
 
   async function getEventShapes() {
     const now = Date.now();
@@ -698,12 +766,16 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       return jsonResponse(c, { error: "Forbidden" }, 403);
     }
 
+    const normalizedPayload = normalizeSensitiveMessagePayload(
+      type,
+      parsed.data.payload ?? {},
+    );
     const eventShapes = await getEventShapes();
     const validationResult = validateEventAgainstShapes(
       {
         type,
         source,
-        payload: parsed.data.payload ?? {},
+        payload: normalizedPayload,
         channelId: parsed.data.channelId,
         parentEventId: parsed.data.parentEventId,
         deliverAt: parsed.data.deliverAt,
@@ -724,7 +796,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     const postMembershipError = scheduledTriggerMembershipError(
       type,
       parsed.data.channelId,
-      parsed.data.payload ?? {},
+      normalizedPayload,
     );
     if (postMembershipError) {
       return jsonResponse(c, { error: postMembershipError }, 400);
@@ -739,7 +811,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       if (existing) return jsonResponse(c, eventRowToApi(existing), 200);
     }
 
-    const row = insertEvent({ ...parsed.data, type, source });
+    const row = insertEvent({ ...parsed.data, type, source, payload: normalizedPayload });
     return jsonResponse(c, eventRowToApi(row), 201);
   });
 
@@ -859,7 +931,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     }
 
     const nextType = parsed.data.type ?? existing.type;
-    const nextPayload =
+    const rawNextPayload =
       parsed.data.payload !== undefined
         ? parsed.data.payload
         : (() => {
@@ -869,6 +941,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
               return {};
             }
           })();
+    const nextPayload = normalizeSensitiveMessagePayload(nextType, rawNextPayload);
     const nextChannelId =
       parsed.data.channelId !== undefined
         ? parsed.data.channelId
@@ -933,6 +1006,72 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     }
     publishEventRow(updated);
     return jsonResponse(c, eventRowToApi(updated));
+  });
+
+  app.post("/api/events/:id/reveal-sensitive", async (c) => {
+    const id = c.req.param("id");
+    const user = c.get("user") as RequestUser | undefined;
+    if (!user?.username || user.username === "runner") {
+      return jsonResponse(c, { error: "Authenticated human user required" }, 401);
+    }
+
+    const body = (await c.req.json().catch(() => ({}))) as { password?: unknown };
+    const password = typeof body.password === "string" ? body.password : "";
+    if (!password) {
+      return jsonResponse(c, { error: "password is required" }, 400);
+    }
+
+    const human = orm
+      .select({
+        id: schema.humans.id,
+        username: schema.humans.username,
+        passwordHash: schema.humans.password_hash,
+      })
+      .from(schema.humans)
+      .where(eq(schema.humans.username, user.username))
+      .get() as { id: string; username: string; passwordHash: string } | undefined;
+    if (!human || !verifyPassword(password, human.passwordHash)) {
+      return jsonResponse(c, { error: "Invalid credentials" }, 401);
+    }
+
+    const row = orm
+      .select()
+      .from(schema.events)
+      .where(eq(schema.events.id, id))
+      .get() as any | undefined;
+    if (!row) return jsonResponse(c, { error: "Not found" }, 404);
+    if (row.channel_id && !access.canViewChannel(user, row.channel_id)) {
+      return jsonResponse(c, { error: "Not found" }, 404);
+    }
+
+    let payload: unknown = {};
+    try {
+      payload = JSON.parse(row.payload_json ?? "{}");
+    } catch {
+      payload = {};
+    }
+    const ciphertextB64 = extractSensitiveCiphertext(payload);
+    if (!ciphertextB64) {
+      return jsonResponse(c, { error: "Event does not contain sensitive content" }, 400);
+    }
+
+    try {
+      const plaintext = decryptSecret(getMasterKeyOrThrow(), ciphertextB64);
+      insertEvent({
+        type: "audit.sensitive_message.revealed",
+        source: `human:${user.username}`,
+        channelId: row.channel_id ?? undefined,
+        payload: {
+          eventId: row.id,
+          eventType: row.type,
+          revealedBy: user.username,
+        },
+        status: "DELIVERED",
+      });
+      return jsonResponse(c, { ok: true, text: plaintext });
+    } catch {
+      return jsonResponse(c, { error: "Unable to decrypt sensitive content" }, 422);
+    }
   });
 
   app.get("/api/events", (c) => {
