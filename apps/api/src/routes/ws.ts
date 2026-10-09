@@ -77,7 +77,8 @@ export function registerWsRoutes(app: Hono<any>, deps: WsDeps) {
       };
       return {
         onMessage: (event: { data: string | Uint8Array }, ws: { send: (data: string) => void }) => {
-          if (!user || !validSession(ws)) return;
+          if (!user) return ws.send(JSON.stringify({type: "error", message: "Unauthorized"}));
+          if (!validSession(ws)) return;
           const message = JSON.parse(event.data.toString()) as WsMessage;
           if (message.type === "ping") {
             return send(ws, { type: "subscribed", topic: "pong" });
