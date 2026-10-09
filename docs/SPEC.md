@@ -508,7 +508,7 @@ Current tool families exposed to models:
   - `events_emit`
   - `events_channel_messages`, `events_search`
   - `events_channel_create`, `events_channel_update`, `events_channel_delete`
-  - `events_channel_participants`, `events_channel_participant_add`, `events_channel_participant_remove`
+  - `events_channel_participants`, `events_channel_participant_add`, `events_channel_participant_remove` (participant add/remove supports `AGENT` and `HUMAN`; legacy `agentName` alias still maps to `AGENT`)
   - `events_channels_list`, `events_event_types`, `events_scheduled_create`, `events_schedule_self`
 - agent management helpers:
   - `agents_search`, `agents_create`
