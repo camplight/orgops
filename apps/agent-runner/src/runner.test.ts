@@ -2482,6 +2482,214 @@ describe("agent runner", () => {
     expect(result.error).toContain("Integration bridge channels");
   });
 
+  it("adds a HUMAN channel participant via events_channel_participant_add", async () => {
+    const requests: Array<{ path: string; body: any }> = [];
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        soulContents: "role prompt",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async (path: string, init?: RequestInit) => {
+        requests.push({
+          path,
+          body: JSON.parse(String(init?.body ?? "{}")),
+        });
+        if (path === "/api/channels") {
+          return new Response(
+            JSON.stringify([{ id: "chan-1", name: "team", kind: "GROUP", participants: [] }]),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+    };
+
+    const result = (await executeTool(ctx, "events_channel_participant_add", {
+      channelId: "chan-1",
+      subscriberType: "human",
+      subscriberId: "alice",
+    })) as {
+      ok?: boolean;
+      channelId?: string;
+      subscriberType?: string;
+      subscriberId?: string;
+      error?: string;
+    };
+
+    expect(result.error).toBeUndefined();
+    expect(result.ok).toBe(true);
+    expect(result.channelId).toBe("chan-1");
+    expect(result.subscriberType).toBe("HUMAN");
+    expect(result.subscriberId).toBe("alice");
+    expect(requests[0]?.path).toBe("/api/channels");
+    expect(requests[1]?.path).toBe("/api/channels/chan-1/subscribe");
+    expect(requests[1]?.body).toEqual({
+      subscriberType: "HUMAN",
+      subscriberId: "alice",
+    });
+  });
+
+  it("keeps legacy agentName args for events_channel_participant_add", async () => {
+    const requests: Array<{ path: string; body: any }> = [];
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        soulContents: "role prompt",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async (path: string, init?: RequestInit) => {
+        requests.push({
+          path,
+          body: JSON.parse(String(init?.body ?? "{}")),
+        });
+        if (path === "/api/channels") {
+          return new Response(
+            JSON.stringify([{ id: "chan-1", name: "team", kind: "GROUP", participants: [] }]),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+    };
+
+    const result = (await executeTool(ctx, "events_channel_participant_add", {
+      channelId: "chan-1",
+      agentName: "worker-a",
+    })) as {
+      ok?: boolean;
+      subscriberType?: string;
+      subscriberId?: string;
+      agentName?: string;
+      error?: string;
+    };
+
+    expect(result.error).toBeUndefined();
+    expect(result.ok).toBe(true);
+    expect(result.subscriberType).toBe("AGENT");
+    expect(result.subscriberId).toBe("worker-a");
+    expect(result.agentName).toBe("worker-a");
+    expect(requests[1]?.path).toBe("/api/channels/chan-1/subscribe");
+    expect(requests[1]?.body).toEqual({
+      subscriberType: "AGENT",
+      subscriberId: "worker-a",
+    });
+  });
+
+  it("removes a HUMAN channel participant via events_channel_participant_remove", async () => {
+    const requests: Array<{ path: string; body: any }> = [];
+    const ctx = {
+      agent: {
+        name: "tester",
+        systemInstructions: "",
+        soulPath: "",
+        soulContents: "role prompt",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async (path: string, init?: RequestInit) => {
+        requests.push({
+          path,
+          body: JSON.parse(String(init?.body ?? "{}")),
+        });
+        if (path === "/api/channels") {
+          return new Response(
+            JSON.stringify([{ id: "chan-1", name: "team", kind: "GROUP", participants: [] }]),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+    };
+
+    const result = (await executeTool(ctx, "events_channel_participant_remove", {
+      channelId: "chan-1",
+      subscriberType: "HUMAN",
+      subscriberId: "alice",
+    })) as {
+      ok?: boolean;
+      channelId?: string;
+      subscriberType?: string;
+      subscriberId?: string;
+      error?: string;
+    };
+
+    expect(result.error).toBeUndefined();
+    expect(result.ok).toBe(true);
+    expect(result.channelId).toBe("chan-1");
+    expect(result.subscriberType).toBe("HUMAN");
+    expect(result.subscriberId).toBe("alice");
+    expect(requests[0]?.path).toBe("/api/channels");
+    expect(requests[1]?.path).toBe("/api/channels/chan-1/unsubscribe");
+    expect(requests[1]?.body).toEqual({
+      subscriberType: "HUMAN",
+      subscriberId: "alice",
+    });
+  });
+
   it("joins the current channel with default agent via events_channel_join", async () => {
     const requests: Array<{ path: string; body: any }> = [];
     const ctx = {

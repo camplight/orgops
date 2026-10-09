@@ -97,15 +97,56 @@ const channelParticipantsSchema = z.object({
   channelId: z.string().min(1),
 });
 
-const channelParticipantAddSchema = z.object({
-  channelId: z.string().min(1),
-  agentName: z.string().min(1),
-});
+const channelParticipantMutationSchema = z
+  .object({
+    channelId: z.string().min(1),
+    // Backward-compatible alias for AGENT participants.
+    agentName: z.string().min(1).optional(),
+    subscriberType: z.string().min(1).optional(),
+    subscriberId: z.string().min(1).optional(),
+  })
+  .superRefine((value, ctx) => {
+    const hasLegacyAgent = value.agentName !== undefined;
+    const hasExplicitParticipant =
+      value.subscriberType !== undefined || value.subscriberId !== undefined;
 
-const channelParticipantRemoveSchema = z.object({
-  channelId: z.string().min(1),
-  agentName: z.string().min(1),
-});
+    if (!hasLegacyAgent && !hasExplicitParticipant) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "Provide either agentName, or both subscriberType and subscriberId.",
+      });
+      return;
+    }
+
+    if (hasLegacyAgent && hasExplicitParticipant) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "Use either agentName or subscriberType/subscriberId, not both.",
+      });
+      return;
+    }
+
+    if (hasLegacyAgent) return;
+
+    if (!value.subscriberType || !value.subscriberId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "subscriberType and subscriberId are required when agentName is omitted.",
+      });
+      return;
+    }
+
+    const normalizedType = value.subscriberType.trim().toUpperCase();
+    if (normalizedType !== "AGENT" && normalizedType !== "HUMAN") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "subscriberType must be AGENT or HUMAN.",
+      });
+    }
+  });
 
 const channelJoinSchema = z.object({
   channelId: z.string().min(1).optional(),
@@ -246,13 +287,13 @@ export const eventsToolDefs: ToolDef[] = [
   ],
   [
     "events_channel_participant_add",
-    "Add an agent participant to a non-integration channel.",
-    channelParticipantAddSchema,
+    "Add a participant (AGENT or HUMAN) to a non-integration channel. Legacy agentName remains supported for AGENT participants.",
+    channelParticipantMutationSchema,
   ],
   [
     "events_channel_participant_remove",
-    "Remove an agent participant from a non-integration channel.",
-    channelParticipantRemoveSchema,
+    "Remove a participant (AGENT or HUMAN) from a non-integration channel. Legacy agentName remains supported for AGENT participants.",
+    channelParticipantMutationSchema,
   ],
   [
     "events_channel_join",
@@ -794,37 +835,71 @@ export async function execute(
   }
 
   if (tool === "events_channel_participant_add") {
-    const parsedResult = parseToolArgs(tool, channelParticipantAddSchema, args);
+    const parsedResult = parseToolArgs(tool, channelParticipantMutationSchema, args);
     if (!parsedResult.ok) return { error: parsedResult.error };
     const parsed = parsedResult.data;
     const manageable = await ensureManageableChannel(ctx, parsed.channelId);
     if (!manageable.ok) return { error: manageable.error };
+    const participant =
+      parsed.agentName !== undefined
+        ? { subscriberType: "AGENT" as const, subscriberId: parsed.agentName.trim() }
+        : {
+            subscriberType: parsed.subscriberType!.trim().toUpperCase() as
+              | "AGENT"
+              | "HUMAN",
+            subscriberId: parsed.subscriberId!.trim(),
+          };
     await ctx.apiFetch(`/api/channels/${encodeURIComponent(parsed.channelId)}/subscribe`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        subscriberType: "AGENT",
-        subscriberId: parsed.agentName,
+        subscriberType: participant.subscriberType,
+        subscriberId: participant.subscriberId,
       }),
     });
-    return { ok: true, channelId: parsed.channelId, agentName: parsed.agentName };
+    return {
+      ok: true,
+      channelId: parsed.channelId,
+      subscriberType: participant.subscriberType,
+      subscriberId: participant.subscriberId,
+      ...(participant.subscriberType === "AGENT"
+        ? { agentName: participant.subscriberId }
+        : {}),
+    };
   }
 
   if (tool === "events_channel_participant_remove") {
-    const parsedResult = parseToolArgs(tool, channelParticipantRemoveSchema, args);
+    const parsedResult = parseToolArgs(tool, channelParticipantMutationSchema, args);
     if (!parsedResult.ok) return { error: parsedResult.error };
     const parsed = parsedResult.data;
     const manageable = await ensureManageableChannel(ctx, parsed.channelId);
     if (!manageable.ok) return { error: manageable.error };
+    const participant =
+      parsed.agentName !== undefined
+        ? { subscriberType: "AGENT" as const, subscriberId: parsed.agentName.trim() }
+        : {
+            subscriberType: parsed.subscriberType!.trim().toUpperCase() as
+              | "AGENT"
+              | "HUMAN",
+            subscriberId: parsed.subscriberId!.trim(),
+          };
     await ctx.apiFetch(`/api/channels/${encodeURIComponent(parsed.channelId)}/unsubscribe`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        subscriberType: "AGENT",
-        subscriberId: parsed.agentName,
+        subscriberType: participant.subscriberType,
+        subscriberId: participant.subscriberId,
       }),
     });
-    return { ok: true, channelId: parsed.channelId, agentName: parsed.agentName };
+    return {
+      ok: true,
+      channelId: parsed.channelId,
+      subscriberType: participant.subscriberType,
+      subscriberId: participant.subscriberId,
+      ...(participant.subscriberType === "AGENT"
+        ? { agentName: participant.subscriberId }
+        : {}),
+    };
   }
 
   if (tool === "events_channel_join") {

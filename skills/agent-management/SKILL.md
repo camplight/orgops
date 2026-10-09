@@ -10,7 +10,8 @@ Use the native runner tools for agent operations:
 - `agents_search`: list or filter existing agents.
 - `agents_create`: create `CLASSIC`, `RLM_REPL`, or `WRAPPED` agents.
 - `agents_update`: patch an existing agent's config, lifecycle state, skills, model, workspace, or wrapped runtime config.
-- `events_channel_participant_add` or `events_channel_join`: add an agent to a channel when it should receive channel events.
+- `events_channel_participant_add` / `events_channel_participant_remove`: manage AGENT or HUMAN channel participants (`agentName` remains supported as a legacy alias for AGENT adds/removes).
+- `events_channel_join`: add an agent to a channel when it should receive channel events.
 
 ## List Agents
 
