@@ -34,7 +34,7 @@
     "dotenv-cli": "^8.0.0",
     "tsx": "^4.20.5",
     "typescript": "^5.5.4",
-    "vitest": "^3.2.6",
+    "vitest": "^5.0.3",
     "wait-on": "^8.0.5"
   },
   "dependencies": {
@@ -42,6 +42,7 @@
   },
   "overrides": {
     "@tootallnate/once": "^3.0.1",
+    "esbuild": "^0.28.1",
     "sqlite3": "^6.0.1",
     "tar": "^7.5.22",
     "undici": "^6.24.0"
