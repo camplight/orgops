@@ -482,6 +482,7 @@ export function createApp(config: AppConfig = {}) {
     validateEventAgainstShapes,
     serializeEventShapes,
     access,
+    verifyPassword,
   });
 
   registerMemoryRoutes(app as any, { orm, jsonResponse, access });

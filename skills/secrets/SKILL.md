@@ -80,3 +80,30 @@ Runtime env injection resolves matching keys in this order:
 4. `package` (legacy)
 
 For provider credentials (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`), runtime execution uses the resolved scoped secret and does not fall back to host process env.
+
+## Sending sensitive info back to humans
+
+When a response must include sensitive content (passwords, tokens, private keys, reset links), send it as a `message.created` event with `payload.sensitive` instead of plain chat text.
+
+Example payload pattern:
+
+```json
+{
+  "type": "message.created",
+  "channelId": "<channel-id>",
+  "source": "agent:<name>",
+  "payload": {
+    "text": "Sensitive content available. Reveal with password.",
+    "sensitive": {
+      "plaintext": "TOKEN=...",
+      "hint": "Temporary credential for staging"
+    }
+  }
+}
+```
+
+Rules:
+
+- Keep `payload.text` as a safe preview only (no secrets).
+- Put secret content in `payload.sensitive.plaintext`; API encrypts it before storage.
+- Never repeat revealed secret text in later messages unless explicitly requested.

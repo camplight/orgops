@@ -48,6 +48,26 @@ describe("schemas", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("validates message.created with sensitive metadata", () => {
+    const result = validateEventAgainstShapes(
+      {
+        type: "message.created",
+        source: "agent:worker-a",
+        channelId: "chan-1",
+        payload: {
+          text: "Sensitive message locked. Reveal with your password.",
+          sensitive: {
+            ciphertextB64: "ZmFrZS1jaXBoZXJ0ZXh0",
+            algorithm: "aes-256-gcm",
+            requiresPassword: true,
+          },
+        },
+      },
+      getCoreEventShapes(),
+    );
+    expect(result.ok).toBe(true);
+  });
+
   it("validates agent.intent.timeout core event shape", () => {
     const result = validateEventAgainstShapes(
       {

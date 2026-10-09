@@ -10,6 +10,10 @@ import {
 import { apiFetch, apiJson, getApiHeaders } from "./api";
 import { wsUrl } from "./config";
 import type { Agent, AuthMe, Channel, ChannelParticipant, ChannelShare, EventRow, Team } from "./types";
+import { JsonRenderBlock } from "./JsonRenderBlock";
+import { OrgopsSecretInput } from "./OrgopsSecretInput";
+import { hasJsonRenderBlock, splitJsonRenderMarkdown } from "./jsonRenderMarkdown";
+import { hasSecretInputBlock, splitSecretInputMarkdown } from "./secretInputMarkdown";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -50,10 +54,43 @@ function messageText(event: EventRow) {
   return typeof text === "string" ? text : "";
 }
 
+type SensitiveMessagePayload = {
+  ciphertextB64: string;
+  hint?: string;
+  requiresPassword: boolean;
+};
+
+function sensitiveMessagePayload(event: EventRow): SensitiveMessagePayload | null {
+  if (event.type !== "message.created") return null;
+  const payload = event.payload;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const sensitiveRaw = (payload as { sensitive?: unknown }).sensitive;
+  if (!sensitiveRaw || typeof sensitiveRaw !== "object" || Array.isArray(sensitiveRaw)) return null;
+  const ciphertextB64 = (sensitiveRaw as { ciphertextB64?: unknown }).ciphertextB64;
+  if (typeof ciphertextB64 !== "string" || !ciphertextB64.trim()) return null;
+  const hint = (sensitiveRaw as { hint?: unknown }).hint;
+  const requiresPasswordRaw = (sensitiveRaw as { requiresPassword?: unknown }).requiresPassword;
+  return {
+    ciphertextB64: ciphertextB64.trim(),
+    hint: typeof hint === "string" && hint.trim() ? hint.trim() : undefined,
+    requiresPassword: requiresPasswordRaw !== false
+  };
+}
+
+function isHiddenUiActionMessage(event: EventRow) {
+  if (event.type !== "message.created") return false;
+  const payload = event.payload;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  const payloadRecord = payload as { eventType?: unknown; text?: unknown };
+  if (payloadRecord.eventType === "ui.json-render.action") return true;
+  const text = typeof payloadRecord.text === "string" ? payloadRecord.text.trim() : "";
+  return text.toLowerCase().startsWith("json-render action:");
+}
+
 function shouldRenderMarkdown(text: string) {
   const trimmed = text.trim();
   if (!trimmed) return false;
-  return MARKDOWN_HINT_RE.test(trimmed) || URL_RE.test(trimmed);
+  return hasJsonRenderBlock(trimmed) || hasSecretInputBlock(trimmed) || MARKDOWN_HINT_RE.test(trimmed) || URL_RE.test(trimmed);
 }
 
 function sourceLabel(source: string) {
@@ -632,6 +669,10 @@ export default function App() {
   const [shareLinkCopied, setShareLinkCopied] = useState(false);
   const [wsConnected, setWsConnected] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [sensitiveRevealPasswords, setSensitiveRevealPasswords] = useState<Record<string, string>>({});
+  const [revealedSensitiveByEvent, setRevealedSensitiveByEvent] = useState<Record<string, string>>({});
+  const [revealingSensitiveEventId, setRevealingSensitiveEventId] = useState<string | null>(null);
+  const [sensitiveRevealErrors, setSensitiveRevealErrors] = useState<Record<string, string>>({});
 
   const activeChannel = useMemo(
     () => channels.find((channel) => channel.id === activeChannelId) ?? null,
@@ -651,7 +692,10 @@ export default function App() {
   }, [userId]);
 
   const visibleTimelineEvents = useMemo(
-    () => events.filter((event) => event.type === "message.created" || isTraceEvent(event)),
+    () =>
+      events.filter(
+        (event) => (event.type === "message.created" && !isHiddenUiActionMessage(event)) || isTraceEvent(event)
+      ),
     [events]
   );
 
@@ -810,6 +854,44 @@ export default function App() {
     setArchiveDraft(Boolean(activeChannel.archivedAt));
   }, [activeChannel?.id, activeChannel?.visibility, activeChannel?.archivedAt]);
 
+  async function handleRevealSensitive(eventId: string) {
+    const password = sensitiveRevealPasswords[eventId] ?? "";
+    if (!password) {
+      setSensitiveRevealErrors((current) => ({ ...current, [eventId]: "Enter your password to reveal." }));
+      return;
+    }
+    setRevealingSensitiveEventId(eventId);
+    setSensitiveRevealErrors((current) => ({ ...current, [eventId]: "" }));
+    try {
+      const response = await apiJson<{ text?: string }>(`/api/events/${encodeURIComponent(eventId)}/reveal-sensitive`, {
+        method: "POST",
+        headers: getApiHeaders(),
+        body: JSON.stringify({ password })
+      });
+      const text = typeof response.text === "string" ? response.text : "";
+      if (!text) {
+        setSensitiveRevealErrors((current) => ({ ...current, [eventId]: "No sensitive content was returned." }));
+        return;
+      }
+      setRevealedSensitiveByEvent((current) => ({ ...current, [eventId]: text }));
+      setSensitiveRevealPasswords((current) => ({ ...current, [eventId]: "" }));
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Unable to reveal sensitive content";
+      setSensitiveRevealErrors((current) => ({ ...current, [eventId]: detail || "Unable to reveal sensitive content" }));
+    } finally {
+      setRevealingSensitiveEventId((current) => (current === eventId ? null : current));
+    }
+  }
+
+  function handleHideSensitive(eventId: string) {
+    setRevealedSensitiveByEvent((current) => {
+      if (!Object.prototype.hasOwnProperty.call(current, eventId)) return current;
+      const next = { ...current };
+      delete next[eventId];
+      return next;
+    });
+  }
+
   function selectChannel(channelId: string | null, options?: { replace?: boolean }) {
     setActiveChannelId(channelId);
     setMobileSidebarOpen(false);
@@ -926,6 +1008,7 @@ export default function App() {
 
   function newestMessageTime(channelEvents: EventRow[]) {
     return channelEvents.reduce((newest, event) => {
+      if (isHiddenUiActionMessage(event)) return newest;
       if (event.type !== "message.created" && event.type !== "agent.turn.failed") return newest;
       return Math.max(newest, event.createdAt ?? 0);
     }, 0);
@@ -933,6 +1016,7 @@ export default function App() {
 
   function newestTimelineEventTime(channelEvents: EventRow[]) {
     return channelEvents.reduce((newest, event) => {
+      if (isHiddenUiActionMessage(event)) return newest;
       if (event.type !== "message.created" && !isTraceEvent(event)) return newest;
       return Math.max(newest, event.createdAt ?? 0);
     }, 0);
@@ -1150,6 +1234,7 @@ export default function App() {
       const nextCounts: Record<string, number> = {};
       for (const event of nextEvents) {
         if (!event.channelId || event.channelId === activeId) continue;
+        if (isHiddenUiActionMessage(event)) continue;
         const channel = channels.find((candidate) => candidate.id === event.channelId);
         if (channel?.archivedAt) continue;
         if ((event.createdAt ?? 0) > (lastSeenByChannelRef.current[event.channelId] ?? 0)) {
@@ -1169,8 +1254,11 @@ export default function App() {
 
     const currentActiveId = activeChannelIdRef.current;
     if (eventChannelId === currentActiveId && (event.type === "message.created" || isTraceEvent(event))) {
+      const hiddenUiAction = isHiddenUiActionMessage(event);
       const shouldAutoScroll = isMessagesPanelNearBottom();
-      setEvents((current) => mergeEventsChronologically(current, [event]));
+      if (!hiddenUiAction) {
+        setEvents((current) => mergeEventsChronologically(current, [event]));
+      }
       if (event.type === "message.created" || event.type === "agent.turn.failed") {
         const eventCreatedAt = event.createdAt ?? 0;
         if (eventCreatedAt > 0) {
@@ -1197,6 +1285,7 @@ export default function App() {
         delete next[eventChannelId];
         return next;
       });
+      if (hiddenUiAction) return;
       if (shouldAutoScroll) {
         setHasNewMessagesBelow(false);
         scrollMessagesToBottom();
@@ -1207,6 +1296,7 @@ export default function App() {
     }
 
     if (event.type !== "message.created") return;
+    if (isHiddenUiActionMessage(event)) return;
     if (eventChannelId === currentActiveId) return;
 
     const channel = channelsRef.current.find((candidate) => candidate.id === eventChannelId);
@@ -2242,6 +2332,11 @@ export default function App() {
                   const attachments = parseMessageAttachments(event.payload);
                   const text = messageText(event);
                   const markdown = shouldRenderMarkdown(text);
+                  const sensitive = sensitiveMessagePayload(event);
+                  const revealedSensitive = revealedSensitiveByEvent[event.id] ?? "";
+                  const revealError = sensitiveRevealErrors[event.id] ?? "";
+                  const revealPassword = sensitiveRevealPasswords[event.id] ?? "";
+                  const revealing = revealingSensitiveEventId === event.id;
                   return (
                     <article className={`message message-${role}`} key={item.id}>
                       <div className="message-meta">
@@ -2250,20 +2345,125 @@ export default function App() {
                       </div>
                       {markdown ? (
                         <div className="message-markdown">
-                          <ReactMarkdown
-                            remarkPlugins={[remarkGfm]}
-                            components={{
-                              a: ({ node: _node, ...props }) => (
-                                <a {...props} target="_blank" rel="noreferrer" />
+                          {splitJsonRenderMarkdown(text).map((jsonPart, jsonIndex) =>
+                            jsonPart.kind === "json-render" ? (
+                              <JsonRenderBlock
+                                canPost={activeChannelCanPost && !activeChannel?.archivedAt}
+                                channelId={activeChannelId}
+                                key={`${event.id}-json-render-${jsonIndex}`}
+                                specText={jsonPart.specText}
+                                username={username}
+                              />
+                            ) : (
+                              splitSecretInputMarkdown(jsonPart.text).map((secretPart, secretIndex) =>
+                                secretPart.kind === "secret-input" ? (
+                                  <OrgopsSecretInput
+                                    key={`${event.id}-secret-input-${jsonIndex}-${secretIndex}`}
+                                    spec={secretPart.spec}
+                                  />
+                                ) : (
+                                  <ReactMarkdown
+                                    remarkPlugins={[remarkGfm]}
+                                    components={{
+                                      a: ({ node: _node, ...props }) => (
+                                        <a {...props} target="_blank" rel="noreferrer" />
+                                      )
+                                    }}
+                                    key={`${event.id}-markdown-${jsonIndex}-${secretIndex}`}
+                                  >
+                                    {secretPart.text}
+                                  </ReactMarkdown>
+                                )
                               )
-                            }}
-                          >
-                            {text}
-                          </ReactMarkdown>
+                            )
+                          )}
                         </div>
                       ) : (
                         <p>{text}</p>
                       )}
+                      {sensitive ? (
+                        <section className="message-sensitive">
+                          <div className="message-sensitive-head">
+                            <strong>Sensitive content</strong>
+                            <span>Protected</span>
+                          </div>
+                          {sensitive.hint ? <p>{sensitive.hint}</p> : null}
+                          {revealedSensitive ? (
+                            <div className="message-sensitive-revealed">
+                              {shouldRenderMarkdown(revealedSensitive) ? (
+                                <div className="message-markdown">
+                                  {splitJsonRenderMarkdown(revealedSensitive).map((jsonPart, jsonIndex) =>
+                                    jsonPart.kind === "json-render" ? (
+                                      <JsonRenderBlock
+                                        canPost={activeChannelCanPost && !activeChannel?.archivedAt}
+                                        channelId={activeChannelId}
+                                        key={`${event.id}-sensitive-json-render-${jsonIndex}`}
+                                        specText={jsonPart.specText}
+                                        username={username}
+                                      />
+                                    ) : (
+                                      splitSecretInputMarkdown(jsonPart.text).map((secretPart, secretIndex) =>
+                                        secretPart.kind === "secret-input" ? (
+                                          <OrgopsSecretInput
+                                            key={`${event.id}-sensitive-secret-input-${jsonIndex}-${secretIndex}`}
+                                            spec={secretPart.spec}
+                                          />
+                                        ) : (
+                                          <ReactMarkdown
+                                            remarkPlugins={[remarkGfm]}
+                                            components={{
+                                              a: ({ node: _node, ...props }) => (
+                                                <a {...props} target="_blank" rel="noreferrer" />
+                                              )
+                                            }}
+                                            key={`${event.id}-sensitive-markdown-${jsonIndex}-${secretIndex}`}
+                                          >
+                                            {secretPart.text}
+                                          </ReactMarkdown>
+                                        )
+                                      )
+                                    )
+                                  )}
+                                </div>
+                              ) : (
+                                <pre>{revealedSensitive}</pre>
+                              )}
+                              <button type="button" onClick={() => handleHideSensitive(event.id)}>
+                                Hide sensitive content
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="message-sensitive-controls">
+                              <label>
+                                <span>Password</span>
+                                <input
+                                  type="password"
+                                  autoComplete="current-password"
+                                  value={revealPassword}
+                                  onChange={(changeEvent) =>
+                                    {
+                                      setSensitiveRevealPasswords((current) => ({
+                                        ...current,
+                                        [event.id]: changeEvent.target.value
+                                      }));
+                                      setSensitiveRevealErrors((current) => ({ ...current, [event.id]: "" }));
+                                    }
+                                  }
+                                  placeholder="Enter your password"
+                                />
+                              </label>
+                              <button
+                                type="button"
+                                disabled={revealing || !revealPassword}
+                                onClick={() => void handleRevealSensitive(event.id)}
+                              >
+                                {revealing ? "Revealing..." : "Reveal sensitive content"}
+                              </button>
+                            </div>
+                          )}
+                          {revealError ? <p className="message-sensitive-error">{revealError}</p> : null}
+                        </section>
+                      ) : null}
                       {attachments.length > 0 ? (
                         <div className="message-attachments">
                           <strong>Attachments</strong>

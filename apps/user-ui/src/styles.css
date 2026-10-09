@@ -1000,6 +1000,473 @@ button {
   text-align: left;
 }
 
+.message-sensitive {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.04);
+  display: grid;
+  gap: 8px;
+}
+
+.message-sensitive-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.message-sensitive-head strong {
+  margin: 0;
+  font-size: 13px;
+  color: #0f172a;
+}
+
+.message-sensitive-head span {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #334155;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.message-sensitive p {
+  margin: 0;
+  color: #475569;
+  font-size: 13px;
+}
+
+.message-sensitive-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: end;
+}
+
+.message-sensitive-controls label {
+  display: grid;
+  gap: 5px;
+  flex: 1 1 220px;
+}
+
+.message-sensitive-controls label span {
+  color: #334155;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.message-sensitive-controls input {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 9px;
+  background: #fff;
+  color: #0f172a;
+}
+
+.message-sensitive button {
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 9px;
+  background: #0f766e;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.message-sensitive button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.message-sensitive-revealed {
+  display: grid;
+  gap: 8px;
+}
+
+.message-sensitive-revealed pre {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.08);
+  color: #1e293b;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.message-sensitive-error {
+  margin: 0;
+  color: #be123c;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.orgops-secret-input {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 10px;
+  padding: 12px;
+  border: 1px solid #dbe6ef;
+  border-radius: 14px;
+  background: #f8fafc;
+}
+
+.orgops-secret-input-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.orgops-secret-input-head strong {
+  color: #0f172a;
+  font-size: 14px;
+}
+
+.orgops-secret-input-head code {
+  padding: 2px 6px;
+  border-radius: 7px;
+  background: #e2e8f0;
+  color: #334155;
+  font-size: 11px;
+}
+
+.orgops-secret-input p {
+  margin: 0;
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.orgops-secret-input label {
+  display: grid;
+  gap: 6px;
+}
+
+.orgops-secret-input label span {
+  color: #334155;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.orgops-secret-input input {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  background: #fff;
+  color: #0f172a;
+}
+
+.orgops-secret-input button {
+  justify-self: start;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: #0f766e;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.orgops-secret-input button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.orgops-secret-input-status {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.orgops-secret-input-status-success {
+  color: #0f766e;
+}
+
+.orgops-secret-input-status-error {
+  color: #be123c;
+}
+
+.json-render-shell {
+  display: grid;
+  gap: 12px;
+  margin: 0 0 12px;
+  padding: 12px;
+  border: 1px solid #dbe6ef;
+  border-radius: 14px;
+  background: #f8fafc;
+}
+
+.json-render-badge {
+  width: fit-content;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #0f172a;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.json-render-page,
+.json-render-section,
+.json-render-card,
+.json-render-recommendation {
+  display: grid;
+  gap: 8px;
+}
+
+.json-render-section,
+.json-render-card,
+.json-render-recommendation {
+  padding: 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.json-render-page h2,
+.json-render-section h3,
+.json-render-card h3,
+.json-render-recommendation h3 {
+  margin: 0;
+  color: #0f172a;
+  line-height: 1.2;
+}
+
+.json-render-page h2 {
+  font-size: 18px;
+  letter-spacing: -0.02em;
+}
+
+.json-render-section h3,
+.json-render-card h3,
+.json-render-recommendation h3 {
+  font-size: 15px;
+}
+
+.message-markdown .json-render-shell p,
+.json-render-shell p {
+  margin: 0;
+  color: #475569;
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.json-render-question {
+  display: grid;
+  gap: 6px;
+}
+
+.json-render-question span,
+.json-render-choice-list legend {
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.json-render-question em,
+.json-render-choice-list p,
+.json-render-choice-list em {
+  margin: 0;
+  color: #64748b;
+  font-size: 12px;
+  font-style: normal;
+}
+
+.json-render-question textarea {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  background: #fff;
+  color: #0f172a;
+  font-size: 13px;
+  line-height: 1.4;
+  resize: vertical;
+}
+
+.json-render-question textarea:focus {
+  outline: 2px solid rgba(15, 118, 110, 0.18);
+  border-color: #0f766e;
+}
+
+.json-render-choice-list {
+  margin: 0;
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #dbe6ef;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.json-render-choice-list > div {
+  display: grid;
+  gap: 8px;
+}
+
+.json-render-choice-list label {
+  display: flex;
+  gap: 8px;
+  align-items: start;
+  color: #334155;
+  font-size: 13px;
+}
+
+.json-render-choice-list input {
+  margin-top: 2px;
+}
+
+.json-render-choice-list label span {
+  display: grid;
+  gap: 2px;
+}
+
+.json-render-choice-list strong {
+  font-size: 13px;
+}
+
+.json-render-recommendation {
+  border-color: #99f6e4;
+  background: #f0fdfa;
+}
+
+.json-render-recommendation > span {
+  width: fit-content;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(15, 118, 110, 0.12);
+  color: #0f766e;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.json-render-action {
+  justify-self: start;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: #0f766e;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.json-render-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.json-render-status {
+  margin: 0;
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.json-render-checklist {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.json-render-checklist li {
+  display: flex;
+  gap: 8px;
+  align-items: start;
+  color: #334155;
+  font-size: 13px;
+}
+
+.json-render-checklist li::before {
+  content: "";
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-top: 3px;
+  border-radius: 999px;
+  background: #14b8a6;
+  box-shadow: inset 0 0 0 2px #ccfbf1;
+  flex: 0 0 auto;
+}
+
+.json-render-error {
+  border-color: #fecdd3;
+  background: #fff1f2;
+}
+
+.json-render-error strong {
+  color: #be123c;
+}
+
+.json-render-error pre {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.06);
+  color: #475569;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.json-render-secret-input {
+  gap: 10px;
+}
+
+.json-render-secret-input label {
+  display: grid;
+  gap: 6px;
+}
+
+.json-render-secret-input label span {
+  color: #334155;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.json-render-secret-input input {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  background: #fff;
+  color: #0f172a;
+}
+
+.json-render-secret-meta code {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 7px;
+  background: #e2e8f0;
+  color: #334155;
+  font-size: 11px;
+}
+
+.json-render-chart {
+  gap: 10px;
+}
+
+.json-render-chart-host {
+  width: 100%;
+  height: 220px;
+  padding: 8px 6px 2px;
+  border: 1px solid #dbe6ef;
+  border-radius: 10px;
+  background: #fff;
+}
+
 .message-attachments {
   margin-top: 10px;
   padding-top: 10px;
