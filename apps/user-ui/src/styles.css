@@ -1000,6 +1000,109 @@ button {
   text-align: left;
 }
 
+.message-sensitive {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.04);
+  display: grid;
+  gap: 8px;
+}
+
+.message-sensitive-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.message-sensitive-head strong {
+  margin: 0;
+  font-size: 13px;
+  color: #0f172a;
+}
+
+.message-sensitive-head span {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #334155;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.message-sensitive p {
+  margin: 0;
+  color: #475569;
+  font-size: 13px;
+}
+
+.message-sensitive-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: end;
+}
+
+.message-sensitive-controls label {
+  display: grid;
+  gap: 5px;
+  flex: 1 1 220px;
+}
+
+.message-sensitive-controls label span {
+  color: #334155;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.message-sensitive-controls input {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 9px;
+  background: #fff;
+  color: #0f172a;
+}
+
+.message-sensitive button {
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 9px;
+  background: #0f766e;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.message-sensitive button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.message-sensitive-revealed {
+  display: grid;
+  gap: 8px;
+}
+
+.message-sensitive-revealed pre {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.08);
+  color: #1e293b;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.message-sensitive-error {
+  margin: 0;
+  color: #be123c;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .orgops-secret-input {
   display: grid;
   gap: 10px;
