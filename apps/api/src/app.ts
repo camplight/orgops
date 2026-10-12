@@ -1,3 +1,5 @@
+import { createComposioClient, composioConfigFromEnv, type ComposioConfig } from "./composio";
+import { registerComposioRoutes } from "./routes/composio";
 import { registerGoogleAuthRoutes, type HumanSession } from './routes/google-auth';
 import { Hono } from "hono";
 import { createNodeWebSocket } from "@hono/node-ws";
@@ -56,6 +58,7 @@ import { registerAgentInviteRoutes } from "./routes/agent-invites";
 import { createAccessControl } from "./routes/access";
 
 export type AppConfig = {
+  composio?: ComposioConfig;
   db?: OrgOpsDb;
   dbPath?: string;
   dataDir?: string;
@@ -461,6 +464,11 @@ export function createApp(config: AppConfig = {}) {
   });
 
   registerCollabRoutes(app as any, { orm, jsonResponse, access });
+  const composioConfig = config.composio ?? composioConfigFromEnv();
+  registerComposioRoutes(app as any, {
+    db,
+    client: composioConfig ? createComposioClient(composioConfig) : undefined,
+  });
 
   registerEventsRoutes(app as any, {
     orm,

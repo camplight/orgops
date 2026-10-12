@@ -1,3 +1,4 @@
+import { composioToolDefs, execute as executeComposio } from "./composio";
 import type { LlmTool } from "@orgops/llm";
 import { createWrapExecute, toolDefToLlmTool } from "./types";
 import { shellToolDefs, execute as executeShell } from "./shell";
@@ -8,6 +9,7 @@ import { agentsToolDefs, execute as executeAgents } from "./agents";
 import type { ExecuteContext, RunnerToolDeps } from "./types";
 
 const allToolDefs = [
+  ...composioToolDefs,
   ...shellToolDefs,
   ...fsToolDefs,
   ...eventsToolDefs,
@@ -33,6 +35,7 @@ export async function executeTool(
   tool: string,
   args: Record<string, unknown>,
 ): Promise<unknown> {
+  if (tool.startsWith("composio_")) return executeComposio(ctx, tool, args);
   if (tool.startsWith("shell_")) return executeShell(ctx, tool, args);
   if (tool.startsWith("fs_")) return executeFs(ctx, tool, args);
   if (tool.startsWith("events_")) return executeEvents(ctx, tool, args);

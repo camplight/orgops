@@ -509,8 +509,26 @@ export const embedConversations = sqliteTable(
   })
 );
 
+export const composioConnections = sqliteTable("composio_connections", {
+  id: text("id").primaryKey(),
+  human_id: text("human_id").notNull().references(() => humans.id, { onDelete: "cascade" }),
+  external_user_id: text("external_user_id").notNull(),
+  toolkit: text("toolkit").notNull(),
+  created_at: integer("created_at").notNull(),
+});
+export const composioAgentGrants = sqliteTable("composio_agent_grants", {
+  agent_id: text("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
+  human_id: text("human_id").notNull().references(() => humans.id, { onDelete: "cascade" }),
+  connection_id: text("connection_id").notNull().references(() => composioConnections.id, { onDelete: "cascade" }),
+  tools_json: text("tools_json").notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.agent_id, table.connection_id] }),
+}));
+
 export const schema = {
   migrations,
+  composioConnections,
+  composioAgentGrants,
   agents,
   runnerNodes,
   teams,

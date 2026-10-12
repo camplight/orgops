@@ -671,3 +671,81 @@ Google onboarding stores team memberships as `HUMAN` plus the human username,
 matching `/api/teams/me` and team-based access checks. Migration 038 repairs the
 original lowercase/UUID memberships only when tied to a stored Google identity;
 already-correct memberships are preserved and duplicate inserts are ignored.
+### Composio personal connections
+
+The API integrates with Composio's v3.1 REST API. It owns connection references
+and per-agent tool grants; Composio retains provider credentials. This replaces
+the authorization responsibilities of a local Composio skill. Existing skills
+and package secrets are not migrated automatically.
+
+Configure the API with `ORGOPS_COMPOSIO_API_KEY`, a stable
+`ORGOPS_COMPOSIO_INSTANCE_ID`, `ORGOPS_COMPOSIO_CALLBACK_URL` (fixed HTTPS product
+return URL without query/fragment), and `ORGOPS_COMPOSIO_AUTH_CONFIGS` (JSON map
+from toolkit slug to administrator-created Composio auth config ID). Missing or
+invalid configuration disables the integration. Callback/instance validation
+fails startup when configuration is otherwise complete. Changing instance ID
+changes the external user namespace and requires reconnecting accounts.
+
+Human-session endpoints under `/api/composio`:
+
+- `GET /config`: enabled state and configured toolkit slugs.
+- `GET /toolkits?search=&cursor=`: searchable provider catalog; `connectable`
+  means an auth config exists, not that the user has connected it.
+- `POST /connections/link` with `{toolkit}`: create a hosted Composio auth link.
+  The user ID comes from the session (`orgops:<instance>:<human UUID>`).
+- `GET /connections?cursor=`: reconcile that user's private connections and
+  return only ID, toolkit and status. After returning from hosted auth, the
+  product calls this endpoint to discover connection status. Query parameters
+  on the callback must never be treated as proof of a successful connection.
+- `GET /connections/:id/tools?search=&cursor=`: discover tools for an active,
+  owned connection.
+- `PUT /agents/:name/grants/:id` with `{tools: ["EXPLICIT_TOOL_SLUG"]}`;
+  `GET /agents/:name/grants`; `DELETE /agents/:name/grants/:id`.
+  Only the current owner of a private agent may grant access. There are no
+  wildcards; new provider tools do not automatically become authorized.
+- `POST /connections/:id/revoke`: remove local grants and revoke remotely.
+  A remote failure can be retried; local grants remain removed once ownership
+  verification has succeeded.
+
+Native runner tools `composio_connections`, `composio_tool_schema` and
+`composio_execute` call runner-authenticated `/runner/tools`, `/runner/schema`
+and `/runner/execute` POST endpoints beneath `/api/composio`. The adapter supplies
+`agentName` and `triggerEventId` from the actual turn, never model arguments.
+The API verifies scoped runner bindings, agent ownership, the owner-authored
+message, an unarchived private channel with only the owner and that agent,
+explicit grants, remote account ownership/status, and tool toolkit membership.
+Grant and channel authorization are checked again immediately before execution.
+Shared chats, shared agents, scheduled/non-human triggers and wrapped runtimes
+are outside this initial implementation. Agent results use the existing event
+log; sharing that conversation later can share its previously recorded results.
+
+Only hosted auth flows that finish at Composio and leave an ACTIVE connection
+are supported. Deferred/custom authentication completion is not implemented.
+The product must wait for ACTIVE status before offering a grant. OAuth scopes
+are controlled by the administrator's Composio auth configuration; Google sign-in
+alone grants no access to Drive, Gmail or other applications. WordPress.com
+connectivity does not automatically configure a self-hosted WordPress server.
+
+Keep the service key out of agent secret packages and prompts. These checks are
+an API authorization boundary, not OS sandboxing: global runners and operators
+are trusted, and shell-equipped agents must not have access to the API process's
+environment/files. Use separate processes/hosts and restricted runner credentials
+where untrusted agent execution is required. No model provider is configured by
+this integration; personal-agent provisioning, onboarding UI and model selection
+belong to the embedding product.
+
+
+#### Team delegation follow-up
+
+Conversation participation and connection delegation are separate permissions.
+A personal agent should be able to converse with teammates without receiving
+permission to use its owner's personal accounts in that context. A future
+owner-controlled delegation must identify allowed requesting humans and channels,
+connection/tool grants, and provider-enforced resource limits (for example,
+particular Trello boards). Read-only tools can still disclose private data;
+where resource limits cannot be enforced, use a separate team account/connection.
+Actions requiring approval need a server-stored request bound to the exact tool,
+arguments, requester and destination audience, revalidated at execution time.
+The audit must distinguish the requesting human from the credential owner.
+This PR implements no team delegation or approval workflow: shared-context
+connection calls remain denied until those controls exist.
