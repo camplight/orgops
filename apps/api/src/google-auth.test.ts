@@ -29,6 +29,7 @@ describe('Google Workspace sign-in',()=>{
   expect(first.result.headers.get('location')).toBe('/');
   const session=first.result.headers.getSetCookie().find(c=>c.startsWith('orgops_session='))!;expect(session).toContain('HttpOnly');expect(session).toContain('Max-Age=28800');
   const me=await system.app.request('/api/auth/me',{headers:{cookie:session.split(';')[0]}});expect(me.status).toBe(200);expect((await me.json()).mustChangePassword).toBe(false);
+  expect(await (await system.app.request('/api/teams/me',{headers:{cookie:session.split(';')[0]}})).json()).toEqual([expect.objectContaining({name:'Camplight'})]);
   expect((await system.app.request(first.callback,{headers:{cookie:first.cookie}})).headers.get('location')).toContain('google_state');
   const second=await flow({email:'renamed@camplight.net'});expect(second.result.headers.get('location')).toBe('/');
   expect(system.db.prepare('SELECT COUNT(*) n FROM humans').get()).toEqual({n:2});expect(system.db.prepare('SELECT COUNT(*) n FROM team_memberships').get()).toEqual({n:1});
@@ -81,4 +82,21 @@ it('rejects expired authorization state before exchanging the code', async () =>
  const result=await system.app.request(`/api/auth/google/callback?state=${url.searchParams.get('state')}&code=expired`,{headers:{cookie}});
  expect(result.headers.get('location')).toBe('/?authError=google_state');
  expect(exchange).not.toHaveBeenCalled();
+});
+
+it('repairs legacy Google team membership on migration without affecting other members',async()=>{
+ const {result}=await flow();
+ const session=result.headers.getSetCookie().find(c=>c.startsWith('orgops_session='))!.split(';')[0];
+ const human=system.db.prepare("SELECT id FROM humans WHERE username='person@camplight.net'").get() as {id:string};
+ const team=system.db.prepare("SELECT id FROM teams WHERE name='Camplight'").get() as {id:string};
+ system.db.prepare("DELETE FROM team_memberships WHERE member_type='HUMAN' AND member_id=?").run('person@camplight.net');
+ system.db.prepare("INSERT INTO team_memberships VALUES (?,'human',?)").run(team.id,human.id);
+ system.db.prepare("INSERT INTO team_memberships VALUES (?,'HUMAN','owner')").run(team.id);
+ system.db.prepare("DELETE FROM migrations WHERE id=?").run('038_google_team_memberships.sql');
+ system.db.close();
+ system=createApp({dbPath:join(root,'db.sqlite'),dataDir:root,projectRoot:root,adminUser:'owner',adminPass:'password123'});
+ expect(system.db.prepare('SELECT member_type,member_id FROM team_memberships ORDER BY member_id').all()).toEqual([{member_type:'HUMAN',member_id:'owner'},{member_type:'HUMAN',member_id:'person@camplight.net'}]);
+ const again=await flow();
+ const cookie=again.result.headers.getSetCookie().find(c=>c.startsWith('orgops_session='))!.split(';')[0];
+ expect(await (await system.app.request('/api/teams/me',{headers:{cookie}})).json()).toEqual([expect.objectContaining({name:'Camplight'})]);
 });

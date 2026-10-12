@@ -666,3 +666,8 @@ recovery. No Directory API, directory synchronization, invitation emails, Google
 refresh tokens or automatic Workspace suspension handling are included. WebSocket connections recheck sessions before processing messages or delivering
 events, including deferred events. Expired/revoked connections close on their
 next activity; idle sockets are not proactively disconnected.
+
+Google onboarding stores team memberships as `HUMAN` plus the human username,
+matching `/api/teams/me` and team-based access checks. Migration 038 repairs the
+original lowercase/UUID memberships only when tied to a stored Google identity;
+already-correct memberships are preserved and duplicate inserts are ignored.

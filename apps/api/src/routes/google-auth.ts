@@ -80,7 +80,7 @@ export function registerGoogleAuthRoutes(app: Hono<any>, { db, sessions, hashPas
     } else db.prepare("UPDATE human_identities SET email=?,hosted_domain=?,last_login_at=? WHERE provider='google' AND subject=?").run(email,domain,time,subject);
     let team = db.prepare('SELECT id FROM teams WHERE name=?').get(teamName) as {id: string} | undefined;
     if (!team) { team = {id: randomUUID()}; db.prepare('INSERT INTO teams (id,name,description,created_at) VALUES (?,?,?,?)').run(team.id,teamName,'Members joining through Google Workspace',time); }
-    db.prepare("INSERT OR IGNORE INTO team_memberships (team_id,member_type,member_id) VALUES (?,'human',?)").run(team.id,human.id);
+    db.prepare("INSERT OR IGNORE INTO team_memberships (team_id,member_type,member_id) VALUES (?,'HUMAN',?)").run(team.id,human.username);
     return human;
   });
   app.get('/api/auth/google/callback', async c => {
