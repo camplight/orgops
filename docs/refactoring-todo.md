@@ -34,6 +34,21 @@ Caveats:
 - [ ] Low runtime risk compared with the runner, so it is a good place to start.
 - [ ] Extract routing, data loading and conversation logic into separate modules or hooks.
 
+Progress against `docs/1-refactoring-1-user-ui-refactoring-plan.md`:
+
+- [x] 0a. Test tooling (`happy-dom`, Testing Library, setup), the characterisation harness and the timing budget.
+- [ ] 0b. Characterisation suites, one area per commit.
+- [ ] 0c. Stryker spike and gap-filling pass.
+- [ ] 1. Move pure functions out into `domain/*`.
+- [ ] 2. Extract presentational components.
+- [ ] 3. Introduce gateway ports and HTTP adapters.
+- [ ] 4. Extract realtime.
+- [ ] 5. Identity context.
+- [ ] 6. Conversations context.
+- [ ] 7. Messaging context.
+- [ ] 8. `App.tsx` becomes the composition root.
+- [ ] 9. Hardening.
+
 ### 2. Review `apps/agent-runner/src/turn-executor.ts`
 
 - [ ] It is the densest file for its size (210 edges, 102 cross-file links).

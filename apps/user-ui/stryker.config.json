@@ -1,0 +1,14 @@
+{
+  "testRunner": "command",
+  "commandRunner": { "command": "npx vitest run" },
+  "mutate": [
+    "src/App.tsx:901-921",
+    "src/App.tsx:1521-1605",
+    "src/App.tsx:2026-2123",
+    "src/App.tsx:2234-2238"
+  ],
+  "coverageAnalysis": "off",
+  "reporters": ["clear-text", "json"],
+  "jsonReporter": { "fileName": "reports/mutation/mutation.json" },
+  "tempDirName": ".stryker-tmp"
+}

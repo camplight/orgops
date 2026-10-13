@@ -10,11 +10,12 @@ export type FakeResponse = {
   text?: string;
 };
 
+export type FakeResponder = FakeResponse | ((request: FakeRequest) => FakeResponse | Promise<FakeResponse>);
+
 export type FakeRoute = {
   method?: string;
   path: string | RegExp;
-  respond: FakeResponse | ((request: FakeRequest) => FakeResponse);
-};
+} & ({ respond: FakeResponder } | { respondInOrder: readonly FakeResponse[] });
 
 const parseBody = (body: BodyInit | null | undefined): unknown => {
   if (typeof body !== "string") return body ?? undefined;
@@ -50,6 +51,16 @@ const toResponse = ({ status = 200, json, text }: FakeResponse): Response => {
 
 export const createFakeApi = (routes: readonly FakeRoute[]) => {
   const requests: FakeRequest[] = [];
+  const callCounts = new Map<FakeRoute, number>();
+
+  const respondTo = async (route: FakeRoute, request: FakeRequest): Promise<FakeResponse> => {
+    if ("respondInOrder" in route) {
+      const callIndex = callCounts.get(route) ?? 0;
+      callCounts.set(route, callIndex + 1);
+      return route.respondInOrder[Math.min(callIndex, route.respondInOrder.length - 1)];
+    }
+    return typeof route.respond === "function" ? route.respond(request) : route.respond;
+  };
 
   const fakeFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const request: FakeRequest = {
@@ -62,7 +73,7 @@ export const createFakeApi = (routes: readonly FakeRoute[]) => {
     if (!route) {
       return toResponse({ status: 404, text: `No fake route for ${request.method} ${request.path}` });
     }
-    return toResponse(typeof route.respond === "function" ? route.respond(request) : route.respond);
+    return toResponse(await respondTo(route, request));
   };
 
   return { fetch: fakeFetch, requests };
