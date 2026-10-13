@@ -5,3 +5,4 @@
 5. Ask "/graphify what are the most complex components in the codebase in terms of maintainability"
     1. Save the analysis in a file
 6. Start a new session and start exploring how to refactor users-ui/src/App.tsx
+7. Save the plan and then write the characterization tests in a separate session
