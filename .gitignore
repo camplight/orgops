@@ -9,3 +9,6 @@ memory/
 .release-tmp
 .agent-runner-id
 .opscli-output.log
+# Stryker (apps/user-ui)
+apps/user-ui/.stryker-tmp/
+apps/user-ui/reports/
