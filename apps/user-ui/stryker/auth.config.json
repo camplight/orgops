@@ -9,6 +9,6 @@
   ],
   "coverageAnalysis": "off",
   "reporters": ["clear-text", "json"],
-  "jsonReporter": { "fileName": "reports/mutation/mutation.json" },
+  "jsonReporter": { "fileName": "reports/mutation/auth.json" },
   "tempDirName": ".stryker-tmp"
 }

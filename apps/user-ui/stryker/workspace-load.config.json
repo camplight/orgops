@@ -1,0 +1,15 @@
+{
+  "testRunner": "command",
+  "commandRunner": { "command": "npx vitest run" },
+  "mutate": [
+    "src/App.tsx:501-528",
+    "src/App.tsx:895-899",
+    "src/App.tsx:922-989",
+    "src/App.tsx:1329-1331",
+    "src/App.tsx:2190-2217"
+  ],
+  "coverageAnalysis": "off",
+  "reporters": ["clear-text", "json"],
+  "jsonReporter": { "fileName": "reports/mutation/workspace-load.json" },
+  "tempDirName": ".stryker-tmp"
+}

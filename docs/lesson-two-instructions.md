@@ -9,3 +9,4 @@
     1. Adapt the write-bdd-scenarios skill from the previous session to the new context - different framework, not writing gherkin upfront
     2. Start with auth and follow the plan
     3. Small step of written tests, then mutation tests, then move on
+    4. Create an agent that encodes this flow
