@@ -6,3 +6,6 @@
     1. Save the analysis in a file
 6. Start a new session and start exploring how to refactor users-ui/src/App.tsx
 7. Save the plan and then write the characterization tests in a separate session
+    1. Adapt the write-bdd-scenarios skill from the previous session to the new context - different framework, not writing gherkin upfront
+    2. Start with auth and follow the plan
+    3. Small step of written tests, then mutation tests, then move on
