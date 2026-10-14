@@ -674,4 +674,117 @@ describe("wrapped runtime", () => {
     ) as { payload?: { text?: string } } | undefined;
     expect(wrappedReply?.payload?.text).toBe("http://localhost:8787|scoped-runner-token");
   });
+
+  it("includes signal termination details when wrapped runtime is killed by signal", async () => {
+    const workspacePath = mkdtempSync(join(tmpdir(), "orgops-wrapped-signal-fail-"));
+    const emitted: unknown[] = [];
+    const agent: Agent = {
+      name: "wrapped-signal-fail-test",
+      systemInstructions: "",
+      soulPath: "",
+      workspacePath,
+      modelId: "wrapped:none",
+      desiredState: "RUNNING",
+      runtimeState: "RUNNING",
+      mode: "WRAPPED",
+      wrappedConfig: {
+        kind: "test",
+        runtime: {
+          command: 'kill -TERM $$',
+          parse: "text",
+        },
+      },
+    };
+    const event: Event = {
+      id: "evt-signal-fail",
+      type: "message.created",
+      payload: { text: "signal fail test" },
+      source: "human:alice",
+      channelId: "chan-signal-fail",
+      createdAt: Date.now(),
+    };
+
+    try {
+      await expect(
+        runWrappedAgentTurn(
+          {
+            projectRoot: workspacePath,
+            api: {
+              emitEvent: async (outbound: unknown) => {
+                emitted.push(outbound);
+              },
+              getPackageSecretsEnv: async () => ({}),
+            },
+          },
+          agent,
+          [event],
+        ),
+      ).rejects.toThrow(/terminated by signal SIGTERM/);
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true });
+    }
+
+    const failedEvent = emitted.find((outbound) => (outbound as any).type === "wrapper.turn.failed") as
+      | { payload?: Record<string, unknown> }
+      | undefined;
+    expect(failedEvent?.payload?.signal).toBe("SIGTERM");
+    expect(failedEvent?.payload?.terminationReason).toBe("terminated by signal SIGTERM");
+  });
+
+  it("uses runtime timeout override and reports timeout reason", async () => {
+    const workspacePath = mkdtempSync(join(tmpdir(), "orgops-wrapped-timeout-fail-"));
+    const emitted: unknown[] = [];
+    const agent: Agent = {
+      name: "wrapped-timeout-fail-test",
+      systemInstructions: "",
+      soulPath: "",
+      workspacePath,
+      modelId: "wrapped:none",
+      desiredState: "RUNNING",
+      runtimeState: "RUNNING",
+      mode: "WRAPPED",
+      wrappedConfig: {
+        kind: "test",
+        runtime: {
+          command: 'node -e "setInterval(() => {}, 1000)"',
+          parse: "text",
+          timeoutMs: 150,
+        },
+      },
+    };
+    const event: Event = {
+      id: "evt-timeout-fail",
+      type: "message.created",
+      payload: { text: "timeout fail test" },
+      source: "human:alice",
+      channelId: "chan-timeout-fail",
+      createdAt: Date.now(),
+    };
+
+    try {
+      await expect(
+        runWrappedAgentTurn(
+          {
+            projectRoot: workspacePath,
+            api: {
+              emitEvent: async (outbound: unknown) => {
+                emitted.push(outbound);
+              },
+              getPackageSecretsEnv: async () => ({}),
+            },
+          },
+          agent,
+          [event],
+        ),
+      ).rejects.toThrow(/timed out/);
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true });
+    }
+
+    const failedEvent = emitted.find((outbound) => (outbound as any).type === "wrapper.turn.failed") as
+      | { payload?: Record<string, unknown> }
+      | undefined;
+    expect(failedEvent?.payload?.timedOut).toBe(true);
+    expect(String(failedEvent?.payload?.terminationReason ?? "")).toContain("timed out");
+  });
 });

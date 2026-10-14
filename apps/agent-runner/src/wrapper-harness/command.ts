@@ -23,6 +23,10 @@ type NormalizedCommand = {
 
 type CommandResult = {
   exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  timedOut: boolean;
+  killed: boolean;
+  terminationReason?: string;
   stdout: string;
   stderr: string;
 };
@@ -45,7 +49,7 @@ type SidecarEntry = {
 };
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
-const DEFAULT_RUNTIME_COMMAND_TIMEOUT_MS = 0;
+const DEFAULT_RUNTIME_COMMAND_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_SIDECAR_RESTART_DELAY_MS = 2_000;
 const sidecars = new Map<string, SidecarEntry>();
 const PROVIDER_SECRET_ENV_KEYS = [
@@ -134,9 +138,7 @@ function normalizeCommand(
   const timeoutMs =
     options?.allowDisableTimeout &&
     Number.isFinite(configuredTimeout) &&
-    // Legacy wrapped configs commonly set 1800000; treat it as "no hard timeout"
-    // so long-running wrapped turns are not force-terminated.
-    (configuredTimeout === 0 || configuredTimeout === 1_800_000)
+    configuredTimeout === 0
       ? 0
       : readPositiveInt(config?.timeoutMs, fallbackTimeoutMs);
   return {
@@ -147,6 +149,15 @@ function normalizeCommand(
     env: readStringEnv(config?.env),
     parse: parse === "json-payloads" ? "json-payloads" : parse === "text" ? "text" : undefined,
   };
+}
+
+function describeTermination(result: Pick<CommandResult, "exitCode" | "signal" | "timedOut" | "killed">): string {
+  if (result.exitCode === 0) return "completed successfully";
+  if (result.timedOut) return `timed out and was terminated${result.signal ? ` (${result.signal})` : ""}`;
+  if (result.signal) return `terminated by signal ${result.signal}`;
+  if (result.killed) return "killed by runner";
+  if (typeof result.exitCode === "number") return `exited with code ${result.exitCode}`;
+  return "terminated unexpectedly";
 }
 
 function normalizeSidecar(
@@ -194,6 +205,8 @@ async function runCommand(
   return new Promise((resolvePromise, rejectPromise) => {
     let stdout = "";
     let stderr = "";
+    let timedOut = false;
+    let killRequested = false;
     const child = spawn(commandConfig.command, commandConfig.args ?? [], {
       cwd: commandConfig.cwd,
       env: mergedEnv,
@@ -205,8 +218,9 @@ async function runCommand(
     const timeout =
       commandConfig.timeoutMs > 0
         ? setTimeout(() => {
+            timedOut = true;
+            killRequested = true;
             child.kill("SIGTERM");
-            rejectPromise(new Error(`Wrapped command timed out after ${commandConfig.timeoutMs}ms`));
           }, commandConfig.timeoutMs)
         : null;
     child.stdout?.on("data", (chunk) => {
@@ -223,9 +237,23 @@ async function runCommand(
       if (timeout) clearTimeout(timeout);
       rejectPromise(error);
     });
-    child.on("exit", (exitCode) => {
+    child.on("close", (exitCode, signal) => {
       if (timeout) clearTimeout(timeout);
-      resolvePromise({ exitCode, stdout, stderr });
+      const result: CommandResult = {
+        exitCode,
+        signal,
+        timedOut,
+        killed: killRequested || child.killed,
+        terminationReason: describeTermination({
+          exitCode,
+          signal,
+          timedOut,
+          killed: killRequested || child.killed,
+        }),
+        stdout,
+        stderr,
+      };
+      resolvePromise(result);
     });
   });
 }
@@ -819,6 +847,9 @@ export const commandWrapperHarness: WrapperHarness = {
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
               exitCode: result?.exitCode ?? null,
+              signal: result?.signal ?? null,
+              timedOut: result?.timedOut === true,
+              terminationReason: result?.terminationReason,
               state:
                 result === null
                   ? "TERMINATED"
@@ -839,10 +870,16 @@ export const commandWrapperHarness: WrapperHarness = {
       throw new Error(`Wrapped runtime terminated unexpectedly for ${agent.name}.`);
     }
     if (result.exitCode !== 0) {
+      const output = result.stderr || result.stdout;
+      const reason = output || result.terminationReason || describeTermination(result);
       throw Object.assign(
-        new Error(`Wrapped runtime failed for ${agent.name}: ${result.stderr || result.stdout}`),
+        new Error(`Wrapped runtime failed for ${agent.name}: ${reason}`),
         {
           exitCode: result.exitCode,
+          signal: result.signal,
+          timedOut: result.timedOut,
+          killed: result.killed,
+          terminationReason: result.terminationReason,
           stdout: result.stdout,
           stderr: result.stderr,
         },

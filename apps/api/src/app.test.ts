@@ -3849,6 +3849,67 @@ describe("api app", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("stores process exit diagnostics in process.exited payload", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+    await createProcessTestAgent(app, cookie, "process-exit-test");
+
+    const processId = randomUUID();
+    const createRes = await app.request("http://localhost/api/processes", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        id: processId,
+        agentName: "process-exit-test",
+        cmd: "wrapped-runtime",
+        cwd: dataDir,
+        state: "RUNNING",
+      }),
+    });
+    expect(createRes.status).toBe(201);
+
+    const exitRes = await app.request(`http://localhost/api/processes/${processId}/exit`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        exitCode: null,
+        signal: "SIGTERM",
+        timedOut: true,
+        terminationReason: "timed out and was terminated (SIGTERM)",
+      }),
+    });
+    expect(exitRes.status).toBe(200);
+
+    const eventRow = db
+      .prepare(
+        "SELECT payload_json FROM events WHERE type = 'process.exited' ORDER BY created_at DESC LIMIT 1",
+      )
+      .get() as { payload_json: string } | undefined;
+    expect(eventRow).toBeTruthy();
+    const payload = JSON.parse(eventRow?.payload_json ?? "{}") as Record<string, unknown>;
+    expect(payload.processId).toBe(processId);
+    expect(payload.signal).toBe("SIGTERM");
+    expect(payload.timedOut).toBe(true);
+    expect(payload.terminationReason).toBe("timed out and was terminated (SIGTERM)");
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("reconciles missing running processes as exited on refresh", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");

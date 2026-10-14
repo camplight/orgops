@@ -107,6 +107,7 @@ Supported recipe fields:
 - `sidecars`: optional long-running commands started before turns, such as the OpenClaw Gateway.
 - `runtime.command`: required command for handling a turn.
 - `runtime.parse`: `json-payloads` extracts OpenClaw-style `payloads[].text`; `text` returns stdout; omitted tries JSON payloads and falls back to text.
+- `runtime.timeoutMs`: optional turn timeout override in milliseconds. Default is `1800000` (30 minutes). Set `0` to disable hard timeout for intentionally long-lived runtimes.
 - `secrets.allowedKeys`: optional env-key allowlist (exact keys or `*` wildcard patterns) applied to wrapped secret injection.
 - `secrets.deniedKeys`: optional env-key denylist (exact keys or `*` wildcard patterns) applied after allowlist.
 - `session.scope`: `per-channel` (default) or `per-agent`.
@@ -490,7 +491,7 @@ Wrapped lifecycle:
 4. Wrapper lifecycle emits `wrapper.lifecycle.started`, `wrapper.setup.started`, `wrapper.setup.skipped`, `wrapper.setup.completed`, or `wrapper.setup.failed`.
 5. On each turn, the runner builds normalized `message` and `sessionId`, then calls the selected harness `runTurn`.
 6. Harness output is normalized into `message.created` from `agent:<name>`.
-7. Wrapper turn events (`wrapper.turn.started/completed/failed`) are bookkeeping and never wake agents.
+7. Wrapper turn events (`wrapper.turn.started/completed/failed`) are bookkeeping and never wake agents. `wrapper.turn.failed` includes runtime diagnostics such as `exitCode`, `signal`, `timedOut`, and `terminationReason` when available.
 
 Shutdown behavior:
 

@@ -99,12 +99,25 @@ export async function runWrappedAgentTurn(
       sessionId,
     });
   } catch (error) {
-    const detail = error as { exitCode?: unknown; stdout?: unknown; stderr?: unknown };
+    const detail = error as {
+      exitCode?: unknown;
+      signal?: unknown;
+      timedOut?: unknown;
+      killed?: unknown;
+      terminationReason?: unknown;
+      stdout?: unknown;
+      stderr?: unknown;
+    };
     await emitWrapperEvent(ctx, agent, "wrapper.turn.failed", {
       kind: config.kind,
       harness: harness.name,
       sessionId,
       exitCode: detail.exitCode,
+      signal: detail.signal,
+      timedOut: detail.timedOut,
+      killed: detail.killed,
+      terminationReason:
+        typeof detail.terminationReason === "string" ? detail.terminationReason : undefined,
       stderr: typeof detail.stderr === "string" ? detail.stderr.slice(-4000) : undefined,
       stdout: typeof detail.stdout === "string" ? detail.stdout.slice(-4000) : undefined,
       error: error instanceof Error ? error.message : String(error),

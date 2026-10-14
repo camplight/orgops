@@ -402,6 +402,10 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
       payload: {
         processId,
         exitCode: body.exitCode ?? null,
+        signal: body.signal ?? null,
+        timedOut: body.timedOut === true,
+        terminationReason:
+          typeof body.terminationReason === "string" ? body.terminationReason : undefined,
         ...(processContext?.agentName
           ? {
               ownerAgentName: processContext.agentName,
