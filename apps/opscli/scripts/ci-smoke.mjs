@@ -127,6 +127,7 @@ const installDir = mkdtempSync(join(tmpdir(), "orgops-install-smoke-"));
 const smokeEnv = {
   ORGOPS_OPSCLI_INSTALL_SMOKE_MOCK: "1",
   ORGOPS_OPSCLI_NO_BROWSER: "1",
+  ORGOPS_OPSCLI_SKIP_SERVICE_RUN: "1",
   ORGOPS_LLM_STUB: "1",
   OPENAI_API_KEY: "stub-key",
   ORGOPS_OPSCLI_MODEL: "openai:gpt-5.2",

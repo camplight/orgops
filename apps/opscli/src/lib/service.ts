@@ -12,6 +12,12 @@ const COMPONENT_START_COMMAND: Record<InstallComponent, string> = {
   "user-ui": "start:user-ui:preview:env",
 };
 
+function isTruthyEnv(value: string | undefined) {
+  if (!value) return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
 function escapeForDoubleQuotes(value: string) {
   return value.replace(/"/g, '\\"');
 }
@@ -133,7 +139,9 @@ export function registerAutostartServices(installDir: string, components: Instal
         `powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "${scriptPath}"`,
         "/F",
       ]);
-      runSchtasks(["/Run", "/TN", taskName]);
+      if (!isTruthyEnv(process.env.ORGOPS_OPSCLI_SKIP_SERVICE_RUN)) {
+        runSchtasks(["/Run", "/TN", taskName]);
+      }
       messages.push(`Scheduled task ${taskName} registered with script ${scriptPath}`);
     }
     return messages;
