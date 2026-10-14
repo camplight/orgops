@@ -2,7 +2,11 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { npmCommandForHost, runChecked } from "./exec";
 import { ensurePrerequisites } from "./prereqs";
-import { createUserUiShortcut, openUrlInBrowser } from "./browser";
+import {
+  createUserUiShortcut,
+  createWindowsStackLauncherShortcut,
+  openUrlInBrowser,
+} from "./browser";
 import { registerAutostartServices } from "./service";
 import { loadState, saveState } from "./runtime-state";
 import {
@@ -132,7 +136,16 @@ export async function runInstall(rawOptions: InstallOptions) {
 
   let shortcutPath = "";
   if (rawOptions.createShortcut && includesComponent(components, "user-ui")) {
-    shortcutPath = smokeMockEnabled ? createMockShortcut(installDir) : createUserUiShortcut(USER_UI_URL);
+    if (smokeMockEnabled) {
+      shortcutPath = createMockShortcut(installDir);
+    } else if (process.platform === "win32") {
+      shortcutPath = createWindowsStackLauncherShortcut({
+        installDir,
+        componentsCsv: components.join(","),
+      });
+    } else {
+      shortcutPath = createUserUiShortcut(USER_UI_URL);
+    }
   }
 
   const prior = loadState();

@@ -641,7 +641,7 @@ export default function App() {
   const [username, setUsername] = useState("");
   const [userId, setUserId] = useState<string | null>(null);
   const [loginUsername, setLoginUsername] = useState("admin");
-  const [loginPassword, setLoginPassword] = useState("");
+  const [loginPassword, setLoginPassword] = useState("admin");
   const [mustChangePassword, setMustChangePassword] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");

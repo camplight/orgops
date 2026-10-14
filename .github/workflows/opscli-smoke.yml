@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - "apps/opscli/**"
+      - "apps/user-ui/**"
+      - "apps/admin-ui/**"
       - ".github/workflows/opscli-smoke.yml"
   workflow_dispatch:
 

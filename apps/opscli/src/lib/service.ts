@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { InstallComponent } from "./components";
@@ -20,6 +21,25 @@ function runBestEffort(command: string, args: string[]) {
     runChecked(command, args);
   } catch {
     // Best effort for commands that may fail on first registration.
+  }
+}
+
+function runSchtasks(args: string[]) {
+  const result = spawnSync("schtasks", args, {
+    stdio: "inherit",
+    shell: false,
+    env: process.env,
+  });
+  if (result.status !== 0) {
+    throw new Error(`schtasks ${args.join(" ")} failed with status ${result.status}`);
+  }
+}
+
+function runSchtasksBestEffort(args: string[]) {
+  try {
+    runSchtasks(args);
+  } catch {
+    // Best effort for cleanup and re-registration steps.
   }
 }
 
@@ -94,25 +114,26 @@ export function registerAutostartServices(installDir: string, components: Instal
     for (const component of components) {
       const slug = componentSlug(component);
       const taskName = windowsTaskNameFor(component);
-      const scriptPath = resolve(installDir, `.orgops-start-${slug}.cmd`);
+      const scriptPath = resolve(installDir, `.orgops-start-${slug}.ps1`);
       const script = [
-        "@echo off",
-        `cd /d "${installDir}"`,
-        `npm run ${COMPONENT_START_COMMAND[component]}`,
+        '$ErrorActionPreference = "Stop"',
+        `Set-Location -Path "${installDir.replace(/"/g, '""')}"`,
+        `Start-Process -FilePath "npm.cmd" -ArgumentList "run ${COMPONENT_START_COMMAND[component]}" -WindowStyle Hidden`,
         "",
-      ].join("\r\n");
+      ].join("\n");
       writeFileSync(scriptPath, script, "utf-8");
-      runChecked("schtasks", [
+      runSchtasksBestEffort(["/Delete", "/TN", taskName, "/F"]);
+      runSchtasks([
         "/Create",
         "/SC",
         "ONLOGON",
         "/TN",
         taskName,
         "/TR",
-        `"${scriptPath}"`,
+        `powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "${scriptPath}"`,
         "/F",
       ]);
-      runChecked("schtasks", ["/Run", "/TN", taskName]);
+      runSchtasks(["/Run", "/TN", taskName]);
       messages.push(`Scheduled task ${taskName} registered with script ${scriptPath}`);
     }
     return messages;
@@ -174,9 +195,9 @@ export function unregisterAutostartServices(installDir: string, components: Inst
     for (const component of components) {
       const slug = componentSlug(component);
       const taskName = windowsTaskNameFor(component);
-      const scriptPath = resolve(installDir, `.orgops-start-${slug}.cmd`);
-      runBestEffort("schtasks", ["/End", "/TN", taskName]);
-      runBestEffort("schtasks", ["/Delete", "/TN", taskName, "/F"]);
+      const scriptPath = resolve(installDir, `.orgops-start-${slug}.ps1`);
+      runSchtasksBestEffort(["/End", "/TN", taskName]);
+      runSchtasksBestEffort(["/Delete", "/TN", taskName, "/F"]);
       rmSync(scriptPath, { force: true });
       messages.push(`Scheduled task ${taskName} deleted`);
     }

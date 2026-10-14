@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { runChecked } from "./exec";
@@ -14,7 +14,11 @@ function isTruthyEnv(value: string | undefined) {
 function desktopDir() {
   if (process.platform === "win32") {
     const userProfile = process.env.USERPROFILE ?? homedir();
-    return join(userProfile, "Desktop");
+    const profileDesktop = join(userProfile, "Desktop");
+    if (existsSync(profileDesktop)) return profileDesktop;
+    const oneDriveDesktop = join(process.env.OneDrive ?? "", "Desktop");
+    if (process.env.OneDrive && existsSync(oneDriveDesktop)) return oneDriveDesktop;
+    return profileDesktop;
   }
   return join(homedir(), "Desktop");
 }
@@ -36,6 +40,31 @@ export function openUrlInBrowser(url: string) {
 
 export function createUserUiShortcut(url: string) {
   return createUiShortcut("user-ui", url);
+}
+
+export function createWindowsStackLauncherShortcut(options: {
+  installDir: string;
+  componentsCsv: string;
+}) {
+  if (process.platform !== "win32") {
+    throw new Error("Windows stack launcher shortcut is only supported on Windows.");
+  }
+  const desktop = desktopDir();
+  mkdirSync(desktop, { recursive: true });
+  const path = join(desktop, "OrgOps Start.vbs");
+  const command = [
+    "npm.cmd run --workspace @orgops/opscli start --",
+    `--dir "${options.installDir}"`,
+    `--components ${options.componentsCsv}`,
+  ].join(" ");
+  const script = [
+    'Set shell = CreateObject("WScript.Shell")',
+    `cmd = "cmd /c ${command.replace(/"/g, '""')}"`,
+    "shell.Run cmd, 0, False",
+    "",
+  ].join("\r\n");
+  writeFileSync(path, script, "utf-8");
+  return path;
 }
 
 export function createUiShortcut(target: ShortcutTarget, url: string) {

@@ -1,4 +1,5 @@
 import { existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -50,6 +51,14 @@ function runBestEffort(binaryPath, args, extraEnv = {}) {
 function assertPath(path, label) {
   if (!existsSync(path)) {
     fail(`Missing expected ${label}: ${path}`);
+  }
+}
+
+async function readJson(path, label) {
+  try {
+    return JSON.parse(await readFile(path, "utf-8"));
+  } catch (error) {
+    fail(`Unable to read ${label} at ${path}: ${String(error)}`);
   }
 }
 
@@ -140,6 +149,15 @@ try {
   assertPath(resolve(installDir, ".opscli-install-smoke.json"), "mock install metadata file");
   assertPath(resolve(installDir, ".opscli-install-smoke-build.txt"), "mock build marker file");
   assertPath(resolve(installDir, "OrgOps User UI.smoke-shortcut"), "mock shortcut file");
+  const statePath = resolve(tempHome, ".orgops", "opscli-state.json");
+  assertPath(statePath, "opscli state file");
+  const state = await readJson(statePath, "opscli state file");
+  const installedComponents = Array.isArray(state?.installedComponents) ? state.installedComponents : [];
+  for (const expected of ["api", "runner", "admin-ui", "user-ui"]) {
+    if (!installedComponents.includes(expected)) {
+      fail(`Expected installedComponents to include ${expected}, got: ${JSON.stringify(installedComponents)}`);
+    }
+  }
 
   // Seed realistic mutable payload so upgrade backup creation is exercised.
   mkdirSync(resolve(installDir, ".orgops-data"), { recursive: true });
@@ -161,9 +179,44 @@ try {
 
   // Smoke the deterministic lifecycle commands.
   run(binaryPath, ["start", "--dir", installDir, "--no-open"], smokeEnv);
+  for (const component of ["api", "runner", "admin-ui", "user-ui"]) {
+    assertPath(resolve(installDir, ".orgops-runtime", `${component}.json`), `runtime pid state for ${component}`);
+  }
   run(binaryPath, ["status", "--dir", installDir], smokeEnv);
   run(binaryPath, ["stop", "--dir", installDir], smokeEnv);
   run(binaryPath, ["status", "--dir", installDir], smokeEnv);
+
+  if (process.platform === "win32") {
+    run(
+      binaryPath,
+      ["service", "register", "--dir", installDir, "--components", "api,runner,admin-ui,user-ui"],
+      smokeEnv
+    );
+    for (const slug of ["api", "runner", "admin-ui", "user-ui"]) {
+      const scriptPath = resolve(installDir, `.orgops-start-${slug}.ps1`);
+      assertPath(scriptPath, `windows launcher script for ${slug}`);
+      const scriptBody = await readFile(scriptPath, "utf-8");
+      if (!scriptBody.includes("WindowStyle Hidden")) {
+        fail(`Expected hidden-window start in ${scriptPath}`);
+      }
+      const expectedCommand =
+        slug === "admin-ui"
+          ? "start:admin-ui:preview:env"
+          : slug === "user-ui"
+            ? "start:user-ui:preview:env"
+            : slug === "runner"
+              ? "start:runner:env"
+              : "start:api:env";
+      if (!scriptBody.includes(expectedCommand)) {
+        fail(`Expected ${expectedCommand} command in ${scriptPath}`);
+      }
+    }
+    run(
+      binaryPath,
+      ["service", "unregister", "--dir", installDir, "--components", "api,runner,admin-ui,user-ui"],
+      smokeEnv
+    );
+  }
 
   // Smoke the admin command surface (browser launch disabled by env).
   run(binaryPath, ["admin", "open", "--dir", installDir], smokeEnv);

@@ -5,6 +5,7 @@ export type InstallComponent = (typeof INSTALL_COMPONENTS)[number];
 export const DEFAULT_INSTALL_COMPONENTS: InstallComponent[] = [
   "api",
   "runner",
+  "admin-ui",
   "user-ui",
 ];
 
