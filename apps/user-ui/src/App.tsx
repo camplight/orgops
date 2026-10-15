@@ -10,6 +10,7 @@ import {
 import { apiFetch, apiJson, getApiHeaders } from "./api";
 import { wsUrl } from "./config";
 import { ChangePasswordScreen } from "./ui/auth/change-password-screen";
+import { ComposerAttachments } from "./ui/composer/composer-attachments";
 import { Sidebar } from "./ui/sidebar/sidebar";
 import { ActivityPanel } from "./ui/activity/activity-panel";
 import { ConversationDialog } from "./ui/dialogs/conversation-dialog";
@@ -1986,33 +1987,14 @@ export default function App() {
             </p>
           ) : null}
           {pendingAttachments.length > 0 ? (
-            <div className="composer-attachments">
-              {pendingAttachments.map((attachment) => (
-                <article key={attachment.localId}>
-                  <div>
-                    <strong>{attachment.name}</strong>
-                    <span>
-                      {attachment.status === "ready"
-                        ? `Ready${formatAttachmentSize(attachment.size) ? ` • ${formatAttachmentSize(attachment.size)}` : ""}`
-                        : attachment.status === "uploading"
-                          ? "Uploading..."
-                          : attachment.error || "Upload failed"}
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    className="composer-attachment-remove"
-                    onClick={() =>
-                      setPendingAttachments((current) =>
-                        current.filter((item) => item.localId !== attachment.localId)
-                      )
-                    }
-                  >
-                    Remove
-                  </button>
-                </article>
-              ))}
-            </div>
+            <ComposerAttachments
+              attachments={pendingAttachments}
+              onRemove={(localId) =>
+                setPendingAttachments((current) =>
+                  current.filter((item) => item.localId !== localId)
+                )
+              }
+            />
           ) : null}
           <textarea
             ref={composerTextareaRef}
