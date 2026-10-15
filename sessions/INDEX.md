@@ -14,3 +14,4 @@ Chronological by creation time. Each folder holds `transcript.jsonl` (raw sessio
 | 8 | [part-4-presentational-components](08-part-4-presentational-components/brief.md) | named | `3cd8917c-150a-41d2-9a8f-cd7be6ec0a6c` | 2026-10-15T07:24:37.962Z | 2026-10-15T07:45:08.589Z | 8 |
 | 9 | [part-5-gateway-ports-adapters](09-part-5-gateway-ports-adapters/brief.md) | named | `e4103eca-4211-41fa-9f06-2a2a589eeb8d` | 2026-10-15T07:45:22.207Z | 2026-10-15T08:06:00.326Z | 6 |
 | 10 | [part-5-gateway-ports-adapters-2-better-tests](10-part-5-gateway-ports-adapters-2-better-tests/brief.md) | named | `4a9b8637-f4b3-4904-b108-10f94fad2d1b` | 2026-10-15T07:55:09.493Z | 2026-10-15T08:03:16.143Z | 2 |
+| 11 | [part-6-realtime](11-part-6-realtime/brief.md) | named | `8c2a0659-6730-4815-a431-2fd585bfa561` | 2026-10-15T08:08:17.525Z | 2026-10-15T08:11:10.110Z | 2 |
