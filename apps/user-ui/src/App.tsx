@@ -170,17 +170,14 @@ export default function App() {
     loginPassword,
     setLoginPassword,
     handleLogin,
-    setUsername,
-    setUserId,
     setLoginUsername,
-    setMustChangePassword,
-    setAuthenticated,
     newPassword,
     confirmPassword,
     setNewPassword,
     setConfirmPassword,
-    handlePasswordUpdate
-  } = useSession({ loadCurrentSession, signIn, changePassword, setError });
+    handlePasswordUpdate,
+    handleLogout
+  } = useSession({ loadCurrentSession, signIn, signOut, changePassword, setError, onSignedOut: handleSignedOut });
   const [participantKind, setParticipantKind] = useState<"HUMAN" | "AGENT">("AGENT");
   const [participantValue, setParticipantValue] = useState("");
   const [participantSubmitting, setParticipantSubmitting] = useState(false);
@@ -914,14 +911,7 @@ export default function App() {
     return () => window.removeEventListener("popstate", handlePopState);
   }, [sessionState, channels, userId, username, viewerTeamIds]);
 
-  async function handleLogout() {
-    await signOut();
-    setAuthenticated(false);
-    setUsername("");
-    setUserId(null);
-    setMustChangePassword(false);
-    setNewPassword("");
-    setConfirmPassword("");
+  function handleSignedOut() {
     setChannels([]);
     setAgents([]);
     setTeams([]);
