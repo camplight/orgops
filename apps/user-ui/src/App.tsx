@@ -18,7 +18,7 @@ import { createLogin } from "./application/identity/login";
 import { createUpdatePassword } from "./application/identity/update-password";
 import { createLogout } from "./application/identity/logout";
 import { createLoadSession } from "./application/identity/load-session";
-import { deriveSessionState } from "./domain/identity/session-state";
+import { useSession } from "./ui/identity/use-session";
 import { validateNewPassword } from "./domain/identity/password-rules";
 import { createHttpSessionGateway } from "./infrastructure/http/http-session-gateway";
 import { createHttpConversationGateway } from "./infrastructure/http/http-conversation-gateway";
@@ -153,22 +153,31 @@ export default function App() {
   const [showParticipantsDialog, setShowParticipantsDialog] = useState(false);
   const [showChannelManageDialog, setShowChannelManageDialog] = useState(false);
   const [draft, setDraft] = useState("");
-  const [username, setUsername] = useState("");
-  const [userId, setUserId] = useState<string | null>(null);
-  const [loginUsername, setLoginUsername] = useState("admin");
   const [loginPassword, setLoginPassword] = useState("");
-  const [mustChangePassword, setMustChangePassword] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [authenticated, setAuthenticated] = useState(false);
-  const [authLoading, setAuthLoading] = useState(true);
-  const sessionState = deriveSessionState({ authenticated, authLoading, mustChangePassword });
   const [loading, setLoading] = useState(true);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
   const [hasOlderMessages, setHasOlderMessages] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const {
+    username,
+    userId,
+    loginUsername,
+    mustChangePassword,
+    authenticated,
+    authLoading,
+    sessionState,
+    loadSession,
+    setUsername,
+    setUserId,
+    setLoginUsername,
+    setMustChangePassword,
+    setAuthenticated,
+    setAuthLoading
+  } = useSession({ loadCurrentSession, clearError: () => setError(null) });
   const [participantKind, setParticipantKind] = useState<"HUMAN" | "AGENT">("AGENT");
   const [participantValue, setParticipantValue] = useState("");
   const [participantSubmitting, setParticipantSubmitting] = useState(false);
@@ -408,28 +417,6 @@ export default function App() {
     setActiveChannelId(channelId);
     setMobileSidebarOpen(false);
     deepLink.updateChannelDeepLink(channelId, options?.replace);
-  }
-
-  async function loadSession() {
-    setAuthLoading(true);
-    setError(null);
-    try {
-      const session = await loadCurrentSession();
-      if (session.kind === "loaded") {
-        setUsername(session.username);
-        setUserId(session.userId);
-        setLoginUsername(session.username || "admin");
-        setAuthenticated(session.authenticated);
-        setMustChangePassword(session.mustChangePassword);
-      } else {
-        setAuthenticated(false);
-        setUsername("");
-        setUserId(null);
-        setMustChangePassword(false);
-      }
-    } finally {
-      setAuthLoading(false);
-    }
   }
 
   async function loadShell() {
