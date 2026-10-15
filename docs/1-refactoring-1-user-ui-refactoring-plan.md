@@ -140,7 +140,7 @@ Every step ends with the characterisation tests unchanged and green, `npm run li
 
 **1. Move pure functions out** into `domain/*`, verbatim, in several small commits: event interpretation, trace and failure rules, channel rules, ordering and attachments. **(done)**
 
-**2. Extract presentational components,** props in and callbacks out, one per commit: auth screens, dialogs, sidebar, activity panel, composer, timeline items. De-duplicate the markdown block here. **(in progress)**
+**2. Extract presentational components,** props in and callbacks out, one per commit: auth screens, dialogs, sidebar, activity panel, composer, timeline items. De-duplicate the markdown block here. **(done)**
 
 **3. Introduce gateway ports and HTTP adapters:** `ConversationGateway`, `MessageGateway`, `FileGateway`, `SessionGateway`, plus `DeepLink`, `Clipboard` and `Confirm`. Swap call sites one at a time.
 

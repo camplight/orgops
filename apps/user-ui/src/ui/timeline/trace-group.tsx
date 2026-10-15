@@ -4,13 +4,13 @@ import {
   traceDetail,
   traceTitle
 } from "../../domain/messaging/trace-rules";
+import { formatTime } from "../../domain/messaging/time-format";
 import type { EventRow } from "../../types";
 
 type TraceGroupProps = {
   traceEvents: EventRow[];
   tone: "agent" | "system";
   expandedTraceEventId: string | null;
-  formatTime: (value?: number) => string;
   onToggleTraceEvent: (eventId: string) => void;
 };
 
@@ -18,7 +18,6 @@ export function TraceGroup({
   traceEvents,
   tone,
   expandedTraceEventId,
-  formatTime,
   onToggleTraceEvent
 }: TraceGroupProps) {
   const selectedEvent = traceEvents.find((event) => event.id === expandedTraceEventId) ?? null;

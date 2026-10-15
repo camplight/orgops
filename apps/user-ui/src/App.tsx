@@ -10,11 +10,9 @@ import {
 import { apiFetch, apiJson, getApiHeaders } from "./api";
 import { wsUrl } from "./config";
 import { ChangePasswordScreen } from "./ui/auth/change-password-screen";
+import { MessageItem } from "./ui/timeline/message-item";
 import { TurnFailureItem } from "./ui/timeline/turn-failure-item";
 import { TraceGroup } from "./ui/timeline/trace-group";
-import { MessageAttachments } from "./ui/timeline/message-attachments";
-import { SensitiveContent } from "./ui/timeline/sensitive-content";
-import { MessageMarkdown } from "./ui/timeline/message-markdown";
 import { ComposerTextarea } from "./ui/composer/composer-textarea";
 import { ComposerActions } from "./ui/composer/composer-actions";
 import { ComposerAttachments } from "./ui/composer/composer-attachments";
@@ -40,18 +38,9 @@ import {
   participantAgentStatus,
   type ChannelGroupId
 } from "./domain/conversations/channel-rules";
-import { parseMessageAttachments } from "./domain/messaging/attachments";
 import { mergeEventsChronologically } from "./domain/messaging/event-ordering";
-import {
-  isHiddenUiActionMessage,
-  messageDisplayTime,
-  messageRole,
-  messageText,
-  sensitiveMessagePayload,
-  sourceLabel
-} from "./domain/messaging/event-interpretation";
+import { isHiddenUiActionMessage } from "./domain/messaging/event-interpretation";
 import { isTraceEvent } from "./domain/messaging/trace-rules";
-import { shouldRenderMarkdown } from "./domain/messaging/markdown-detection";
 import { formatTime } from "./domain/messaging/time-format";
 
 type UploadedAttachment = {
@@ -1705,59 +1694,27 @@ export default function App() {
                 }
                 if (item.kind === "message") {
                   const event = item.event;
-                  const role = messageRole(event.source);
-                  const attachments = parseMessageAttachments(event.payload);
-                  const text = messageText(event);
-                  const markdown = shouldRenderMarkdown(text);
-                  const sensitive = sensitiveMessagePayload(event);
-                  const revealedSensitive = revealedSensitiveByEvent[event.id] ?? "";
-                  const revealError = sensitiveRevealErrors[event.id] ?? "";
-                  const revealPassword = sensitiveRevealPasswords[event.id] ?? "";
-                  const revealing = revealingSensitiveEventId === event.id;
                   return (
-                    <article className={`message message-${role}`} key={item.id}>
-                      <div className="message-meta">
-                        <strong>{sourceLabel(event.source)}</strong>
-                        <span>{formatTime(messageDisplayTime(event))}</span>
-                      </div>
-                      {markdown ? (
-                        <MessageMarkdown
-                          text={text}
-                          keyPrefix={event.id}
-                          canPost={activeChannelCanPost && !activeChannel?.archivedAt}
-                          channelId={activeChannelId}
-                          username={username}
-                        />
-                      ) : (
-                        <p>{text}</p>
-                      )}
-                      {sensitive ? (
-                        <SensitiveContent
-                          eventId={event.id}
-                          hint={sensitive.hint}
-                          revealedText={revealedSensitive}
-                          revealedAsMarkdown={shouldRenderMarkdown(revealedSensitive)}
-                          password={revealPassword}
-                          error={revealError}
-                          revealing={revealing}
-                          canPost={activeChannelCanPost && !activeChannel?.archivedAt}
-                          channelId={activeChannelId}
-                          username={username}
-                          onPasswordChange={(value) => {
-                            setSensitiveRevealPasswords((current) => ({
-                              ...current,
-                              [event.id]: value
-                            }));
-                            setSensitiveRevealErrors((current) => ({ ...current, [event.id]: "" }));
-                          }}
-                          onReveal={() => void handleRevealSensitive(event.id)}
-                          onHide={() => handleHideSensitive(event.id)}
-                        />
-                      ) : null}
-                      {attachments.length > 0 ? (
-                        <MessageAttachments eventId={event.id} attachments={attachments} />
-                      ) : null}
-                    </article>
+                    <MessageItem
+                      key={item.id}
+                      event={event}
+                      canPost={activeChannelCanPost && !activeChannel?.archivedAt}
+                      channelId={activeChannelId}
+                      username={username}
+                      revealedSensitive={revealedSensitiveByEvent[event.id] ?? ""}
+                      revealError={sensitiveRevealErrors[event.id] ?? ""}
+                      revealPassword={sensitiveRevealPasswords[event.id] ?? ""}
+                      revealing={revealingSensitiveEventId === event.id}
+                      onPasswordChange={(value) => {
+                        setSensitiveRevealPasswords((current) => ({
+                          ...current,
+                          [event.id]: value
+                        }));
+                        setSensitiveRevealErrors((current) => ({ ...current, [event.id]: "" }));
+                      }}
+                      onReveal={() => void handleRevealSensitive(event.id)}
+                      onHide={() => handleHideSensitive(event.id)}
+                    />
                   );
                 }
                 return (
@@ -1766,7 +1723,6 @@ export default function App() {
                     traceEvents={item.traceEvents}
                     tone={item.tone}
                     expandedTraceEventId={expandedTraceEventId}
-                    formatTime={formatTime}
                     onToggleTraceEvent={(eventId) =>
                       setExpandedTraceEventId((current) => (current === eventId ? null : eventId))
                     }
