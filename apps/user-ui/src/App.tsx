@@ -34,6 +34,7 @@ import { createSelectChannel } from "./application/conversations/select-channel"
 import { createClaimPendingShareLink } from "./application/conversations/claim-pending-share-link";
 import { createLoadWorkspace } from "./application/conversations/load-workspace";
 import { createRefreshChannels } from "./application/conversations/refresh-channels";
+import { useConversationsState } from "./ui/conversations/use-conversations-state";
 import { useChannelSelection } from "./ui/conversations/use-channel-selection";
 import { useStartConversation } from "./ui/conversations/use-start-conversation";
 import { useChannelManagement } from "./ui/conversations/use-channel-management";
@@ -54,14 +55,7 @@ import { ConversationDialog } from "./ui/dialogs/conversation-dialog";
 import { ParticipantsDialog } from "./ui/dialogs/participants-dialog";
 import { ChannelManageDialog } from "./ui/dialogs/channel-manage-dialog";
 import { LoginScreen } from "./ui/auth/login-screen";
-import type {
-  Agent,
-  Channel,
-  ChannelParticipant,
-  EventRow,
-  Team,
-  UploadedAttachment
-} from "./types";
+import type { Channel, EventRow, UploadedAttachment } from "./types";
 import {
   CHANNEL_GROUPS,
   agentVisibleToUserUi,
@@ -157,12 +151,18 @@ export default function App() {
   const messageFetchSeqRef = useRef(0);
   const loadingChannelIdRef = useRef<string | null>(null);
   const forceScrollToBottomOnLoadRef = useRef(false);
-  const [channels, setChannels] = useState<Channel[]>([]);
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [teams, setTeams] = useState<Team[]>([]);
-  const [humans, setHumans] = useState<Array<{ username: string }>>([]);
+  const {
+    channels,
+    agents,
+    teams,
+    humans,
+    activeChannelId,
+    setWorkspace,
+    setChannels,
+    setActiveChannelId,
+    resetForSignOut
+  } = useConversationsState();
   const [events, setEvents] = useState<EventRow[]>([]);
-  const [activeChannelId, setActiveChannelId] = useState<string | null>(null);
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const [collapsedChannelGroups, setCollapsedChannelGroups] = useState<Record<ChannelGroupId, boolean>>({
     channels: false,
@@ -530,10 +530,7 @@ export default function App() {
         userId,
         username
       });
-      setChannels(workspace.channels);
-      setAgents(workspace.agents);
-      setHumans(workspace.humans);
-      setTeams(workspace.teams);
+      setWorkspace(workspace);
       setSelectedConversationAgents((current) =>
         current.filter((agentName) => workspace.visibleAgentNames.has(agentName))
       );
@@ -953,11 +950,8 @@ export default function App() {
   }, [sessionState]);
 
   function handleSignedOut() {
-    setChannels([]);
-    setAgents([]);
-    setTeams([]);
+    resetForSignOut();
     setEvents([]);
-    setActiveChannelId(null);
     deepLink.updateChannelDeepLink(null, true);
     setChannelQuery("");
     setConversationName("");
