@@ -8,6 +8,7 @@ import {
   useState
 } from "react";
 import { wsUrl } from "./infrastructure/http/config";
+import { createBrowserConfirm } from "./infrastructure/browser/browser-confirm";
 import { createHttpSessionGateway } from "./infrastructure/http/http-session-gateway";
 import { createHttpConversationGateway } from "./infrastructure/http/http-conversation-gateway";
 import { createHttpFileGateway } from "./infrastructure/http/http-file-gateway";
@@ -125,6 +126,7 @@ function createLocalAttachmentId() {
 
 const messageGateway = createHttpMessageGateway();
 const sessionGateway = createHttpSessionGateway();
+const confirmPort = createBrowserConfirm();
 const fileGateway = createHttpFileGateway();
 const conversationGateway = createHttpConversationGateway();
 
@@ -1207,7 +1209,7 @@ export default function App() {
   }
 
   async function handleDeleteChannel(channel: Channel) {
-    if (!window.confirm(`Permanently delete ${channelLabel(channel, username)}?`)) return;
+    if (!confirmPort.confirm(`Permanently delete ${channelLabel(channel, username)}?`)) return;
     setError(null);
     setLoading(true);
     try {
