@@ -10,6 +10,14 @@ import {
 import { apiFetch, apiJson, getApiHeaders } from "./api";
 import { wsUrl } from "./config";
 import type { Agent, AuthMe, Channel, ChannelParticipant, ChannelShare, EventRow, Team } from "./types";
+import {
+  isHiddenUiActionMessage,
+  messageDisplayTime,
+  messageRole,
+  messageText,
+  sensitiveMessagePayload,
+  sourceLabel
+} from "./domain/messaging/event-interpretation";
 import { JsonRenderBlock } from "./JsonRenderBlock";
 import { OrgopsSecretInput } from "./OrgopsSecretInput";
 import { hasJsonRenderBlock, splitJsonRenderMarkdown } from "./jsonRenderMarkdown";
@@ -43,70 +51,10 @@ function formatTime(value?: number) {
   }).format(date);
 }
 
-function messageText(event: EventRow) {
-  const payload = event.payload;
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return "";
-  if (event.type === "agent.turn.failed") {
-    const error = (payload as { error?: unknown }).error;
-    return typeof error === "string" ? `Agent error: ${error}` : "Agent failed to respond.";
-  }
-  const text = (payload as { text?: unknown }).text;
-  return typeof text === "string" ? text : "";
-}
-
-type SensitiveMessagePayload = {
-  ciphertextB64: string;
-  hint?: string;
-  requiresPassword: boolean;
-};
-
-function sensitiveMessagePayload(event: EventRow): SensitiveMessagePayload | null {
-  if (event.type !== "message.created") return null;
-  const payload = event.payload;
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
-  const sensitiveRaw = (payload as { sensitive?: unknown }).sensitive;
-  if (!sensitiveRaw || typeof sensitiveRaw !== "object" || Array.isArray(sensitiveRaw)) return null;
-  const ciphertextB64 = (sensitiveRaw as { ciphertextB64?: unknown }).ciphertextB64;
-  if (typeof ciphertextB64 !== "string" || !ciphertextB64.trim()) return null;
-  const hint = (sensitiveRaw as { hint?: unknown }).hint;
-  const requiresPasswordRaw = (sensitiveRaw as { requiresPassword?: unknown }).requiresPassword;
-  return {
-    ciphertextB64: ciphertextB64.trim(),
-    hint: typeof hint === "string" && hint.trim() ? hint.trim() : undefined,
-    requiresPassword: requiresPasswordRaw !== false
-  };
-}
-
-function isHiddenUiActionMessage(event: EventRow) {
-  if (event.type !== "message.created") return false;
-  const payload = event.payload;
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
-  const payloadRecord = payload as { eventType?: unknown; text?: unknown };
-  if (payloadRecord.eventType === "ui.json-render.action") return true;
-  const text = typeof payloadRecord.text === "string" ? payloadRecord.text.trim() : "";
-  return text.toLowerCase().startsWith("json-render action:");
-}
-
 function shouldRenderMarkdown(text: string) {
   const trimmed = text.trim();
   if (!trimmed) return false;
   return hasJsonRenderBlock(trimmed) || hasSecretInputBlock(trimmed) || MARKDOWN_HINT_RE.test(trimmed) || URL_RE.test(trimmed);
-}
-
-function sourceLabel(source: string) {
-  if (source.startsWith("human:")) return source.slice("human:".length) || "Human";
-  if (source.startsWith("agent:")) return source.slice("agent:".length) || "Agent";
-  return source || "System";
-}
-
-function messageRole(source: string) {
-  if (source.startsWith("human:")) return "human";
-  if (source.startsWith("agent:")) return "agent";
-  return "system";
-}
-
-function messageDisplayTime(event: EventRow) {
-  return event.deliverAt ?? event.createdAt;
 }
 
 const DIRECT_CHANNEL_KINDS = new Set(["HUMAN_AGENT_DM", "AGENT_AGENT_DM", "DIRECT_GROUP"]);
