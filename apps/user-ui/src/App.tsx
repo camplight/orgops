@@ -12,6 +12,7 @@ import { createBrowserConfirm } from "./infrastructure/browser/browser-confirm";
 import { createBrowserClipboard } from "./infrastructure/browser/browser-clipboard";
 import { createWebSocketRealtimeFeed } from "./infrastructure/websocket/websocket-realtime-feed";
 import type { RealtimeFeed } from "./ports/realtime-feed";
+import { usePollingFallback } from "./ui/realtime/use-polling-fallback";
 import { createBrowserDeepLink } from "./infrastructure/browser/browser-deep-link";
 import { createHttpSessionGateway } from "./infrastructure/http/http-session-gateway";
 import { createHttpConversationGateway } from "./infrastructure/http/http-conversation-gateway";
@@ -871,15 +872,14 @@ export default function App() {
     realtimeFeedRef.current?.setTopics(desiredTopics);
   }, [authenticated, mustChangePassword, visibleChannels]);
 
-  useEffect(() => {
-    if (!authenticated || mustChangePassword || wsConnected) return;
-    const interval = window.setInterval(() => {
+  usePollingFallback({
+    enabled: authenticated && !mustChangePassword && !wsConnected,
+    poll: () => {
       const liveChannelId = activeChannelIdRef.current;
       if (liveChannelId) void loadMessages(liveChannelId);
       void loadMessageNotifications();
-    }, 10000);
-    return () => window.clearInterval(interval);
-  }, [authenticated, mustChangePassword, wsConnected]);
+    }
+  });
 
   useEffect(() => {
     if (!authenticated || mustChangePassword) return;
