@@ -666,23 +666,8 @@ export default function App() {
     setLoadingOlderMessages(true);
     setError(null);
     try {
-      const [olderMessages, olderTurns, olderTools, olderWrappers, olderProcesses] = await Promise.all([
-        apiJson<EventRow[]>(
-          `/api/events?channelId=${encodeURIComponent(channelId)}&type=message.created&limit=${limit}&order=desc&before=${oldestEventAt}`
-        ),
-        apiJson<EventRow[]>(
-          `/api/events?channelId=${encodeURIComponent(channelId)}&typePrefix=agent.turn.&limit=${limit}&order=desc&before=${oldestEventAt}`
-        ),
-        apiJson<EventRow[]>(
-          `/api/events?channelId=${encodeURIComponent(channelId)}&typePrefix=tool.&limit=${limit}&order=desc&before=${oldestEventAt}`
-        ),
-        apiJson<EventRow[]>(
-          `/api/events?channelId=${encodeURIComponent(channelId)}&typePrefix=wrapper.turn.&limit=${limit}&order=desc&before=${oldestEventAt}`
-        ),
-        apiJson<EventRow[]>(
-          `/api/events?channelId=${encodeURIComponent(channelId)}&typePrefix=process.&limit=${limit}&order=desc&before=${oldestEventAt}`
-        )
-      ]);
+      const { olderMessages, olderTurns, olderTools, olderWrappers, olderProcesses } =
+        await messageGateway.listOlderChannelEvents({ channelId, limit, before: oldestEventAt });
       const olderEvents = mergeEventsChronologically(
         mergeEventsChronologically(
           mergeEventsChronologically(olderMessages, olderTurns),
@@ -721,9 +706,7 @@ export default function App() {
   async function loadMessageNotifications(options?: { initialize?: boolean }) {
     if (!authenticated) return;
     try {
-      const nextEvents = await apiJson<EventRow[]>(
-        "/api/events?type=message.created&limit=100&order=desc"
-      );
+      const nextEvents = await messageGateway.listRecentMessageEvents();
       if (options?.initialize) {
         const nextSeen = { ...lastSeenByChannelRef.current };
         for (const event of nextEvents) {
