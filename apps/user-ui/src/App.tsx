@@ -10,6 +10,7 @@ import {
 import { apiFetch, apiJson, getApiHeaders } from "./api";
 import { wsUrl } from "./config";
 import { ChangePasswordScreen } from "./ui/auth/change-password-screen";
+import { ChannelGroup } from "./ui/sidebar/channel-group";
 import { ArchivedChannelGroup } from "./ui/sidebar/archived-channel-group";
 import { ActivityPanel } from "./ui/activity/activity-panel";
 import { ConversationDialog } from "./ui/dialogs/conversation-dialog";
@@ -1663,38 +1664,22 @@ export default function App() {
             {groupedChannels.map((group) => {
               const isCollapsed = !isSearchingChannels && collapsedChannelGroups[group.id];
               return (
-                <section className="channel-group" key={group.id}>
-                  <button
-                    type="button"
-                    className="channel-group-toggle"
-                    aria-expanded={!isCollapsed}
-                    onClick={() =>
-                      setCollapsedChannelGroups((current) => ({
-                        ...current,
-                        [group.id]: !current[group.id]
-                      }))
-                    }
-                  >
-                    <span>{group.label}</span>
-                    <em>{group.channels.length}</em>
-                    <strong>{isCollapsed ? "+" : "-"}</strong>
-                  </button>
-
-                  {!isCollapsed ? (
-                    <div className="channel-group-items">
-                      {group.channels.map((channel) => (
-                        <button
-                          key={channel.id}
-                          className={channel.id === activeChannelId ? "active" : undefined}
-                          onClick={() => selectChannel(channel.id)}
-                        >
-                          <span>{channelLabel(channel, username)}</span>
-                          {unreadCounts[channel.id] ? <em>{unreadCounts[channel.id]}</em> : null}
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                </section>
+                <ChannelGroup
+                  key={group.id}
+                  label={group.label}
+                  channels={group.channels}
+                  collapsed={Boolean(isCollapsed)}
+                  activeChannelId={activeChannelId}
+                  username={username}
+                  unreadCounts={unreadCounts}
+                  onToggle={() =>
+                    setCollapsedChannelGroups((current) => ({
+                      ...current,
+                      [group.id]: !current[group.id]
+                    }))
+                  }
+                  onSelectChannel={selectChannel}
+                />
               );
             })}
             {filteredArchivedChannels.length > 0 ? (
