@@ -2,8 +2,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { JsonRenderBlock } from "../../JsonRenderBlock";
 import { OrgopsSecretInput } from "../../OrgopsSecretInput";
-import { splitJsonRenderMarkdown } from "../../jsonRenderMarkdown";
-import { splitSecretInputMarkdown } from "../../secretInputMarkdown";
+import { splitJsonRenderMarkdown } from "../../domain/messaging/json-render-markdown";
+import { splitSecretInputMarkdown } from "../../domain/messaging/secret-input-markdown";
 
 type MessageMarkdownProps = {
   text: string;
