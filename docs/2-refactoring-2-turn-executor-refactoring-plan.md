@@ -21,6 +21,11 @@ It also has a short section on running this work in parallel with the user-ui re
   - `models-dev-db` is not a boundary: it is bundled, gzipped data and never touches the network.
 - **`pullMessages` is never used.** The executor passes `pullMessages` to `generate` and `GenerateOptions` declares it, but nothing in `packages/llm/src/index.ts` reads it (no `prepareStep`, and `git log -S` shows none was ever added). `AGENTS.md` says the runner polls for same-channel events between model steps. In the current code only the post-response `reconcileLateInjectedMessages` check does anything. See the quirks list.
 - **MSW is already in the lockfile** (`apps/user-ui` uses it, `^2.15.0`) but is not a dependency of `apps/agent-runner`.
+- **Baseline coverage of `turn-executor.ts` (step 0a, measured once with a scratch `@vitest/coverage-v8`, not committed):** before the characterisation tests, 15.9% lines, 14.2% branches, 14.0% functions (47 of 296 lines). Lines 448-938, all of `executeTurn`, are uncovered. With the single harness test (`characterisation/classic-turn.test.ts`) it is 74.0% lines and 51.1% branches. Cyclomatic complexity was not measured.
+- **Facts the harness proved (step 0a):**
+  - `openrouter:test-model` does not resolve in `models-dev-db` (`getModel` throws), so the context window falls back to the table. `openrouter:openai/gpt-4o` does not resolve either. `openai:gpt-4o` (128000) and `anthropic:claude-sonnet-4-5` (200000) do.
+  - A provider response without a `usage` field still gives a truthy `usage` object after `generate`, so a classic turn emits a second `telemetry.context.window.updated` event even then. The usage-telemetry tests must not assume that no usage means no second event.
+  - `ORGOPS_LLM_STUB=1` in the environment makes `generate` skip the network. The harness never sets it, but a developer's shell might.
 
 ## 1. Characterisation tests
 
@@ -43,7 +48,7 @@ The executor tests assert on the wire: the requests recorded by the `/api/events
 
 Everything else also runs for real: `prompt-composer`, `context-maintenance`, `channel-injection`, `event-routing`, `tools`, and `@orgops/schemas` validation. These are the modules the refactor moves code between, so mocking them would break the tests on every move.
 
-MSW runs with `onUnhandledRequest: "error"`, so any request the test did not plan for fails it. The server setup mirrors `apps/user-ui/src/characterisation/server.ts` (`setupServer`, reset after each test).
+MSW runs with `onUnhandledRequest: "error"`, so any request the test did not plan for fails it. The server setup mirrors `apps/user-ui/src/characterisation/server.ts` (`setupServer`, reset after each test). The shared root `vitest.config.ts` has no per-project setup file for agent-runner and the plan leaves it alone, so the lifecycle lives in `characterisation/lifecycle.ts` as `useFakeNetwork()`, called once at the top of each suite file, instead of a setup file.
 
 Tests import only `createTurnExecutor`, the exported helpers, and the types from `types.ts`. No `let`, no `beforeEach` (the MSW server lifecycle goes in a setup file, not in the tests). Data comes from factories (`getMockAgent`, `getMockEvent`, `getMockChannelRecord`) and from response builders (`chatCompletion({ text | toolCalls, usage })`, `eventsHandler`, `channelsHandler`). `chatCompletion` is the one place that knows the provider's wire format.
 
