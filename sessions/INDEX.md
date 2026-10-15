@@ -12,4 +12,5 @@ Chronological by creation time. Each folder holds `transcript.jsonl` (raw sessio
 | 6 | [part-2-characterization-tests-3](06-part-2-characterization-tests-3/brief.md) | named | `7c356c1a-aebd-414c-81de-12b625d434a6` | 2026-10-15T06:28:44.436Z | 2026-10-15T07:02:31.629Z | 5 |
 | 7 | [part-3-pure-functions](07-part-3-pure-functions/brief.md) | named | `16973ab7-05f6-4289-8cdc-54d52f5330f7` | 2026-10-15T07:12:03.916Z | 2026-10-15T07:23:55.871Z | 8 |
 | 8 | [part-4-presentational-components](08-part-4-presentational-components/brief.md) | named | `3cd8917c-150a-41d2-9a8f-cd7be6ec0a6c` | 2026-10-15T07:24:37.962Z | 2026-10-15T07:45:08.589Z | 8 |
+| 9 | [part-5-gateway-ports-adapters](09-part-5-gateway-ports-adapters/brief.md) | named | `e4103eca-4211-41fa-9f06-2a2a589eeb8d` | 2026-10-15T07:45:22.207Z | 2026-10-15T08:06:00.326Z | 6 |
 | 10 | [part-5-gateway-ports-adapters-2-better-tests](10-part-5-gateway-ports-adapters-2-better-tests/brief.md) | named | `4a9b8637-f4b3-4904-b108-10f94fad2d1b` | 2026-10-15T07:55:09.493Z | 2026-10-15T08:03:16.143Z | 2 |
