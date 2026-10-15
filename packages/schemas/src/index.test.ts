@@ -114,3 +114,14 @@ describe("schemas", () => {
     expect(result.ok).toBe(false);
   });
 });
+
+it("validates message target lists", () => {
+  const validate = (targetAgentNames: unknown) => validateEventAgainstShapes({
+    type: "message.created", source: "human:admin", channelId: "channel",
+    payload: {text: "Review together", targetAgentNames},
+  }, getCoreEventShapes()).ok;
+  expect(validate(["one", "two"])).toBe(true);
+  for (const names of [[], [" "], [1], "one", null, Array(31).fill("one")]) {
+    expect(validate(names)).toBe(false);
+  }
+});

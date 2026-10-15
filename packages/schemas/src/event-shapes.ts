@@ -114,6 +114,7 @@ const coreEventShapes: EventShapeDefinition[] = [
         .object({
           text: z.string().min(1),
           eventType: z.string().min(1).optional(),
+          targetAgentNames: z.array(z.string().trim().min(1)).min(1).max(30).optional(),
           sensitive: z
             .object({
               ciphertextB64: z.string().min(1),

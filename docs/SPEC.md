@@ -209,6 +209,13 @@ Envelope fields used by API/runner:
 - scheduling: `deliverAt`
 - dedupe: `idempotencyKey`
 
+`message.created` accepts optional `payload.targetAgentNames` (1–30 nonempty agent names).
+The runner handles the message only for listed agents; an existing singular
+`targetAgentName` also restricts delivery when supplied. Unlisted subscribers
+retain channel history access but do not start a turn for this message. Messages
+without either field keep ordinary channel routing. Scheduled triggers continue
+to require their singular target.
+
 `message.created` accepts optional `payload.sensitive` metadata for protected content:
 
 - sender-safe preview remains in `payload.text`

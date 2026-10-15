@@ -18,6 +18,18 @@ export function shouldHandleEventForAgent(agent: Agent, event: Event): boolean {
   if (payloadTargetAgentName && payloadTargetAgentName !== agent.name) {
     return false;
   }
+  // Message target lists restrict delivery to every explicitly selected agent.
+  if (
+    event.type === "message.created" && event.payload &&
+    typeof event.payload === "object" && "targetAgentNames" in event.payload
+  ) {
+    const names = (event.payload as { targetAgentNames?: unknown }).targetAgentNames;
+    if (
+      !Array.isArray(names) || !names.length ||
+      names.some(name => typeof name !== "string" || !name.trim()) ||
+      !names.some(name => name.trim() === agent.name)
+    ) return false;
+  }
   if (event.type === "agent.scheduled.trigger") {
     // Scheduled trigger events should only wake their intended target.
     if (!payloadTargetAgentName || payloadTargetAgentName !== agent.name) return false;

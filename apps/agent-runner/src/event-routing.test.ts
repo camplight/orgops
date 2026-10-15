@@ -113,3 +113,17 @@ describe("event routing", () => {
     ).toBe(true);
   });
 });
+
+it("routes message target lists without widening legacy targets or bypassing exclusions", () => {
+  const message=makeEvent({payload:{targetAgentNames:["browser","worker"]}});
+  expect(shouldHandleEventForAgent(agent,message)).toBe(true);
+  expect(shouldHandleEventForAgent({...agent,name:"worker"},message)).toBe(true);
+  expect(shouldHandleEventForAgent({...agent,name:"other"},message)).toBe(false);
+  expect(shouldHandleEventForAgent(agent,{...message,source:"agent:browser"})).toBe(false);
+  expect(shouldHandleEventForAgent(agent,{...message,channelId:undefined})).toBe(false);
+  expect(shouldHandleEventForAgent(agent,makeEvent({payload:{targetAgentNames:["browser"],targetAgentName:"worker"}}))).toBe(false);
+  expect(shouldHandleEventForAgent(agent,{...message,type:"agent.scheduled.trigger"})).toBe(false);
+  for(const targetAgentNames of [[],null,"browser",[123],[" "]]) {
+    expect(shouldHandleEventForAgent(agent,makeEvent({payload:{targetAgentNames}}))).toBe(false);
+  }
+});
