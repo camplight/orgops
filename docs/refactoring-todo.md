@@ -37,8 +37,8 @@ Caveats:
 Progress against `docs/1-refactoring-1-user-ui-refactoring-plan.md`:
 
 - [x] 0a. Test tooling (`happy-dom`, Testing Library, setup), the characterisation harness and the timing budget.
-- [ ] 0b. Characterisation suites, one area per commit.
-- [ ] 0c. Stryker spike and gap-filling pass.
+- [x] 0b. Characterisation suites, one area per commit (auth, workspace load, sidebar, timeline, loading and realtime, composer, dialogs and management).
+- [x] 0c. Stryker spike and gap-filling pass. Closed without a whole-file run, as too slow. Accepted as good enough.
 - [ ] 1. Move pure functions out into `domain/*`.
 - [ ] 2. Extract presentational components.
 - [ ] 3. Introduce gateway ports and HTTP adapters.
