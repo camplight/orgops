@@ -10,6 +10,8 @@ import {
 import { wsUrl } from "./infrastructure/http/config";
 import { createBrowserConfirm } from "./infrastructure/browser/browser-confirm";
 import { createBrowserClipboard } from "./infrastructure/browser/browser-clipboard";
+import { createWebSocketRealtimeFeed } from "./infrastructure/websocket/websocket-realtime-feed";
+import type { RealtimeFeed } from "./ports/realtime-feed";
 import { createBrowserDeepLink } from "./infrastructure/browser/browser-deep-link";
 import { createHttpSessionGateway } from "./infrastructure/http/http-session-gateway";
 import { createHttpConversationGateway } from "./infrastructure/http/http-conversation-gateway";
@@ -67,12 +69,6 @@ type PendingAttachment = {
   error?: string;
 };
 
-type WsServerEventMessage = {
-  type: "event";
-  topic: string;
-  data: EventRow;
-};
-
 function adaptiveMessageBatchSize() {
   const connection = (
     navigator as Navigator & {
@@ -118,11 +114,7 @@ export default function App() {
   const userIdRef = useRef<string | null>(null);
   const viewerTeamIdsRef = useRef<Set<string>>(new Set());
   const seenWsEventIdsRef = useRef<Set<string>>(new Set());
-  const wsRef = useRef<WebSocket | null>(null);
-  const wsSubscribedTopicsRef = useRef<Set<string>>(new Set());
-  const wsReconnectTimerRef = useRef<number | null>(null);
-  const wsShouldReconnectRef = useRef(true);
-  const wsReconnectAttemptRef = useRef(0);
+  const realtimeFeedRef = useRef<RealtimeFeed | null>(null);
   const messageFetchSeqRef = useRef(0);
   const loadingChannelIdRef = useRef<string | null>(null);
   const forceScrollToBottomOnLoadRef = useRef(false);
@@ -846,72 +838,27 @@ export default function App() {
 
   useEffect(() => {
     if (!authenticated || mustChangePassword) return;
-    wsShouldReconnectRef.current = true;
-    const url = wsUrl();
-
-    const clearReconnectTimer = () => {
-      if (wsReconnectTimerRef.current !== null) {
-        window.clearTimeout(wsReconnectTimerRef.current);
-        wsReconnectTimerRef.current = null;
-      }
-    };
-
-    const subscribeTopic = (topic: string) => {
-      if (!wsSubscribedTopicsRef.current.has(topic)) {
-        wsSubscribedTopicsRef.current.add(topic);
-      }
-      const ws = wsRef.current;
-      if (ws?.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "subscribe", topic }));
-      }
-    };
-
-    const connect = () => {
-      const ws = new WebSocket(url);
-      wsRef.current = ws;
-      ws.onopen = () => {
-        setWsConnected(true);
-        wsReconnectAttemptRef.current = 0;
-        for (const topic of wsSubscribedTopicsRef.current) {
-          ws.send(JSON.stringify({ type: "subscribe", topic }));
-        }
-        const liveChannelId = activeChannelIdRef.current;
-        if (liveChannelId) {
-          void loadMessages(liveChannelId);
-        }
-        void loadMessageNotifications();
-      };
-      ws.onmessage = (raw) => {
-        try {
-          const parsed = JSON.parse(String(raw.data)) as WsServerEventMessage;
-          if (parsed.type === "event" && parsed.data) {
-            handleIncomingRealtimeEvent(parsed.data);
+    const feed = createWebSocketRealtimeFeed({
+      url: wsUrl(),
+      handlers: {
+        onOpen: () => {
+          setWsConnected(true);
+          const liveChannelId = activeChannelIdRef.current;
+          if (liveChannelId) {
+            void loadMessages(liveChannelId);
           }
-        } catch {
-          // Ignore malformed payloads from background topics.
-        }
-      };
-      ws.onerror = () => ws.close();
-      ws.onclose = () => {
-        setWsConnected(false);
-        if (!wsShouldReconnectRef.current) return;
-        const delay = Math.min(5000, 400 * 2 ** wsReconnectAttemptRef.current);
-        wsReconnectAttemptRef.current += 1;
-        clearReconnectTimer();
-        wsReconnectTimerRef.current = window.setTimeout(connect, delay);
-      };
-    };
-
-    connect();
+          void loadMessageNotifications();
+        },
+        onClose: () => setWsConnected(false),
+        onEvent: (event) => handleIncomingRealtimeEvent(event)
+      }
+    });
+    realtimeFeedRef.current = feed;
+    feed.start();
 
     return () => {
-      wsShouldReconnectRef.current = false;
-      clearReconnectTimer();
-      wsRef.current?.close();
-      wsRef.current = null;
-      wsReconnectAttemptRef.current = 0;
-      wsSubscribedTopicsRef.current.clear();
-      setWsConnected(false);
+      feed.stop();
+      realtimeFeedRef.current = null;
     };
   }, [authenticated, mustChangePassword]);
 
@@ -921,23 +868,7 @@ export default function App() {
     for (const channel of visibleChannels) {
       desiredTopics.add(`channel:${channel.id}`);
     }
-    const ws = wsRef.current;
-    for (const topic of [...wsSubscribedTopicsRef.current]) {
-      if (!desiredTopics.has(topic)) {
-        wsSubscribedTopicsRef.current.delete(topic);
-        if (ws?.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: "unsubscribe", topic }));
-        }
-      }
-    }
-    for (const topic of desiredTopics) {
-      if (!wsSubscribedTopicsRef.current.has(topic)) {
-        wsSubscribedTopicsRef.current.add(topic);
-        if (ws?.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: "subscribe", topic }));
-        }
-      }
-    }
+    realtimeFeedRef.current?.setTopics(desiredTopics);
   }, [authenticated, mustChangePassword, visibleChannels]);
 
   useEffect(() => {

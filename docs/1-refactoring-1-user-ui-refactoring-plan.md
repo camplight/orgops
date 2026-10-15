@@ -144,7 +144,7 @@ Every step ends with the characterisation tests unchanged and green, `npm run li
 
 **3. Introduce gateway ports and HTTP adapters:** `ConversationGateway`, `MessageGateway`, `FileGateway`, `SessionGateway`, plus `DeepLink`, `Clipboard` and `Confirm`. Swap call sites one at a time. **(done)**
 
-**4. Extract realtime:** a `RealtimeFeed` adapter (connect, backoff, topic diff) and a polling-fallback hook.
+**4. Extract realtime:** a `RealtimeFeed` adapter (connect, backoff, topic diff) and a polling-fallback hook. **(in progress)** `RealtimeFeed` port and WebSocket adapter done; the polling-fallback hook remains.
 
 **5. Identity context:** use cases, the session state union and `useSession`.
 
