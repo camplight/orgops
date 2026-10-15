@@ -28,6 +28,8 @@ import {
   shareTypeLabel,
   type ChannelGroupId
 } from "./domain/conversations/channel-rules";
+import { formatAttachmentSize, parseMessageAttachments } from "./domain/messaging/attachments";
+import { mergeEventsChronologically } from "./domain/messaging/event-ordering";
 import {
   isHiddenUiActionMessage,
   messageDisplayTime,
@@ -103,13 +105,6 @@ type PendingAttachment = {
   error?: string;
 };
 
-type MessageAttachment = {
-  fileId: string;
-  name: string;
-  mime?: string;
-  size?: number;
-};
-
 type WsServerEventMessage = {
   type: "event";
   topic: string;
@@ -162,53 +157,11 @@ function adaptiveMessageBatchSize() {
   return 30;
 }
 
-function mergeEventsChronologically(current: EventRow[], incoming: EventRow[]) {
-  const byId = new Map<string, EventRow>();
-  for (const event of current) byId.set(event.id, event);
-  for (const event of incoming) byId.set(event.id, event);
-  return [...byId.values()].sort((left, right) => {
-    const leftPrimary = left.deliverAt ?? left.createdAt ?? 0;
-    const rightPrimary = right.deliverAt ?? right.createdAt ?? 0;
-    if (leftPrimary !== rightPrimary) return leftPrimary - rightPrimary;
-    const leftCreated = left.createdAt ?? 0;
-    const rightCreated = right.createdAt ?? 0;
-    if (leftCreated !== rightCreated) return leftCreated - rightCreated;
-    return left.id.localeCompare(right.id);
-  });
-}
-
 function createLocalAttachmentId() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
   }
   return `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function parseMessageAttachments(payload: unknown): MessageAttachment[] {
-  if (!payload || typeof payload !== "object") return [];
-  const payloadRecord = payload as { attachments?: unknown };
-  if (!Array.isArray(payloadRecord.attachments)) return [];
-  const attachments: MessageAttachment[] = [];
-  for (const entry of payloadRecord.attachments) {
-    if (!entry || typeof entry !== "object") continue;
-    const record = entry as Record<string, unknown>;
-    const fileId = typeof record.fileId === "string" ? record.fileId.trim() : "";
-    if (!fileId) continue;
-    const name = typeof record.name === "string" && record.name.trim() ? record.name.trim() : fileId;
-    const mime = typeof record.mime === "string" && record.mime.trim() ? record.mime.trim() : undefined;
-    const size = typeof record.size === "number" && Number.isFinite(record.size) ? Math.max(0, record.size) : undefined;
-    attachments.push({ fileId, name, mime, size });
-  }
-  return attachments;
-}
-
-function formatAttachmentSize(size?: number) {
-  if (typeof size !== "number" || !Number.isFinite(size) || size <= 0) return null;
-  if (size < 1024) return `${size} B`;
-  const kb = size / 1024;
-  if (kb < 1024) return `${kb.toFixed(kb >= 100 ? 0 : 1)} KB`;
-  const mb = kb / 1024;
-  return `${mb.toFixed(mb >= 100 ? 0 : 1)} MB`;
 }
 
 export default function App() {
