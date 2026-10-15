@@ -14,10 +14,31 @@ type EmittedEvent = {
   parentEventId?: string;
 };
 
+type MemoryRecordFixture = Record<string, unknown> | null;
+
+export type MemoryRecords = {
+  channelRecent?: MemoryRecordFixture;
+  channelFull?: MemoryRecordFixture;
+  crossRecent?: MemoryRecordFixture;
+  crossFull?: MemoryRecordFixture;
+};
+
+const MEMORY_ENDPOINTS: Record<string, keyof MemoryRecords> = {
+  "/api/memory/channel/recent": "channelRecent",
+  "/api/memory/channel/full": "channelFull",
+  "/api/memory/cross/recent": "crossRecent",
+  "/api/memory/cross/full": "crossFull",
+};
+
+const MEMORY_HOLD_LIMIT_MS = 150;
+const MEMORY_REQUEST_COUNT = 4;
+
 type FakeOrgopsOptions = {
   channels: ChannelRecord[];
   pendingEvents?: () => Event[];
-  channelHistory?: Event[];
+  channelHistory?: Event[] | ((query: URLSearchParams) => Event[]);
+  memoryRecords?: MemoryRecords;
+  holdMemoryResponses?: boolean;
   secretsEnv?: Record<string, string>;
   rejectEvent?: (event: EmittedEvent) => boolean;
 };
@@ -28,11 +49,34 @@ export const DEFAULT_SECRETS_ENV = {
 };
 
 export const createFakeOrgops = (options: FakeOrgopsOptions) => {
-  const { channels, pendingEvents = () => [], channelHistory = [], secretsEnv = DEFAULT_SECRETS_ENV, rejectEvent } =
-    options;
+  const {
+    channels,
+    pendingEvents = () => [],
+    channelHistory = [],
+    memoryRecords = {},
+    holdMemoryResponses = false,
+    secretsEnv = DEFAULT_SECRETS_ENV,
+    rejectEvent,
+  } = options;
+  let memoryArrivals = 0;
+  let arrivalsWhenFirstReleased: number | undefined;
+  let releaseMemory: () => void = () => {};
+  const memoryGate = new Promise<void>((resolve) => {
+    releaseMemory = resolve;
+  });
+  const holdMemoryResponse = async () => {
+    memoryArrivals += 1;
+    if (memoryArrivals >= MEMORY_REQUEST_COUNT) releaseMemory();
+    await Promise.race([
+      memoryGate,
+      new Promise<void>((resolve) => setTimeout(resolve, MEMORY_HOLD_LIMIT_MS)),
+    ]);
+    arrivalsWhenFirstReleased ??= memoryArrivals;
+  };
   const emitted: EmittedEvent[] = [];
   const requestLog: string[] = [];
   const callLog: string[] = [];
+  const memoryQueries: string[] = [];
 
   const handlers = [
     http.post(`${API_ORIGIN}/api/events`, async ({ request }) => {
@@ -48,7 +92,10 @@ export const createFakeOrgops = (options: FakeOrgopsOptions) => {
       requestLog.push(`GET /api/events?${url.searchParams.toString()}`);
       callLog.push("GET /api/events");
       const status = url.searchParams.get("status");
-      return HttpResponse.json(status === "PENDING" ? pendingEvents() : channelHistory);
+      if (status === "PENDING") return HttpResponse.json(pendingEvents());
+      return HttpResponse.json(
+        typeof channelHistory === "function" ? channelHistory(url.searchParams) : channelHistory,
+      );
     }),
     http.get(`${API_ORIGIN}/api/channels`, () => {
       requestLog.push("GET /api/channels");
@@ -60,10 +107,14 @@ export const createFakeOrgops = (options: FakeOrgopsOptions) => {
       callLog.push("GET /api/secrets/env");
       return HttpResponse.json(secretsEnv);
     }),
-    http.get(`${API_ORIGIN}/api/memory/*`, ({ request }) => {
-      requestLog.push(`GET ${new URL(request.url).pathname}`);
-      callLog.push(`GET ${new URL(request.url).pathname}`);
-      return HttpResponse.json({ record: null });
+    http.get(`${API_ORIGIN}/api/memory/*`, async ({ request }) => {
+      const pathname = new URL(request.url).pathname;
+      requestLog.push(`GET ${pathname}`);
+      callLog.push(`GET ${pathname}`);
+      memoryQueries.push(`${pathname}?${new URL(request.url).searchParams.toString()}`);
+      if (holdMemoryResponses) await holdMemoryResponse();
+      const key = MEMORY_ENDPOINTS[pathname];
+      return HttpResponse.json({ record: (key && memoryRecords[key]) || null });
     }),
   ];
 
@@ -72,5 +123,7 @@ export const createFakeOrgops = (options: FakeOrgopsOptions) => {
     emitted: () => [...emitted],
     requestLog: () => [...requestLog],
     callLog: () => [...callLog],
+    memoryQueries: () => [...memoryQueries],
+    memoryRequestsArrivedBeforeFirstResponse: () => arrivalsWhenFirstReleased,
   };
 };

@@ -1,0 +1,16 @@
+{
+  "testRunner": "command",
+  "commandRunner": { "command": "npx vitest run src/characterisation/memory-modes.test.ts" },
+  "mutate": [
+    "src/turn-executor.ts:406-416",
+    "src/turn-executor.ts:557-616",
+    "src/context-maintenance.ts:17-36",
+    "src/context-maintenance.ts:56-61",
+    "src/context-maintenance.ts:557-575",
+    "src/prompt-composer.ts:319-331"
+  ],
+  "coverageAnalysis": "off",
+  "reporters": ["clear-text", "json"],
+  "jsonReporter": { "fileName": "reports/mutation/memory-modes.json" },
+  "tempDirName": ".stryker-tmp"
+}
