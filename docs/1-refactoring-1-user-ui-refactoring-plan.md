@@ -142,7 +142,7 @@ Every step ends with the characterisation tests unchanged and green, `npm run li
 
 **2. Extract presentational components,** props in and callbacks out, one per commit: auth screens, dialogs, sidebar, activity panel, composer, timeline items. De-duplicate the markdown block here. **(done)**
 
-**3. Introduce gateway ports and HTTP adapters:** `ConversationGateway`, `MessageGateway`, `FileGateway`, `SessionGateway`, plus `DeepLink`, `Clipboard` and `Confirm`. Swap call sites one at a time. **(done for the HTTP gateways; the `DeepLink`, `Clipboard` and `Confirm` browser ports are deferred and not yet extracted)**
+**3. Introduce gateway ports and HTTP adapters:** `ConversationGateway`, `MessageGateway`, `FileGateway`, `SessionGateway`, plus `DeepLink`, `Clipboard` and `Confirm`. Swap call sites one at a time. **(done)**
 
 **4. Extract realtime:** a `RealtimeFeed` adapter (connect, backoff, topic diff) and a polling-fallback hook.
 
