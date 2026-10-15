@@ -9,6 +9,7 @@ import {
 } from "react";
 import { apiFetch, apiJson, getApiHeaders } from "./api";
 import { wsUrl } from "./config";
+import { createHttpMessageGateway } from "./infrastructure/http/http-message-gateway";
 import { ChangePasswordScreen } from "./ui/auth/change-password-screen";
 import { MessageItem } from "./ui/timeline/message-item";
 import { TurnFailureItem } from "./ui/timeline/turn-failure-item";
@@ -120,6 +121,8 @@ function createLocalAttachmentId() {
   }
   return `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
+
+const messageGateway = createHttpMessageGateway();
 
 export default function App() {
   const messagesPanelRef = useRef<HTMLElement | null>(null);
@@ -391,11 +394,7 @@ export default function App() {
     setRevealingSensitiveEventId(eventId);
     setSensitiveRevealErrors((current) => ({ ...current, [eventId]: "" }));
     try {
-      const response = await apiJson<{ text?: string }>(`/api/events/${encodeURIComponent(eventId)}/reveal-sensitive`, {
-        method: "POST",
-        headers: getApiHeaders(),
-        body: JSON.stringify({ password })
-      });
+      const response = await messageGateway.revealSensitive({ eventId, password });
       const text = typeof response.text === "string" ? response.text : "";
       if (!text) {
         setSensitiveRevealErrors((current) => ({ ...current, [eventId]: "No sensitive content was returned." }));
