@@ -29,6 +29,8 @@ import { createCopyShareLink } from "./application/conversations/copy-share-link
 import { useShareLink } from "./ui/conversations/use-share-link";
 import { createUpdateChannelSettings } from "./application/conversations/update-channel-settings";
 import { createDeleteChannel } from "./application/conversations/delete-channel";
+import { createStartConversation } from "./application/conversations/start-conversation";
+import { useStartConversation } from "./ui/conversations/use-start-conversation";
 import { useChannelManagement } from "./ui/conversations/use-channel-management";
 import { createHttpSessionGateway } from "./infrastructure/http/http-session-gateway";
 import { createHttpConversationGateway } from "./infrastructure/http/http-conversation-gateway";
@@ -127,6 +129,7 @@ const copyShareLink = createCopyShareLink({ conversationGateway, deepLink, clipb
 const removeShare = createRemoveShare({ conversationGateway });
 const updateChannelSettings = createUpdateChannelSettings({ conversationGateway });
 const deleteChannel = createDeleteChannel({ conversationGateway });
+const startConversation = createStartConversation({ conversationGateway });
 
 export default function App() {
   const messagesPanelRef = useRef<HTMLElement | null>(null);
@@ -159,9 +162,6 @@ export default function App() {
   });
   const [hasNewMessagesBelow, setHasNewMessagesBelow] = useState(false);
   const [channelQuery, setChannelQuery] = useState("");
-  const [conversationName, setConversationName] = useState("");
-  const [conversationDescription, setConversationDescription] = useState("");
-  const [conversationVisibility, setConversationVisibility] = useState<"PUBLIC" | "PRIVATE">("PRIVATE");
   const [selectedConversationAgents, setSelectedConversationAgents] = useState<string[]>([]);
   const [agentSearchQuery, setAgentSearchQuery] = useState("");
   const [showArchivedChannels, setShowArchivedChannels] = useState(false);
@@ -400,6 +400,28 @@ export default function App() {
   const hasAttachmentErrors = pendingAttachments.some((item) => item.status === "error");
   const activeChannelManageable = canManageUserChannel(activeChannel, userId);
   const activeChannelCanPost = activeChannel ? activeChannel.canPost !== false : false;
+  const {
+    conversationName,
+    conversationDescription,
+    conversationVisibility,
+    setConversationName,
+    setConversationDescription,
+    setConversationVisibility,
+    handleStartConversation
+  } = useStartConversation({
+    username,
+    selectedConversationAgents,
+    startConversation,
+    refreshChannels,
+    expandChannelGroup: (group) =>
+      setCollapsedChannelGroups((current) => ({ ...current, [group]: false })),
+    setError,
+    setLoading,
+    setSelectedConversationAgents,
+    setAgentSearchQuery,
+    setChannelQuery,
+    setShowConversationDialog
+  });
   const canStartConversation =
     Boolean(conversationName.trim()) || selectedConversationAgents.length === 1;
   const selectedConversationAgentRecords = useMemo(
@@ -1052,65 +1074,6 @@ export default function App() {
           : visibleChannels.find((channel) => !channel.archivedAt)?.id ?? null;
     selectChannel(nextSelectedChannelId, { replace: true });
     return nextChannels;
-  }
-
-  async function handleStartConversation(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const name = conversationName.trim();
-    const description = conversationDescription.trim();
-    const selectedAgents = selectedConversationAgents.filter(Boolean);
-    setError(null);
-
-    if (!name && selectedAgents.length !== 1) {
-      setError("Choose one agent for a direct message, or add a channel name.");
-      return;
-    }
-
-    setLoading(true);
-    try {
-      if (!name) {
-        const direct = await conversationGateway.openDirectChannel({ agentName: selectedAgents[0] });
-        setCollapsedChannelGroups((current) => ({ ...current, direct: false }));
-        await refreshChannels(direct.id);
-      } else {
-        const created = await conversationGateway.createChannel({
-          name,
-          description: description || undefined,
-          visibility: conversationVisibility
-        });
-        await Promise.all([
-          username
-            ? conversationGateway
-                .subscribe({ channelId: created.id, subscriberType: "HUMAN", subscriberId: username })
-                .catch(() => undefined)
-            : Promise.resolve(),
-          ...selectedAgents.map((agentName) =>
-            conversationGateway.subscribe({
-              channelId: created.id,
-              subscriberType: "AGENT",
-              subscriberId: agentName
-            })
-          )
-        ]);
-        setCollapsedChannelGroups((current) => ({ ...current, channels: false }));
-        await refreshChannels(created.id);
-      }
-      setConversationName("");
-      setConversationDescription("");
-      setSelectedConversationAgents([]);
-      setConversationVisibility("PRIVATE");
-      setAgentSearchQuery("");
-      setChannelQuery("");
-      setShowConversationDialog(false);
-    } catch (conversationError) {
-      setError(
-        conversationError instanceof Error
-          ? conversationError.message
-          : "Unable to start conversation"
-      );
-    } finally {
-      setLoading(false);
-    }
   }
 
   function handleMessagesScroll() {
