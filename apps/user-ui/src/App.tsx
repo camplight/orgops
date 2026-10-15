@@ -7,7 +7,7 @@ import {
   useRef,
   useState
 } from "react";
-import { wsUrl } from "./config";
+import { wsUrl } from "./infrastructure/http/config";
 import { createHttpSessionGateway } from "./infrastructure/http/http-session-gateway";
 import { createHttpConversationGateway } from "./infrastructure/http/http-conversation-gateway";
 import { createHttpFileGateway } from "./infrastructure/http/http-file-gateway";

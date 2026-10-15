@@ -1,4 +1,4 @@
-import { apiFetch, apiJson } from "../../api";
+import { apiFetch, apiJson } from "./api";
 import type { FileGateway } from "../../ports/file-gateway";
 
 export function createHttpFileGateway(): FileGateway {

@@ -1,4 +1,4 @@
-import { apiFetch, apiJson, getApiHeaders } from "../../api";
+import { apiFetch, apiJson, getApiHeaders } from "./api";
 import type { ConversationGateway } from "../../ports/conversation-gateway";
 import type { Agent, Channel, Team } from "../../types";
 

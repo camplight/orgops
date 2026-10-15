@@ -1,5 +1,5 @@
 import { FormEvent, useState } from "react";
-import { apiFetch, getApiHeaders } from "./api";
+import { apiFetch, getApiHeaders } from "./infrastructure/http/api";
 import type { SecretInputSpec } from "./domain/messaging/secret-input-markdown";
 
 type OrgopsSecretInputProps = {
