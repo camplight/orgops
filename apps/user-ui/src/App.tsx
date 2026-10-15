@@ -10,6 +10,7 @@ import {
 import { apiFetch, apiJson, getApiHeaders } from "./api";
 import { wsUrl } from "./config";
 import { ChangePasswordScreen } from "./ui/auth/change-password-screen";
+import { ComposerActions } from "./ui/composer/composer-actions";
 import { ComposerAttachments } from "./ui/composer/composer-attachments";
 import { Sidebar } from "./ui/sidebar/sidebar";
 import { ActivityPanel } from "./ui/activity/activity-panel";
@@ -2024,32 +2025,24 @@ export default function App() {
             disabled={!activeChannel || Boolean(activeChannel.archivedAt) || !activeChannelCanPost || sending}
             rows={isConversationEmpty ? 1 : 3}
           />
-          <div className="composer-actions">
-            <button
-              type="button"
-              className="composer-secondary"
-              disabled={!activeChannel || Boolean(activeChannel.archivedAt) || !activeChannelCanPost || sending}
-              onClick={() => fileInputRef.current?.click()}
-            >
-              Attach files
-            </button>
-            <button
-              disabled={
+          <ComposerActions
+            canAttach={
+              !(!activeChannel || Boolean(activeChannel.archivedAt) || !activeChannelCanPost || sending)
+            }
+            canSend={
+              !(
                 !activeChannel ||
                 Boolean(activeChannel.archivedAt) ||
                 !activeChannelCanPost ||
                 sending ||
                 uploadingAttachmentCount > 0 ||
                 (!draft.trim() && readyAttachments.length === 0)
-              }
-            >
-              {uploadingAttachmentCount > 0
-                ? `Uploading ${uploadingAttachmentCount}...`
-                : sending
-                  ? "Sending..."
-                  : "Send"}
-            </button>
-          </div>
+              )
+            }
+            sending={sending}
+            uploadingAttachmentCount={uploadingAttachmentCount}
+            onAttachClick={() => fileInputRef.current?.click()}
+          />
           {hasAttachmentErrors ? (
             <p className="composer-attachment-error">
               One or more attachments failed to upload. Remove them or retry.
