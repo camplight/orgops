@@ -10,8 +10,7 @@ import {
 import { apiFetch, apiJson, getApiHeaders } from "./api";
 import { wsUrl } from "./config";
 import { ChangePasswordScreen } from "./ui/auth/change-password-screen";
-import { ChannelGroup } from "./ui/sidebar/channel-group";
-import { ArchivedChannelGroup } from "./ui/sidebar/archived-channel-group";
+import { Sidebar } from "./ui/sidebar/sidebar";
 import { ActivityPanel } from "./ui/activity/activity-panel";
 import { ConversationDialog } from "./ui/dialogs/conversation-dialog";
 import { ParticipantsDialog } from "./ui/dialogs/participants-dialog";
@@ -1635,85 +1634,32 @@ export default function App() {
 
   return (
     <main className="app-shell">
-      <aside className={`sidebar ${mobileSidebarOpen ? "sidebar-mobile-open" : ""}`}>
-        <button
-          type="button"
-          className="sidebar-mobile-close"
-          onClick={() => setMobileSidebarOpen(false)}
-        >
-          Close
-        </button>
-        <div className="brand">
-          <div className="brand-mark">OO</div>
-          <div>
-            <strong>OrgOps</strong>
-            <span>User workspace</span>
-          </div>
-        </div>
-
-        <section className="sidebar-section">
-          <label className="channel-search">
-            <span>Search channels</span>
-            <input
-              value={channelQuery}
-              onChange={(event) => setChannelQuery(event.target.value)}
-              placeholder="Search channels..."
-            />
-          </label>
-          <div className="channel-list">
-            {groupedChannels.map((group) => {
-              const isCollapsed = !isSearchingChannels && collapsedChannelGroups[group.id];
-              return (
-                <ChannelGroup
-                  key={group.id}
-                  label={group.label}
-                  channels={group.channels}
-                  collapsed={Boolean(isCollapsed)}
-                  activeChannelId={activeChannelId}
-                  username={username}
-                  unreadCounts={unreadCounts}
-                  onToggle={() =>
-                    setCollapsedChannelGroups((current) => ({
-                      ...current,
-                      [group.id]: !current[group.id]
-                    }))
-                  }
-                  onSelectChannel={selectChannel}
-                />
-              );
-            })}
-            {filteredArchivedChannels.length > 0 ? (
-              <ArchivedChannelGroup
-                channels={filteredArchivedChannels}
-                activeChannelId={activeChannelId}
-                username={username}
-                expanded={isSearchingChannels || showArchivedChannels}
-                onToggle={() => setShowArchivedChannels((current) => !current)}
-                onSelectChannel={selectChannel}
-              />
-            ) : null}
-            {!loading &&
-            channelQuery.trim() &&
-            filteredChannels.length === 0 &&
-            filteredArchivedChannels.length === 0 ? (
-              <p className="channel-empty">No channels match "{channelQuery.trim()}".</p>
-            ) : null}
-          </div>
-        </section>
-
-        <section className="sidebar-section start-conversation">
-          <button className="new-conversation-button" onClick={() => setShowConversationDialog(true)}>
-            <span>New conversation</span>
-            <kbd>Cmd+K</kbd>
-          </button>
-        </section>
-
-        <section className="sidebar-section account-actions">
-          <button className="logout-button" onClick={() => void handleLogout()}>
-            Sign out {username ? `(${username})` : ""}
-          </button>
-        </section>
-      </aside>
+      <Sidebar
+        mobileOpen={mobileSidebarOpen}
+        username={username}
+        loading={loading}
+        channelQuery={channelQuery}
+        isSearchingChannels={isSearchingChannels}
+        groupedChannels={groupedChannels}
+        collapsedChannelGroups={collapsedChannelGroups}
+        filteredChannels={filteredChannels}
+        filteredArchivedChannels={filteredArchivedChannels}
+        showArchivedChannels={showArchivedChannels}
+        activeChannelId={activeChannelId}
+        unreadCounts={unreadCounts}
+        onCloseMobile={() => setMobileSidebarOpen(false)}
+        onChannelQueryChange={setChannelQuery}
+        onToggleChannelGroup={(groupId) =>
+          setCollapsedChannelGroups((current) => ({
+            ...current,
+            [groupId]: !current[groupId]
+          }))
+        }
+        onToggleArchivedChannels={() => setShowArchivedChannels((current) => !current)}
+        onSelectChannel={selectChannel}
+        onNewConversation={() => setShowConversationDialog(true)}
+        onLogout={() => void handleLogout()}
+      />
       {mobileSidebarOpen ? (
         <button
           type="button"
