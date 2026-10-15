@@ -19,6 +19,7 @@ type FakeOrgopsOptions = {
   pendingEvents?: () => Event[];
   channelHistory?: Event[];
   secretsEnv?: Record<string, string>;
+  rejectEvent?: (event: EmittedEvent) => boolean;
 };
 
 export const DEFAULT_SECRETS_ENV = {
@@ -27,33 +28,41 @@ export const DEFAULT_SECRETS_ENV = {
 };
 
 export const createFakeOrgops = (options: FakeOrgopsOptions) => {
-  const { channels, pendingEvents = () => [], channelHistory = [], secretsEnv = DEFAULT_SECRETS_ENV } =
+  const { channels, pendingEvents = () => [], channelHistory = [], secretsEnv = DEFAULT_SECRETS_ENV, rejectEvent } =
     options;
   const emitted: EmittedEvent[] = [];
   const requestLog: string[] = [];
+  const callLog: string[] = [];
 
   const handlers = [
     http.post(`${API_ORIGIN}/api/events`, async ({ request }) => {
       requestLog.push("POST /api/events");
-      emitted.push((await request.json()) as EmittedEvent);
+      const event = (await request.json()) as EmittedEvent;
+      callLog.push(`POST /api/events ${event.type}`);
+      if (rejectEvent?.(event)) return HttpResponse.json({ error: "rejected" }, { status: 500 });
+      emitted.push(event);
       return HttpResponse.json({ ok: true });
     }),
     http.get(`${API_ORIGIN}/api/events`, ({ request }) => {
       const url = new URL(request.url);
       requestLog.push(`GET /api/events?${url.searchParams.toString()}`);
+      callLog.push("GET /api/events");
       const status = url.searchParams.get("status");
       return HttpResponse.json(status === "PENDING" ? pendingEvents() : channelHistory);
     }),
     http.get(`${API_ORIGIN}/api/channels`, () => {
       requestLog.push("GET /api/channels");
+      callLog.push("GET /api/channels");
       return HttpResponse.json(channels);
     }),
     http.get(`${API_ORIGIN}/api/secrets/env`, () => {
       requestLog.push("GET /api/secrets/env");
+      callLog.push("GET /api/secrets/env");
       return HttpResponse.json(secretsEnv);
     }),
     http.get(`${API_ORIGIN}/api/memory/*`, ({ request }) => {
       requestLog.push(`GET ${new URL(request.url).pathname}`);
+      callLog.push(`GET ${new URL(request.url).pathname}`);
       return HttpResponse.json({ record: null });
     }),
   ];
@@ -62,5 +71,6 @@ export const createFakeOrgops = (options: FakeOrgopsOptions) => {
     handlers,
     emitted: () => [...emitted],
     requestLog: () => [...requestLog],
+    callLog: () => [...callLog],
   };
 };

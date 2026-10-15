@@ -1,0 +1,12 @@
+{
+  "testRunner": "command",
+  "commandRunner": { "command": "npx vitest run src/characterisation/guards-bracket-dispatch.test.ts" },
+  "mutate": [
+    "src/turn-executor.ts:448-492",
+    "src/turn-executor.ts:779-791"
+  ],
+  "coverageAnalysis": "off",
+  "reporters": ["clear-text", "json"],
+  "jsonReporter": { "fileName": "reports/mutation/guards-bracket-dispatch.json" },
+  "tempDirName": ".stryker-tmp"
+}
