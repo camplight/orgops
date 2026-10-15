@@ -11,4 +11,12 @@ export type MessageGateway = {
     wrapperEvents: EventRow[];
     processEvents: EventRow[];
   }>;
+  listOlderChannelEvents: (options: { channelId: string; limit: number; before: number }) => Promise<{
+    olderMessages: EventRow[];
+    olderTurns: EventRow[];
+    olderTools: EventRow[];
+    olderWrappers: EventRow[];
+    olderProcesses: EventRow[];
+  }>;
+  listRecentMessageEvents: () => Promise<EventRow[]>;
 };
