@@ -1,14 +1,16 @@
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 import { deriveSessionState } from "../../domain/identity/session-state";
 import type { LoadSessionResult } from "../../application/identity/load-session";
 
 export function useSession(options: {
   loadCurrentSession: () => Promise<LoadSessionResult>;
-  clearError: () => void;
+  signIn: (credentials: { username: string; password: string }) => Promise<void>;
+  setError: (message: string | null) => void;
 }) {
-  const { loadCurrentSession, clearError } = options;
+  const { loadCurrentSession, signIn, setError } = options;
   const [username, setUsername] = useState("");
   const [userId, setUserId] = useState<string | null>(null);
+  const [loginPassword, setLoginPassword] = useState("");
   const [loginUsername, setLoginUsername] = useState("admin");
   const [mustChangePassword, setMustChangePassword] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
@@ -17,7 +19,7 @@ export function useSession(options: {
 
   async function loadSession() {
     setAuthLoading(true);
-    clearError();
+    setError(null);
     try {
       const session = await loadCurrentSession();
       if (session.kind === "loaded") {
@@ -37,6 +39,24 @@ export function useSession(options: {
     }
   }
 
+  async function handleLogin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError(null);
+    setAuthLoading(true);
+    try {
+      await signIn({
+        username: loginUsername,
+        password: loginPassword
+      });
+      setLoginPassword("");
+      await loadSession();
+    } catch (loginError) {
+      setError(loginError instanceof Error ? loginError.message : "Unable to sign in");
+      setAuthenticated(false);
+      setAuthLoading(false);
+    }
+  }
+
   return {
     username,
     userId,
@@ -46,6 +66,9 @@ export function useSession(options: {
     authLoading,
     sessionState,
     loadSession,
+    loginPassword,
+    setLoginPassword,
+    handleLogin,
     setUsername,
     setUserId,
     setLoginUsername,
