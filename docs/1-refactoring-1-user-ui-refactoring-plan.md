@@ -138,7 +138,7 @@ Every step ends with the characterisation tests unchanged and green, `npm run li
 - **0b:** the suites above, one area per commit.
 - **0c:** Stryker spike, then a gap-filling pass driven by surviving mutants. Refactoring does not start until this is done.
 
-**1. Move pure functions out** into `domain/*`, verbatim, in several small commits: event interpretation, trace and failure rules, channel rules, ordering and attachments.
+**1. Move pure functions out** into `domain/*`, verbatim, in several small commits: event interpretation, trace and failure rules, channel rules, ordering and attachments. **(in progress)**
 
 **2. Extract presentational components,** props in and callbacks out, one per commit: auth screens, dialogs, sidebar, activity panel, composer, timeline items. De-duplicate the markdown block here.
 
