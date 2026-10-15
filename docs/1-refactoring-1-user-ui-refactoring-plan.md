@@ -138,9 +138,9 @@ Every step ends with the characterisation tests unchanged and green, `npm run li
 - **0b:** the suites above, one area per commit. Done: auth, workspace load, sidebar, timeline, loading and realtime, composer, dialogs and management (809 tests, about 3s).
 - **0c:** Stryker spike, then a gap-filling pass driven by surviving mutants. Closed without the full pass: Stryker was run per area on line ranges and a few targeted manual probes were made, but a whole-file run (3,166 mutants) was stopped as too slow. Accepted as good enough to start refactoring.
 
-**1. Move pure functions out** into `domain/*`, verbatim, in several small commits: event interpretation, trace and failure rules, channel rules, ordering and attachments. **(in progress)**
+**1. Move pure functions out** into `domain/*`, verbatim, in several small commits: event interpretation, trace and failure rules, channel rules, ordering and attachments. **(done)**
 
-**2. Extract presentational components,** props in and callbacks out, one per commit: auth screens, dialogs, sidebar, activity panel, composer, timeline items. De-duplicate the markdown block here.
+**2. Extract presentational components,** props in and callbacks out, one per commit: auth screens, dialogs, sidebar, activity panel, composer, timeline items. De-duplicate the markdown block here. **(in progress)**
 
 **3. Introduce gateway ports and HTTP adapters:** `ConversationGateway`, `MessageGateway`, `FileGateway`, `SessionGateway`, plus `DeepLink`, `Clipboard` and `Confirm`. Swap call sites one at a time.
 

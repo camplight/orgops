@@ -9,6 +9,7 @@ import {
 } from "react";
 import { apiFetch, apiJson, getApiHeaders } from "./api";
 import { wsUrl } from "./config";
+import { LoginScreen } from "./ui/auth/login-screen";
 import type { Agent, AuthMe, Channel, ChannelParticipant, ChannelShare, EventRow, Team } from "./types";
 import {
   CHANNEL_GROUPS,
@@ -1600,42 +1601,15 @@ export default function App() {
 
   if (!authenticated) {
     return (
-      <main className="login-screen">
-        <section className="login-copy">
-          <div className="brand-mark large">OO</div>
-          <p>OrgOps User Workspace</p>
-          <h1>Welcome back</h1>
-          <span>Sign in to talk to your team and agents.</span>
-        </section>
-
-        <form className="login-card" onSubmit={handleLogin}>
-          <div>
-            <span>Sign in</span>
-            <strong>OrgOps</strong>
-          </div>
-          {error ? <div className="notice error">{error}</div> : null}
-          <label>
-            Username
-            <input
-              value={loginUsername}
-              onChange={(event) => setLoginUsername(event.target.value)}
-              autoComplete="username"
-            />
-          </label>
-          <label>
-            Password
-            <input
-              value={loginPassword}
-              onChange={(event) => setLoginPassword(event.target.value)}
-              type="password"
-              autoComplete="current-password"
-            />
-          </label>
-          <button disabled={!loginUsername.trim() || !loginPassword || authLoading}>
-            {authLoading ? "Signing in..." : "Continue"}
-          </button>
-        </form>
-      </main>
+      <LoginScreen
+        error={error}
+        username={loginUsername}
+        password={loginPassword}
+        loading={authLoading}
+        onUsernameChange={setLoginUsername}
+        onPasswordChange={setLoginPassword}
+        onSubmit={handleLogin}
+      />
     );
   }
 
