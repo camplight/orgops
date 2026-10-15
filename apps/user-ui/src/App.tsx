@@ -10,6 +10,7 @@ import {
 import { apiFetch, apiJson, getApiHeaders } from "./api";
 import { wsUrl } from "./config";
 import { ChangePasswordScreen } from "./ui/auth/change-password-screen";
+import { ParticipantsDialog } from "./ui/dialogs/participants-dialog";
 import { ChannelManageDialog } from "./ui/dialogs/channel-manage-dialog";
 import { LoginScreen } from "./ui/auth/login-screen";
 import type { Agent, AuthMe, Channel, ChannelParticipant, ChannelShare, EventRow, Team } from "./types";
@@ -2326,154 +2327,28 @@ export default function App() {
       ) : null}
 
       {showParticipantsDialog && activeChannel && activeChannelManageable ? (
-        <div
-          className="dialog-backdrop"
-          role="presentation"
-          onMouseDown={() => setShowParticipantsDialog(false)}
-        >
-          <section
-            aria-modal="true"
-            className="conversation-dialog participants-dialog"
-            role="dialog"
-            onMouseDown={(event) => event.stopPropagation()}
-          >
-            <header>
-              <div>
-                <span>Channel controls</span>
-                <h2>Manage participants</h2>
-              </div>
-              <button
-                aria-label="Close dialog"
-                className="dialog-close"
-                onClick={() => setShowParticipantsDialog(false)}
-                type="button"
-              >
-                Close
-              </button>
-            </header>
-
-            <form className="participant-form" onSubmit={handleAddParticipant}>
-              <select
-                value={participantKind}
-                onChange={(event) => setParticipantKind(event.target.value === "HUMAN" ? "HUMAN" : "AGENT")}
-                disabled={participantSubmitting}
-              >
-                <option value="AGENT">Agent</option>
-                <option value="HUMAN">Human</option>
-              </select>
-              <input
-                list={participantKind === "AGENT" ? "agent-participant-options" : "human-participant-options"}
-                placeholder={participantKind === "AGENT" ? "agent name" : "username"}
-                value={participantValue}
-                onChange={(event) => setParticipantValue(event.target.value)}
-                disabled={participantSubmitting}
-              />
-              <button type="submit" disabled={participantSubmitting || !participantValue.trim()}>
-                {participantSubmitting ? "Adding..." : "Add"}
-              </button>
-              <datalist id="agent-participant-options">
-                {visibleAgents.map((agent) => (
-                  <option key={agent.name} value={agent.name} />
-                ))}
-              </datalist>
-              <datalist id="human-participant-options">
-                {humans.map((human) => (
-                  <option key={human.username} value={human.username} />
-                ))}
-              </datalist>
-            </form>
-
-            <div className="participants-dialog-list">
-              {(activeChannel.participants ?? []).map((participant, index) => {
-                const participantKey = `${participant.subscriberType}:${participant.subscriberId}`;
-                return (
-                  <article key={`${participant.subscriberType}:${participant.subscriberId}:${index}`}>
-                    <div>
-                      <strong>{participantName(participant)}</strong>
-                      <span>{participantType(participant)}</span>
-                    </div>
-                    <button
-                      className="participant-remove-button"
-                      onClick={() => void handleRemoveParticipant(participant)}
-                      disabled={participantRemovingKey === participantKey}
-                      title={`Remove ${participantName(participant)}`}
-                      type="button"
-                    >
-                      {participantRemovingKey === participantKey ? "Removing..." : "Remove"}
-                    </button>
-                  </article>
-                );
-              })}
-              {(activeChannel.participants ?? []).length === 0 ? (
-                <p>No participants yet.</p>
-              ) : null}
-            </div>
-
-            <header>
-              <div>
-                <span>Read-only sharing</span>
-                <h2>Shared viewers</h2>
-              </div>
-            </header>
-
-            <form className="participant-form" onSubmit={handleAddShare}>
-              <select
-                value={shareKind}
-                onChange={(event) => setShareKind(event.target.value === "AGENT" ? "AGENT" : "HUMAN")}
-                disabled={shareSubmitting}
-              >
-                <option value="HUMAN">Human viewer</option>
-                <option value="AGENT">Agent viewer</option>
-              </select>
-              <input
-                list={shareKind === "AGENT" ? "agent-share-options" : "human-share-options"}
-                placeholder={shareKind === "AGENT" ? "agent name" : "username"}
-                value={shareValue}
-                onChange={(event) => setShareValue(event.target.value)}
-                disabled={shareSubmitting}
-              />
-              <button type="submit" disabled={shareSubmitting || !shareValue.trim()}>
-                {shareSubmitting ? "Sharing..." : "Share"}
-              </button>
-              <datalist id="agent-share-options">
-                {visibleAgents.map((agent) => (
-                  <option key={agent.name} value={agent.name} />
-                ))}
-              </datalist>
-              <datalist id="human-share-options">
-                {humans.map((human) => (
-                  <option key={human.username} value={human.username} />
-                ))}
-              </datalist>
-            </form>
-
-            <div className="participants-dialog-list">
-              {(activeChannel.shares ?? []).map((share, index) => {
-                const shareKey = `${share.viewerType}:${share.viewerId}`;
-                return (
-                  <article key={`${share.viewerType}:${share.viewerId}:${index}`}>
-                    <div>
-                      <strong>{share.viewerId}</strong>
-                      <span>{shareTypeLabel(share)}</span>
-                    </div>
-                    <button
-                      className="participant-remove-button"
-                      onClick={() => void handleRemoveShare(share)}
-                      disabled={shareRemovingKey === shareKey}
-                      title={`Remove shared viewer ${share.viewerId}`}
-                      type="button"
-                    >
-                      {shareRemovingKey === shareKey ? "Removing..." : "Remove"}
-                    </button>
-                  </article>
-                );
-              })}
-              {(activeChannel.shares ?? []).length === 0 ? (
-                <p>No shared viewers yet.</p>
-              ) : null}
-            </div>
-          </section>
-        </div>
+        <ParticipantsDialog
+          channel={activeChannel}
+          visibleAgents={visibleAgents}
+          humans={humans}
+          participantKind={participantKind}
+          participantValue={participantValue}
+          participantSubmitting={participantSubmitting}
+          participantRemovingKey={participantRemovingKey}
+          shareKind={shareKind}
+          shareValue={shareValue}
+          shareSubmitting={shareSubmitting}
+          shareRemovingKey={shareRemovingKey}
+          onClose={() => setShowParticipantsDialog(false)}
+          onParticipantKindChange={setParticipantKind}
+          onParticipantValueChange={setParticipantValue}
+          onAddParticipant={handleAddParticipant}
+          onRemoveParticipant={(participant) => void handleRemoveParticipant(participant)}
+          onShareKindChange={setShareKind}
+          onShareValueChange={setShareValue}
+          onAddShare={handleAddShare}
+          onRemoveShare={(share) => void handleRemoveShare(share)}
+        />
       ) : null}
 
       {showChannelManageDialog && activeChannel && activeChannelManageable ? (
