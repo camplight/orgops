@@ -18,6 +18,7 @@ import { createLogin } from "./application/identity/login";
 import { createUpdatePassword } from "./application/identity/update-password";
 import { createLogout } from "./application/identity/logout";
 import { createLoadSession } from "./application/identity/load-session";
+import { deriveSessionState } from "./domain/identity/session-state";
 import { validateNewPassword } from "./domain/identity/password-rules";
 import { createHttpSessionGateway } from "./infrastructure/http/http-session-gateway";
 import { createHttpConversationGateway } from "./infrastructure/http/http-conversation-gateway";
@@ -1369,11 +1370,13 @@ export default function App() {
     return () => window.removeEventListener("resize", handleWindowResize);
   }, []);
 
-  if (authLoading && !authenticated) {
+  const sessionState = deriveSessionState({ authenticated, authLoading, mustChangePassword });
+
+  if (sessionState === "loading") {
     return <main className="loading-screen">Loading OrgOps...</main>;
   }
 
-  if (!authenticated) {
+  if (sessionState === "signedOut") {
     return (
       <LoginScreen
         error={error}
@@ -1387,7 +1390,7 @@ export default function App() {
     );
   }
 
-  if (mustChangePassword) {
+  if (sessionState === "mustChangePassword") {
     return (
       <ChangePasswordScreen
         error={error}
