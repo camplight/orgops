@@ -10,6 +10,7 @@ import {
 import { apiFetch, apiJson, getApiHeaders } from "./api";
 import { wsUrl } from "./config";
 import { ChangePasswordScreen } from "./ui/auth/change-password-screen";
+import { ArchivedChannelGroup } from "./ui/sidebar/archived-channel-group";
 import { ActivityPanel } from "./ui/activity/activity-panel";
 import { ConversationDialog } from "./ui/dialogs/conversation-dialog";
 import { ParticipantsDialog } from "./ui/dialogs/participants-dialog";
@@ -1697,32 +1698,14 @@ export default function App() {
               );
             })}
             {filteredArchivedChannels.length > 0 ? (
-              <section className="channel-group">
-                <button
-                  type="button"
-                  className="channel-group-toggle"
-                  aria-expanded={isSearchingChannels || showArchivedChannels}
-                  onClick={() => setShowArchivedChannels((current) => !current)}
-                >
-                  <span>Archived</span>
-                  <em>{filteredArchivedChannels.length}</em>
-                  <strong>{isSearchingChannels || showArchivedChannels ? "-" : "+"}</strong>
-                </button>
-
-                {isSearchingChannels || showArchivedChannels ? (
-                  <div className="channel-group-items archived-channel-items">
-                    {filteredArchivedChannels.map((channel) => (
-                      <button
-                        key={channel.id}
-                        className={channel.id === activeChannelId ? "active" : undefined}
-                        onClick={() => selectChannel(channel.id)}
-                      >
-                        <span>{channelLabel(channel, username)}</span>
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-              </section>
+              <ArchivedChannelGroup
+                channels={filteredArchivedChannels}
+                activeChannelId={activeChannelId}
+                username={username}
+                expanded={isSearchingChannels || showArchivedChannels}
+                onToggle={() => setShowArchivedChannels((current) => !current)}
+                onSelectChannel={selectChannel}
+              />
             ) : null}
             {!loading &&
             channelQuery.trim() &&
