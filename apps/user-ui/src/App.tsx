@@ -30,6 +30,9 @@ import { useShareLink } from "./ui/conversations/use-share-link";
 import { createUpdateChannelSettings } from "./application/conversations/update-channel-settings";
 import { createDeleteChannel } from "./application/conversations/delete-channel";
 import { createStartConversation } from "./application/conversations/start-conversation";
+import { createSelectChannel } from "./application/conversations/select-channel";
+import { createRefreshChannels } from "./application/conversations/refresh-channels";
+import { useChannelSelection } from "./ui/conversations/use-channel-selection";
 import { useStartConversation } from "./ui/conversations/use-start-conversation";
 import { useChannelManagement } from "./ui/conversations/use-channel-management";
 import { createHttpSessionGateway } from "./infrastructure/http/http-session-gateway";
@@ -130,6 +133,8 @@ const removeShare = createRemoveShare({ conversationGateway });
 const updateChannelSettings = createUpdateChannelSettings({ conversationGateway });
 const deleteChannel = createDeleteChannel({ conversationGateway });
 const startConversation = createStartConversation({ conversationGateway });
+const selectChannelUseCase = createSelectChannel({ deepLink });
+const refreshChannelsUseCase = createRefreshChannels({ conversationGateway });
 
 export default function App() {
   const messagesPanelRef = useRef<HTMLElement | null>(null);
@@ -195,6 +200,19 @@ export default function App() {
     handlePasswordUpdate,
     handleLogout
   } = useSession({ loadCurrentSession, signIn, signOut, changePassword, setError, onSignedOut: handleSignedOut });
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const viewerTeamIds = useMemo(() => new Set(teams.map((team) => team.id)), [teams]);
+  const { selectChannel, refreshChannels } = useChannelSelection({
+    activeChannelId,
+    userId,
+    username,
+    viewerTeamIds,
+    selectChannelUseCase,
+    refreshChannelsUseCase,
+    setChannels,
+    setActiveChannelId,
+    setMobileSidebarOpen
+  });
   const {
     participantKind,
     participantValue,
@@ -235,7 +253,6 @@ export default function App() {
   const [expandedTraceEventId, setExpandedTraceEventId] = useState<string | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const [wsConnected, setWsConnected] = useState(false);
-  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [sensitiveRevealPasswords, setSensitiveRevealPasswords] = useState<Record<string, string>>({});
   const [revealedSensitiveByEvent, setRevealedSensitiveByEvent] = useState<Record<string, string>>({});
   const [revealingSensitiveEventId, setRevealingSensitiveEventId] = useState<string | null>(null);
@@ -323,7 +340,6 @@ export default function App() {
     return activeTurns > 0;
   }, [events]);
 
-  const viewerTeamIds = useMemo(() => new Set(teams.map((team) => team.id)), [teams]);
   useEffect(() => {
     viewerTeamIdsRef.current = viewerTeamIds;
   }, [viewerTeamIds]);
@@ -491,12 +507,6 @@ export default function App() {
       delete next[eventId];
       return next;
     });
-  }
-
-  function selectChannel(channelId: string | null, options?: { replace?: boolean }) {
-    setActiveChannelId(channelId);
-    setMobileSidebarOpen(false);
-    deepLink.updateChannelDeepLink(channelId, options?.replace);
   }
 
   async function loadShell() {
@@ -1057,23 +1067,6 @@ export default function App() {
 
   function removeConversationAgent(agentName: string) {
     setSelectedConversationAgents((current) => current.filter((name) => name !== agentName));
-  }
-
-  async function refreshChannels(nextActiveChannelId?: string | null) {
-    const nextChannels = await conversationGateway.listChannels();
-    setChannels(nextChannels);
-    const visibleChannels = nextChannels.filter((channel) =>
-      channelVisibleToUserUi(channel, userId, username, viewerTeamIds)
-    );
-    const nextSelectedChannelId =
-      nextActiveChannelId !== undefined
-        ? nextActiveChannelId
-        : activeChannelId &&
-            visibleChannels.some((channel) => channel.id === activeChannelId && !channel.archivedAt)
-          ? activeChannelId
-          : visibleChannels.find((channel) => !channel.archivedAt)?.id ?? null;
-    selectChannel(nextSelectedChannelId, { replace: true });
-    return nextChannels;
   }
 
   function handleMessagesScroll() {
