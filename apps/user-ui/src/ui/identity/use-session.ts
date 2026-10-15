@@ -6,6 +6,8 @@ import type { LoadSessionResult } from "../../application/identity/load-session"
 export function useSession(options: {
   loadCurrentSession: () => Promise<LoadSessionResult>;
   signIn: (credentials: { username: string; password: string }) => Promise<void>;
+  signOut: () => Promise<void>;
+  onSignedOut: () => void;
   changePassword: (input: {
     username: string;
     fallbackUsername: string;
@@ -13,7 +15,7 @@ export function useSession(options: {
   }) => Promise<void>;
   setError: (message: string | null) => void;
 }) {
-  const { loadCurrentSession, signIn, changePassword, setError } = options;
+  const { loadCurrentSession, signIn, signOut, changePassword, setError, onSignedOut } = options;
   const [username, setUsername] = useState("");
   const [userId, setUserId] = useState<string | null>(null);
   const [loginPassword, setLoginPassword] = useState("");
@@ -92,6 +94,17 @@ export function useSession(options: {
     }
   }
 
+  async function handleLogout() {
+    await signOut();
+    setAuthenticated(false);
+    setUsername("");
+    setUserId(null);
+    setMustChangePassword(false);
+    setNewPassword("");
+    setConfirmPassword("");
+    onSignedOut();
+  }
+
   return {
     username,
     userId,
@@ -109,10 +122,7 @@ export function useSession(options: {
     setNewPassword,
     setConfirmPassword,
     handlePasswordUpdate,
-    setUsername,
-    setUserId,
-    setLoginUsername,
-    setMustChangePassword,
-    setAuthenticated
+    handleLogout,
+    setLoginUsername
   };
 }
