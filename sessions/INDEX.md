@@ -10,3 +10,4 @@ Chronological by creation time. Each folder holds `transcript.jsonl` (raw sessio
 | 4 | [part-2-characterization-tests-2](04-part-2-characterization-tests-2/brief.md) | named | `ded7bee7-90b8-4c72-906e-9a627e0733b0` | 2026-10-15T06:12:25.211Z | 2026-10-15T07:19:09.553Z | 12 |
 | 5 | [part-2-characterization-tests-3](05-part-2-characterization-tests-3/brief.md) | named | `18c8d9c4-c14f-488f-bfcf-7a2f7b8632d9` | 2026-10-15T06:27:33.842Z | 2026-10-15T06:27:33.842Z | 0 |
 | 6 | [part-2-characterization-tests-3](06-part-2-characterization-tests-3/brief.md) | named | `7c356c1a-aebd-414c-81de-12b625d434a6` | 2026-10-15T06:28:44.436Z | 2026-10-15T07:02:31.629Z | 5 |
+| 7 | [part-3-pure-functions](07-part-3-pure-functions/brief.md) | named | `16973ab7-05f6-4289-8cdc-54d52f5330f7` | 2026-10-15T07:12:03.916Z | 2026-10-15T07:23:55.871Z | 8 |
