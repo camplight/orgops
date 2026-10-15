@@ -15,6 +15,7 @@ import type { RealtimeFeed } from "./ports/realtime-feed";
 import { usePollingFallback } from "./ui/realtime/use-polling-fallback";
 import { createBrowserDeepLink } from "./infrastructure/browser/browser-deep-link";
 import { createLogin } from "./application/identity/login";
+import { createLogout } from "./application/identity/logout";
 import { createLoadSession } from "./application/identity/load-session";
 import { validateNewPassword } from "./domain/identity/password-rules";
 import { createHttpSessionGateway } from "./infrastructure/http/http-session-gateway";
@@ -101,6 +102,7 @@ const messageGateway = createHttpMessageGateway();
 const sessionGateway = createHttpSessionGateway();
 const loadCurrentSession = createLoadSession({ sessionGateway });
 const signIn = createLogin({ sessionGateway });
+const signOut = createLogout({ sessionGateway });
 const confirmPort = createBrowserConfirm();
 const clipboard = createBrowserClipboard();
 const deepLink = createBrowserDeepLink();
@@ -937,7 +939,7 @@ export default function App() {
   }
 
   async function handleLogout() {
-    await sessionGateway.logout().catch(() => undefined);
+    await signOut();
     setAuthenticated(false);
     setUsername("");
     setUserId(null);
