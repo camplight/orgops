@@ -10,6 +10,7 @@ import {
 import { apiFetch, apiJson, getApiHeaders } from "./api";
 import { wsUrl } from "./config";
 import { ChangePasswordScreen } from "./ui/auth/change-password-screen";
+import { MessageAttachments } from "./ui/timeline/message-attachments";
 import { SensitiveContent } from "./ui/timeline/sensitive-content";
 import { MessageMarkdown } from "./ui/timeline/message-markdown";
 import { ComposerActions } from "./ui/composer/composer-actions";
@@ -36,7 +37,7 @@ import {
   participantAgentStatus,
   type ChannelGroupId
 } from "./domain/conversations/channel-rules";
-import { formatAttachmentSize, parseMessageAttachments } from "./domain/messaging/attachments";
+import { parseMessageAttachments } from "./domain/messaging/attachments";
 import { mergeEventsChronologically } from "./domain/messaging/event-ordering";
 import {
   isHiddenUiActionMessage,
@@ -1801,29 +1802,7 @@ export default function App() {
                         />
                       ) : null}
                       {attachments.length > 0 ? (
-                        <div className="message-attachments">
-                          <strong>Attachments</strong>
-                          <ul>
-                            {attachments.map((attachment, index) => {
-                              const sizeLabel = formatAttachmentSize(attachment.size);
-                              const mimeLabel = attachment.mime ? attachment.mime : "";
-                              return (
-                                <li key={`${event.id}-attachment-${index}`}>
-                                  <a href={`/api/files/${encodeURIComponent(attachment.fileId)}`} target="_blank" rel="noreferrer">
-                                    {attachment.name}
-                                  </a>
-                                  {mimeLabel || sizeLabel ? (
-                                    <span>
-                                      {mimeLabel}
-                                      {mimeLabel && sizeLabel ? " • " : ""}
-                                      {sizeLabel || ""}
-                                    </span>
-                                  ) : null}
-                                </li>
-                              );
-                            })}
-                          </ul>
-                        </div>
+                        <MessageAttachments eventId={event.id} attachments={attachments} />
                       ) : null}
                     </article>
                   );
