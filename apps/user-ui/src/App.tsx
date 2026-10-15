@@ -9,6 +9,7 @@ import {
 } from "react";
 import { wsUrl } from "./infrastructure/http/config";
 import { createBrowserConfirm } from "./infrastructure/browser/browser-confirm";
+import { createBrowserClipboard } from "./infrastructure/browser/browser-clipboard";
 import { createHttpSessionGateway } from "./infrastructure/http/http-session-gateway";
 import { createHttpConversationGateway } from "./infrastructure/http/http-conversation-gateway";
 import { createHttpFileGateway } from "./infrastructure/http/http-file-gateway";
@@ -127,6 +128,7 @@ function createLocalAttachmentId() {
 const messageGateway = createHttpMessageGateway();
 const sessionGateway = createHttpSessionGateway();
 const confirmPort = createBrowserConfirm();
+const clipboard = createBrowserClipboard();
 const fileGateway = createHttpFileGateway();
 const conversationGateway = createHttpConversationGateway();
 
@@ -1343,7 +1345,7 @@ export default function App() {
       url.searchParams.set("share", created.token);
       url.searchParams.set("channel", created.channelId);
       const shareLink = url.toString();
-      await navigator.clipboard.writeText(shareLink);
+      await clipboard.writeText(shareLink);
       setShareLinkCopied(true);
       window.setTimeout(() => setShareLinkCopied(false), 2000);
     } catch {
