@@ -10,3 +10,6 @@
     2. Start with auth and follow the plan
     3. Small step of written tests, then mutation tests, then move on
     4. Create an agent that encodes this flow
+    5. Implement all of the tests using the agent. Adjust mutation strictness if things go too slow
+    6. Go through the tests while they're being implemented and verify if they're good or not
+8. Once the mutation tests are done, kick off the refactoring
