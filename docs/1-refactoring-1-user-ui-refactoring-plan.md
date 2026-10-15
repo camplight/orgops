@@ -148,7 +148,7 @@ Every step ends with the characterisation tests unchanged and green, `npm run li
 
 **5. Identity context:** use cases, the session state union and `useSession`. **(done)**
 
-**6. Conversations context:** reducer and use cases (load workspace, select, start, manage, participants, shares, share link).
+**6. Conversations context:** reducer and use cases (load workspace, select, start, manage, participants, shares, share link). **(in progress)**
 
 **7. Messaging context:** timeline load and pagination, a single unread tracker, send, upload, sensitive reveal, and the scroll hook.
 
