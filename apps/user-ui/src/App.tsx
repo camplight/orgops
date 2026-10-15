@@ -25,6 +25,8 @@ import { useParticipants } from "./ui/conversations/use-participants";
 import { createAddShare } from "./application/conversations/add-share";
 import { createRemoveShare } from "./application/conversations/remove-share";
 import { useShares } from "./ui/conversations/use-shares";
+import { createCopyShareLink } from "./application/conversations/copy-share-link";
+import { useShareLink } from "./ui/conversations/use-share-link";
 import { createUpdateChannelSettings } from "./application/conversations/update-channel-settings";
 import { createDeleteChannel } from "./application/conversations/delete-channel";
 import { useChannelManagement } from "./ui/conversations/use-channel-management";
@@ -121,6 +123,7 @@ const conversationGateway = createHttpConversationGateway();
 const addParticipant = createAddParticipant({ conversationGateway });
 const removeParticipant = createRemoveParticipant({ conversationGateway });
 const addShare = createAddShare({ conversationGateway });
+const copyShareLink = createCopyShareLink({ conversationGateway, deepLink, clipboard });
 const removeShare = createRemoveShare({ conversationGateway });
 const updateChannelSettings = createUpdateChannelSettings({ conversationGateway });
 const deleteChannel = createDeleteChannel({ conversationGateway });
@@ -224,9 +227,13 @@ export default function App() {
     refreshChannels,
     setError
   });
+  const { shareLinkCopied, handleCopyShareLink } = useShareLink({
+    activeChannelId,
+    copyShareLink,
+    setError
+  });
   const [expandedTraceEventId, setExpandedTraceEventId] = useState<string | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
-  const [shareLinkCopied, setShareLinkCopied] = useState(false);
   const [wsConnected, setWsConnected] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [sensitiveRevealPasswords, setSensitiveRevealPasswords] = useState<Record<string, string>>({});
@@ -850,7 +857,6 @@ export default function App() {
     setShowParticipantsDialog(false);
     setShowChannelManageDialog(false);
     setPendingAttachments([]);
-    setShareLinkCopied(false);
   }, [activeChannelId]);
 
   useEffect(() => {
@@ -1110,19 +1116,6 @@ export default function App() {
   function handleMessagesScroll() {
     if (hasNewMessagesBelow && isMessagesPanelNearBottom()) {
       setHasNewMessagesBelow(false);
-    }
-  }
-
-  async function handleCopyShareLink() {
-    if (!activeChannelId) return;
-    try {
-      const created = await conversationGateway.createShareLink({ channelId: activeChannelId });
-      const shareLink = deepLink.buildShareLink({ token: created.token, channelId: created.channelId });
-      await clipboard.writeText(shareLink);
-      setShareLinkCopied(true);
-      window.setTimeout(() => setShareLinkCopied(false), 2000);
-    } catch {
-      setError("Unable to copy link. Please copy it from the address bar.");
     }
   }
 
