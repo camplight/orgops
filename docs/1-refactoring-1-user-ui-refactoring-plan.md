@@ -146,7 +146,7 @@ Every step ends with the characterisation tests unchanged and green, `npm run li
 
 **4. Extract realtime:** a `RealtimeFeed` adapter (connect, backoff, topic diff) and a polling-fallback hook. **(done)**
 
-**5. Identity context:** use cases, the session state union and `useSession`.
+**5. Identity context:** use cases, the session state union and `useSession`. **(in progress)** Done so far: password rules.
 
 **6. Conversations context:** reducer and use cases (load workspace, select, start, manage, participants, shares, share link).
 

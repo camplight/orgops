@@ -14,6 +14,7 @@ import { createWebSocketRealtimeFeed } from "./infrastructure/websocket/websocke
 import type { RealtimeFeed } from "./ports/realtime-feed";
 import { usePollingFallback } from "./ui/realtime/use-polling-fallback";
 import { createBrowserDeepLink } from "./infrastructure/browser/browser-deep-link";
+import { validateNewPassword } from "./domain/identity/password-rules";
 import { createHttpSessionGateway } from "./infrastructure/http/http-session-gateway";
 import { createHttpConversationGateway } from "./infrastructure/http/http-conversation-gateway";
 import { createHttpFileGateway } from "./infrastructure/http/http-file-gateway";
@@ -964,12 +965,9 @@ export default function App() {
     event.preventDefault();
     setError(null);
     const nextPassword = newPassword.trim();
-    if (nextPassword.length < 8) {
-      setError("New password must be at least 8 characters.");
-      return;
-    }
-    if (nextPassword !== confirmPassword.trim()) {
-      setError("New password and confirmation do not match.");
+    const passwordError = validateNewPassword(newPassword, confirmPassword);
+    if (passwordError) {
+      setError(passwordError);
       return;
     }
 
