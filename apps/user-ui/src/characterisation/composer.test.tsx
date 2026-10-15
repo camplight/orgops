@@ -13,6 +13,7 @@ type ComposerOptions = {
   agents?: readonly Agent[];
   events?: readonly EventRow[];
   routes?: readonly FakeRoute[];
+  realtimeAvailable?: boolean;
 };
 
 const sendAccepted: FakeRoute = { method: "POST", path: "/api/events", respond: { json: {} } };
@@ -25,6 +26,7 @@ const sendNeverFinishes: FakeRoute = {
 
 const openComposer = async (options: ComposerOptions = {}) => {
   const view = await renderApp({
+    realtimeAvailable: options.realtimeAvailable,
     routes: [
       ...(options.routes ?? []),
       { path: "/api/auth/me", respond: { json: getMockAuthMe({ id: "human-1", username: "alice" }) } },
@@ -349,7 +351,7 @@ describe("When sending fails", () => {
 
 describe("After a message is sent", () => {
   it("reloads the messages when the realtime connection is down", async () => {
-    const { requests } = await openComposer({ routes: [sendAccepted] });
+    const { requests } = await openComposer({ routes: [sendAccepted], realtimeAvailable: false });
     fillIn("Hello");
     const before = messageListLoads(requests).length;
 
@@ -359,9 +361,7 @@ describe("After a message is sent", () => {
   });
 
   it("does not reload the messages when the realtime connection is up", async () => {
-    const { requests, sockets } = await openComposer({ routes: [sendAccepted] });
-    sockets[0].open();
-    await settle();
+    const { requests } = await openComposer({ routes: [sendAccepted] });
     fillIn("Hello");
     const before = messageListLoads(requests).length;
 

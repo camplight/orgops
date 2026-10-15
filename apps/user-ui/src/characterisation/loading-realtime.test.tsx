@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Channel, EventRow } from "../types";
 import { getMockAuthMe, getMockChannel, getMockEvent } from "./factories";
 import type { FakeRequest, FakeRoute } from "./fake-api";
-import type { FakeWebSocketInstance } from "./fake-websocket";
+import type { RealtimeConnection } from "./fake-realtime";
 import { renderApp, settle } from "./render-app";
 
 const BASE_TIME = 1_700_000_000_000;
@@ -45,10 +45,12 @@ type WorkspaceOptions = {
   older?: readonly EventRow[];
   channels?: readonly Channel[];
   routes?: readonly FakeRoute[];
+  realtimeAvailable?: boolean;
 };
 
 const openWorkspace = (options: WorkspaceOptions = {}) =>
   renderApp({
+    realtimeAvailable: options.realtimeAvailable,
     routes: [
       ...(options.routes ?? []),
       { path: "/api/auth/me", respond: { json: getMockAuthMe({ id: "human-1", username: "alice" }) } },
@@ -84,22 +86,15 @@ const press = async (name: string) => {
   await settle();
 };
 
-const receive = async (socket: FakeWebSocketInstance, event: Partial<EventRow>) => {
+const receive = async (connection: RealtimeConnection, event: Partial<EventRow>) => {
   await act(async () => {
-    socket.receive({ type: "event", topic: `channel:${event.channelId}`, data: event });
+    connection.push({ type: "event", topic: `channel:${event.channelId}`, data: event });
   });
 };
 
-const openSocket = async (socket: FakeWebSocketInstance) => {
+const dropConnection = async (connection: RealtimeConnection) => {
   await act(async () => {
-    socket.open();
-  });
-  await settle();
-};
-
-const dropSocket = async (socket: FakeWebSocketInstance) => {
-  await act(async () => {
-    socket.dropConnection();
+    connection.drop();
   });
 };
 
@@ -361,102 +356,102 @@ describe("Load previous messages", () => {
 
 describe("Realtime events in the active channel", () => {
   it("adds a message that arrives over the websocket", async () => {
-    const { sockets } = await openWorkspace({ events: [message("loaded")] });
-    await receive(sockets[0], message("live", { createdAt: at(5) }));
+    const { realtime } = await openWorkspace({ events: [message("loaded")] });
+    await receive(realtime.connections[0], message("live", { createdAt: at(5) }));
 
     expect(isShown("live")).toBe(true);
   });
 
   it("shows a message delivered twice only once", async () => {
-    const { sockets } = await openWorkspace();
-    await receive(sockets[0], message("live"));
-    await receive(sockets[0], message("live"));
+    const { realtime } = await openWorkspace();
+    await receive(realtime.connections[0], message("live"));
+    await receive(realtime.connections[0], message("live"));
 
     expect(screen.getAllByText("live")).toHaveLength(1);
   });
 
   it("replaces a loaded event that shares the id of the incoming one", async () => {
-    const { sockets } = await openWorkspace({ events: [message("draft", { id: "shared-id" })] });
-    await receive(sockets[0], message("final", { id: "shared-id" }));
+    const { realtime } = await openWorkspace({ events: [message("draft", { id: "shared-id" })] });
+    await receive(realtime.connections[0], message("final", { id: "shared-id" }));
 
     expect(isShown("final")).toBe(true);
     expect(isShown("draft")).toBe(false);
   });
 
   it("places an incoming message by its creation time among loaded ones", async () => {
-    const { sockets } = await openWorkspace({
+    const { realtime } = await openWorkspace({
       events: [message("third", { createdAt: at(3) }), message("first", { createdAt: at(1) })],
     });
-    await receive(sockets[0], message("second", { createdAt: at(2) }));
+    await receive(realtime.connections[0], message("second", { createdAt: at(2) }));
 
     expect(shownInOrder(["first", "second", "third"])).toEqual(["first", "second", "third"]);
   });
 
   it("orders a scheduled message by its delivery time rather than its creation time", async () => {
-    const { sockets } = await openWorkspace({ events: [message("loaded", { createdAt: at(3) })] });
-    await receive(sockets[0], message("scheduled", { createdAt: at(1), deliverAt: at(9) }));
+    const { realtime } = await openWorkspace({ events: [message("loaded", { createdAt: at(3) })] });
+    await receive(realtime.connections[0], message("scheduled", { createdAt: at(1), deliverAt: at(9) }));
 
     expect(shownInOrder(["loaded", "scheduled"])).toEqual(["loaded", "scheduled"]);
   });
 
   it("orders messages created at the same time by id", async () => {
-    const { sockets } = await openWorkspace({ events: [message("bravo", { id: "b-id", createdAt: at(2) })] });
-    await receive(sockets[0], message("alpha", { id: "a-id", createdAt: at(2) }));
+    const { realtime } = await openWorkspace({ events: [message("bravo", { id: "b-id", createdAt: at(2) })] });
+    await receive(realtime.connections[0], message("alpha", { id: "a-id", createdAt: at(2) }));
 
     expect(shownInOrder(["alpha", "bravo"])).toEqual(["alpha", "bravo"]);
   });
 
   it("ignores an event without an id", async () => {
-    const { sockets } = await openWorkspace();
-    await receive(sockets[0], message("nameless", { id: "" }));
+    const { realtime } = await openWorkspace();
+    await receive(realtime.connections[0], message("nameless", { id: "" }));
 
     expect(isShown("nameless")).toBe(false);
   });
 
   it("ignores an event without a channel", async () => {
-    const { sockets } = await openWorkspace();
-    await receive(sockets[0], message("homeless", { channelId: undefined }));
+    const { realtime } = await openWorkspace();
+    await receive(realtime.connections[0], message("homeless", { channelId: undefined }));
 
     expect(isShown("homeless")).toBe(false);
   });
 
   it("keeps a message for another channel out of the active timeline", async () => {
-    const { sockets } = await openWorkspace({ channels: [general, ops] });
-    await receive(sockets[0], message("elsewhere", { channelId: "ops-id" }));
+    const { realtime } = await openWorkspace({ channels: [general, ops] });
+    await receive(realtime.connections[0], message("elsewhere", { channelId: "ops-id" }));
 
     expect(isShown("elsewhere")).toBe(false);
   });
 
   it("does not show a json-render action message", async () => {
-    const { sockets } = await openWorkspace();
-    await receive(sockets[0], message("clicked", { payload: { eventType: "ui.json-render.action", text: "clicked" } }));
+    const { realtime } = await openWorkspace();
+    await receive(realtime.connections[0], message("clicked", { payload: { eventType: "ui.json-render.action", text: "clicked" } }));
 
     expect(isShown("clicked")).toBe(false);
   });
 
   it("ignores websocket frames that are not events", async () => {
-    const { sockets } = await openWorkspace();
+    const { realtime } = await openWorkspace();
     await act(async () => {
-      sockets[0].receive({ type: "pong", data: message("pong-text") });
+      realtime.connections[0].push({ type: "pong", data: message("pong-text") });
     });
 
     expect(isShown("pong-text")).toBe(false);
   });
 
   it("survives a malformed websocket frame and keeps handling later events", async () => {
-    const { sockets } = await openWorkspace();
+    const { realtime } = await openWorkspace();
     await act(async () => {
-      sockets[0].onmessage?.({ data: "{not json" });
+      realtime.connections[0].pushRaw("{not json");
     });
-    await receive(sockets[0], message("after-garbage"));
+    await receive(realtime.connections[0], message("after-garbage"));
 
     expect(isShown("after-garbage")).toBe(true);
   });
 
   it("shows an incoming turn failure in the timeline", async () => {
-    const { sockets } = await openWorkspace();
+    const { realtime } = await openWorkspace();
     await receive(
-      sockets[0],
+      realtime.connections[0],
       getMockEvent({
         id: "failure-1",
         type: "agent.turn.failed",
@@ -477,84 +472,84 @@ describe("New messages below", () => {
   };
 
   it("does not show the button when a message arrives and the reader is at the bottom", async () => {
-    const { sockets } = await withMessageOnScreen();
-    await receive(sockets[0], message("live", { createdAt: at(2) }));
+    const { realtime } = await withMessageOnScreen();
+    await receive(realtime.connections[0], message("live", { createdAt: at(2) }));
 
     expect(showsNewMessagesButton()).toBe(false);
   });
 
   it("shows the button when a message arrives while the reader is scrolled up", async () => {
-    const { sockets, panel } = await withMessageOnScreen();
+    const { realtime, panel } = await withMessageOnScreen();
     scrolledUp(panel);
-    await receive(sockets[0], message("live", { createdAt: at(2) }));
+    await receive(realtime.connections[0], message("live", { createdAt: at(2) }));
 
     expect(showsNewMessagesButton()).toBe(true);
   });
 
   it("treats 79px from the bottom as near the bottom", async () => {
-    const { sockets, panel } = await withMessageOnScreen();
+    const { realtime, panel } = await withMessageOnScreen();
     scrolledUp(panel, 79);
-    await receive(sockets[0], message("live", { createdAt: at(2) }));
+    await receive(realtime.connections[0], message("live", { createdAt: at(2) }));
 
     expect(showsNewMessagesButton()).toBe(false);
   });
 
   it("treats 80px from the bottom as scrolled up", async () => {
-    const { sockets, panel } = await withMessageOnScreen();
+    const { realtime, panel } = await withMessageOnScreen();
     scrolledUp(panel, 80);
-    await receive(sockets[0], message("live", { createdAt: at(2) }));
+    await receive(realtime.connections[0], message("live", { createdAt: at(2) }));
 
     expect(showsNewMessagesButton()).toBe(true);
   });
 
   it("shows the button for an incoming trace event", async () => {
-    const { sockets, panel } = await withMessageOnScreen();
+    const { realtime, panel } = await withMessageOnScreen();
     scrolledUp(panel);
-    await receive(sockets[0], trace("tool-live", { createdAt: at(2) }));
+    await receive(realtime.connections[0], trace("tool-live", { createdAt: at(2) }));
 
     expect(showsNewMessagesButton()).toBe(true);
   });
 
   it("does not show the button for a hidden json-render action message", async () => {
-    const { sockets, panel } = await withMessageOnScreen();
+    const { realtime, panel } = await withMessageOnScreen();
     scrolledUp(panel);
-    await receive(sockets[0], message("clicked", { payload: { eventType: "ui.json-render.action" } }));
+    await receive(realtime.connections[0], message("clicked", { payload: { eventType: "ui.json-render.action" } }));
 
     expect(showsNewMessagesButton()).toBe(false);
   });
 
   it("does not show the button for a message in another channel", async () => {
-    const { sockets, panel } = await openWorkspace({ channels: [general, ops], events: [message("loaded")] }).then(
+    const { realtime, panel } = await openWorkspace({ channels: [general, ops], events: [message("loaded")] }).then(
       (app) => ({ ...app, panel: panelAround("loaded") }),
     );
     scrolledUp(panel);
-    await receive(sockets[0], message("elsewhere", { channelId: "ops-id" }));
+    await receive(realtime.connections[0], message("elsewhere", { channelId: "ops-id" }));
 
     expect(showsNewMessagesButton()).toBe(false);
   });
 
   it("scrolls smoothly to the bottom when the reader is already there", async () => {
-    const { sockets, panel } = await withMessageOnScreen();
+    const { realtime, panel } = await withMessageOnScreen();
     const scrollTo = stubLayout(panel, { scrollHeight: 1000, clientHeight: 200, scrollTop: 800 });
-    await receive(sockets[0], message("live", { createdAt: at(2) }));
+    await receive(realtime.connections[0], message("live", { createdAt: at(2) }));
     await settle(20);
 
     expect(scrollTo).toHaveBeenCalledWith({ top: 1000, behavior: "smooth" });
   });
 
   it("does not scroll when the reader is scrolled up", async () => {
-    const { sockets, panel } = await withMessageOnScreen();
+    const { realtime, panel } = await withMessageOnScreen();
     const scrollTo = scrolledUp(panel);
-    await receive(sockets[0], message("live", { createdAt: at(2) }));
+    await receive(realtime.connections[0], message("live", { createdAt: at(2) }));
     await settle(20);
 
     expect(scrollTo).not.toHaveBeenCalled();
   });
 
   it("hides the button and scrolls to the bottom when it is pressed", async () => {
-    const { sockets, panel } = await withMessageOnScreen();
+    const { realtime, panel } = await withMessageOnScreen();
     const scrollTo = scrolledUp(panel);
-    await receive(sockets[0], message("live", { createdAt: at(2) }));
+    await receive(realtime.connections[0], message("live", { createdAt: at(2) }));
     await press("New messages below");
     await settle(20);
 
@@ -563,9 +558,9 @@ describe("New messages below", () => {
   });
 
   it("hides the button when the reader scrolls back near the bottom", async () => {
-    const { sockets, panel } = await withMessageOnScreen();
+    const { realtime, panel } = await withMessageOnScreen();
     scrolledUp(panel);
-    await receive(sockets[0], message("live", { createdAt: at(2) }));
+    await receive(realtime.connections[0], message("live", { createdAt: at(2) }));
     stubLayout(panel, { scrollHeight: 1000, clientHeight: 200, scrollTop: 721 });
     fireEvent.scroll(panel);
 
@@ -573,9 +568,9 @@ describe("New messages below", () => {
   });
 
   it("keeps the button while the reader is still far from the bottom after scrolling", async () => {
-    const { sockets, panel } = await withMessageOnScreen();
+    const { realtime, panel } = await withMessageOnScreen();
     scrolledUp(panel);
-    await receive(sockets[0], message("live", { createdAt: at(2) }));
+    await receive(realtime.connections[0], message("live", { createdAt: at(2) }));
     stubLayout(panel, { scrollHeight: 1000, clientHeight: 200, scrollTop: 720 });
     fireEvent.scroll(panel);
 
@@ -583,12 +578,12 @@ describe("New messages below", () => {
   });
 
   it("clears the button when another channel is opened", async () => {
-    const { sockets, panel } = await openWorkspace({
+    const { realtime, panel } = await openWorkspace({
       channels: [general, ops],
       events: [message("loaded")],
     }).then((app) => ({ ...app, panel: panelAround("loaded") }));
     scrolledUp(panel);
-    await receive(sockets[0], message("live", { createdAt: at(2) }));
+    await receive(realtime.connections[0], message("live", { createdAt: at(2) }));
     await press("# ops");
 
     expect(showsNewMessagesButton()).toBe(false);
@@ -596,6 +591,7 @@ describe("New messages below", () => {
 
   it("shows the button when a poll finds a newer message while the reader is scrolled up", async () => {
     const { panel } = await openWorkspace({
+      realtimeAvailable: false,
       routes: [feedWithNewerMessageOnPoll(message("loaded", { createdAt: at(1) }), message("polled", { createdAt: at(2) }))],
     }).then((app) => ({ ...app, panel: panelAround("loaded") }));
     scrolledUp(panel);
@@ -607,6 +603,7 @@ describe("New messages below", () => {
 
   it("does not show the button when a poll finds a newer message and the reader is at the bottom", async () => {
     await openWorkspace({
+      realtimeAvailable: false,
       routes: [feedWithNewerMessageOnPoll(message("loaded", { createdAt: at(1) }), message("polled", { createdAt: at(2) }))],
     });
     await settle(10_000);
@@ -629,7 +626,7 @@ describe("New messages below", () => {
 
 describe("Polling while the websocket is down", () => {
   it("does not poll before 10 seconds have passed", async () => {
-    const { requests } = await openWorkspace();
+    const { requests } = await openWorkspace({ realtimeAvailable: false });
     const loads = countOf(requests, LOAD_MESSAGES_PATH);
     const notifications = countOf(requests, NOTIFICATIONS_PATH);
     await settle(9_999);
@@ -639,7 +636,7 @@ describe("Polling while the websocket is down", () => {
   });
 
   it("reloads the active channel and the notifications after 10 seconds", async () => {
-    const { requests } = await openWorkspace();
+    const { requests } = await openWorkspace({ realtimeAvailable: false });
     const loads = countOf(requests, LOAD_MESSAGES_PATH);
     const notifications = countOf(requests, NOTIFICATIONS_PATH);
     await settle(10_000);
@@ -649,7 +646,7 @@ describe("Polling while the websocket is down", () => {
   });
 
   it("keeps polling every 10 seconds", async () => {
-    const { requests } = await openWorkspace();
+    const { requests } = await openWorkspace({ realtimeAvailable: false });
     const loads = countOf(requests, LOAD_MESSAGES_PATH);
     await settle(30_000);
 
@@ -658,6 +655,7 @@ describe("Polling while the websocket is down", () => {
 
   it("shows a message that was only found by polling", async () => {
     await openWorkspace({
+      realtimeAvailable: false,
       routes: [
         {
           path: LOAD_MESSAGES_PATH,
@@ -672,6 +670,7 @@ describe("Polling while the websocket is down", () => {
 
   it("keeps the messages already shown when a poll returns a newer page", async () => {
     await openWorkspace({
+      realtimeAvailable: false,
       routes: [
         {
           path: LOAD_MESSAGES_PATH,
@@ -686,19 +685,18 @@ describe("Polling while the websocket is down", () => {
   });
 
   it("stops polling while the websocket is connected", async () => {
-    const { requests, sockets } = await openWorkspace();
-    await openSocket(sockets[0]);
+    const { requests } = await openWorkspace();
     const before = countOf(requests, LOAD_MESSAGES_PATH);
     await settle(30_000);
 
     expect(countOf(requests, LOAD_MESSAGES_PATH)).toBe(before);
   });
 
-  it("resumes polling 10 seconds after the websocket drops", async () => {
-    const { requests, sockets } = await openWorkspace();
-    await openSocket(sockets[0]);
+  it("resumes polling 10 seconds after the websocket drops and cannot be re-established", async () => {
+    const { requests, realtime } = await openWorkspace();
     const before = countOf(requests, LOAD_MESSAGES_PATH);
-    await dropSocket(sockets[0]);
+    realtime.makeUnavailable();
+    await dropConnection(realtime.connections[0]);
     await settle(9_999);
 
     expect(countOf(requests, LOAD_MESSAGES_PATH)).toBe(before);
@@ -709,7 +707,7 @@ describe("Polling while the websocket is down", () => {
   });
 
   it("does not poll a channel when none is selected", async () => {
-    const { requests } = await openWorkspace({ channels: [] });
+    const { requests } = await openWorkspace({ channels: [], realtimeAvailable: false });
     const notifications = countOf(requests, NOTIFICATIONS_PATH);
     await settle(10_000);
 
@@ -720,114 +718,113 @@ describe("Polling while the websocket is down", () => {
 
 describe("Websocket connection", () => {
   it("connects to the /ws endpoint once signed in", async () => {
-    const { sockets } = await openWorkspace();
+    const { realtime } = await openWorkspace();
 
-    expect(sockets).toHaveLength(1);
-    expect(sockets[0].url).toMatch(socketUrlPattern);
+    expect(realtime.connectionAttempts).toHaveLength(1);
+    expect(realtime.connectionAttempts[0]).toMatch(socketUrlPattern);
   });
 
   it("does not connect while signed out", async () => {
-    const { sockets } = await renderApp({
+    const { realtime } = await renderApp({
       routes: [{ path: "/api/auth/me", respond: { status: 401, text: "Unauthorized" } }],
     });
 
-    expect(sockets).toHaveLength(0);
+    expect(realtime.connectionAttempts).toHaveLength(0);
   });
 
   it("does not connect while a password change is required", async () => {
-    const { sockets } = await renderApp({
+    const { realtime } = await renderApp({
       routes: [{ path: "/api/auth/me", respond: { json: getMockAuthMe({ mustChangePassword: true }) } }],
     });
 
-    expect(sockets).toHaveLength(0);
+    expect(realtime.connectionAttempts).toHaveLength(0);
   });
 
   it("reloads the active channel and notifications when the socket opens", async () => {
-    const { requests, sockets } = await openWorkspace();
+    const { requests, realtime } = await openWorkspace({ realtimeAvailable: false });
     const loads = countOf(requests, LOAD_MESSAGES_PATH);
     const notifications = countOf(requests, NOTIFICATIONS_PATH);
-    await openSocket(sockets[0]);
+    realtime.makeAvailable();
+    await settle(400);
 
+    expect(realtime.connections).toHaveLength(1);
     expect(countOf(requests, LOAD_MESSAGES_PATH)).toBe(loads + 1);
     expect(countOf(requests, NOTIFICATIONS_PATH)).toBe(notifications + 1);
   });
 
   it("closes the socket and stops reconnecting after sign out", async () => {
-    const { sockets } = await openWorkspace({
+    const { realtime } = await openWorkspace({
       routes: [{ method: "POST", path: "/api/auth/logout", respond: { json: { ok: true } } }],
     });
-    await openSocket(sockets[0]);
     await press("Sign out (alice)");
     await settle(10_000);
 
-    expect(sockets).toHaveLength(1);
-    expect(sockets[0].readyState).toBe(3);
+    expect(realtime.connectionAttempts).toHaveLength(1);
+    expect(realtime.connections[0].closed).toBe(true);
   });
 });
 
 describe("Websocket reconnect backoff", () => {
-  const reconnectsAfter = async (sockets: FakeWebSocketInstance[], delays: readonly number[]) => {
+  const reconnectsAfter = async (realtime: { connectionAttempts: readonly string[] }, delays: readonly number[]) => {
+    const attemptsBefore = realtime.connectionAttempts.length;
     for (const [index, delay] of delays.entries()) {
-      await dropSocket(sockets[index]);
       await settle(delay - 1);
-      expect(sockets).toHaveLength(index + 1);
+      expect(realtime.connectionAttempts).toHaveLength(attemptsBefore + index);
       await settle(1);
-      expect(sockets).toHaveLength(index + 2);
+      expect(realtime.connectionAttempts).toHaveLength(attemptsBefore + index + 1);
     }
   };
 
   it("reconnects 400ms after the socket closes", async () => {
-    const { sockets } = await openWorkspace();
+    const { realtime } = await openWorkspace();
+    await dropConnection(realtime.connections[0]);
 
-    await reconnectsAfter(sockets, [400]);
+    await reconnectsAfter(realtime, [400]);
   });
 
   it("doubles the delay for each failed attempt: 400, 800, 1600, 3200", async () => {
-    const { sockets } = await openWorkspace();
+    const { realtime } = await openWorkspace({ realtimeAvailable: false });
 
-    await reconnectsAfter(sockets, [400, 800, 1600, 3200]);
+    await reconnectsAfter(realtime, [400, 800, 1600, 3200]);
   });
 
   it("caps the delay at 5000ms", async () => {
-    const { sockets } = await openWorkspace();
+    const { realtime } = await openWorkspace({ realtimeAvailable: false });
 
-    await reconnectsAfter(sockets, [400, 800, 1600, 3200, 5000, 5000]);
+    await reconnectsAfter(realtime, [400, 800, 1600, 3200, 5000, 5000]);
   });
 
   it("starts over at 400ms after a connection succeeds", async () => {
-    const { sockets } = await openWorkspace();
-    await reconnectsAfter(sockets, [400, 800]);
-    await openSocket(sockets[2]);
-    await dropSocket(sockets[2]);
-    await settle(399);
+    const { realtime } = await openWorkspace({ realtimeAvailable: false });
+    await reconnectsAfter(realtime, [400, 800]);
+    realtime.makeAvailable();
+    await reconnectsAfter(realtime, [1600]);
+    await dropConnection(realtime.connections[0]);
 
-    expect(sockets).toHaveLength(3);
-
-    await settle(1);
-
-    expect(sockets).toHaveLength(4);
+    await reconnectsAfter(realtime, [400]);
   });
 
   it("closes the socket on an error so that it reconnects", async () => {
-    const { sockets } = await openWorkspace();
+    const { realtime } = await openWorkspace();
     await act(async () => {
-      sockets[0].onerror?.(new Event("error"));
+      realtime.connections[0].failWithNetworkError();
     });
     await settle(400);
 
-    expect(sockets[0].readyState).toBe(3);
-    expect(sockets).toHaveLength(2);
+    expect(realtime.connections[0].closed).toBe(true);
+    expect(realtime.connectionAttempts).toHaveLength(2);
   });
 
   it("connects to the same url when reconnecting", async () => {
-    const { sockets } = await openWorkspace();
-    await reconnectsAfter(sockets, [400]);
+    const { realtime } = await openWorkspace();
+    await dropConnection(realtime.connections[0]);
+    await reconnectsAfter(realtime, [400]);
 
-    expect(sockets[1].url).toBe(sockets[0].url);
+    expect(realtime.connectionAttempts[1]).toBe(realtime.connectionAttempts[0]);
   });
 
   it("reloads the active channel when the reconnected socket opens, picking up missed messages", async () => {
-    const { sockets } = await openWorkspace({
+    const { realtime } = await openWorkspace({
       routes: [
         {
           path: LOAD_MESSAGES_PATH,
@@ -835,71 +832,60 @@ describe("Websocket reconnect backoff", () => {
         },
       ],
     });
-    await openSocket(sockets[0]);
-    await reconnectsAfter(sockets, [400]);
-    await openSocket(sockets[1]);
+    expect(isShown("missed")).toBe(false);
+
+    await dropConnection(realtime.connections[0]);
+    await settle(400);
 
     expect(isShown("missed")).toBe(true);
   });
 });
 
 describe("Websocket topics", () => {
-  const sentBy = (socket: FakeWebSocketInstance) => socket.sent.map((frame) => JSON.parse(frame));
-
-  it("sends nothing before the socket is open", async () => {
-    const { sockets } = await openWorkspace({ channels: [general, ops] });
-
-    expect(sockets[0].sent).toEqual([]);
-  });
+  const framesSentBy = (connection: RealtimeConnection) => connection.receivedFrames;
 
   it("subscribes to every visible channel when the socket opens", async () => {
-    const { sockets } = await openWorkspace({ channels: [general, ops] });
-    await openSocket(sockets[0]);
+    const { realtime } = await openWorkspace({ channels: [general, ops] });
 
-    expect(sentBy(sockets[0])).toEqual([
+    expect(framesSentBy(realtime.connections[0])).toEqual([
       { type: "subscribe", topic: "channel:channel-1" },
       { type: "subscribe", topic: "channel:ops-id" },
     ]);
   });
 
   it("does not subscribe to a channel the viewer cannot see", async () => {
-    const { sockets } = await openWorkspace({ channels: [general, someoneElsesPrivate] });
-    await openSocket(sockets[0]);
+    const { realtime } = await openWorkspace({ channels: [general, someoneElsesPrivate] });
 
-    expect(sentBy(sockets[0])).toEqual([{ type: "subscribe", topic: "channel:channel-1" }]);
+    expect(framesSentBy(realtime.connections[0])).toEqual([{ type: "subscribe", topic: "channel:channel-1" }]);
   });
 
   it("subscribes to archived channels as well", async () => {
     const archived = getMockChannel({ id: "old-id", name: "old", archivedAt: at(-5) });
-    const { sockets } = await openWorkspace({ channels: [general, archived] });
-    await openSocket(sockets[0]);
+    const { realtime } = await openWorkspace({ channels: [general, archived] });
 
-    expect(sentBy(sockets[0])).toContainEqual({ type: "subscribe", topic: "channel:old-id" });
+    expect(framesSentBy(realtime.connections[0])).toContainEqual({ type: "subscribe", topic: "channel:old-id" });
   });
 
   it("resubscribes to every channel on a new socket after reconnecting", async () => {
-    const { sockets } = await openWorkspace({ channels: [general, ops] });
-    await openSocket(sockets[0]);
-    await dropSocket(sockets[0]);
+    const { realtime } = await openWorkspace({ channels: [general, ops] });
+    await dropConnection(realtime.connections[0]);
     await settle(400);
-    await openSocket(sockets[1]);
 
-    expect(sentBy(sockets[1])).toEqual([
+    expect(framesSentBy(realtime.connections[1])).toEqual([
       { type: "subscribe", topic: "channel:channel-1" },
       { type: "subscribe", topic: "channel:ops-id" },
     ]);
   });
 
   it("sends nothing more when the operator switches channel", async () => {
-    const { sockets } = await openWorkspace({ channels: [general, ops] });
-    await openSocket(sockets[0]);
+    const { realtime } = await openWorkspace({ channels: [general, ops] });
     await press("# ops");
 
-    expect(sockets[0].sent).toHaveLength(2);
+    expect(framesSentBy(realtime.connections[0])).toHaveLength(2);
   });
 
   it("subscribes to a channel that appears while the socket is open", async () => {
-    const { sockets } = await openWorkspace({
+    const { realtime } = await openWorkspace({
       routes: [
         {
           path: "/api/channels?includeArchived=1",
@@ -908,17 +894,16 @@ describe("Websocket topics", () => {
         { method: "POST", path: "/api/channels", respond: { json: { id: "ops-id" } } },
       ],
     });
-    await openSocket(sockets[0]);
     fireEvent.keyDown(window, { key: "k", metaKey: true });
     fireEvent.change(screen.getByLabelText("Channel name"), { target: { value: "ops" } });
     await press("Start");
 
-    expect(sentBy(sockets[0])).toContainEqual({ type: "subscribe", topic: "channel:ops-id" });
+    expect(framesSentBy(realtime.connections[0])).toContainEqual({ type: "subscribe", topic: "channel:ops-id" });
   });
 
   it("unsubscribes from a channel that disappears while the socket is open", async () => {
     vi.stubGlobal("confirm", () => true);
-    const { sockets } = await openWorkspace({
+    const { realtime } = await openWorkspace({
       routes: [
         {
           path: "/api/channels?includeArchived=1",
@@ -927,17 +912,16 @@ describe("Websocket topics", () => {
         { method: "DELETE", path: "/api/channels/channel-1", respond: { json: { ok: true } } },
       ],
     });
-    await openSocket(sockets[0]);
     await press("Manage channel");
     await press("Delete channel");
 
-    expect(sentBy(sockets[0])).toContainEqual({ type: "unsubscribe", topic: "channel:channel-1" });
+    expect(framesSentBy(realtime.connections[0])).toContainEqual({ type: "unsubscribe", topic: "channel:channel-1" });
   });
 
   it("keeps the other channels subscribed when one disappears", async () => {
     vi.stubGlobal("confirm", () => true);
     const manageable = getMockChannel({ ...general, canManage: true });
-    const { sockets } = await openWorkspace({
+    const { realtime } = await openWorkspace({
       routes: [
         {
           path: "/api/channels?includeArchived=1",
@@ -946,11 +930,10 @@ describe("Websocket topics", () => {
         { method: "DELETE", path: "/api/channels/channel-1", respond: { json: { ok: true } } },
       ],
     });
-    await openSocket(sockets[0]);
     await press("Manage channel");
     await press("Delete channel");
 
-    expect(sentBy(sockets[0]).filter((frame) => frame.topic === "channel:ops-id")).toEqual([
+    expect(framesSentBy(realtime.connections[0]).filter((frame) => frame.topic === "channel:ops-id")).toEqual([
       { type: "subscribe", topic: "channel:ops-id" },
     ]);
   });
