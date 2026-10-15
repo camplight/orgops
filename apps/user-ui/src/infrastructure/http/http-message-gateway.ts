@@ -1,4 +1,4 @@
-import { apiFetch, apiJson, getApiHeaders } from "../../api";
+import { apiFetch, apiJson, getApiHeaders } from "./api";
 import type { EventRow } from "../../types";
 import type { MessageGateway } from "../../ports/message-gateway";
 

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { apiFetch, getApiHeaders } from "./api";
+import { apiFetch, getApiHeaders } from "./infrastructure/http/api";
 import {
   ResponsiveContainer,
   BarChart,

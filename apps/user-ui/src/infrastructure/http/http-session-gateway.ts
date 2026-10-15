@@ -1,4 +1,4 @@
-import { apiFetch, apiJson, getApiHeaders } from "../../api";
+import { apiFetch, apiJson, getApiHeaders } from "./api";
 import type { AuthMe } from "../../types";
 import type { SessionGateway } from "../../ports/session-gateway";
 
