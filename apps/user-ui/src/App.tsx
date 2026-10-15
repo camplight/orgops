@@ -11,6 +11,24 @@ import { apiFetch, apiJson, getApiHeaders } from "./api";
 import { wsUrl } from "./config";
 import type { Agent, AuthMe, Channel, ChannelParticipant, ChannelShare, EventRow, Team } from "./types";
 import {
+  CHANNEL_GROUPS,
+  agentVisibleToUserUi,
+  canManageUserChannel,
+  channelGroupId,
+  channelHasHumanParticipant,
+  channelLabel,
+  channelMatchesQuery,
+  channelVisibleToUserUi,
+  isHumanAgentDirectChannel,
+  isSharedChannelForUser,
+  normalizedSubscriberType,
+  participantAgentStatus,
+  participantName,
+  participantType,
+  shareTypeLabel,
+  type ChannelGroupId
+} from "./domain/conversations/channel-rules";
+import {
   isHiddenUiActionMessage,
   messageDisplayTime,
   messageRole,
@@ -66,15 +84,6 @@ function shouldRenderMarkdown(text: string) {
   return hasJsonRenderBlock(trimmed) || hasSecretInputBlock(trimmed) || MARKDOWN_HINT_RE.test(trimmed) || URL_RE.test(trimmed);
 }
 
-const DIRECT_CHANNEL_KINDS = new Set(["HUMAN_AGENT_DM", "AGENT_AGENT_DM", "DIRECT_GROUP"]);
-const CHANNEL_GROUPS = [
-  { id: "direct", label: "Direct messages" },
-  { id: "channels", label: "Channels" },
-  { id: "shared", label: "Shared channels" }
-] as const;
-
-type ChannelGroupId = (typeof CHANNEL_GROUPS)[number]["id"];
-
 type UploadedAttachment = {
   localId: string;
   fileId: string;
@@ -106,158 +115,6 @@ type WsServerEventMessage = {
   topic: string;
   data: EventRow;
 };
-
-function normalizedSubscriberType(participant: ChannelParticipant) {
-  return participant.subscriberType.trim().toUpperCase();
-}
-
-function isDirectChannel(channel?: Channel | null) {
-  return Boolean(channel?.kind && DIRECT_CHANNEL_KINDS.has(channel.kind.toUpperCase()));
-}
-
-function isHumanAgentDirectChannel(channel?: Channel | null) {
-  return channel?.kind?.toUpperCase() === "HUMAN_AGENT_DM";
-}
-
-function channelHasHumanParticipant(channel: Channel, humanId: string) {
-  return (channel.participants ?? []).some(
-    (participant) =>
-      normalizedSubscriberType(participant) === "HUMAN" && participant.subscriberId === humanId
-  );
-}
-
-function isLifecycleChannel(channel: Channel) {
-  return channel.name.toLowerCase().startsWith("agent.lifecycle.");
-}
-
-function lifecycleAgentName(channel: Channel) {
-  return channel.name.slice("agent.lifecycle.".length) || channel.name;
-}
-
-function channelGroupId(channel: Channel): ChannelGroupId {
-  if (isDirectChannel(channel)) return "direct";
-  return "channels";
-}
-
-function participantDisplayName(participant: ChannelParticipant, currentUsername?: string) {
-  if (
-    normalizedSubscriberType(participant) === "HUMAN" &&
-    currentUsername &&
-    participant.subscriberId === currentUsername
-  ) {
-    return "you";
-  }
-  return participant.subscriberId || participant.subscriberType || "participant";
-}
-
-function channelDisplayName(channel?: Channel | null, currentUsername?: string) {
-  if (!channel) return "Select a channel";
-  if (isLifecycleChannel(channel)) return lifecycleAgentName(channel);
-  if (!isDirectChannel(channel)) return channel.name;
-
-  const participants = channel.participants ?? [];
-  const visibleParticipants = participants.filter(
-    (participant) =>
-      normalizedSubscriberType(participant) !== "HUMAN" || participant.subscriberId !== currentUsername
-  );
-  const names = (visibleParticipants.length > 0 ? visibleParticipants : participants).map((participant) =>
-    participantDisplayName(participant, currentUsername)
-  );
-
-  if (channel.kind?.toUpperCase() === "HUMAN_AGENT_DM" && names[0]) return names[0];
-  if (names.length > 0) return `Direct: ${names.join(", ")}`;
-  return channel.name;
-}
-
-function channelLabel(channel?: Channel | null, currentUsername?: string) {
-  if (!channel) return "Select a channel";
-  return isDirectChannel(channel) || isLifecycleChannel(channel)
-    ? channelDisplayName(channel, currentUsername)
-    : `# ${channel.name}`;
-}
-
-function participantName(participant: ChannelParticipant) {
-  return participant.subscriberId || participant.subscriberType || "Participant";
-}
-
-function participantType(participant: ChannelParticipant) {
-  const type = normalizedSubscriberType(participant);
-  if (type === "HUMAN") return "Human";
-  if (type === "AGENT") return "Agent";
-  return participant.subscriberType || "Participant";
-}
-
-function shareTypeLabel(share: ChannelShare) {
-  const type = share.viewerType.trim().toUpperCase();
-  if (type === "HUMAN") return "Shared human viewer";
-  if (type === "AGENT") return "Shared agent viewer";
-  return "Shared viewer";
-}
-
-function channelHasHumanShare(channel: Channel, humanId: string) {
-  return (channel.shares ?? []).some(
-    (share) => share.viewerType.trim().toUpperCase() === "HUMAN" && share.viewerId === humanId
-  );
-}
-
-function isSharedChannelForUser(channel: Channel, currentUsername: string) {
-  return Boolean(currentUsername && channelHasHumanShare(channel, currentUsername));
-}
-
-function participantAgentStatus(participant: ChannelParticipant, agents: Agent[]) {
-  if (normalizedSubscriberType(participant) !== "AGENT") return null;
-  const agent = agents.find((candidate) => candidate.name === participant.subscriberId);
-  return agent?.runtimeState === "RUNNING" ? "running" : "off";
-}
-
-function channelMatchesQuery(channel: Channel, query: string, currentUsername: string) {
-  const displayName = channelDisplayName(channel, currentUsername).toLowerCase();
-  return channel.name.toLowerCase().includes(query) || displayName.includes(query);
-}
-
-function canManageUserChannel(channel: Channel | null, userId: string | null) {
-  if (!channel || isLifecycleChannel(channel)) return false;
-  if (typeof channel.canManage === "boolean") return channel.canManage;
-  if (channel.visibility === "PRIVATE") return Boolean(userId && channel.ownerHumanId === userId);
-  return true;
-}
-
-function channelHasTeamParticipant(channel: Channel, teamIds: Set<string>) {
-  return (channel.participants ?? []).some(
-    (participant) =>
-      normalizedSubscriberType(participant) === "TEAM" && teamIds.has(participant.subscriberId)
-  );
-}
-
-function channelVisibleToUserUi(
-  channel: Channel,
-  userId: string | null,
-  username: string,
-  viewerTeamIds: Set<string>
-) {
-  const isSharedToHuman = channelHasHumanShare(channel, username);
-  if (isLifecycleChannel(channel)) return false;
-  if (isHumanAgentDirectChannel(channel)) {
-    return channelHasHumanParticipant(channel, username) || isSharedToHuman;
-  }
-  if (isDirectChannel(channel)) {
-    return channelHasHumanParticipant(channel, username) || isSharedToHuman;
-  }
-  if (channel.visibility !== "PRIVATE") return true;
-  if (Boolean(userId && channel.ownerHumanId === userId)) return true;
-  if (channelHasTeamParticipant(channel, viewerTeamIds)) return true;
-  return isSharedToHuman;
-}
-
-function agentVisibleToUserUi(
-  agent: Agent,
-  visibleChannelAgentNames: Set<string>,
-  userId: string | null
-) {
-  if (agent.visibility !== "PRIVATE") return true;
-  if (Boolean(userId && agent.ownerHumanId === userId)) return true;
-  return visibleChannelAgentNames.has(agent.name);
-}
 
 function readLinkedChannelId() {
   return new URL(window.location.href).searchParams.get("channel");
