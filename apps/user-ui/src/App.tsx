@@ -14,6 +14,7 @@ import { createWebSocketRealtimeFeed } from "./infrastructure/websocket/websocke
 import type { RealtimeFeed } from "./ports/realtime-feed";
 import { usePollingFallback } from "./ui/realtime/use-polling-fallback";
 import { createBrowserDeepLink } from "./infrastructure/browser/browser-deep-link";
+import { createLoadSession } from "./application/identity/load-session";
 import { validateNewPassword } from "./domain/identity/password-rules";
 import { createHttpSessionGateway } from "./infrastructure/http/http-session-gateway";
 import { createHttpConversationGateway } from "./infrastructure/http/http-conversation-gateway";
@@ -97,6 +98,7 @@ function createLocalAttachmentId() {
 
 const messageGateway = createHttpMessageGateway();
 const sessionGateway = createHttpSessionGateway();
+const loadCurrentSession = createLoadSession({ sessionGateway });
 const confirmPort = createBrowserConfirm();
 const clipboard = createBrowserClipboard();
 const deepLink = createBrowserDeepLink();
@@ -404,18 +406,19 @@ export default function App() {
     setAuthLoading(true);
     setError(null);
     try {
-      const me = await sessionGateway.getCurrentUser();
-      const nextUsername = me.username ?? "";
-      setUsername(nextUsername);
-      setUserId(me.id ?? null);
-      setLoginUsername(nextUsername || "admin");
-      setAuthenticated(Boolean(nextUsername));
-      setMustChangePassword(Boolean(me.mustChangePassword));
-    } catch {
-      setAuthenticated(false);
-      setUsername("");
-      setUserId(null);
-      setMustChangePassword(false);
+      const session = await loadCurrentSession();
+      if (session.kind === "loaded") {
+        setUsername(session.username);
+        setUserId(session.userId);
+        setLoginUsername(session.username || "admin");
+        setAuthenticated(session.authenticated);
+        setMustChangePassword(session.mustChangePassword);
+      } else {
+        setAuthenticated(false);
+        setUsername("");
+        setUserId(null);
+        setMustChangePassword(false);
+      }
     } finally {
       setAuthLoading(false);
     }
