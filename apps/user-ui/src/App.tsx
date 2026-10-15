@@ -10,6 +10,7 @@ import {
 import { apiFetch, apiJson, getApiHeaders } from "./api";
 import { wsUrl } from "./config";
 import { ChangePasswordScreen } from "./ui/auth/change-password-screen";
+import { ChannelManageDialog } from "./ui/dialogs/channel-manage-dialog";
 import { LoginScreen } from "./ui/auth/login-screen";
 import type { Agent, AuthMe, Channel, ChannelParticipant, ChannelShare, EventRow, Team } from "./types";
 import {
@@ -2476,102 +2477,23 @@ export default function App() {
       ) : null}
 
       {showChannelManageDialog && activeChannel && activeChannelManageable ? (
-        <div
-          className={`dialog-backdrop${showParticipantsDialog ? " dialog-backdrop-underlay" : ""}`}
-          role="presentation"
-          onMouseDown={() => setShowChannelManageDialog(false)}
-        >
-          <section
-            aria-modal="true"
-            className="conversation-dialog participants-dialog"
-            role="dialog"
-            onMouseDown={(event) => event.stopPropagation()}
-          >
-            <header>
-              <div>
-                <span>Channel settings</span>
-                <h2>Manage channel</h2>
-              </div>
-              <button
-                aria-label="Close dialog"
-                className="dialog-close"
-                onClick={() => setShowChannelManageDialog(false)}
-                type="button"
-              >
-                Close
-              </button>
-            </header>
-
-            <div className="channel-manage-grid">
-              <label>
-                <span>Visibility</span>
-                <select
-                  value={channelVisibilityDraft}
-                  onChange={(event) =>
-                    setChannelVisibilityDraft(event.target.value === "PUBLIC" ? "PUBLIC" : "PRIVATE")
-                  }
-                  disabled={updatingChannelVisibility}
-                >
-                  <option value="PRIVATE">Private</option>
-                  <option value="PUBLIC">Public</option>
-                </select>
-              </label>
-
-              <label className="archive-checkbox-row">
-                <input
-                  type="checkbox"
-                  checked={archiveDraft}
-                  onChange={(event) => setArchiveDraft(event.target.checked)}
-                  disabled={updatingChannelVisibility}
-                />
-                <span>Archived</span>
-              </label>
-            </div>
-
-            <div className="channel-manage-quick-actions">
-              <button
-                type="button"
-                className="channel-manage-secondary-button"
-                onClick={() => {
-                  setShowParticipantsDialog(true);
-                }}
-                disabled={updatingChannelVisibility}
-              >
-                Manage participants
-              </button>
-              <button
-                type="button"
-                className="channel-manage-secondary-button"
-                onClick={() => void handleCopyShareLink()}
-                disabled={updatingChannelVisibility}
-              >
-                {shareLinkCopied ? "Link copied" : "Copy share link"}
-              </button>
-            </div>
-
-            <button
-              className="channel-manage-save-button"
-              type="button"
-              onClick={() => void handleSaveChannelSettings()}
-              disabled={
-                updatingChannelVisibility ||
-                (channelVisibilityDraft === (activeChannel.visibility === "PUBLIC" ? "PUBLIC" : "PRIVATE") &&
-                  archiveDraft === Boolean(activeChannel.archivedAt))
-              }
-            >
-              {updatingChannelVisibility ? "Saving..." : "Save"}
-            </button>
-
-            <button
-              className="channel-manage-delete-button"
-              type="button"
-              onClick={() => void handleDeleteChannel(activeChannel)}
-              disabled={updatingChannelVisibility}
-            >
-              Delete channel
-            </button>
-          </section>
-        </div>
+        <ChannelManageDialog
+          channel={activeChannel}
+          underlay={showParticipantsDialog}
+          visibilityDraft={channelVisibilityDraft}
+          archiveDraft={archiveDraft}
+          updating={updatingChannelVisibility}
+          shareLinkCopied={shareLinkCopied}
+          onClose={() => setShowChannelManageDialog(false)}
+          onVisibilityDraftChange={setChannelVisibilityDraft}
+          onArchiveDraftChange={setArchiveDraft}
+          onManageParticipants={() => {
+            setShowParticipantsDialog(true);
+          }}
+          onCopyShareLink={() => void handleCopyShareLink()}
+          onSave={() => void handleSaveChannelSettings()}
+          onDelete={(channel) => void handleDeleteChannel(channel)}
+        />
       ) : null}
     </main>
   );
