@@ -15,6 +15,7 @@ import { TraceGroup } from "./ui/timeline/trace-group";
 import { MessageAttachments } from "./ui/timeline/message-attachments";
 import { SensitiveContent } from "./ui/timeline/sensitive-content";
 import { MessageMarkdown } from "./ui/timeline/message-markdown";
+import { ComposerTextarea } from "./ui/composer/composer-textarea";
 import { ComposerActions } from "./ui/composer/composer-actions";
 import { ComposerAttachments } from "./ui/composer/composer-attachments";
 import { Sidebar } from "./ui/sidebar/sidebar";
@@ -1843,33 +1844,19 @@ export default function App() {
               }
             />
           ) : null}
-          <textarea
-            ref={composerTextareaRef}
+          <ComposerTextarea
+            textareaRef={composerTextareaRef}
             value={draft}
+            activeChannel={activeChannel}
+            activeChannelCanPost={activeChannelCanPost}
+            sending={sending}
+            isConversationEmpty={isConversationEmpty}
+            username={username}
             onChange={(event) => {
               setDraft(event.target.value);
               resizeComposerTextarea(event.currentTarget);
             }}
             onPaste={handleComposerPaste}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                event.preventDefault();
-                event.currentTarget.form?.requestSubmit();
-              }
-            }}
-            placeholder={
-              activeChannel?.archivedAt
-                ? "Restore this channel to send messages"
-                : activeChannel && !activeChannelCanPost
-                  ? "This channel is shared with you as read-only"
-                : activeChannel
-                  ? isConversationEmpty
-                    ? `Message ${channelLabel(activeChannel, username)}`
-                    : `Message ${channelLabel(activeChannel, username)} (Enter to send, Shift+Enter for newline)`
-                  : "Select a channel first"
-            }
-            disabled={!activeChannel || Boolean(activeChannel.archivedAt) || !activeChannelCanPost || sending}
-            rows={isConversationEmpty ? 1 : 3}
           />
           <ComposerActions
             canAttach={
