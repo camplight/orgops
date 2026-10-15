@@ -1,4 +1,5 @@
 import { channelVisibleToUserUi } from "../../domain/conversations/channel-rules";
+import { keepOrFirstActiveChannelId } from "../../domain/conversations/active-channel";
 import type { ConversationGateway } from "../../ports/conversation-gateway";
 import type { Channel } from "../../types";
 
@@ -19,10 +20,7 @@ export function createRefreshChannels(options: { conversationGateway: Conversati
     const nextSelectedChannelId =
       nextActiveChannelId !== undefined
         ? nextActiveChannelId
-        : activeChannelId &&
-            visibleChannels.some((channel) => channel.id === activeChannelId && !channel.archivedAt)
-          ? activeChannelId
-          : visibleChannels.find((channel) => !channel.archivedAt)?.id ?? null;
+        : keepOrFirstActiveChannelId({ activeChannelId, visibleChannels });
     return { channels: nextChannels, nextSelectedChannelId };
   };
 }
