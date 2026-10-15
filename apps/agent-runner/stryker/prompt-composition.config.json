@@ -1,0 +1,12 @@
+{
+  "testRunner": "command",
+  "commandRunner": { "command": "npx vitest run src/characterisation/prompt-composition.test.ts" },
+  "mutate": [
+    "src/turn-executor.ts:495-540",
+    "src/turn-executor.ts:617-664"
+  ],
+  "coverageAnalysis": "off",
+  "reporters": ["clear-text", "json"],
+  "jsonReporter": { "fileName": "reports/mutation/prompt-composition.json" },
+  "tempDirName": ".stryker-tmp"
+}
