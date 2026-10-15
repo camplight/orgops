@@ -9,6 +9,7 @@ import {
 } from "react";
 import { apiFetch, apiJson, getApiHeaders } from "./api";
 import { wsUrl } from "./config";
+import { createHttpSessionGateway } from "./infrastructure/http/http-session-gateway";
 import { createHttpMessageGateway } from "./infrastructure/http/http-message-gateway";
 import { ChangePasswordScreen } from "./ui/auth/change-password-screen";
 import { MessageItem } from "./ui/timeline/message-item";
@@ -23,7 +24,7 @@ import { ConversationDialog } from "./ui/dialogs/conversation-dialog";
 import { ParticipantsDialog } from "./ui/dialogs/participants-dialog";
 import { ChannelManageDialog } from "./ui/dialogs/channel-manage-dialog";
 import { LoginScreen } from "./ui/auth/login-screen";
-import type { Agent, AuthMe, Channel, ChannelParticipant, ChannelShare, EventRow, Team } from "./types";
+import type { Agent, Channel, ChannelParticipant, ChannelShare, EventRow, Team } from "./types";
 import {
   CHANNEL_GROUPS,
   agentVisibleToUserUi,
@@ -123,6 +124,7 @@ function createLocalAttachmentId() {
 }
 
 const messageGateway = createHttpMessageGateway();
+const sessionGateway = createHttpSessionGateway();
 
 export default function App() {
   const messagesPanelRef = useRef<HTMLElement | null>(null);
@@ -429,7 +431,7 @@ export default function App() {
     setAuthLoading(true);
     setError(null);
     try {
-      const me = await apiJson<AuthMe>("/api/auth/me");
+      const me = await sessionGateway.getCurrentUser();
       const nextUsername = me.username ?? "";
       setUsername(nextUsername);
       setUserId(me.id ?? null);
@@ -1011,13 +1013,9 @@ export default function App() {
     setError(null);
     setAuthLoading(true);
     try {
-      await apiFetch("/api/auth/login", {
-        method: "POST",
-        headers: getApiHeaders(),
-        body: JSON.stringify({
-          username: loginUsername.trim(),
-          password: loginPassword
-        })
+      await sessionGateway.login({
+        username: loginUsername.trim(),
+        password: loginPassword
       });
       setLoginPassword("");
       await loadSession();
@@ -1029,7 +1027,7 @@ export default function App() {
   }
 
   async function handleLogout() {
-    await apiFetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
+    await sessionGateway.logout().catch(() => undefined);
     setAuthenticated(false);
     setUsername("");
     setUserId(null);
@@ -1073,13 +1071,9 @@ export default function App() {
 
     setAuthLoading(true);
     try {
-      await apiFetch("/api/auth/profile", {
-        method: "PATCH",
-        headers: getApiHeaders(),
-        body: JSON.stringify({
-          username: username || loginUsername.trim(),
-          newPassword: nextPassword
-        })
+      await sessionGateway.updateProfile({
+        username: username || loginUsername.trim(),
+        newPassword: nextPassword
       });
       setNewPassword("");
       setConfirmPassword("");
