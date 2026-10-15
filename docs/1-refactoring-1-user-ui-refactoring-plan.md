@@ -132,11 +132,11 @@ src/
 
 Every step ends with the characterisation tests unchanged and green, `npm run lint` and `npm test` green, the user-ui build green, a quick manual smoke with `ORGOPS_LLM_STUB=1`, and a commit.
 
-**0. Safety net** (no changes to `App.tsx`)
+**0. Safety net** (no changes to `App.tsx`) — **done**
 
-- **0a:** tooling (`happy-dom`, Testing Library, test setup) and the timing budget.
-- **0b:** the suites above, one area per commit.
-- **0c:** Stryker spike, then a gap-filling pass driven by surviving mutants. Refactoring does not start until this is done.
+- **0a:** tooling (`happy-dom`, Testing Library, test setup) and the timing budget. Done.
+- **0b:** the suites above, one area per commit. Done: auth, workspace load, sidebar, timeline, loading and realtime, composer, dialogs and management (809 tests, about 3s).
+- **0c:** Stryker spike, then a gap-filling pass driven by surviving mutants. Closed without the full pass: Stryker was run per area on line ranges and a few targeted manual probes were made, but a whole-file run (3,166 mutants) was stopped as too slow. Accepted as good enough to start refactoring.
 
 **1. Move pure functions out** into `domain/*`, verbatim, in several small commits: event interpretation, trace and failure rules, channel rules, ordering and attachments. **(in progress)**
 
