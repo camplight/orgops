@@ -220,7 +220,7 @@ The two plans touch different workspaces (`apps/user-ui` and `apps/agent-runner`
   - `docs/refactoring-todo.md`: tick only the task 2 lines, and only when merging, so both branches do not edit the same file at once.
   - `docs/SPEC.md` and `AGENTS.md`: touched only in step 7, after the user-ui branch has merged or at least after its step 9 edits are known.
 - **Scope test runs:** `npx vitest run apps/agent-runner` here, so the large user-ui suite does not slow this work down.
-- **Agents:** `.claude/agents` has `user-ui-characteriser` and `user-ui-refactorer`, both specific to the user-ui plan. For this plan the generic agents are enough for now. If the flow proves repeatable, a `turn-executor` pair can be added later.
+- **Agents:** `.claude/agents` has `characteriser` (works for any target with a plan doc, including this one: give it `apps/agent-runner` and an area) and `user-ui-refactorer` (specific to the user-ui plan). For refactoring steps the generic agents are enough for now. If the flow proves repeatable, a `turn-executor` pair can be added later.
 
 ## Defaults chosen (override if needed)
 
