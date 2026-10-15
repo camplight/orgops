@@ -25,6 +25,9 @@ import { useParticipants } from "./ui/conversations/use-participants";
 import { createAddShare } from "./application/conversations/add-share";
 import { createRemoveShare } from "./application/conversations/remove-share";
 import { useShares } from "./ui/conversations/use-shares";
+import { createUpdateChannelSettings } from "./application/conversations/update-channel-settings";
+import { createDeleteChannel } from "./application/conversations/delete-channel";
+import { useChannelManagement } from "./ui/conversations/use-channel-management";
 import { createHttpSessionGateway } from "./infrastructure/http/http-session-gateway";
 import { createHttpConversationGateway } from "./infrastructure/http/http-conversation-gateway";
 import { createHttpFileGateway } from "./infrastructure/http/http-file-gateway";
@@ -119,6 +122,8 @@ const addParticipant = createAddParticipant({ conversationGateway });
 const removeParticipant = createRemoveParticipant({ conversationGateway });
 const addShare = createAddShare({ conversationGateway });
 const removeShare = createRemoveShare({ conversationGateway });
+const updateChannelSettings = createUpdateChannelSettings({ conversationGateway });
+const deleteChannel = createDeleteChannel({ conversationGateway });
 
 export default function App() {
   const messagesPanelRef = useRef<HTMLElement | null>(null);
@@ -219,9 +224,6 @@ export default function App() {
     refreshChannels,
     setError
   });
-  const [channelVisibilityDraft, setChannelVisibilityDraft] = useState<"PUBLIC" | "PRIVATE">("PRIVATE");
-  const [updatingChannelVisibility, setUpdatingChannelVisibility] = useState(false);
-  const [archiveDraft, setArchiveDraft] = useState(false);
   const [expandedTraceEventId, setExpandedTraceEventId] = useState<string | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const [shareLinkCopied, setShareLinkCopied] = useState(false);
@@ -406,11 +408,27 @@ export default function App() {
       .slice(0, 8);
   }, [agentSearchQuery, visibleAgents, selectedConversationAgents]);
 
-  useEffect(() => {
-    if (!activeChannel) return;
-    setChannelVisibilityDraft(activeChannel.visibility === "PUBLIC" ? "PUBLIC" : "PRIVATE");
-    setArchiveDraft(Boolean(activeChannel.archivedAt));
-  }, [activeChannel?.id, activeChannel?.visibility, activeChannel?.archivedAt]);
+  const {
+    channelVisibilityDraft,
+    archiveDraft,
+    updatingChannelVisibility,
+    setChannelVisibilityDraft,
+    setArchiveDraft,
+    handleDeleteChannel,
+    handleSaveChannelSettings
+  } = useChannelManagement({
+    activeChannel,
+    activeChannelId,
+    username,
+    updateChannelSettings,
+    deleteChannel,
+    confirm: (message) => confirmPort.confirm(message),
+    refreshChannels,
+    setError,
+    setLoading,
+    setShowArchivedChannels,
+    setShowChannelManageDialog
+  });
 
   async function handleRevealSensitive(eventId: string) {
     const password = sensitiveRevealPasswords[eventId] ?? "";
@@ -1086,49 +1104,6 @@ export default function App() {
       );
     } finally {
       setLoading(false);
-    }
-  }
-
-  async function handleDeleteChannel(channel: Channel) {
-    if (!confirmPort.confirm(`Permanently delete ${channelLabel(channel, username)}?`)) return;
-    setError(null);
-    setLoading(true);
-    try {
-      await conversationGateway.deleteChannel({ channelId: channel.id });
-      await refreshChannels(activeChannelId === channel.id ? null : undefined);
-    } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : "Unable to delete channel");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleSaveChannelSettings() {
-    if (!activeChannel) return;
-    setUpdatingChannelVisibility(true);
-    setError(null);
-    try {
-      const currentVisibility = activeChannel.visibility === "PUBLIC" ? "PUBLIC" : "PRIVATE";
-      if (channelVisibilityDraft !== currentVisibility) {
-        await conversationGateway.updateChannelVisibility({
-          channelId: activeChannel.id,
-          visibility: channelVisibilityDraft
-        });
-      }
-      const currentlyArchived = Boolean(activeChannel.archivedAt);
-      if (archiveDraft !== currentlyArchived) {
-        await conversationGateway.setChannelArchived({
-          channelId: activeChannel.id,
-          archived: archiveDraft
-        });
-        if (archiveDraft) setShowArchivedChannels(true);
-      }
-      await refreshChannels(activeChannel.id);
-      setShowChannelManageDialog(false);
-    } catch (updateError) {
-      setError(updateError instanceof Error ? updateError.message : "Unable to update channel settings");
-    } finally {
-      setUpdatingChannelVisibility(false);
     }
   }
 
