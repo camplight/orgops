@@ -10,6 +10,7 @@ import {
 import { apiFetch, apiJson, getApiHeaders } from "./api";
 import { wsUrl } from "./config";
 import { ChangePasswordScreen } from "./ui/auth/change-password-screen";
+import { ConversationDialog } from "./ui/dialogs/conversation-dialog";
 import { ParticipantsDialog } from "./ui/dialogs/participants-dialog";
 import { ChannelManageDialog } from "./ui/dialogs/channel-manage-dialog";
 import { LoginScreen } from "./ui/auth/login-screen";
@@ -2225,105 +2226,25 @@ export default function App() {
       </aside>
 
       {showConversationDialog ? (
-        <div className="dialog-backdrop" role="presentation" onMouseDown={() => setShowConversationDialog(false)}>
-          <section
-            aria-modal="true"
-            className="conversation-dialog"
-            role="dialog"
-            onMouseDown={(event) => event.stopPropagation()}
-          >
-            <header>
-              <div>
-                <span>Start conversation</span>
-                <h2>New conversation</h2>
-              </div>
-              <button
-                aria-label="Close dialog"
-                className="dialog-close"
-                onClick={() => setShowConversationDialog(false)}
-              >
-                Close
-              </button>
-            </header>
-            <form className="conversation-form" onSubmit={handleStartConversation}>
-              <label>
-                <span>Channel name</span>
-                <input
-                  autoFocus
-                  value={conversationName}
-                  onChange={(event) => setConversationName(event.target.value)}
-                  placeholder="Leave blank for a DM"
-                />
-              </label>
-              <label>
-                <span>Description</span>
-                <input
-                  value={conversationDescription}
-                  onChange={(event) => setConversationDescription(event.target.value)}
-                  placeholder="Optional"
-                />
-              </label>
-              <label>
-                <span>Visibility</span>
-                <select
-                  value={conversationVisibility}
-                  onChange={(event) =>
-                    setConversationVisibility(event.target.value === "PUBLIC" ? "PUBLIC" : "PRIVATE")
-                  }
-                >
-                  <option value="PRIVATE">Private</option>
-                  <option value="PUBLIC">Public</option>
-                </select>
-              </label>
-              <div className="agent-combobox">
-                <span>Agents</span>
-                {selectedConversationAgentRecords.length > 0 ? (
-                  <div className="selected-agent-chips">
-                    {selectedConversationAgentRecords.map((agent) => (
-                      <button
-                        key={agent.name}
-                        onClick={() => removeConversationAgent(agent.name)}
-                        type="button"
-                      >
-                        {agent.name}
-                        <span>Remove</span>
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="agent-picker-hint">Select one agent for a DM, or many for a channel.</p>
-                )}
-                <label className="agent-search-field">
-                  <span>Search agents</span>
-                  <input
-                    value={agentSearchQuery}
-                    onChange={(event) => setAgentSearchQuery(event.target.value)}
-                    placeholder="Type an agent name..."
-                  />
-                </label>
-                {visibleAgents.length === 0 ? (
-                  <p className="sidebar-note">No available agents.</p>
-                ) : agentSuggestions.length > 0 ? (
-                  <div className="agent-suggestions">
-                    {agentSuggestions.map((agent) => (
-                      <button
-                        key={agent.name}
-                        onClick={() => addConversationAgent(agent.name)}
-                        type="button"
-                      >
-                        <span>{agent.name}</span>
-                        <em>{agent.runtimeState === "RUNNING" ? "Running" : "Off"}</em>
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="agent-picker-hint">No matching agents.</p>
-                )}
-              </div>
-              <button disabled={loading || !canStartConversation}>Start</button>
-            </form>
-          </section>
-        </div>
+        <ConversationDialog
+          name={conversationName}
+          description={conversationDescription}
+          visibility={conversationVisibility}
+          selectedAgents={selectedConversationAgentRecords}
+          agentSearchQuery={agentSearchQuery}
+          visibleAgents={visibleAgents}
+          agentSuggestions={agentSuggestions}
+          loading={loading}
+          canStart={canStartConversation}
+          onClose={() => setShowConversationDialog(false)}
+          onSubmit={handleStartConversation}
+          onNameChange={setConversationName}
+          onDescriptionChange={setConversationDescription}
+          onVisibilityChange={setConversationVisibility}
+          onRemoveAgent={removeConversationAgent}
+          onAddAgent={addConversationAgent}
+          onAgentSearchQueryChange={setAgentSearchQuery}
+        />
       ) : null}
 
       {showParticipantsDialog && activeChannel && activeChannelManageable ? (
