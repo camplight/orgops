@@ -1,16 +1,24 @@
 import { useState, type FormEvent } from "react";
+import { validateNewPassword } from "../../domain/identity/password-rules";
 import { deriveSessionState } from "../../domain/identity/session-state";
 import type { LoadSessionResult } from "../../application/identity/load-session";
 
 export function useSession(options: {
   loadCurrentSession: () => Promise<LoadSessionResult>;
   signIn: (credentials: { username: string; password: string }) => Promise<void>;
+  changePassword: (input: {
+    username: string;
+    fallbackUsername: string;
+    newPassword: string;
+  }) => Promise<void>;
   setError: (message: string | null) => void;
 }) {
-  const { loadCurrentSession, signIn, setError } = options;
+  const { loadCurrentSession, signIn, changePassword, setError } = options;
   const [username, setUsername] = useState("");
   const [userId, setUserId] = useState<string | null>(null);
   const [loginPassword, setLoginPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [loginUsername, setLoginUsername] = useState("admin");
   const [mustChangePassword, setMustChangePassword] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
@@ -57,6 +65,33 @@ export function useSession(options: {
     }
   }
 
+  async function handlePasswordUpdate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError(null);
+    const nextPassword = newPassword.trim();
+    const passwordError = validateNewPassword(newPassword, confirmPassword);
+    if (passwordError) {
+      setError(passwordError);
+      return;
+    }
+
+    setAuthLoading(true);
+    try {
+      await changePassword({
+        username,
+        fallbackUsername: loginUsername,
+        newPassword: nextPassword
+      });
+      setNewPassword("");
+      setConfirmPassword("");
+      await loadSession();
+    } catch (updateError) {
+      setError(updateError instanceof Error ? updateError.message : "Unable to update password");
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
   return {
     username,
     userId,
@@ -69,11 +104,15 @@ export function useSession(options: {
     loginPassword,
     setLoginPassword,
     handleLogin,
+    newPassword,
+    confirmPassword,
+    setNewPassword,
+    setConfirmPassword,
+    handlePasswordUpdate,
     setUsername,
     setUserId,
     setLoginUsername,
     setMustChangePassword,
-    setAuthenticated,
-    setAuthLoading
+    setAuthenticated
   };
 }

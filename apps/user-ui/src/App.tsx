@@ -19,7 +19,6 @@ import { createUpdatePassword } from "./application/identity/update-password";
 import { createLogout } from "./application/identity/logout";
 import { createLoadSession } from "./application/identity/load-session";
 import { useSession } from "./ui/identity/use-session";
-import { validateNewPassword } from "./domain/identity/password-rules";
 import { createHttpSessionGateway } from "./infrastructure/http/http-session-gateway";
 import { createHttpConversationGateway } from "./infrastructure/http/http-conversation-gateway";
 import { createHttpFileGateway } from "./infrastructure/http/http-file-gateway";
@@ -153,8 +152,6 @@ export default function App() {
   const [showParticipantsDialog, setShowParticipantsDialog] = useState(false);
   const [showChannelManageDialog, setShowChannelManageDialog] = useState(false);
   const [draft, setDraft] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(true);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
@@ -178,8 +175,12 @@ export default function App() {
     setLoginUsername,
     setMustChangePassword,
     setAuthenticated,
-    setAuthLoading
-  } = useSession({ loadCurrentSession, signIn, setError });
+    newPassword,
+    confirmPassword,
+    setNewPassword,
+    setConfirmPassword,
+    handlePasswordUpdate
+  } = useSession({ loadCurrentSession, signIn, changePassword, setError });
   const [participantKind, setParticipantKind] = useState<"HUMAN" | "AGENT">("AGENT");
   const [participantValue, setParticipantValue] = useState("");
   const [participantSubmitting, setParticipantSubmitting] = useState(false);
@@ -941,33 +942,6 @@ export default function App() {
     lastSeenByChannelRef.current = {};
     lastLoadedMessageAtByChannelRef.current = {};
     lastLoadedTimelineAtByChannelRef.current = {};
-  }
-
-  async function handlePasswordUpdate(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setError(null);
-    const nextPassword = newPassword.trim();
-    const passwordError = validateNewPassword(newPassword, confirmPassword);
-    if (passwordError) {
-      setError(passwordError);
-      return;
-    }
-
-    setAuthLoading(true);
-    try {
-      await changePassword({
-        username,
-        fallbackUsername: loginUsername,
-        newPassword: nextPassword
-      });
-      setNewPassword("");
-      setConfirmPassword("");
-      await loadSession();
-    } catch (updateError) {
-      setError(updateError instanceof Error ? updateError.message : "Unable to update password");
-    } finally {
-      setAuthLoading(false);
-    }
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
