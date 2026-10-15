@@ -40,7 +40,7 @@ Progress against `docs/1-refactoring-1-user-ui-refactoring-plan.md`:
 - [x] 0b. Characterisation suites, one area per commit (auth, workspace load, sidebar, timeline, loading and realtime, composer, dialogs and management).
 - [x] 0c. Stryker spike and gap-filling pass. Closed without a whole-file run, as too slow. Accepted as good enough.
 - [x] 1. Move pure functions out into `domain/*`.
-- [ ] 2. Extract presentational components.
+- [x] 2. Extract presentational components.
 - [ ] 3. Introduce gateway ports and HTTP adapters.
 - [ ] 4. Extract realtime.
 - [ ] 5. Identity context.
