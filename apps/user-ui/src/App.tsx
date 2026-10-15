@@ -7,7 +7,6 @@ import {
   useRef,
   useState
 } from "react";
-import { apiFetch, apiJson, getApiHeaders } from "./api";
 import { wsUrl } from "./config";
 import { createHttpSessionGateway } from "./infrastructure/http/http-session-gateway";
 import { createHttpConversationGateway } from "./infrastructure/http/http-conversation-gateway";
@@ -1256,13 +1255,10 @@ export default function App() {
     setParticipantSubmitting(true);
     setError(null);
     try {
-      await apiFetch(`/api/channels/${encodeURIComponent(activeChannelId)}/subscribe`, {
-        method: "POST",
-        headers: getApiHeaders(),
-        body: JSON.stringify({
-          subscriberType: participantKind,
-          subscriberId: participantValue.trim()
-        })
+      await conversationGateway.subscribe({
+        channelId: activeChannelId,
+        subscriberType: participantKind,
+        subscriberId: participantValue.trim()
       });
       await refreshChannels(activeChannelId);
       setParticipantValue("");
@@ -1279,13 +1275,10 @@ export default function App() {
     setParticipantRemovingKey(participantKey);
     setError(null);
     try {
-      await apiFetch(`/api/channels/${encodeURIComponent(activeChannelId)}/unsubscribe`, {
-        method: "POST",
-        headers: getApiHeaders(),
-        body: JSON.stringify({
-          subscriberType: participant.subscriberType,
-          subscriberId: participant.subscriberId
-        })
+      await conversationGateway.unsubscribe({
+        channelId: activeChannelId,
+        subscriberType: participant.subscriberType,
+        subscriberId: participant.subscriberId
       });
       await refreshChannels(activeChannelId);
     } catch (removeError) {
@@ -1301,13 +1294,10 @@ export default function App() {
     setShareSubmitting(true);
     setError(null);
     try {
-      await apiFetch(`/api/channels/${encodeURIComponent(activeChannelId)}/share`, {
-        method: "POST",
-        headers: getApiHeaders(),
-        body: JSON.stringify({
-          viewerType: shareKind,
-          viewerId: shareValue.trim()
-        })
+      await conversationGateway.shareChannel({
+        channelId: activeChannelId,
+        viewerType: shareKind,
+        viewerId: shareValue.trim()
       });
       await refreshChannels(activeChannelId);
       setShareValue("");
@@ -1324,13 +1314,10 @@ export default function App() {
     setShareRemovingKey(shareKey);
     setError(null);
     try {
-      await apiFetch(`/api/channels/${encodeURIComponent(activeChannelId)}/unshare`, {
-        method: "POST",
-        headers: getApiHeaders(),
-        body: JSON.stringify({
-          viewerType: share.viewerType,
-          viewerId: share.viewerId
-        })
+      await conversationGateway.unshareChannel({
+        channelId: activeChannelId,
+        viewerType: share.viewerType,
+        viewerId: share.viewerId
       });
       await refreshChannels(activeChannelId);
     } catch (removeError) {
@@ -1349,13 +1336,7 @@ export default function App() {
   async function handleCopyShareLink() {
     if (!activeChannelId) return;
     try {
-      const created = await apiJson<{ token: string; channelId: string }>(
-        `/api/channels/${encodeURIComponent(activeChannelId)}/share-link`,
-        {
-          method: "POST",
-          headers: getApiHeaders()
-        }
-      );
+      const created = await conversationGateway.createShareLink({ channelId: activeChannelId });
       const url = new URL(window.location.href);
       url.searchParams.set("share", created.token);
       url.searchParams.set("channel", created.channelId);

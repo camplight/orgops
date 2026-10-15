@@ -54,6 +54,44 @@ export function createHttpConversationGateway(): ConversationGateway {
         `/api/channels/${encodeURIComponent(channelId)}/${archived ? "archive" : "unarchive"}`,
         { method: "POST" }
       );
-    }
+    },
+    unsubscribe: async ({ channelId, subscriberType, subscriberId }) => {
+      await apiFetch(`/api/channels/${encodeURIComponent(channelId)}/unsubscribe`, {
+        method: "POST",
+        headers: getApiHeaders(),
+        body: JSON.stringify({
+          subscriberType,
+          subscriberId
+        })
+      });
+    },
+    shareChannel: async ({ channelId, viewerType, viewerId }) => {
+      await apiFetch(`/api/channels/${encodeURIComponent(channelId)}/share`, {
+        method: "POST",
+        headers: getApiHeaders(),
+        body: JSON.stringify({
+          viewerType,
+          viewerId
+        })
+      });
+    },
+    unshareChannel: async ({ channelId, viewerType, viewerId }) => {
+      await apiFetch(`/api/channels/${encodeURIComponent(channelId)}/unshare`, {
+        method: "POST",
+        headers: getApiHeaders(),
+        body: JSON.stringify({
+          viewerType,
+          viewerId
+        })
+      });
+    },
+    createShareLink: ({ channelId }) =>
+      apiJson<{ token: string; channelId: string }>(
+        `/api/channels/${encodeURIComponent(channelId)}/share-link`,
+        {
+          method: "POST",
+          headers: getApiHeaders()
+        }
+      )
   };
 }
