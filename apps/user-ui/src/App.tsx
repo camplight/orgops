@@ -9,6 +9,7 @@ import {
 } from "react";
 import { apiFetch, apiJson, getApiHeaders } from "./api";
 import { wsUrl } from "./config";
+import { ChangePasswordScreen } from "./ui/auth/change-password-screen";
 import { LoginScreen } from "./ui/auth/login-screen";
 import type { Agent, AuthMe, Channel, ChannelParticipant, ChannelShare, EventRow, Team } from "./types";
 import {
@@ -1615,55 +1616,17 @@ export default function App() {
 
   if (mustChangePassword) {
     return (
-      <main className="login-screen">
-        <section className="login-copy">
-          <div className="brand-mark large">OO</div>
-          <p>OrgOps User Workspace</p>
-          <h1>Set a new password</h1>
-          <span>Finish first-time setup before opening your workspace.</span>
-        </section>
-
-        <form className="login-card" onSubmit={handlePasswordUpdate}>
-          <div>
-            <span>First login</span>
-            <strong>{username || "OrgOps"}</strong>
-          </div>
-          <p className="login-hint">
-            Your temporary password worked. Choose a new password with at least 8 characters.
-          </p>
-          {error ? <div className="notice error">{error}</div> : null}
-          <label>
-            New password
-            <input
-              value={newPassword}
-              onChange={(event) => setNewPassword(event.target.value)}
-              type="password"
-              autoComplete="new-password"
-            />
-          </label>
-          <label>
-            Confirm new password
-            <input
-              value={confirmPassword}
-              onChange={(event) => setConfirmPassword(event.target.value)}
-              type="password"
-              autoComplete="new-password"
-            />
-          </label>
-          <button
-            disabled={
-              newPassword.trim().length < 8 ||
-              newPassword.trim() !== confirmPassword.trim() ||
-              authLoading
-            }
-          >
-            {authLoading ? "Updating..." : "Update password"}
-          </button>
-          <button className="secondary-button" type="button" onClick={() => void handleLogout()}>
-            Sign out
-          </button>
-        </form>
-      </main>
+      <ChangePasswordScreen
+        error={error}
+        username={username}
+        newPassword={newPassword}
+        confirmPassword={confirmPassword}
+        loading={authLoading}
+        onNewPasswordChange={setNewPassword}
+        onConfirmPasswordChange={setConfirmPassword}
+        onSubmit={handlePasswordUpdate}
+        onSignOut={() => void handleLogout()}
+      />
     );
   }
 
