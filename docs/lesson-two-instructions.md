@@ -17,3 +17,4 @@
 10. Go through step 2
 11. On step 3 notice that the agent wasn't able to test stuff properly because it mocked what it doesn't own - so now we have to test in integration
     1. Rewrite the tests so it uses msw to mock the api calls themselves
+12. Continue with step 4
