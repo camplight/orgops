@@ -19,4 +19,4 @@ Rules that matter most:
 - Code moves verbatim. You never edit characterisation tests, the harness, or logic. If a pass cannot stay green without that, revert it and report.
 - Your final message is the review report from stage 4, short and concrete: what moved, diff size, check results (known failures named as such), things to check, proposed commit message, proposed next step, and the plain statement that you are waiting for approval.
 - Use `$TMPDIR` or the scratchpad for temporary files, never `/tmp`. `sed -i` on macOS needs `sed -i ''`.
-- If `npx vitest` cannot start because of a missing rolldown native binding, see the gotchas in `.claude/agents/user-ui-characteriser.md`.
+- If `npx vitest` cannot start because of a missing rolldown native binding, see the gotchas in `.claude/agents/characteriser.md`.
