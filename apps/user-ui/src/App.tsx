@@ -10,6 +10,7 @@ import {
 import { wsUrl } from "./infrastructure/http/config";
 import { createBrowserConfirm } from "./infrastructure/browser/browser-confirm";
 import { createBrowserClipboard } from "./infrastructure/browser/browser-clipboard";
+import { createBrowserDeepLink } from "./infrastructure/browser/browser-deep-link";
 import { createHttpSessionGateway } from "./infrastructure/http/http-session-gateway";
 import { createHttpConversationGateway } from "./infrastructure/http/http-conversation-gateway";
 import { createHttpFileGateway } from "./infrastructure/http/http-file-gateway";
@@ -72,35 +73,6 @@ type WsServerEventMessage = {
   data: EventRow;
 };
 
-function readLinkedChannelId() {
-  return new URL(window.location.href).searchParams.get("channel");
-}
-
-function readPendingShareToken() {
-  const token = new URL(window.location.href).searchParams.get("share");
-  return token?.trim() || null;
-}
-
-function updateChannelDeepLink(channelId: string | null, replace = false) {
-  const url = new URL(window.location.href);
-  if (channelId) {
-    url.searchParams.set("channel", channelId);
-  } else {
-    url.searchParams.delete("channel");
-  }
-  const method = replace ? "replaceState" : "pushState";
-  window.history[method](null, "", url);
-}
-
-function consumeShareToken(channelId?: string | null) {
-  const url = new URL(window.location.href);
-  url.searchParams.delete("share");
-  if (channelId) {
-    url.searchParams.set("channel", channelId);
-  }
-  window.history.replaceState(null, "", url);
-}
-
 function adaptiveMessageBatchSize() {
   const connection = (
     navigator as Navigator & {
@@ -129,6 +101,7 @@ const messageGateway = createHttpMessageGateway();
 const sessionGateway = createHttpSessionGateway();
 const confirmPort = createBrowserConfirm();
 const clipboard = createBrowserClipboard();
+const deepLink = createBrowserDeepLink();
 const fileGateway = createHttpFileGateway();
 const conversationGateway = createHttpConversationGateway();
 
@@ -430,7 +403,7 @@ export default function App() {
   function selectChannel(channelId: string | null, options?: { replace?: boolean }) {
     setActiveChannelId(channelId);
     setMobileSidebarOpen(false);
-    updateChannelDeepLink(channelId, options?.replace);
+    deepLink.updateChannelDeepLink(channelId, options?.replace);
   }
 
   async function loadSession() {
@@ -459,15 +432,15 @@ export default function App() {
     setError(null);
     setLoading(true);
     try {
-      const pendingShareToken = readPendingShareToken();
+      const pendingShareToken = deepLink.readPendingShareToken();
       let claimedShareChannelId: string | null = null;
       if (pendingShareToken) {
         try {
           const claimed = await conversationGateway.claimShareLink({ token: pendingShareToken });
           claimedShareChannelId = claimed.channelId;
-          consumeShareToken(claimed.channelId);
+          deepLink.consumeShareToken(claimed.channelId);
         } catch (claimError) {
-          consumeShareToken(readLinkedChannelId());
+          deepLink.consumeShareToken(deepLink.readLinkedChannelId());
           setError(
             claimError instanceof Error
               ? claimError.message
@@ -503,7 +476,7 @@ export default function App() {
       setSelectedConversationAgents((current) =>
         current.filter((agentName) => nextVisibleAgents.some((agent) => agent.name === agentName))
       );
-      const linkedChannelId = readLinkedChannelId();
+      const linkedChannelId = deepLink.readLinkedChannelId();
       const preferredLinkedId = claimedShareChannelId ?? linkedChannelId;
       const linkedChannel = visibleChannels.find((channel) => channel.id === preferredLinkedId);
       const nextActiveChannelId =
@@ -995,7 +968,7 @@ export default function App() {
   useEffect(() => {
     if (!authenticated || mustChangePassword) return;
     function handlePopState() {
-      const linkedChannelId = readLinkedChannelId();
+      const linkedChannelId = deepLink.readLinkedChannelId();
       const linkedChannel = channels.find(
         (channel) =>
           channel.id === linkedChannelId &&
@@ -1039,7 +1012,7 @@ export default function App() {
     setTeams([]);
     setEvents([]);
     setActiveChannelId(null);
-    updateChannelDeepLink(null, true);
+    deepLink.updateChannelDeepLink(null, true);
     setChannelQuery("");
     setConversationName("");
     setConversationDescription("");
@@ -1341,10 +1314,7 @@ export default function App() {
     if (!activeChannelId) return;
     try {
       const created = await conversationGateway.createShareLink({ channelId: activeChannelId });
-      const url = new URL(window.location.href);
-      url.searchParams.set("share", created.token);
-      url.searchParams.set("channel", created.channelId);
-      const shareLink = url.toString();
+      const shareLink = deepLink.buildShareLink({ token: created.token, channelId: created.channelId });
       await clipboard.writeText(shareLink);
       setShareLinkCopied(true);
       window.setTimeout(() => setShareLinkCopied(false), 2000);
