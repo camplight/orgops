@@ -24,7 +24,15 @@ import { ConversationDialog } from "./ui/dialogs/conversation-dialog";
 import { ParticipantsDialog } from "./ui/dialogs/participants-dialog";
 import { ChannelManageDialog } from "./ui/dialogs/channel-manage-dialog";
 import { LoginScreen } from "./ui/auth/login-screen";
-import type { Agent, Channel, ChannelParticipant, ChannelShare, EventRow, Team } from "./types";
+import type {
+  Agent,
+  Channel,
+  ChannelParticipant,
+  ChannelShare,
+  EventRow,
+  Team,
+  UploadedAttachment
+} from "./types";
 import {
   CHANNEL_GROUPS,
   agentVisibleToUserUi,
@@ -44,15 +52,6 @@ import { mergeEventsChronologically } from "./domain/messaging/event-ordering";
 import { isHiddenUiActionMessage } from "./domain/messaging/event-interpretation";
 import { isTraceEvent } from "./domain/messaging/trace-rules";
 import { formatTime } from "./domain/messaging/time-format";
-
-type UploadedAttachment = {
-  localId: string;
-  fileId: string;
-  name: string;
-  mime: string;
-  size: number;
-  sha256?: string;
-};
 
 type PendingAttachment = {
   localId: string;
@@ -1098,18 +1097,11 @@ export default function App() {
       const effectiveText =
         trimmedText ||
         `Attached ${readyAttachments.length} file${readyAttachments.length === 1 ? "" : "s"} for reference.`;
-      await apiFetch("/api/events", {
-        method: "POST",
-        headers: getApiHeaders(),
-        body: JSON.stringify({
-          type: "message.created",
-          payload: {
-            text: effectiveText,
-            ...(readyAttachments.length > 0 ? { attachments: readyAttachments } : {})
-          },
-          source: `human:${username || "user"}`,
-          channelId: activeChannelId
-        })
+      await messageGateway.sendMessage({
+        text: effectiveText,
+        attachments: readyAttachments,
+        username,
+        channelId: activeChannelId
       });
       setDraft("");
       setPendingAttachments([]);

@@ -1,4 +1,4 @@
-import type { EventRow } from "../types";
+import type { EventRow, UploadedAttachment } from "../types";
 
 export type MessageGateway = {
   revealSensitive: (options: { eventId: string; password: string }) => Promise<{ text?: string }>;
@@ -19,4 +19,10 @@ export type MessageGateway = {
     olderProcesses: EventRow[];
   }>;
   listRecentMessageEvents: () => Promise<EventRow[]>;
+  sendMessage: (options: {
+    text: string;
+    attachments: UploadedAttachment[];
+    username: string;
+    channelId: string;
+  }) => Promise<void>;
 };
