@@ -10,6 +10,7 @@ import {
 import { apiFetch, apiJson, getApiHeaders } from "./api";
 import { wsUrl } from "./config";
 import { createHttpSessionGateway } from "./infrastructure/http/http-session-gateway";
+import { createHttpConversationGateway } from "./infrastructure/http/http-conversation-gateway";
 import { createHttpFileGateway } from "./infrastructure/http/http-file-gateway";
 import { createHttpMessageGateway } from "./infrastructure/http/http-message-gateway";
 import { ChangePasswordScreen } from "./ui/auth/change-password-screen";
@@ -126,6 +127,7 @@ function createLocalAttachmentId() {
 const messageGateway = createHttpMessageGateway();
 const sessionGateway = createHttpSessionGateway();
 const fileGateway = createHttpFileGateway();
+const conversationGateway = createHttpConversationGateway();
 
 export default function App() {
   const messagesPanelRef = useRef<HTMLElement | null>(null);
@@ -458,13 +460,7 @@ export default function App() {
       let claimedShareChannelId: string | null = null;
       if (pendingShareToken) {
         try {
-          const claimed = await apiJson<{ ok?: boolean; channelId: string }>(
-            `/api/channel-share-links/${encodeURIComponent(pendingShareToken)}/claim`,
-            {
-              method: "POST",
-              headers: getApiHeaders()
-            }
-          );
+          const claimed = await conversationGateway.claimShareLink({ token: pendingShareToken });
           claimedShareChannelId = claimed.channelId;
           consumeShareToken(claimed.channelId);
         } catch (claimError) {
@@ -477,10 +473,10 @@ export default function App() {
         }
       }
       const [nextChannels, nextAgents, nextHumans, nextTeams] = await Promise.all([
-        apiJson<Channel[]>("/api/channels?includeArchived=1"),
-        apiJson<Agent[]>("/api/agents"),
-        apiJson<Array<{ username: string }>>("/api/humans").catch(() => []),
-        apiJson<Team[]>("/api/teams/me").catch(() => [])
+        conversationGateway.listChannels(),
+        conversationGateway.listAgents(),
+        conversationGateway.listHumans().catch(() => []),
+        conversationGateway.listMyTeams().catch(() => [])
       ]);
       setChannels(nextChannels);
       setAgents(nextAgents);
@@ -1136,7 +1132,7 @@ export default function App() {
   }
 
   async function refreshChannels(nextActiveChannelId?: string | null) {
-    const nextChannels = await apiJson<Channel[]>("/api/channels?includeArchived=1");
+    const nextChannels = await conversationGateway.listChannels();
     setChannels(nextChannels);
     const visibleChannels = nextChannels.filter((channel) =>
       channelVisibleToUserUi(channel, userId, username, viewerTeamIds)
