@@ -153,7 +153,6 @@ export default function App() {
   const [showParticipantsDialog, setShowParticipantsDialog] = useState(false);
   const [showChannelManageDialog, setShowChannelManageDialog] = useState(false);
   const [draft, setDraft] = useState("");
-  const [loginPassword, setLoginPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(true);
@@ -171,13 +170,16 @@ export default function App() {
     authLoading,
     sessionState,
     loadSession,
+    loginPassword,
+    setLoginPassword,
+    handleLogin,
     setUsername,
     setUserId,
     setLoginUsername,
     setMustChangePassword,
     setAuthenticated,
     setAuthLoading
-  } = useSession({ loadCurrentSession, clearError: () => setError(null) });
+  } = useSession({ loadCurrentSession, signIn, setError });
   const [participantKind, setParticipantKind] = useState<"HUMAN" | "AGENT">("AGENT");
   const [participantValue, setParticipantValue] = useState("");
   const [participantSubmitting, setParticipantSubmitting] = useState(false);
@@ -910,24 +912,6 @@ export default function App() {
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
   }, [sessionState, channels, userId, username, viewerTeamIds]);
-
-  async function handleLogin(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setError(null);
-    setAuthLoading(true);
-    try {
-      await signIn({
-        username: loginUsername,
-        password: loginPassword
-      });
-      setLoginPassword("");
-      await loadSession();
-    } catch (loginError) {
-      setError(loginError instanceof Error ? loginError.message : "Unable to sign in");
-      setAuthenticated(false);
-      setAuthLoading(false);
-    }
-  }
 
   async function handleLogout() {
     await signOut();
