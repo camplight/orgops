@@ -31,6 +31,7 @@ import { createUpdateChannelSettings } from "./application/conversations/update-
 import { createDeleteChannel } from "./application/conversations/delete-channel";
 import { createStartConversation } from "./application/conversations/start-conversation";
 import { createSelectChannel } from "./application/conversations/select-channel";
+import { createClaimPendingShareLink } from "./application/conversations/claim-pending-share-link";
 import { createRefreshChannels } from "./application/conversations/refresh-channels";
 import { useChannelSelection } from "./ui/conversations/use-channel-selection";
 import { useStartConversation } from "./ui/conversations/use-start-conversation";
@@ -135,6 +136,7 @@ const deleteChannel = createDeleteChannel({ conversationGateway });
 const startConversation = createStartConversation({ conversationGateway });
 const selectChannelUseCase = createSelectChannel({ deepLink });
 const refreshChannelsUseCase = createRefreshChannels({ conversationGateway });
+const claimPendingShareLinkUseCase = createClaimPendingShareLink({ conversationGateway, deepLink });
 
 export default function App() {
   const messagesPanelRef = useRef<HTMLElement | null>(null);
@@ -207,11 +209,15 @@ export default function App() {
     userId,
     username,
     viewerTeamIds,
+    sessionState,
+    channels,
+    readLinkedChannelId: deepLink.readLinkedChannelId,
     selectChannelUseCase,
     refreshChannelsUseCase,
     setChannels,
     setActiveChannelId,
-    setMobileSidebarOpen
+    setMobileSidebarOpen,
+    setShowArchivedChannels
   });
   const {
     participantKind,
@@ -514,22 +520,8 @@ export default function App() {
     setError(null);
     setLoading(true);
     try {
-      const pendingShareToken = deepLink.readPendingShareToken();
-      let claimedShareChannelId: string | null = null;
-      if (pendingShareToken) {
-        try {
-          const claimed = await conversationGateway.claimShareLink({ token: pendingShareToken });
-          claimedShareChannelId = claimed.channelId;
-          deepLink.consumeShareToken(claimed.channelId);
-        } catch (claimError) {
-          deepLink.consumeShareToken(deepLink.readLinkedChannelId());
-          setError(
-            claimError instanceof Error
-              ? claimError.message
-              : "Unable to claim shared channel link"
-          );
-        }
-      }
+      const { claimedShareChannelId, errorMessage: claimErrorMessage } = await claimPendingShareLinkUseCase();
+      if (claimErrorMessage) setError(claimErrorMessage);
       const [nextChannels, nextAgents, nextHumans, nextTeams] = await Promise.all([
         conversationGateway.listChannels(),
         conversationGateway.listAgents(),
@@ -980,22 +972,6 @@ export default function App() {
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
   }, [sessionState]);
-
-  useEffect(() => {
-    if (sessionState !== "ready") return;
-    function handlePopState() {
-      const linkedChannelId = deepLink.readLinkedChannelId();
-      const linkedChannel = channels.find(
-        (channel) =>
-          channel.id === linkedChannelId &&
-          channelVisibleToUserUi(channel, userId, username, viewerTeamIds)
-      );
-      if (linkedChannel?.archivedAt) setShowArchivedChannels(true);
-      setActiveChannelId(linkedChannel?.id ?? null);
-    }
-    window.addEventListener("popstate", handlePopState);
-    return () => window.removeEventListener("popstate", handlePopState);
-  }, [sessionState, channels, userId, username, viewerTeamIds]);
 
   function handleSignedOut() {
     setChannels([]);
