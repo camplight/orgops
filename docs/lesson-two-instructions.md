@@ -13,3 +13,7 @@
     5. Implement all of the tests using the agent. Adjust mutation strictness if things go too slow
     6. Go through the tests while they're being implemented and verify if they're good or not
 8. Once the mutation tests are done, kick off the refactoring
+9. go through step 1
+10. Go through step 2
+11. On step 3 notice that the agent wasn't able to test stuff properly because it mocked what it doesn't own - so now we have to test in integration
+    1. Rewrite the tests so it uses msw to mock the api calls themselves
