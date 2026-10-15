@@ -10,6 +10,7 @@ import {
 import { apiFetch, apiJson, getApiHeaders } from "./api";
 import { wsUrl } from "./config";
 import { ChangePasswordScreen } from "./ui/auth/change-password-screen";
+import { TurnFailureItem } from "./ui/timeline/turn-failure-item";
 import { TraceGroup } from "./ui/timeline/trace-group";
 import { MessageAttachments } from "./ui/timeline/message-attachments";
 import { SensitiveContent } from "./ui/timeline/sensitive-content";
@@ -48,11 +49,7 @@ import {
   sensitiveMessagePayload,
   sourceLabel
 } from "./domain/messaging/event-interpretation";
-import {
-  classifyTurnFailure,
-  isTraceEvent,
-  turnFailureText
-} from "./domain/messaging/trace-rules";
+import { isTraceEvent } from "./domain/messaging/trace-rules";
 import { hasJsonRenderBlock } from "./jsonRenderMarkdown";
 import { hasSecretInputBlock } from "./secretInputMarkdown";
 
@@ -1729,22 +1726,12 @@ export default function App() {
             ) : (
               timelineItems.map((item) => {
                 if (item.kind === "message" && item.event.type === "agent.turn.failed") {
-                  const event = item.event;
-                  const rawText = turnFailureText(event);
-                  const failure = classifyTurnFailure(rawText);
                   return (
-                    <article className="message message-error" key={item.id}>
-                      <div className="message-meta">
-                        <strong>System · {sourceLabel(event.source)}</strong>
-                        <span>{formatTime(event.createdAt)}</span>
-                      </div>
-                      <h3 className="message-error-title">{failure.title}</h3>
-                      <p>{failure.message}</p>
-                      <details className="turn-failure-details">
-                        <summary>Technical details</summary>
-                        <pre>{rawText}</pre>
-                      </details>
-                    </article>
+                    <TurnFailureItem
+                      key={item.id}
+                      event={item.event}
+                      createdAtLabel={formatTime(item.event.createdAt)}
+                    />
                   );
                 }
                 if (item.kind === "message") {
