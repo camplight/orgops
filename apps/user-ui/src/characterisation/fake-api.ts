@@ -1,3 +1,5 @@
+import { http, HttpResponse } from "msw";
+
 export type FakeRequest = {
   method: string;
   path: string;
@@ -17,19 +19,17 @@ export type FakeRoute = {
   path: string | RegExp;
 } & ({ respond: FakeResponder } | { respondInOrder: readonly FakeResponse[] });
 
-const parseBody = (body: BodyInit | null | undefined): unknown => {
-  if (typeof body !== "string") return body ?? undefined;
-  try {
-    return JSON.parse(body);
-  } catch {
-    return body;
+const readBody = async (request: Request): Promise<unknown> => {
+  if (request.headers.get("content-type")?.startsWith("multipart/form-data")) {
+    return request.formData();
   }
-};
-
-const pathOf = (input: RequestInfo | URL): string => {
-  const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-  const url = new URL(raw, "http://localhost");
-  return `${url.pathname}${url.search}`;
+  const text = await request.text();
+  if (text === "") return undefined;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
 };
 
 const matches = (route: FakeRoute, request: FakeRequest): boolean => {
@@ -40,13 +40,8 @@ const matches = (route: FakeRoute, request: FakeRequest): boolean => {
 };
 
 const toResponse = ({ status = 200, json, text }: FakeResponse): Response => {
-  if (json !== undefined) {
-    return new Response(JSON.stringify(json), {
-      status,
-      headers: { "content-type": "application/json" },
-    });
-  }
-  return new Response(text ?? "", { status });
+  if (json !== undefined) return HttpResponse.json(json, { status });
+  return new HttpResponse(text ?? "", { status });
 };
 
 export const createFakeApi = (routes: readonly FakeRoute[]) => {
@@ -62,19 +57,20 @@ export const createFakeApi = (routes: readonly FakeRoute[]) => {
     return typeof route.respond === "function" ? route.respond(request) : route.respond;
   };
 
-  const fakeFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const request: FakeRequest = {
-      method: (init?.method ?? "GET").toUpperCase(),
-      path: pathOf(input),
-      body: parseBody(init?.body),
+  const handler = http.all("*", async ({ request }) => {
+    const { pathname, search } = new URL(request.url);
+    const recorded: FakeRequest = {
+      method: request.method.toUpperCase(),
+      path: `${pathname}${search}`,
+      body: await readBody(request.clone()),
     };
-    requests.push(request);
-    const route = routes.find((candidate) => matches(candidate, request));
+    requests.push(recorded);
+    const route = routes.find((candidate) => matches(candidate, recorded));
     if (!route) {
-      return toResponse({ status: 404, text: `No fake route for ${request.method} ${request.path}` });
+      return toResponse({ status: 404, text: `No fake route for ${recorded.method} ${recorded.path}` });
     }
-    return toResponse(await respondTo(route, request));
-  };
+    return toResponse(await respondTo(route, recorded));
+  });
 
-  return { fetch: fakeFetch, requests };
+  return { handler, requests };
 };

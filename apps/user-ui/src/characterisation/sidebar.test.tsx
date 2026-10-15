@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Channel, ChannelParticipant, ChannelShare, EventRow, Team } from "../types";
 import { getMockAuthMe, getMockChannel, getMockEvent } from "./factories";
 import type { FakeRoute } from "./fake-api";
-import type { FakeWebSocketInstance } from "./fake-websocket";
+import type { RealtimeConnection } from "./fake-realtime";
 import { renderApp, settle } from "./render-app";
 
 const noEvents: FakeRoute = { path: /^\/api\/events/, respond: { json: [] } };
@@ -13,9 +13,11 @@ const openSidebar = (options: {
   teams?: readonly Team[];
   url?: string;
   extraRoutes?: readonly FakeRoute[];
+  realtimeAvailable?: boolean;
 }) =>
   renderApp({
     url: options.url ?? "/",
+    realtimeAvailable: options.realtimeAvailable,
     routes: [
       ...(options.extraRoutes ?? []),
       { path: "/api/auth/me", respond: { json: getMockAuthMe({ id: "human-1", username: "alice" }) } },
@@ -45,9 +47,9 @@ const press = async (name: string) => {
   await settle();
 };
 
-const receive = async (app: { sockets: FakeWebSocketInstance[] }, event: EventRow) => {
+const receive = async (app: { realtime: { connections: readonly RealtimeConnection[] } }, event: EventRow) => {
   await act(async () => {
-    app.sockets[0].receive({ type: "event", topic: `channel:${event.channelId}`, data: event });
+    app.realtime.connections[0].push({ type: "event", topic: `channel:${event.channelId}`, data: event });
   });
 };
 
@@ -934,6 +936,7 @@ describe("Unread badges", () => {
 
   it("counts every message it finds in another channel when it polls", async () => {
     await openSidebar({
+      realtimeAvailable: false,
       channels: [general, ops],
       extraRoutes: [
         messageFeed({
@@ -952,6 +955,7 @@ describe("Unread badges", () => {
 
   it("does not count messages in the open channel when it polls", async () => {
     await openSidebar({
+      realtimeAvailable: false,
       channels: [general, ops],
       extraRoutes: [messageFeed({ atLoad: [], later: [messageIn("general-id", { id: "event-1" })] })],
     });
@@ -962,6 +966,7 @@ describe("Unread badges", () => {
 
   it("does not count json-render action messages when it polls", async () => {
     await openSidebar({
+      realtimeAvailable: false,
       channels: [general, ops],
       extraRoutes: [
         messageFeed({
@@ -978,6 +983,7 @@ describe("Unread badges", () => {
   it("does not count messages that were already there when the workspace opened", async () => {
     const seen = messageIn("ops-id", { id: "event-0" });
     await openSidebar({
+      realtimeAvailable: false,
       channels: [general, ops],
       extraRoutes: [messageFeed({ atLoad: [seen], later: [seen] })],
     });
@@ -990,6 +996,7 @@ describe("Unread badges", () => {
     const seen = messageIn("ops-id", { id: "event-0", createdAt: 1_700_000_001_000 });
     const fresh = messageIn("ops-id", { id: "event-1", createdAt: 1_700_000_002_000 });
     await openSidebar({
+      realtimeAvailable: false,
       channels: [general, ops],
       extraRoutes: [messageFeed({ atLoad: [seen], later: [fresh, seen] })],
     });
@@ -1000,6 +1007,7 @@ describe("Unread badges", () => {
 
   it("shows the latest poll's count rather than adding to the previous one", async () => {
     await openSidebar({
+      realtimeAvailable: false,
       channels: [general, ops],
       extraRoutes: [messageFeed({ atLoad: [], later: [messageIn("ops-id", { id: "event-1" })] })],
     });

@@ -23,6 +23,7 @@
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^6.0.1",
     "happy-dom": "^21.0.1",
+    "msw": "^2.15.0",
     "typescript": "^5.5.4",
     "vite": "^8.0.10"
   },
