@@ -12,3 +12,6 @@ memory/
 # Stryker (apps/user-ui)
 apps/user-ui/.stryker-tmp/
 apps/user-ui/reports/
+# Stryker (apps/agent-runner)
+apps/agent-runner/.stryker-tmp/
+apps/agent-runner/reports/
