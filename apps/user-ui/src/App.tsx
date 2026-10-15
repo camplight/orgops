@@ -1163,36 +1163,26 @@ export default function App() {
     setLoading(true);
     try {
       if (!name) {
-        const direct = await apiJson<{ id: string }>("/api/channels/direct/human-agent", {
-          method: "POST",
-          headers: getApiHeaders(),
-          body: JSON.stringify({ agentName: selectedAgents[0] })
-        });
+        const direct = await conversationGateway.openDirectChannel({ agentName: selectedAgents[0] });
         setCollapsedChannelGroups((current) => ({ ...current, direct: false }));
         await refreshChannels(direct.id);
       } else {
-        const created = await apiJson<{ id: string }>("/api/channels", {
-          method: "POST",
-          headers: getApiHeaders(),
-          body: JSON.stringify({
-            name,
-            description: description || undefined,
-            visibility: conversationVisibility
-          })
+        const created = await conversationGateway.createChannel({
+          name,
+          description: description || undefined,
+          visibility: conversationVisibility
         });
         await Promise.all([
           username
-            ? apiFetch(`/api/channels/${encodeURIComponent(created.id)}/subscribe`, {
-                method: "POST",
-                headers: getApiHeaders(),
-                body: JSON.stringify({ subscriberType: "HUMAN", subscriberId: username })
-              }).catch(() => undefined)
+            ? conversationGateway
+                .subscribe({ channelId: created.id, subscriberType: "HUMAN", subscriberId: username })
+                .catch(() => undefined)
             : Promise.resolve(),
           ...selectedAgents.map((agentName) =>
-            apiFetch(`/api/channels/${encodeURIComponent(created.id)}/subscribe`, {
-              method: "POST",
-              headers: getApiHeaders(),
-              body: JSON.stringify({ subscriberType: "AGENT", subscriberId: agentName })
+            conversationGateway.subscribe({
+              channelId: created.id,
+              subscriberType: "AGENT",
+              subscriberId: agentName
             })
           )
         ]);
@@ -1222,7 +1212,7 @@ export default function App() {
     setError(null);
     setLoading(true);
     try {
-      await apiFetch(`/api/channels/${encodeURIComponent(channel.id)}`, { method: "DELETE" });
+      await conversationGateway.deleteChannel({ channelId: channel.id });
       await refreshChannels(activeChannelId === channel.id ? null : undefined);
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : "Unable to delete channel");
@@ -1238,18 +1228,17 @@ export default function App() {
     try {
       const currentVisibility = activeChannel.visibility === "PUBLIC" ? "PUBLIC" : "PRIVATE";
       if (channelVisibilityDraft !== currentVisibility) {
-        await apiFetch(`/api/channels/${encodeURIComponent(activeChannel.id)}`, {
-          method: "PATCH",
-          headers: getApiHeaders(),
-          body: JSON.stringify({ visibility: channelVisibilityDraft })
+        await conversationGateway.updateChannelVisibility({
+          channelId: activeChannel.id,
+          visibility: channelVisibilityDraft
         });
       }
       const currentlyArchived = Boolean(activeChannel.archivedAt);
       if (archiveDraft !== currentlyArchived) {
-        await apiFetch(
-          `/api/channels/${encodeURIComponent(activeChannel.id)}/${archiveDraft ? "archive" : "unarchive"}`,
-          { method: "POST" }
-        );
+        await conversationGateway.setChannelArchived({
+          channelId: activeChannel.id,
+          archived: archiveDraft
+        });
         if (archiveDraft) setShowArchivedChannels(true);
       }
       await refreshChannels(activeChannel.id);
