@@ -10,6 +10,7 @@ import {
 import { apiFetch, apiJson, getApiHeaders } from "./api";
 import { wsUrl } from "./config";
 import { ChangePasswordScreen } from "./ui/auth/change-password-screen";
+import { TraceGroup } from "./ui/timeline/trace-group";
 import { MessageAttachments } from "./ui/timeline/message-attachments";
 import { SensitiveContent } from "./ui/timeline/sensitive-content";
 import { MessageMarkdown } from "./ui/timeline/message-markdown";
@@ -50,10 +51,6 @@ import {
 import {
   classifyTurnFailure,
   isTraceEvent,
-  traceChipCode,
-  traceChipTone,
-  traceDetail,
-  traceTitle,
   turnFailureText
 } from "./domain/messaging/trace-rules";
 import { hasJsonRenderBlock } from "./jsonRenderMarkdown";
@@ -1807,45 +1804,17 @@ export default function App() {
                     </article>
                   );
                 }
-                const selectedEvent = item.traceEvents.find((event) => event.id === expandedTraceEventId) ?? null;
                 return (
-                  <article className={`trace-group trace-group-${item.tone}`} key={item.id}>
-                    <div className="trace-chips" role="list" aria-label="Agent activity trace">
-                      {item.traceEvents.map((event) => {
-                        const selected = event.id === expandedTraceEventId;
-                        const summary = traceTitle(event);
-                        return (
-                          <button
-                            key={event.id}
-                            className={`trace-chip trace-chip-${traceChipTone(event)} ${
-                              selected ? "trace-chip-active" : ""
-                            }`}
-                            title={`${summary}${event.createdAt ? ` • ${formatTime(event.createdAt)}` : ""}`}
-                            type="button"
-                            onClick={() =>
-                              setExpandedTraceEventId((current) => (current === event.id ? null : event.id))
-                            }
-                            aria-label={summary}
-                          >
-                            <span>{traceChipCode(event)}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                    {selectedEvent ? (
-                      <div className="trace-detail-card">
-                        <div className="trace-detail-meta">
-                          <strong>{traceTitle(selectedEvent)}</strong>
-                          <span>{formatTime(selectedEvent.createdAt)}</span>
-                        </div>
-                        {traceDetail(selectedEvent) ? (
-                          <pre>{traceDetail(selectedEvent)}</pre>
-                        ) : (
-                          <p>No additional details.</p>
-                        )}
-                      </div>
-                    ) : null}
-                  </article>
+                  <TraceGroup
+                    key={item.id}
+                    traceEvents={item.traceEvents}
+                    tone={item.tone}
+                    expandedTraceEventId={expandedTraceEventId}
+                    formatTime={formatTime}
+                    onToggleTraceEvent={(eventId) =>
+                      setExpandedTraceEventId((current) => (current === eventId ? null : eventId))
+                    }
+                  />
                 );
               })
             )}
