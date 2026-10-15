@@ -162,6 +162,7 @@ export default function App() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [authenticated, setAuthenticated] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
+  const sessionState = deriveSessionState({ authenticated, authLoading, mustChangePassword });
   const [loading, setLoading] = useState(true);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
@@ -793,9 +794,9 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!authenticated || mustChangePassword) return;
+    if (sessionState !== "ready") return;
     void loadShell();
-  }, [authenticated, mustChangePassword]);
+  }, [sessionState]);
 
   useEffect(() => {
     messageFetchSeqRef.current += 1;
@@ -818,7 +819,7 @@ export default function App() {
   }, [activeChannelId]);
 
   useEffect(() => {
-    if (!authenticated || mustChangePassword) return;
+    if (sessionState !== "ready") return;
     if (!activeChannelId) {
       setEvents([]);
       return;
@@ -828,7 +829,7 @@ export default function App() {
       scrollToBottom: true,
       showLoading: true
     });
-  }, [activeChannelId, authenticated, mustChangePassword]);
+  }, [activeChannelId, sessionState]);
 
   useEffect(() => {
     if (!activeChannelId || messagesLoading) return;
@@ -844,12 +845,12 @@ export default function App() {
   }, [activeChannelId, messagesLoading, timelineItems.length]);
 
   useEffect(() => {
-    if (!authenticated || mustChangePassword) return;
+    if (sessionState !== "ready") return;
     void loadMessageNotifications();
-  }, [authenticated, mustChangePassword, channels]);
+  }, [sessionState, channels]);
 
   useEffect(() => {
-    if (!authenticated || mustChangePassword) return;
+    if (sessionState !== "ready") return;
     const feed = createWebSocketRealtimeFeed({
       url: wsUrl(),
       handlers: {
@@ -872,19 +873,19 @@ export default function App() {
       feed.stop();
       realtimeFeedRef.current = null;
     };
-  }, [authenticated, mustChangePassword]);
+  }, [sessionState]);
 
   useEffect(() => {
-    if (!authenticated || mustChangePassword) return;
+    if (sessionState !== "ready") return;
     const desiredTopics = new Set<string>();
     for (const channel of visibleChannels) {
       desiredTopics.add(`channel:${channel.id}`);
     }
     realtimeFeedRef.current?.setTopics(desiredTopics);
-  }, [authenticated, mustChangePassword, visibleChannels]);
+  }, [sessionState, visibleChannels]);
 
   usePollingFallback({
-    enabled: authenticated && !mustChangePassword && !wsConnected,
+    enabled: sessionState === "ready" && !wsConnected,
     poll: () => {
       const liveChannelId = activeChannelIdRef.current;
       if (liveChannelId) void loadMessages(liveChannelId);
@@ -893,7 +894,7 @@ export default function App() {
   });
 
   useEffect(() => {
-    if (!authenticated || mustChangePassword) return;
+    if (sessionState !== "ready") return;
     function handleShortcut(event: KeyboardEvent) {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
@@ -905,10 +906,10 @@ export default function App() {
     }
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
-  }, [authenticated, mustChangePassword]);
+  }, [sessionState]);
 
   useEffect(() => {
-    if (!authenticated || mustChangePassword) return;
+    if (sessionState !== "ready") return;
     function handlePopState() {
       const linkedChannelId = deepLink.readLinkedChannelId();
       const linkedChannel = channels.find(
@@ -921,7 +922,7 @@ export default function App() {
     }
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
-  }, [authenticated, channels, mustChangePassword, userId, username, viewerTeamIds]);
+  }, [sessionState, channels, userId, username, viewerTeamIds]);
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1369,8 +1370,6 @@ export default function App() {
     window.addEventListener("resize", handleWindowResize);
     return () => window.removeEventListener("resize", handleWindowResize);
   }, []);
-
-  const sessionState = deriveSessionState({ authenticated, authLoading, mustChangePassword });
 
   if (sessionState === "loading") {
     return <main className="loading-screen">Loading OrgOps...</main>;
