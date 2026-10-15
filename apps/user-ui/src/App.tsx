@@ -10,6 +10,7 @@ import {
 import { apiFetch, apiJson, getApiHeaders } from "./api";
 import { wsUrl } from "./config";
 import { ChangePasswordScreen } from "./ui/auth/change-password-screen";
+import { SensitiveContent } from "./ui/timeline/sensitive-content";
 import { MessageMarkdown } from "./ui/timeline/message-markdown";
 import { ComposerActions } from "./ui/composer/composer-actions";
 import { ComposerAttachments } from "./ui/composer/composer-attachments";
@@ -1777,60 +1778,27 @@ export default function App() {
                         <p>{text}</p>
                       )}
                       {sensitive ? (
-                        <section className="message-sensitive">
-                          <div className="message-sensitive-head">
-                            <strong>Sensitive content</strong>
-                            <span>Protected</span>
-                          </div>
-                          {sensitive.hint ? <p>{sensitive.hint}</p> : null}
-                          {revealedSensitive ? (
-                            <div className="message-sensitive-revealed">
-                              {shouldRenderMarkdown(revealedSensitive) ? (
-                                <MessageMarkdown
-                                  text={revealedSensitive}
-                                  keyPrefix={`${event.id}-sensitive`}
-                                  canPost={activeChannelCanPost && !activeChannel?.archivedAt}
-                                  channelId={activeChannelId}
-                                  username={username}
-                                />
-                              ) : (
-                                <pre>{revealedSensitive}</pre>
-                              )}
-                              <button type="button" onClick={() => handleHideSensitive(event.id)}>
-                                Hide sensitive content
-                              </button>
-                            </div>
-                          ) : (
-                            <div className="message-sensitive-controls">
-                              <label>
-                                <span>Password</span>
-                                <input
-                                  type="password"
-                                  autoComplete="current-password"
-                                  value={revealPassword}
-                                  onChange={(changeEvent) =>
-                                    {
-                                      setSensitiveRevealPasswords((current) => ({
-                                        ...current,
-                                        [event.id]: changeEvent.target.value
-                                      }));
-                                      setSensitiveRevealErrors((current) => ({ ...current, [event.id]: "" }));
-                                    }
-                                  }
-                                  placeholder="Enter your password"
-                                />
-                              </label>
-                              <button
-                                type="button"
-                                disabled={revealing || !revealPassword}
-                                onClick={() => void handleRevealSensitive(event.id)}
-                              >
-                                {revealing ? "Revealing..." : "Reveal sensitive content"}
-                              </button>
-                            </div>
-                          )}
-                          {revealError ? <p className="message-sensitive-error">{revealError}</p> : null}
-                        </section>
+                        <SensitiveContent
+                          eventId={event.id}
+                          hint={sensitive.hint}
+                          revealedText={revealedSensitive}
+                          revealedAsMarkdown={shouldRenderMarkdown(revealedSensitive)}
+                          password={revealPassword}
+                          error={revealError}
+                          revealing={revealing}
+                          canPost={activeChannelCanPost && !activeChannel?.archivedAt}
+                          channelId={activeChannelId}
+                          username={username}
+                          onPasswordChange={(value) => {
+                            setSensitiveRevealPasswords((current) => ({
+                              ...current,
+                              [event.id]: value
+                            }));
+                            setSensitiveRevealErrors((current) => ({ ...current, [event.id]: "" }));
+                          }}
+                          onReveal={() => void handleRevealSensitive(event.id)}
+                          onHide={() => handleHideSensitive(event.id)}
+                        />
                       ) : null}
                       {attachments.length > 0 ? (
                         <div className="message-attachments">
