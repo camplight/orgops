@@ -19,6 +19,9 @@ import { createUpdatePassword } from "./application/identity/update-password";
 import { createLogout } from "./application/identity/logout";
 import { createLoadSession } from "./application/identity/load-session";
 import { useSession } from "./ui/identity/use-session";
+import { createAddParticipant } from "./application/conversations/add-participant";
+import { createRemoveParticipant } from "./application/conversations/remove-participant";
+import { useParticipants } from "./ui/conversations/use-participants";
 import { createHttpSessionGateway } from "./infrastructure/http/http-session-gateway";
 import { createHttpConversationGateway } from "./infrastructure/http/http-conversation-gateway";
 import { createHttpFileGateway } from "./infrastructure/http/http-file-gateway";
@@ -110,6 +113,8 @@ const clipboard = createBrowserClipboard();
 const deepLink = createBrowserDeepLink();
 const fileGateway = createHttpFileGateway();
 const conversationGateway = createHttpConversationGateway();
+const addParticipant = createAddParticipant({ conversationGateway });
+const removeParticipant = createRemoveParticipant({ conversationGateway });
 
 export default function App() {
   const messagesPanelRef = useRef<HTMLElement | null>(null);
@@ -178,10 +183,22 @@ export default function App() {
     handlePasswordUpdate,
     handleLogout
   } = useSession({ loadCurrentSession, signIn, signOut, changePassword, setError, onSignedOut: handleSignedOut });
-  const [participantKind, setParticipantKind] = useState<"HUMAN" | "AGENT">("AGENT");
-  const [participantValue, setParticipantValue] = useState("");
-  const [participantSubmitting, setParticipantSubmitting] = useState(false);
-  const [participantRemovingKey, setParticipantRemovingKey] = useState<string | null>(null);
+  const {
+    participantKind,
+    participantValue,
+    participantSubmitting,
+    participantRemovingKey,
+    setParticipantKind,
+    setParticipantValue,
+    handleAddParticipant,
+    handleRemoveParticipant
+  } = useParticipants({
+    activeChannelId,
+    addParticipant,
+    removeParticipant,
+    refreshChannels,
+    setError
+  });
   const [shareKind, setShareKind] = useState<"HUMAN" | "AGENT">("HUMAN");
   const [shareValue, setShareValue] = useState("");
   const [shareSubmitting, setShareSubmitting] = useState(false);
@@ -1099,45 +1116,6 @@ export default function App() {
       setError(updateError instanceof Error ? updateError.message : "Unable to update channel settings");
     } finally {
       setUpdatingChannelVisibility(false);
-    }
-  }
-
-  async function handleAddParticipant(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!activeChannelId || !participantValue.trim()) return;
-    setParticipantSubmitting(true);
-    setError(null);
-    try {
-      await conversationGateway.subscribe({
-        channelId: activeChannelId,
-        subscriberType: participantKind,
-        subscriberId: participantValue.trim()
-      });
-      await refreshChannels(activeChannelId);
-      setParticipantValue("");
-    } catch (addError) {
-      setError(addError instanceof Error ? addError.message : "Unable to add participant");
-    } finally {
-      setParticipantSubmitting(false);
-    }
-  }
-
-  async function handleRemoveParticipant(participant: ChannelParticipant) {
-    if (!activeChannelId) return;
-    const participantKey = `${participant.subscriberType}:${participant.subscriberId}`;
-    setParticipantRemovingKey(participantKey);
-    setError(null);
-    try {
-      await conversationGateway.unsubscribe({
-        channelId: activeChannelId,
-        subscriberType: participant.subscriberType,
-        subscriberId: participant.subscriberId
-      });
-      await refreshChannels(activeChannelId);
-    } catch (removeError) {
-      setError(removeError instanceof Error ? removeError.message : "Unable to remove participant");
-    } finally {
-      setParticipantRemovingKey(null);
     }
   }
 
