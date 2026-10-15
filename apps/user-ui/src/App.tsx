@@ -10,6 +10,7 @@ import {
 import { apiFetch, apiJson, getApiHeaders } from "./api";
 import { wsUrl } from "./config";
 import { createHttpSessionGateway } from "./infrastructure/http/http-session-gateway";
+import { createHttpFileGateway } from "./infrastructure/http/http-file-gateway";
 import { createHttpMessageGateway } from "./infrastructure/http/http-message-gateway";
 import { ChangePasswordScreen } from "./ui/auth/change-password-screen";
 import { MessageItem } from "./ui/timeline/message-item";
@@ -124,6 +125,7 @@ function createLocalAttachmentId() {
 
 const messageGateway = createHttpMessageGateway();
 const sessionGateway = createHttpSessionGateway();
+const fileGateway = createHttpFileGateway();
 
 export default function App() {
   const messagesPanelRef = useRef<HTMLElement | null>(null);
@@ -1395,17 +1397,8 @@ export default function App() {
       }
     ]);
     try {
-      const body = new FormData();
-      body.append("file", file, file.name);
-      const uploadResponse = await apiFetch("/api/files", { method: "POST", body });
-      const uploadPayload = (await uploadResponse.json()) as { id: string };
-      const meta = await apiJson<{
-        id: string;
-        original_name?: string;
-        mime?: string;
-        size?: number;
-        sha256?: string;
-      }>(`/api/files/${encodeURIComponent(uploadPayload.id)}/meta`);
+      const uploadPayload = await fileGateway.upload(file);
+      const meta = await fileGateway.getMeta(uploadPayload.id);
       const uploaded: UploadedAttachment = {
         localId,
         fileId: uploadPayload.id,
