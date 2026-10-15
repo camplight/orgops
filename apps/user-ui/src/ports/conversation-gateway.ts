@@ -20,4 +20,12 @@ export type ConversationGateway = {
   deleteChannel: (options: { channelId: string }) => Promise<void>;
   updateChannelVisibility: (options: { channelId: string; visibility: string }) => Promise<void>;
   setChannelArchived: (options: { channelId: string; archived: boolean }) => Promise<void>;
+  unsubscribe: (options: {
+    channelId: string;
+    subscriberType: string;
+    subscriberId: string;
+  }) => Promise<void>;
+  shareChannel: (options: { channelId: string; viewerType: string; viewerId: string }) => Promise<void>;
+  unshareChannel: (options: { channelId: string; viewerType: string; viewerId: string }) => Promise<void>;
+  createShareLink: (options: { channelId: string }) => Promise<{ token: string; channelId: string }>;
 };
