@@ -51,40 +51,8 @@ import {
   sourceLabel
 } from "./domain/messaging/event-interpretation";
 import { isTraceEvent } from "./domain/messaging/trace-rules";
-import { hasJsonRenderBlock } from "./jsonRenderMarkdown";
-import { hasSecretInputBlock } from "./secretInputMarkdown";
-
-const MARKDOWN_HINT_RE =
-  /(^|\n)\s{0,3}(#{1,6}\s|[-*+]\s|\d+\.\s|>\s)|`{1,3}[^`]|(\*\*|__)[^*_]+(\*\*|__)|(\*|_)[^*_]+(\*|_)|\[[^\]]+\]\([^)]+\)|!\[[^\]]*\]\([^)]+\)|(^|\n)\|.+\|/m;
-const URL_RE = /(https?:\/\/[^\s<]+)/i;
-
-function formatTime(value?: number) {
-  if (!value) return "";
-  const date = new Date(value);
-  const today = new Date();
-  const isToday =
-    date.getFullYear() === today.getFullYear() &&
-    date.getMonth() === today.getMonth() &&
-    date.getDate() === today.getDate();
-  return new Intl.DateTimeFormat(undefined, {
-    ...(isToday
-      ? {}
-      : {
-          day: "numeric",
-          month: "short",
-          ...(date.getFullYear() === today.getFullYear() ? {} : { year: "numeric" })
-        }),
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit"
-  }).format(date);
-}
-
-function shouldRenderMarkdown(text: string) {
-  const trimmed = text.trim();
-  if (!trimmed) return false;
-  return hasJsonRenderBlock(trimmed) || hasSecretInputBlock(trimmed) || MARKDOWN_HINT_RE.test(trimmed) || URL_RE.test(trimmed);
-}
+import { shouldRenderMarkdown } from "./domain/messaging/markdown-detection";
+import { formatTime } from "./domain/messaging/time-format";
 
 type UploadedAttachment = {
   localId: string;
