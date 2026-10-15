@@ -1,4 +1,4 @@
-import { apiJson, getApiHeaders } from "../../api";
+import { apiFetch, apiJson, getApiHeaders } from "../../api";
 import type { EventRow } from "../../types";
 import type { MessageGateway } from "../../ports/message-gateway";
 
@@ -59,6 +59,21 @@ export function createHttpMessageGateway(): MessageGateway {
       return { olderMessages, olderTurns, olderTools, olderWrappers, olderProcesses };
     },
     listRecentMessageEvents: () =>
-      apiJson<EventRow[]>("/api/events?type=message.created&limit=100&order=desc")
+      apiJson<EventRow[]>("/api/events?type=message.created&limit=100&order=desc"),
+    sendMessage: async ({ text, attachments, username, channelId }) => {
+      await apiFetch("/api/events", {
+        method: "POST",
+        headers: getApiHeaders(),
+        body: JSON.stringify({
+          type: "message.created",
+          payload: {
+            text,
+            ...(attachments.length > 0 ? { attachments } : {})
+          },
+          source: `human:${username || "user"}`,
+          channelId
+        })
+      });
+    }
   };
 }

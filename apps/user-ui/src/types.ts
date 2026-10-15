@@ -54,3 +54,12 @@ export type Team = {
   id: string;
   name: string;
 };
+
+export type UploadedAttachment = {
+  localId: string;
+  fileId: string;
+  name: string;
+  mime: string;
+  size: number;
+  sha256?: string;
+};
