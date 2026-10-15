@@ -10,6 +10,7 @@ import {
 import { apiFetch, apiJson, getApiHeaders } from "./api";
 import { wsUrl } from "./config";
 import { ChangePasswordScreen } from "./ui/auth/change-password-screen";
+import { MessageMarkdown } from "./ui/timeline/message-markdown";
 import { ComposerActions } from "./ui/composer/composer-actions";
 import { ComposerAttachments } from "./ui/composer/composer-attachments";
 import { Sidebar } from "./ui/sidebar/sidebar";
@@ -53,12 +54,8 @@ import {
   traceTitle,
   turnFailureText
 } from "./domain/messaging/trace-rules";
-import { JsonRenderBlock } from "./JsonRenderBlock";
-import { OrgopsSecretInput } from "./OrgopsSecretInput";
-import { hasJsonRenderBlock, splitJsonRenderMarkdown } from "./jsonRenderMarkdown";
-import { hasSecretInputBlock, splitSecretInputMarkdown } from "./secretInputMarkdown";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { hasJsonRenderBlock } from "./jsonRenderMarkdown";
+import { hasSecretInputBlock } from "./secretInputMarkdown";
 
 const MARKDOWN_HINT_RE =
   /(^|\n)\s{0,3}(#{1,6}\s|[-*+]\s|\d+\.\s|>\s)|`{1,3}[^`]|(\*\*|__)[^*_]+(\*\*|__)|(\*|_)[^*_]+(\*|_)|\[[^\]]+\]\([^)]+\)|!\[[^\]]*\]\([^)]+\)|(^|\n)\|.+\|/m;
@@ -1769,40 +1766,13 @@ export default function App() {
                         <span>{formatTime(messageDisplayTime(event))}</span>
                       </div>
                       {markdown ? (
-                        <div className="message-markdown">
-                          {splitJsonRenderMarkdown(text).map((jsonPart, jsonIndex) =>
-                            jsonPart.kind === "json-render" ? (
-                              <JsonRenderBlock
-                                canPost={activeChannelCanPost && !activeChannel?.archivedAt}
-                                channelId={activeChannelId}
-                                key={`${event.id}-json-render-${jsonIndex}`}
-                                specText={jsonPart.specText}
-                                username={username}
-                              />
-                            ) : (
-                              splitSecretInputMarkdown(jsonPart.text).map((secretPart, secretIndex) =>
-                                secretPart.kind === "secret-input" ? (
-                                  <OrgopsSecretInput
-                                    key={`${event.id}-secret-input-${jsonIndex}-${secretIndex}`}
-                                    spec={secretPart.spec}
-                                  />
-                                ) : (
-                                  <ReactMarkdown
-                                    remarkPlugins={[remarkGfm]}
-                                    components={{
-                                      a: ({ node: _node, ...props }) => (
-                                        <a {...props} target="_blank" rel="noreferrer" />
-                                      )
-                                    }}
-                                    key={`${event.id}-markdown-${jsonIndex}-${secretIndex}`}
-                                  >
-                                    {secretPart.text}
-                                  </ReactMarkdown>
-                                )
-                              )
-                            )
-                          )}
-                        </div>
+                        <MessageMarkdown
+                          text={text}
+                          keyPrefix={event.id}
+                          canPost={activeChannelCanPost && !activeChannel?.archivedAt}
+                          channelId={activeChannelId}
+                          username={username}
+                        />
                       ) : (
                         <p>{text}</p>
                       )}
@@ -1816,40 +1786,13 @@ export default function App() {
                           {revealedSensitive ? (
                             <div className="message-sensitive-revealed">
                               {shouldRenderMarkdown(revealedSensitive) ? (
-                                <div className="message-markdown">
-                                  {splitJsonRenderMarkdown(revealedSensitive).map((jsonPart, jsonIndex) =>
-                                    jsonPart.kind === "json-render" ? (
-                                      <JsonRenderBlock
-                                        canPost={activeChannelCanPost && !activeChannel?.archivedAt}
-                                        channelId={activeChannelId}
-                                        key={`${event.id}-sensitive-json-render-${jsonIndex}`}
-                                        specText={jsonPart.specText}
-                                        username={username}
-                                      />
-                                    ) : (
-                                      splitSecretInputMarkdown(jsonPart.text).map((secretPart, secretIndex) =>
-                                        secretPart.kind === "secret-input" ? (
-                                          <OrgopsSecretInput
-                                            key={`${event.id}-sensitive-secret-input-${jsonIndex}-${secretIndex}`}
-                                            spec={secretPart.spec}
-                                          />
-                                        ) : (
-                                          <ReactMarkdown
-                                            remarkPlugins={[remarkGfm]}
-                                            components={{
-                                              a: ({ node: _node, ...props }) => (
-                                                <a {...props} target="_blank" rel="noreferrer" />
-                                              )
-                                            }}
-                                            key={`${event.id}-sensitive-markdown-${jsonIndex}-${secretIndex}`}
-                                          >
-                                            {secretPart.text}
-                                          </ReactMarkdown>
-                                        )
-                                      )
-                                    )
-                                  )}
-                                </div>
+                                <MessageMarkdown
+                                  text={revealedSensitive}
+                                  keyPrefix={`${event.id}-sensitive`}
+                                  canPost={activeChannelCanPost && !activeChannel?.archivedAt}
+                                  channelId={activeChannelId}
+                                  username={username}
+                                />
                               ) : (
                                 <pre>{revealedSensitive}</pre>
                               )}
