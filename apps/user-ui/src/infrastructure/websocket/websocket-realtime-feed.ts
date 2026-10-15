@@ -42,7 +42,6 @@ export function createWebSocketRealtimeFeed(options: {
           handlers.onEvent(parsed.data);
         }
       } catch {
-        // Ignore malformed payloads from background topics.
       }
     };
     socket.onerror = () => socket.close();
