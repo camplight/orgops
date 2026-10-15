@@ -22,6 +22,9 @@ import { useSession } from "./ui/identity/use-session";
 import { createAddParticipant } from "./application/conversations/add-participant";
 import { createRemoveParticipant } from "./application/conversations/remove-participant";
 import { useParticipants } from "./ui/conversations/use-participants";
+import { createAddShare } from "./application/conversations/add-share";
+import { createRemoveShare } from "./application/conversations/remove-share";
+import { useShares } from "./ui/conversations/use-shares";
 import { createHttpSessionGateway } from "./infrastructure/http/http-session-gateway";
 import { createHttpConversationGateway } from "./infrastructure/http/http-conversation-gateway";
 import { createHttpFileGateway } from "./infrastructure/http/http-file-gateway";
@@ -43,7 +46,6 @@ import type {
   Agent,
   Channel,
   ChannelParticipant,
-  ChannelShare,
   EventRow,
   Team,
   UploadedAttachment
@@ -115,6 +117,8 @@ const fileGateway = createHttpFileGateway();
 const conversationGateway = createHttpConversationGateway();
 const addParticipant = createAddParticipant({ conversationGateway });
 const removeParticipant = createRemoveParticipant({ conversationGateway });
+const addShare = createAddShare({ conversationGateway });
+const removeShare = createRemoveShare({ conversationGateway });
 
 export default function App() {
   const messagesPanelRef = useRef<HTMLElement | null>(null);
@@ -199,10 +203,22 @@ export default function App() {
     refreshChannels,
     setError
   });
-  const [shareKind, setShareKind] = useState<"HUMAN" | "AGENT">("HUMAN");
-  const [shareValue, setShareValue] = useState("");
-  const [shareSubmitting, setShareSubmitting] = useState(false);
-  const [shareRemovingKey, setShareRemovingKey] = useState<string | null>(null);
+  const {
+    shareKind,
+    shareValue,
+    shareSubmitting,
+    shareRemovingKey,
+    setShareKind,
+    setShareValue,
+    handleAddShare,
+    handleRemoveShare
+  } = useShares({
+    activeChannelId,
+    addShare,
+    removeShare,
+    refreshChannels,
+    setError
+  });
   const [channelVisibilityDraft, setChannelVisibilityDraft] = useState<"PUBLIC" | "PRIVATE">("PRIVATE");
   const [updatingChannelVisibility, setUpdatingChannelVisibility] = useState(false);
   const [archiveDraft, setArchiveDraft] = useState(false);
@@ -816,10 +832,7 @@ export default function App() {
     setShowParticipantsDialog(false);
     setShowChannelManageDialog(false);
     setPendingAttachments([]);
-    setShareValue("");
     setShareLinkCopied(false);
-    setShareRemovingKey(null);
-    setShareSubmitting(false);
   }, [activeChannelId]);
 
   useEffect(() => {
@@ -1116,45 +1129,6 @@ export default function App() {
       setError(updateError instanceof Error ? updateError.message : "Unable to update channel settings");
     } finally {
       setUpdatingChannelVisibility(false);
-    }
-  }
-
-  async function handleAddShare(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!activeChannelId || !shareValue.trim()) return;
-    setShareSubmitting(true);
-    setError(null);
-    try {
-      await conversationGateway.shareChannel({
-        channelId: activeChannelId,
-        viewerType: shareKind,
-        viewerId: shareValue.trim()
-      });
-      await refreshChannels(activeChannelId);
-      setShareValue("");
-    } catch (shareError) {
-      setError(shareError instanceof Error ? shareError.message : "Unable to share channel");
-    } finally {
-      setShareSubmitting(false);
-    }
-  }
-
-  async function handleRemoveShare(share: ChannelShare) {
-    if (!activeChannelId) return;
-    const shareKey = `${share.viewerType}:${share.viewerId}`;
-    setShareRemovingKey(shareKey);
-    setError(null);
-    try {
-      await conversationGateway.unshareChannel({
-        channelId: activeChannelId,
-        viewerType: share.viewerType,
-        viewerId: share.viewerId
-      });
-      await refreshChannels(activeChannelId);
-    } catch (removeError) {
-      setError(removeError instanceof Error ? removeError.message : "Unable to remove shared viewer");
-    } finally {
-      setShareRemovingKey(null);
     }
   }
 
