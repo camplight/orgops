@@ -1,3 +1,4 @@
+import { uploadWorkspaceFile } from "./file-upload";
 import { z } from "zod";
 import type { ExecuteContext, ToolDef } from "./types";
 import { resolveAgentPath } from "./path-access";
@@ -11,6 +12,7 @@ const fsRmSchema = z.object({ path: z.string().min(1) });
 const fsMoveSchema = z.object({ path: z.string().min(1), to: z.string().min(1) });
 
 export const fsToolDefs: ToolDef[] = [
+  ["fs_upload", "Upload a generated workspace file (up to 20 MiB) for sharing. Returns attachment metadata; include it in message.created payload.attachments using events_emit. A local filesystem path alone is not a chat attachment.", fsReadSchema],
   ["fs_read", "Read a file.", fsReadSchema],
   [
     "fs_write",
@@ -64,6 +66,11 @@ export async function execute(
     return resolveAgentPath(ctx.agent, value, ctx.extraAllowedRoots ?? []);
   };
 
+  if (tool === "fs_upload") {
+    const parsed = parseToolArgs(tool, fsReadSchema, args);
+    if (!parsed.ok) return { error: parsed.error };
+    return uploadWorkspaceFile(ctx, parsed.data.path);
+  }
   if (tool === "fs_read") {
     const parsedResult = parseToolArgs(tool, fsReadSchema, args);
     if (!parsedResult.ok) return { error: parsedResult.error };

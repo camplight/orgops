@@ -672,3 +672,12 @@ Google onboarding stores team memberships as `HUMAN` plus the human username,
 matching `/api/teams/me` and team-based access checks. Migration 038 repairs the
 original lowercase/UUID memberships only when tied to a stored Google identity;
 already-correct memberships are preserved and duplicate inserts are ignored.
+
+### Generated file attachments
+
+Native runner agents can call `fs_upload` with a workspace file path (maximum
+20 MiB). The tool checks allowed roots and resolved symlink targets, uploads
+bytes through the authenticated file API, and returns `attachment` metadata and
+a download URL. It does not publish a message: include the returned object in
+`message.created.payload.attachments` via `events_emit` to share it. Wrapped
+external runtimes do not automatically receive native runner tools.
