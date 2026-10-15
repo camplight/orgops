@@ -32,6 +32,7 @@ import { createDeleteChannel } from "./application/conversations/delete-channel"
 import { createStartConversation } from "./application/conversations/start-conversation";
 import { createSelectChannel } from "./application/conversations/select-channel";
 import { createClaimPendingShareLink } from "./application/conversations/claim-pending-share-link";
+import { createLoadWorkspace } from "./application/conversations/load-workspace";
 import { createRefreshChannels } from "./application/conversations/refresh-channels";
 import { useChannelSelection } from "./ui/conversations/use-channel-selection";
 import { useStartConversation } from "./ui/conversations/use-start-conversation";
@@ -136,6 +137,7 @@ const deleteChannel = createDeleteChannel({ conversationGateway });
 const startConversation = createStartConversation({ conversationGateway });
 const selectChannelUseCase = createSelectChannel({ deepLink });
 const refreshChannelsUseCase = createRefreshChannels({ conversationGateway });
+const loadWorkspaceUseCase = createLoadWorkspace({ conversationGateway, deepLink });
 const claimPendingShareLinkUseCase = createClaimPendingShareLink({ conversationGateway, deepLink });
 
 export default function App() {
@@ -522,44 +524,21 @@ export default function App() {
     try {
       const { claimedShareChannelId, errorMessage: claimErrorMessage } = await claimPendingShareLinkUseCase();
       if (claimErrorMessage) setError(claimErrorMessage);
-      const [nextChannels, nextAgents, nextHumans, nextTeams] = await Promise.all([
-        conversationGateway.listChannels(),
-        conversationGateway.listAgents(),
-        conversationGateway.listHumans().catch(() => []),
-        conversationGateway.listMyTeams().catch(() => [])
-      ]);
-      setChannels(nextChannels);
-      setAgents(nextAgents);
-      setHumans(nextHumans);
-      setTeams(nextTeams);
-      const nextViewerTeamIds = new Set(nextTeams.map((team) => team.id));
-      const visibleChannels = nextChannels.filter((channel) =>
-        channelVisibleToUserUi(channel, userId, username, nextViewerTeamIds)
-      );
-      const nextVisibleChannelAgentNames = new Set<string>();
-      for (const channel of visibleChannels) {
-        for (const participant of channel.participants ?? []) {
-          if (normalizedSubscriberType(participant) === "AGENT" && participant.subscriberId) {
-            nextVisibleChannelAgentNames.add(participant.subscriberId);
-          }
-        }
-      }
-      const nextVisibleAgents = nextAgents.filter((agent) =>
-        agentVisibleToUserUi(agent, nextVisibleChannelAgentNames, userId)
-      );
+      const workspace = await loadWorkspaceUseCase({
+        claimedShareChannelId,
+        activeChannelId,
+        userId,
+        username
+      });
+      setChannels(workspace.channels);
+      setAgents(workspace.agents);
+      setHumans(workspace.humans);
+      setTeams(workspace.teams);
       setSelectedConversationAgents((current) =>
-        current.filter((agentName) => nextVisibleAgents.some((agent) => agent.name === agentName))
+        current.filter((agentName) => workspace.visibleAgentNames.has(agentName))
       );
-      const linkedChannelId = deepLink.readLinkedChannelId();
-      const preferredLinkedId = claimedShareChannelId ?? linkedChannelId;
-      const linkedChannel = visibleChannels.find((channel) => channel.id === preferredLinkedId);
-      const nextActiveChannelId =
-        linkedChannel?.id ??
-        (activeChannelId && visibleChannels.some((channel) => channel.id === activeChannelId && !channel.archivedAt)
-          ? activeChannelId
-          : visibleChannels.find((channel) => !channel.archivedAt)?.id ?? null);
-      if (linkedChannel?.archivedAt) setShowArchivedChannels(true);
-      selectChannel(nextActiveChannelId, { replace: true });
+      if (workspace.expandArchivedChannels) setShowArchivedChannels(true);
+      selectChannel(workspace.nextActiveChannelId, { replace: true });
       await loadMessageNotifications({ initialize: true });
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Unable to load OrgOps");
