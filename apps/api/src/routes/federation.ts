@@ -634,6 +634,39 @@ export function registerFederationRoutes(app: Hono<any>, deps: FederationDeps) {
     if (!homeBaseUrl || !remoteChannelId || !outboundToken) {
       return jsonResponse(c, { error: "joinUrl is missing homeBaseUrl, channelId, or token" }, 400);
     }
+    const existingInstance = orm
+      .select()
+      .from(schema.federationInstances)
+      .where(
+        and(
+          eq(schema.federationInstances.base_url, homeBaseUrl),
+          eq(schema.federationInstances.outbound_token, outboundToken),
+        ),
+      )
+      .get() as any;
+    if (existingInstance) {
+      const existingLink = orm
+        .select()
+        .from(schema.federationChannels)
+        .where(
+          and(
+            eq(schema.federationChannels.home_instance_id, existingInstance.id),
+            eq(schema.federationChannels.remote_channel_id, remoteChannelId),
+            eq(schema.federationChannels.role, "REMOTE_PROJECTION"),
+          ),
+        )
+        .get() as any;
+      if (existingLink) {
+        return jsonResponse(c, {
+          ok: true,
+          instanceId: existingInstance.id,
+          localChannelId: existingLink.local_channel_id,
+          registeredWithHome: false,
+          registrationError: null,
+          alreadyJoined: true,
+        });
+      }
+    }
     const now = Date.now();
     const instanceId = randomUUID();
     const inboundToken = generateFederationToken();
