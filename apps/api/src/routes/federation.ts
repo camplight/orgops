@@ -199,11 +199,17 @@ export function registerFederationRoutes(app: Hono<any>, deps: FederationDeps) {
   }
 
   async function syncAllProjectionChannels() {
-    const links = orm
-      .select()
-      .from(schema.federationChannels)
-      .where(eq(schema.federationChannels.role, "REMOTE_PROJECTION"))
-      .all() as any[];
+    let links: any[];
+    try {
+      links = orm
+        .select()
+        .from(schema.federationChannels)
+        .where(eq(schema.federationChannels.role, "REMOTE_PROJECTION"))
+        .all() as any[];
+    } catch (error) {
+      if (String(error).includes("no such table: federation_channels")) return;
+      throw error;
+    }
     for (const link of links) {
       try {
         await syncProjectionLink(link);

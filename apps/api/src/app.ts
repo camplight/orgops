@@ -338,11 +338,17 @@ export function createApp(config: AppConfig = {}) {
   async function pushFederatedEvent(row: any) {
     const channelId = typeof row.channel_id === "string" ? row.channel_id : "";
     if (!channelId) return;
-    const subscribers = orm
-      .select()
-      .from(schema.federationChannelSubscribers)
-      .where(eq(schema.federationChannelSubscribers.local_channel_id, channelId))
-      .all() as any[];
+    let subscribers: any[];
+    try {
+      subscribers = orm
+        .select()
+        .from(schema.federationChannelSubscribers)
+        .where(eq(schema.federationChannelSubscribers.local_channel_id, channelId))
+        .all() as any[];
+    } catch (error) {
+      if (String(error).includes("no such table: federation_channel_subscribers")) return;
+      throw error;
+    }
     if (subscribers.length === 0) return;
     const event = eventRowToApi(row);
     for (const subscriber of subscribers) {

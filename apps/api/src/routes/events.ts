@@ -740,16 +740,22 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     idempotencyKey?: string;
   }): Promise<any | null> {
     if (!input.channelId) return null;
-    const link = orm
-      .select()
-      .from(schema.federationChannels)
-      .where(
-        and(
-          eq(schema.federationChannels.local_channel_id, input.channelId),
-          eq(schema.federationChannels.role, "REMOTE_PROJECTION"),
-        ),
-      )
-      .get() as any;
+    let link: any;
+    try {
+      link = orm
+        .select()
+        .from(schema.federationChannels)
+        .where(
+          and(
+            eq(schema.federationChannels.local_channel_id, input.channelId),
+            eq(schema.federationChannels.role, "REMOTE_PROJECTION"),
+          ),
+        )
+        .get() as any;
+    } catch (error) {
+      if (String(error).includes("no such table: federation_channels")) return null;
+      throw error;
+    }
     if (!link) return null;
     const instance = orm
       .select()
