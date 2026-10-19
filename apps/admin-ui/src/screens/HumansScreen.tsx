@@ -1,14 +1,25 @@
 import { useMemo, useState } from "react";
 import { Button, Card, Input } from "../components/ui";
 import { useEscapeKey } from "../hooks/useEscapeKey";
-import type { Human } from "../types";
+import type { Agent, Channel, Human } from "../types";
 
 type HumansScreenProps = {
   humans: Human[];
+  channels: Channel[];
+  agents: Agent[];
   onInviteHuman: (input: {
     username: string;
     tempPassword?: string;
-  }) => Promise<{ id: string; username: string; temporaryPassword: string }>;
+    channelId?: string;
+    channelName?: string;
+    channelDescription?: string;
+    agentParticipants?: string[];
+  }) => Promise<{
+    id: string;
+    username: string;
+    temporaryPassword: string;
+    channel?: { id: string; name: string; created: boolean };
+  }>;
   onResetTempPassword: (input: {
     id: string;
     tempPassword?: string;
@@ -21,8 +32,22 @@ function formatDate(value: number) {
   return new Date(value).toLocaleString();
 }
 
-export function HumansScreen({ humans, onInviteHuman, onResetTempPassword, onRefresh }: HumansScreenProps) {
-  const [newHuman, setNewHuman] = useState({ username: "", tempPassword: "" });
+export function HumansScreen({
+  humans,
+  channels,
+  agents,
+  onInviteHuman,
+  onResetTempPassword,
+  onRefresh,
+}: HumansScreenProps) {
+  const [newHuman, setNewHuman] = useState({
+    username: "",
+    tempPassword: "",
+    channelId: "",
+    channelName: "",
+    channelDescription: "",
+    agentParticipants: "",
+  });
   const [resetTempPasswordInput, setResetTempPasswordInput] = useState("");
   const [activeHumanId, setActiveHumanId] = useState<string | null>(null);
   const [createDrawerOpen, setCreateDrawerOpen] = useState(false);
@@ -56,16 +81,36 @@ export function HumansScreen({ humans, onInviteHuman, onResetTempPassword, onRef
     try {
       const invited = await onInviteHuman({
         username: trimmedUsername,
-        tempPassword: newHuman.tempPassword.trim() || undefined
+        tempPassword: newHuman.tempPassword.trim() || undefined,
+        channelId: newHuman.channelId || undefined,
+        channelName: newHuman.channelId ? undefined : newHuman.channelName.trim() || undefined,
+        channelDescription: newHuman.channelDescription.trim() || undefined,
+        agentParticipants: newHuman.channelId
+          ? undefined
+          : newHuman.agentParticipants
+              .split(",")
+              .map((agentName) => agentName.trim())
+              .filter(Boolean),
       });
       setInviteResult({
         username: invited.username,
         temporaryPassword: invited.temporaryPassword
       });
-      setNewHuman({ username: "", tempPassword: "" });
+      setNewHuman({
+        username: "",
+        tempPassword: "",
+        channelId: "",
+        channelName: "",
+        channelDescription: "",
+        agentParticipants: "",
+      });
       setCreateDrawerOpen(false);
       setActiveHumanId(invited.id);
-      setStatus(`Created human "${invited.username}".`);
+      setStatus(
+        invited.channel
+          ? `Created human "${invited.username}" and landed them in "${invited.channel.name}".`
+          : `Created human "${invited.username}".`,
+      );
       await onRefresh();
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Failed to invite user");
@@ -176,7 +221,7 @@ export function HumansScreen({ humans, onInviteHuman, onResetTempPassword, onRef
           </div>
           <div className="space-y-3 px-4 py-4">
             <div className="text-sm text-slate-400">
-              Create a human account with a temporary password.
+              Create a human account with a temporary password. Optionally land them in a channel.
             </div>
             <Input
               placeholder="username"
@@ -191,6 +236,68 @@ export function HumansScreen({ humans, onInviteHuman, onResetTempPassword, onRef
                 setNewHuman((prev) => ({ ...prev, tempPassword: event.target.value }))
               }
             />
+            <div className="space-y-2 rounded border border-slate-800 p-3">
+              <div className="text-xs uppercase tracking-wide text-slate-400">
+                Optional Landing Channel
+              </div>
+              <select
+                className="w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+                value={newHuman.channelId}
+                onChange={(event) =>
+                  setNewHuman((prev) => ({
+                    ...prev,
+                    channelId: event.target.value,
+                    channelName: event.target.value ? "" : prev.channelName,
+                  }))
+                }
+              >
+                <option value="">Create a new channel or leave blank</option>
+                {channels.map((channel) => (
+                  <option key={channel.id} value={channel.id}>
+                    {channel.name}
+                  </option>
+                ))}
+              </select>
+              <Input
+                placeholder="new channel name"
+                value={newHuman.channelName}
+                disabled={Boolean(newHuman.channelId)}
+                onChange={(event) =>
+                  setNewHuman((prev) => ({ ...prev, channelName: event.target.value }))
+                }
+              />
+              <Input
+                placeholder="new channel description (optional)"
+                value={newHuman.channelDescription}
+                disabled={Boolean(newHuman.channelId)}
+                onChange={(event) =>
+                  setNewHuman((prev) => ({
+                    ...prev,
+                    channelDescription: event.target.value,
+                  }))
+                }
+              />
+              <Input
+                placeholder="agent participants for new channel, comma-separated"
+                value={newHuman.agentParticipants}
+                disabled={Boolean(newHuman.channelId)}
+                list="human-invite-agent-names"
+                onChange={(event) =>
+                  setNewHuman((prev) => ({
+                    ...prev,
+                    agentParticipants: event.target.value,
+                  }))
+                }
+              />
+              <datalist id="human-invite-agent-names">
+                {agents.map((agent) => (
+                  <option key={agent.name} value={agent.name} />
+                ))}
+              </datalist>
+              <div className="text-xs text-slate-500">
+                Existing channels keep their current agents. New channels are private by default.
+              </div>
+            </div>
             {status && <div className="text-sm text-slate-300">{status}</div>}
           </div>
           <div className="mt-auto border-t border-slate-800 px-4 py-3">

@@ -435,6 +435,7 @@ export function createApp(config: AppConfig = {}) {
     jsonResponse,
     humanSchema: schema.humans,
     hashPassword,
+    access,
   });
 
   registerAgentInviteRoutes(app as any, {

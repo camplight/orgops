@@ -1325,6 +1325,8 @@ export default function App() {
       {activeScreen === "humans" && (
         <HumansScreen
           humans={data.humans}
+          channels={data.channels}
+          agents={data.agents}
           onInviteHuman={async (input) => {
             const res = await data.apiFetch("/api/humans/invite", {
               method: "POST",
@@ -1335,8 +1337,10 @@ export default function App() {
               id: string;
               username: string;
               temporaryPassword: string;
+              channel?: { id: string; name: string; created: boolean };
             };
             await data.refreshHumans();
+            await data.refreshChannels();
             return body;
           }}
           onResetTempPassword={async (input) => {
@@ -1358,6 +1362,7 @@ export default function App() {
           }}
           onRefresh={async () => {
             await data.refreshHumans();
+            await data.refreshChannels();
           }}
         />
       )}
