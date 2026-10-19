@@ -154,17 +154,6 @@ button {
   text-transform: uppercase;
 }
 
-.channel-search kbd {
-  padding: 2px 5px;
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.12);
-  color: #cbd5e1;
-  font-size: 10px;
-  font-weight: 900;
-  letter-spacing: 0;
-  text-transform: none;
-}
-
 .channel-search input {
   width: 100%;
   min-width: 0;

@@ -636,6 +636,7 @@ export default function App() {
   const channelSearchInputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const draftRef = useRef("");
   const conversationNameInputRef = useRef<HTMLInputElement | null>(null);
   const agentSearchInputRef = useRef<HTMLInputElement | null>(null);
   const teamSearchInputRef = useRef<HTMLInputElement | null>(null);
@@ -684,7 +685,7 @@ export default function App() {
   const [showConversationDialog, setShowConversationDialog] = useState(false);
   const [showParticipantsDialog, setShowParticipantsDialog] = useState(false);
   const [showChannelManageDialog, setShowChannelManageDialog] = useState(false);
-  const [draft, setDraft] = useState("");
+  const [draftHasText, setDraftHasText] = useState(false);
   const [username, setUsername] = useState("");
   const [userId, setUserId] = useState<string | null>(null);
   const [loginUsername, setLoginUsername] = useState("admin");
@@ -1757,7 +1758,7 @@ export default function App() {
     event.preventDefault();
     if (!activeChannelId || activeChannel?.archivedAt || !activeChannelCanPost) return;
     if (uploadingAttachmentCount > 0) return;
-    const trimmedText = draft.trim();
+    const trimmedText = draftRef.current.trim();
     if (!trimmedText && readyAttachments.length === 0) return;
 
     setSending(true);
@@ -1779,7 +1780,12 @@ export default function App() {
           channelId: activeChannelId
         })
       });
-      setDraft("");
+      draftRef.current = "";
+      if (composerTextareaRef.current) {
+        composerTextareaRef.current.value = "";
+        resizeComposerTextarea(composerTextareaRef.current);
+      }
+      setDraftHasText(false);
       setPendingAttachments([]);
       setHasNewMessagesBelow(false);
       if (wsConnected) {
@@ -2201,7 +2207,7 @@ export default function App() {
 
   useEffect(() => {
     resizeComposerTextarea();
-  }, [draft, isConversationEmpty, activeChannelId]);
+  }, [isConversationEmpty, activeChannelId]);
 
   useEffect(() => {
     function handleWindowResize() {
@@ -2332,13 +2338,12 @@ export default function App() {
           <label className="channel-search">
             <span>
               Search channels
-              <kbd>Cmd+Shift+K</kbd>
             </span>
             <input
               ref={channelSearchInputRef}
               value={channelQuery}
               onChange={(event) => setChannelQuery(event.target.value)}
-              placeholder="Search channels..."
+              placeholder="Search channels... (Cmd+Shift+K)"
             />
           </label>
           <div className="channel-list">
@@ -2807,9 +2812,10 @@ export default function App() {
           ) : null}
           <textarea
             ref={composerTextareaRef}
-            value={draft}
             onChange={(event) => {
-              setDraft(event.target.value);
+              draftRef.current = event.target.value;
+              const nextHasText = Boolean(event.target.value.trim());
+              setDraftHasText((current) => (current === nextHasText ? current : nextHasText));
               resizeComposerTextarea(event.currentTarget);
             }}
             onPaste={handleComposerPaste}
@@ -2849,7 +2855,7 @@ export default function App() {
                 !activeChannelCanPost ||
                 sending ||
                 uploadingAttachmentCount > 0 ||
-                (!draft.trim() && readyAttachments.length === 0)
+                (!draftHasText && readyAttachments.length === 0)
               }
             >
               {uploadingAttachmentCount > 0
