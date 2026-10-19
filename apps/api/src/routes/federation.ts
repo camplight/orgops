@@ -575,27 +575,36 @@ export function registerFederationRoutes(app: Hono<any>, deps: FederationDeps) {
     if (!link) return jsonResponse(c, { error: "Channel is not a LOCAL_HOME federated channel" }, 400);
     const body = await c.req.json().catch(() => ({}));
     const now = Date.now();
-    const id = randomUUID();
-    const inboundToken = generateFederationToken();
-    const peerName =
-      trimString((body as Record<string, unknown>).peerName) ||
-      `join-${channel.name}-${id.slice(0, 8)}`;
-    orm
-      .insert(schema.federationInstances)
-      .values({
-        id,
-        name: peerName,
-        base_url: "",
-        outbound_token: null,
-        inbound_token_hash: hashToken(inboundToken),
-        inbound_token_prefix: inboundToken.slice(0, 12),
-        status: "ACTIVE",
-        metadata_json: JSON.stringify({ joinChannelId: channelId }),
-        created_at: now,
-        updated_at: now,
-        last_seen_at: null,
-      })
-      .run();
+    const requestedPeerName = trimString((body as Record<string, unknown>).peerName);
+    let id = randomUUID();
+    let inboundToken = generateFederationToken();
+    let peerName = requestedPeerName || `join-${channel.name}-${id.slice(0, 8)}`;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        orm
+          .insert(schema.federationInstances)
+          .values({
+            id,
+            name: peerName,
+            base_url: "",
+            outbound_token: null,
+            inbound_token_hash: hashToken(inboundToken),
+            inbound_token_prefix: inboundToken.slice(0, 12),
+            status: "ACTIVE",
+            metadata_json: JSON.stringify({ joinChannelId: channelId }),
+            created_at: now,
+            updated_at: now,
+            last_seen_at: null,
+          })
+          .run();
+        break;
+      } catch (error) {
+        if (!String(error).includes("UNIQUE") || attempt === 4) throw error;
+        id = randomUUID();
+        inboundToken = generateFederationToken();
+        peerName = `join-${channel.name}-${id.slice(0, 8)}`;
+      }
+    }
     const origin = requestOrigin(c);
     const joinUrl = new URL(`${origin}/federation/join`);
     joinUrl.searchParams.set("homeBaseUrl", origin);

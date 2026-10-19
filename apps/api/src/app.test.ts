@@ -875,12 +875,13 @@ describe("api app", () => {
         {
           method: "POST",
           headers: { "content-type": "application/json", cookie },
-          body: JSON.stringify({}),
+          body: JSON.stringify({ peerName: "repeat-peer" }),
         },
       );
       expect(joinLinkRes.status).toBe(200);
-      const body = (await joinLinkRes.json()) as { joinUrl?: string };
+      const body = (await joinLinkRes.json()) as { joinUrl?: string; peerName?: string };
       expect(body.joinUrl).toContain("/federation/join");
+      expect(body.peerName).toBeTruthy();
     }
 
     const linksRes = await app.request("http://localhost/api/federation/channels", {
