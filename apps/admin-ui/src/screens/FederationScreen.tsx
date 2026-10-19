@@ -60,6 +60,8 @@ export function FederationScreen({
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const instancesById = new Map(instances.map((instance) => [instance.id, instance]));
+  const connectedInstances = instances.filter((instance) => instance.baseUrl.trim().length > 0);
+  const pendingInviteCount = instances.length - connectedInstances.length;
   const localHomeLinks = channelLinks.filter((link) => link.role === "LOCAL_HOME");
   const remoteProjectionLinks = channelLinks.filter((link) => link.role === "REMOTE_PROJECTION");
 
@@ -322,10 +324,10 @@ export function FederationScreen({
         </div>
       </Card>
 
-      <Card title="Peer Instances">
+      <Card title={`Peer Instances (${connectedInstances.length})`}>
         <div className="mb-3 text-xs text-slate-500">
-          Peers are usually created by joining with a URL. Use manual setup only when connecting
-          older instances or rotating tokens.
+          Peers appear here after another OrgOps joins or when you add one manually. Pending join
+          URLs are not shown as peers{pendingInviteCount > 0 ? ` (${pendingInviteCount} pending)` : ""}.
         </div>
         {showAdvanced ? (
         <div className="mb-4 grid gap-2 md:grid-cols-4">
@@ -364,7 +366,7 @@ export function FederationScreen({
               </tr>
             </thead>
             <tbody>
-              {instances.map((instance) => (
+              {connectedInstances.map((instance) => (
                 <tr key={instance.id} className="border-b border-slate-900">
                   <td className="px-2 py-2 text-slate-100">{instance.name}</td>
                   <td className="px-2 py-2 text-slate-400">{instance.baseUrl}</td>
@@ -389,7 +391,7 @@ export function FederationScreen({
               ))}
             </tbody>
           </table>
-          {instances.length === 0 ? (
+          {connectedInstances.length === 0 ? (
             <div className="py-4 text-center text-slate-500">No peer instances configured.</div>
           ) : null}
         </div>
@@ -448,7 +450,7 @@ export function FederationScreen({
             disabled={linkForm.role === "LOCAL_HOME"}
           >
             <option value="">Home instance</option>
-            {instances.map((instance) => (
+            {connectedInstances.map((instance) => (
               <option key={instance.id} value={instance.id}>
                 {instance.name}
               </option>
