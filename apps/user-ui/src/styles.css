@@ -143,11 +143,26 @@ button {
 }
 
 .channel-search span {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
   color: #94a3b8;
   font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.1em;
   text-transform: uppercase;
+}
+
+.channel-search kbd {
+  padding: 2px 5px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #cbd5e1;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .channel-search input {

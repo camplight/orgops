@@ -633,6 +633,7 @@ function formatAttachmentSize(size?: number) {
 
 export default function App() {
   const messagesPanelRef = useRef<HTMLElement | null>(null);
+  const channelSearchInputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const conversationNameInputRef = useRef<HTMLInputElement | null>(null);
@@ -862,10 +863,20 @@ export default function App() {
       const rightName = channelDisplayName(right, username).toLowerCase();
       return leftName.localeCompare(rightName);
     });
+  const isSearchingChannels = Boolean(channelQuery.trim());
 
   const groupedChannels = useMemo(
-    () =>
-      CHANNEL_GROUPS.map((group) => ({
+    () => {
+      if (isSearchingChannels) {
+        return [
+          {
+            id: "channels" as const,
+            label: "Search results",
+            channels: sortChannelsForDisplay(filteredChannels)
+          }
+        ].filter((group) => group.channels.length > 0);
+      }
+      return CHANNEL_GROUPS.map((group) => ({
         ...group,
         channels: sortChannelsForDisplay(filteredChannels.filter((channel) => {
           const shared = isSharedChannelForUser(channel, username);
@@ -881,11 +892,11 @@ export default function App() {
           if (shared) return false;
           return channelGroupId(channel) === "channels";
         }))
-      })).filter((group) => group.channels.length > 0),
-    [filteredChannels, pinnedChannelIdSet, unreadCounts, username]
+      })).filter((group) => group.channels.length > 0);
+    },
+    [filteredChannels, isSearchingChannels, pinnedChannelIdSet, unreadCounts, username]
   );
 
-  const isSearchingChannels = Boolean(channelQuery.trim());
   const uploadingAttachmentCount = pendingAttachments.filter((item) => item.status === "uploading").length;
   const readyAttachments = pendingAttachments
     .filter((item) => item.status === "ready" && item.uploaded)
@@ -1611,7 +1622,14 @@ export default function App() {
   useEffect(() => {
     if (!authenticated || mustChangePassword) return;
     function handleShortcut(event: KeyboardEvent) {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+      if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setMobileSidebarOpen(true);
+        channelSearchInputRef.current?.focus();
+        channelSearchInputRef.current?.select();
+        return;
+      }
+      if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLowerCase() === "k") {
         event.preventDefault();
         setShowConversationDialog(true);
       }
@@ -2312,8 +2330,12 @@ export default function App() {
 
         <section className="sidebar-section">
           <label className="channel-search">
-            <span>Search channels</span>
+            <span>
+              Search channels
+              <kbd>Cmd+Shift+K</kbd>
+            </span>
             <input
+              ref={channelSearchInputRef}
               value={channelQuery}
               onChange={(event) => setChannelQuery(event.target.value)}
               placeholder="Search channels..."
