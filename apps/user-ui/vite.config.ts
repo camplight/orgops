@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 
 const basePath = process.env.VITE_UI_BASE_PATH ?? "/";
 const appRoot = dirname(fileURLToPath(import.meta.url));
+const apiProxyTarget = process.env.ORGOPS_DEV_API_PROXY_TARGET ?? "http://localhost:8787";
+const wsProxyTarget = process.env.ORGOPS_DEV_WS_PROXY_TARGET ?? "ws://localhost:8787";
 
 export default defineConfig({
   root: appRoot,
@@ -13,9 +15,9 @@ export default defineConfig({
   server: {
     port: 5190,
     proxy: {
-      "/api": "http://localhost:8787",
+      "/api": apiProxyTarget,
       "/ws": {
-        target: "ws://localhost:8787",
+        target: wsProxyTarget,
         ws: true
       }
     }
