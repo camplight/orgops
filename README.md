@@ -184,6 +184,7 @@ chmod +x ./opscli-macos
 
 - `PORT` (API server port, default: `8787`)
 - `ORGOPS_ADMIN_USER` / `ORGOPS_ADMIN_PASS` (defaults to `admin`)
+- `ORGOPS_SYSTEM_AGENT_MODEL` (optional provider or `provider:model`; seeds a public `system` agent on a fresh database when the matching provider API key is set)
 - `ORGOPS_RUNNER_TOKEN` (shared token for agent-runner -> API, default: `dev-runner-token`)
 - `ORGOPS_MASTER_KEY` (32-byte base64, required for secrets encryption)
 - `ORGOPS_COOKIE_SECURE` (`auto|always|never`, default: `auto`; `auto` enables `Secure` cookies on HTTPS requests)

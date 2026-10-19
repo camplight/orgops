@@ -20,6 +20,7 @@ npm run dev --workspace @orgops/api
 
 - `PORT` (default: 8787)
 - `ORGOPS_ADMIN_USER` / `ORGOPS_ADMIN_PASS`
+- `ORGOPS_SYSTEM_AGENT_MODEL` (optional provider or `provider:model`; seeds `system` when no agents exist and the matching provider API key is set)
 - `ORGOPS_RUNNER_TOKEN`
 - `ORGOPS_MASTER_KEY`
 - `ORGOPS_PROJECT_ROOT` (optional monorepo root override)

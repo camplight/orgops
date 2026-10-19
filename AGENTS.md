@@ -42,7 +42,7 @@ Scenario e2e checks run against already-running services:
 npm run scenario:test:countdown
 ```
 
-Set `ORGOPS_LLM_STUB=1` to work without provider API keys. Default login is `ORGOPS_ADMIN_USER`/`ORGOPS_ADMIN_PASS` (`admin`/`admin`); the admin row is only seeded when no humans exist.
+Set `ORGOPS_LLM_STUB=1` to work without provider API keys. Default login is `ORGOPS_ADMIN_USER`/`ORGOPS_ADMIN_PASS` (`admin`/`admin`); the admin row is only seeded when no humans exist. A public `system` agent is seeded only when no agents exist and `ORGOPS_SYSTEM_AGENT_MODEL` plus the matching provider API key are set.
 
 Backend apps run TypeScript directly via `tsx` (`node --import tsx`). There is no compile step and no emitted `dist/` — `lint` is the only type check.
 

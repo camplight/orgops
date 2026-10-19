@@ -10,14 +10,16 @@ import {
   scryptSync,
   timingSafeEqual,
 } from "node:crypto";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 
+import { encryptSecret, parseMasterKey } from "@orgops/crypto";
 import {
   createDrizzleDb,
   openDb,
   migrate,
   schema,
   type OrgOpsDb,
+  type OrgOpsDrizzleDb,
 } from "@orgops/db";
 import { EventBus } from "@orgops/event-bus";
 import {
@@ -61,6 +63,8 @@ export type AppConfig = {
   dataDir?: string;
   adminUser?: string;
   adminPass?: string;
+  /** `provider` or `provider:model`. Seeds the default `system` agent on an empty agents table. */
+  systemAgentModel?: string;
   runnerToken?: string;
   runnerApiUrl?: string;
   projectRoot?: string;
@@ -153,6 +157,8 @@ export function createApp(config: AppConfig = {}) {
       })
       .run();
   }
+
+  seedDefaultSystemAgent(orm, DATA_DIR, config.systemAgentModel);
 
   function jsonResponse(c: any, data: unknown, status = 200) {
     return c.json(data, status);
@@ -541,4 +547,154 @@ export function createApp(config: AppConfig = {}) {
   registerEmbedRoutes(app as any, { orm, jsonResponse, insertEvent });
 
   return { app, db, bus, injectWebSocket };
+}
+
+const SYSTEM_AGENT_NAME = "system";
+
+const DEFAULT_MODEL_NAME_BY_PROVIDER = {
+  openai: "gpt-5.2",
+  anthropic: "claude-3-5-sonnet-latest",
+  openrouter: "openai/gpt-4o-mini",
+} as const;
+
+const PROVIDER_API_KEY_ENV = {
+  openai: "OPENAI_API_KEY",
+  anthropic: "ANTHROPIC_API_KEY",
+  openrouter: "OPENROUTER_API_KEY",
+} as const;
+
+type SystemAgentProvider = keyof typeof DEFAULT_MODEL_NAME_BY_PROVIDER;
+
+function normalizeSystemAgentProvider(raw: string): SystemAgentProvider | null {
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "openai") return "openai";
+  if (normalized === "anthropic" || normalized === "claude") return "anthropic";
+  if (normalized === "openrouter" || normalized === "or") return "openrouter";
+  return null;
+}
+
+function resolveSystemAgentModel(raw: string) {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const colon = trimmed.indexOf(":");
+  const provider = normalizeSystemAgentProvider(
+    colon === -1 ? trimmed : trimmed.slice(0, colon),
+  );
+  if (!provider) return null;
+  const explicitModel = colon === -1 ? "" : trimmed.slice(colon + 1).trim();
+  const modelName = explicitModel || DEFAULT_MODEL_NAME_BY_PROVIDER[provider];
+  if (!modelName) return null;
+  return {
+    provider,
+    modelName,
+    modelId: `${provider}:${modelName}`,
+    secretName: PROVIDER_API_KEY_ENV[provider],
+  };
+}
+
+function seedDefaultSystemAgent(
+  orm: OrgOpsDrizzleDb,
+  dataDir: string,
+  configuredModel: string | undefined,
+) {
+  const configured = (
+    configuredModel ??
+    process.env.ORGOPS_SYSTEM_AGENT_MODEL ??
+    ""
+  ).trim();
+  if (!configured) return;
+
+  const existingAgent = orm
+    .select({ id: schema.agents.id })
+    .from(schema.agents)
+    .limit(1)
+    .get();
+  if (existingAgent) return;
+
+  const resolved = resolveSystemAgentModel(configured);
+  if (!resolved) {
+    console.warn(
+      `ORGOPS_SYSTEM_AGENT_MODEL "${configured}" is not a supported provider or provider:model value. Skipping default system agent.`,
+    );
+    return;
+  }
+
+  const apiKey = (process.env[resolved.secretName] ?? "").trim();
+  if (!apiKey) {
+    console.warn(
+      `ORGOPS_SYSTEM_AGENT_MODEL is set but ${resolved.secretName} is empty. Skipping default system agent.`,
+    );
+    return;
+  }
+
+  let masterKey: Buffer;
+  try {
+    masterKey = parseMasterKey(process.env.ORGOPS_MASTER_KEY ?? "");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`Skipping default system agent: ${message}`);
+    return;
+  }
+
+  const now = Date.now();
+  orm.transaction((tx) => {
+    const existingSecret = tx
+      .select({ id: schema.secrets.id })
+      .from(schema.secrets)
+      .where(
+        and(
+          eq(schema.secrets.name, resolved.secretName),
+          eq(schema.secrets.scope_type, "public"),
+          isNull(schema.secrets.scope_id),
+        ),
+      )
+      .get();
+    if (!existingSecret) {
+      tx.insert(schema.secrets)
+        .values({
+          id: randomUUID(),
+          name: resolved.secretName,
+          scope_type: "public",
+          scope_id: null,
+          ciphertext_b64: encryptSecret(masterKey, apiKey),
+          created_at: now,
+        })
+        .run();
+    }
+
+    const existingModel = tx
+      .select({ id: schema.models.id })
+      .from(schema.models)
+      .where(eq(schema.models.id, resolved.modelId))
+      .get();
+    if (!existingModel) {
+      tx.insert(schema.models)
+        .values({
+          id: resolved.modelId,
+          provider: resolved.provider,
+          model_name: resolved.modelName,
+          enabled: 1,
+          defaults_json: "{}",
+          created_at: now,
+        })
+        .run();
+    }
+
+    tx.insert(schema.agents)
+      .values({
+        id: randomUUID(),
+        name: SYSTEM_AGENT_NAME,
+        description: "Default system agent",
+        model_id: resolved.modelId,
+        system_instructions:
+          "You are the default OrgOps system agent for this instance.",
+        soul_path: join(dataDir, "souls", "system.md"),
+        soul_contents:
+          "You are system, the default agent created when this OrgOps instance first started.",
+        workspace_path: join(dataDir, "workspaces", "system"),
+        created_at: now,
+        updated_at: now,
+      })
+      .run();
+  });
 }

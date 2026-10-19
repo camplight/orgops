@@ -54,6 +54,8 @@ Stored in `agents`:
 - secret delegation toggle: `allow_owner_human_secrets` (when enabled and owner exists, user-scoped secrets are injected for native turns)
 - wrapped runtime config: `wrapped_config_json` (JSON object; used only by `WRAPPED` mode)
 
+On API startup, when `agents` is empty, OrgOps seeds one public agent named `system` if `ORGOPS_SYSTEM_AGENT_MODEL` is set. The value is a provider (`openai`, `anthropic`/`claude`, `openrouter`/`or`) or `provider:model`. A bare provider uses `openai:gpt-5.2`, `anthropic:claude-3-5-sonnet-latest`, or `openrouter:openai/gpt-4o-mini`. Seeding also stores the matching provider API key (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `OPENROUTER_API_KEY`) as a public secret and inserts an enabled `models` row. The agent is skipped when the model is unset, the provider is unsupported, the API key is empty, `ORGOPS_MASTER_KEY` cannot encrypt the secret, or any agent row already exists. The seeded agent is unassigned; a runner executes it after `assigned_runner_id` is set.
+
 `WRAPPED` agents are orgops-owned lifecycle records whose turns are delegated to an external runtime. They do not use orgops memory summaries, prompt composition, skills, model calls, or `allow_outside_workspace` for turn handling. The wrapped runtime owns its own session/memory/tool state and filesystem policy. The normal `soul_path` / `soul_contents` fields may still be stored on the agent row for humans, opscli, and native management agents; the wrapper runner does not automatically inject them. The creator of the wrapped agent should translate those native fields into the selected harness configuration/setup/runtime behavior when that harness needs a soul file or prompt seed.
 
 Example wrapped config:
@@ -578,6 +580,7 @@ Security note: wrapped `source`, `setup.command`, and `runtime.command` are host
 - `ORGOPS_RUNNER_ID_FILE`
 - `ORGOPS_RUNNER_NAME`
 - `ORGOPS_ADMIN_USER`, `ORGOPS_ADMIN_PASS`
+- `ORGOPS_SYSTEM_AGENT_MODEL` (optional provider or `provider:model`; seeds the default `system` agent when `agents` is empty)
 - `ORGOPS_MASTER_KEY`
 - `ORGOPS_COOKIE_SECURE`
 - `ORGOPS_EVENT_MAX_FAILURES`
@@ -596,6 +599,7 @@ Security note: wrapped `source`, `setup.command`, and `runtime.command` are host
 - `ORGOPS_AGENT_INTENT_MAX_TIMEOUTS`
 - `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`
   - for native/wrapped runtime execution with injected env, provider keys are loaded from resolved secrets and do not fall back to host process env
+  - when the default `system` agent is seeded, the matching key is copied into a public secret so the runner can inject it
 - `OPENROUTER_BASE_URL`, `OPENROUTER_HTTP_REFERER`, `OPENROUTER_APP_TITLE`
 - `ORGOPS_GIT_BASH_PATH`
 - `ORGOPS_SHELL_PATH`, `ORGOPS_SHELL_ARGS`

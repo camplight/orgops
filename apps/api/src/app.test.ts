@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
+import { decryptSecret, parseMasterKey } from "@orgops/crypto";
 import { createDrizzleDb, migrate, openDb, schema } from "@orgops/db";
 import { createApp } from "./app";
 
@@ -88,6 +89,184 @@ describe("api app", () => {
     expect(loginRes.status).toBe(401);
 
     rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("seeds a system agent only when a provider model and API key are configured", async () => {
+    const masterKey = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
+    const previousMasterKey = process.env.ORGOPS_MASTER_KEY;
+    const previousOpenAiKey = process.env.OPENAI_API_KEY;
+    const previousAnthropicKey = process.env.ANTHROPIC_API_KEY;
+    process.env.ORGOPS_MASTER_KEY = masterKey;
+    process.env.OPENAI_API_KEY = "sk-test-openai";
+    delete process.env.ANTHROPIC_API_KEY;
+
+    try {
+      const unconfiguredDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+      const unconfiguredDb = openDb(":memory:");
+      const unconfigured = createApp({
+        db: unconfiguredDb,
+        dataDir: unconfiguredDir,
+        adminUser: "admin",
+        adminPass: "admin",
+      });
+      const unconfiguredLogin = await unconfigured.app.request(
+        "http://localhost/api/auth/login",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ username: "admin", password: "admin" }),
+        },
+      );
+      const unconfiguredCookie = unconfiguredLogin.headers.get("set-cookie") ?? "";
+      const missingModel = await unconfigured.app.request(
+        "http://localhost/api/agents/system",
+        { headers: { cookie: unconfiguredCookie } },
+      );
+      expect(missingModel.status).toBe(404);
+      rmSync(unconfiguredDir, { recursive: true, force: true });
+
+      const missingKeyDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+      const missingKeyDb = openDb(":memory:");
+      delete process.env.ANTHROPIC_API_KEY;
+      createApp({
+        db: missingKeyDb,
+        dataDir: missingKeyDir,
+        adminUser: "admin",
+        adminPass: "admin",
+        systemAgentModel: "anthropic",
+      });
+      const missingKeyOrm = createDrizzleDb(missingKeyDb);
+      expect(
+        missingKeyOrm
+          .select({ name: schema.agents.name })
+          .from(schema.agents)
+          .all(),
+      ).toEqual([]);
+      rmSync(missingKeyDir, { recursive: true, force: true });
+
+      const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+      const db = openDb(":memory:");
+      const { app } = createApp({
+        db,
+        dataDir,
+        adminUser: "admin",
+        adminPass: "admin",
+        systemAgentModel: "openai:gpt-4o-mini",
+      });
+      const loginRes = await app.request("http://localhost/api/auth/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ username: "admin", password: "admin" }),
+      });
+      expect(loginRes.status).toBe(200);
+      const cookie = loginRes.headers.get("set-cookie") ?? "";
+      const agentRes = await app.request("http://localhost/api/agents/system", {
+        headers: { cookie },
+      });
+      expect(agentRes.status).toBe(200);
+      const agent = (await agentRes.json()) as {
+        name?: string;
+        modelId?: string;
+        visibility?: string;
+        desiredState?: string;
+        workspacePath?: string;
+      };
+      expect(agent.name).toBe("system");
+      expect(agent.modelId).toBe("openai:gpt-4o-mini");
+      expect(agent.visibility).toBe("PUBLIC");
+      expect(agent.desiredState).toBe("RUNNING");
+      expect(agent.workspacePath).toBe(join(dataDir, "workspaces", "system"));
+
+      const orm = createDrizzleDb(db);
+      const secret = orm
+        .select({
+          name: schema.secrets.name,
+          scopeType: schema.secrets.scope_type,
+          ciphertext: schema.secrets.ciphertext_b64,
+        })
+        .from(schema.secrets)
+        .where(eq(schema.secrets.name, "OPENAI_API_KEY"))
+        .get() as
+        | { name: string; scopeType: string; ciphertext: string }
+        | undefined;
+      expect(secret?.scopeType).toBe("public");
+      expect(decryptSecret(parseMasterKey(masterKey), secret?.ciphertext ?? "")).toBe(
+        "sk-test-openai",
+      );
+      const model = orm
+        .select({
+          provider: schema.models.provider,
+          modelName: schema.models.model_name,
+          enabled: schema.models.enabled,
+        })
+        .from(schema.models)
+        .where(eq(schema.models.id, "openai:gpt-4o-mini"))
+        .get() as
+        | { provider: string; modelName: string; enabled: number }
+        | undefined;
+      expect(model).toEqual({
+        provider: "openai",
+        modelName: "gpt-4o-mini",
+        enabled: 1,
+      });
+      rmSync(dataDir, { recursive: true, force: true });
+    } finally {
+      if (previousMasterKey === undefined) delete process.env.ORGOPS_MASTER_KEY;
+      else process.env.ORGOPS_MASTER_KEY = previousMasterKey;
+      if (previousOpenAiKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = previousOpenAiKey;
+      if (previousAnthropicKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = previousAnthropicKey;
+    }
+  });
+
+  it("does not seed a system agent when any agent already exists", async () => {
+    const masterKey = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
+    const previousMasterKey = process.env.ORGOPS_MASTER_KEY;
+    const previousOpenAiKey = process.env.OPENAI_API_KEY;
+    process.env.ORGOPS_MASTER_KEY = masterKey;
+    process.env.OPENAI_API_KEY = "sk-test-openai";
+
+    try {
+      const db = openDb(":memory:");
+      migrate(db);
+      const orm = createDrizzleDb(db);
+      const now = Date.now();
+      orm
+        .insert(schema.agents)
+        .values({
+          id: randomUUID(),
+          name: "existing-agent",
+          model_id: "openai:gpt-4o-mini",
+          soul_path: "/tmp/existing-soul.md",
+          workspace_path: "/tmp/existing-workspace",
+          created_at: now,
+          updated_at: now,
+        })
+        .run();
+
+      const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+      createApp({
+        db,
+        dataDir,
+        adminUser: "admin",
+        adminPass: "admin",
+        systemAgentModel: "openai:gpt-4o-mini",
+      });
+      const names = orm
+        .select({ name: schema.agents.name })
+        .from(schema.agents)
+        .all()
+        .map((row) => row.name);
+      expect(names).toEqual(["existing-agent"]);
+      expect(orm.select({ id: schema.secrets.id }).from(schema.secrets).all()).toEqual([]);
+      rmSync(dataDir, { recursive: true, force: true });
+    } finally {
+      if (previousMasterKey === undefined) delete process.env.ORGOPS_MASTER_KEY;
+      else process.env.ORGOPS_MASTER_KEY = previousMasterKey;
+      if (previousOpenAiKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = previousOpenAiKey;
+    }
   });
 
   it("registers runners and filters agents by assigned runner", async () => {
