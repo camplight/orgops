@@ -2390,13 +2390,18 @@ export default function App() {
                 {isSearchingChannels || showArchivedChannels ? (
                   <div className="channel-group-items archived-channel-items">
                     {filteredArchivedChannels.map((channel) => (
-                      <button
+                      <div
+                        className={`channel-list-row archived-channel-row${channel.id === activeChannelId ? " active" : ""}`}
                         key={channel.id}
-                        className={channel.id === activeChannelId ? "active" : undefined}
-                        onClick={() => selectChannel(channel.id)}
                       >
-                        <span>{channelLabel(channel, username)}</span>
-                      </button>
+                        <button
+                          className="channel-select-button"
+                          onClick={() => selectChannel(channel.id)}
+                          type="button"
+                        >
+                          <span>{channelLabel(channel, username)}</span>
+                        </button>
+                      </div>
                     ))}
                   </div>
                 ) : null}
