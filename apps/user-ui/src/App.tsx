@@ -2379,15 +2379,15 @@ export default function App() {
                 <button
                   type="button"
                   className="channel-group-toggle"
-                  aria-expanded={isSearchingChannels || showArchivedChannels}
+                  aria-expanded={showArchivedChannels}
                   onClick={() => setShowArchivedChannels((current) => !current)}
                 >
                   <span>Archived</span>
                   <em>{filteredArchivedChannels.length}</em>
-                  <strong>{isSearchingChannels || showArchivedChannels ? "-" : "+"}</strong>
+                  <strong>{showArchivedChannels ? "-" : "+"}</strong>
                 </button>
 
-                {isSearchingChannels || showArchivedChannels ? (
+                {showArchivedChannels ? (
                   <div className="channel-group-items archived-channel-items">
                     {filteredArchivedChannels.map((channel) => (
                       <div
