@@ -709,6 +709,23 @@ export default function App() {
               data.refreshChannels();
               data.refreshProcesses();
             }}
+            onCopyAgent={async (sourceName, input) => {
+              await data.apiFetch(`/api/agents/${encodeURIComponent(sourceName)}/copy`, {
+                method: "POST",
+                headers: data.getApiHeaders(),
+                body: JSON.stringify(input)
+              });
+              data.refreshDashboard();
+              data.refreshChannels();
+            }}
+            onMoveAgent={async (name, assignedRunnerId) => {
+              await data.apiFetch(`/api/agents/${encodeURIComponent(name)}/move`, {
+                method: "POST",
+                headers: data.getApiHeaders(),
+                body: JSON.stringify({ assignedRunnerId })
+              });
+              data.refreshDashboard();
+            }}
             onStartAgent={async (name) => {
               await data.apiFetch(`/api/agents/${name}/start`, { method: "POST" });
             }}
@@ -851,6 +868,23 @@ export default function App() {
             data.refreshDashboard();
             data.refreshChannels();
             data.refreshProcesses();
+          }}
+          onCopyAgent={async (sourceName, input) => {
+            await data.apiFetch(`/api/agents/${encodeURIComponent(sourceName)}/copy`, {
+              method: "POST",
+              headers: data.getApiHeaders(),
+              body: JSON.stringify(input)
+            });
+            data.refreshDashboard();
+            data.refreshChannels();
+          }}
+          onMoveAgent={async (name, assignedRunnerId) => {
+            await data.apiFetch(`/api/agents/${encodeURIComponent(name)}/move`, {
+              method: "POST",
+              headers: data.getApiHeaders(),
+              body: JSON.stringify({ assignedRunnerId })
+            });
+            data.refreshDashboard();
           }}
           onStartAgent={async (name) => {
             await data.apiFetch(`/api/agents/${name}/start`, { method: "POST" });

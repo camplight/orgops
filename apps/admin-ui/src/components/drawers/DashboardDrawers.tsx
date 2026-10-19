@@ -62,6 +62,11 @@ type DashboardDrawersProps = {
   onCreateAgent: (agent: AgentForm) => Promise<void>;
   onUpdateAgent: (name: string, agent: Omit<AgentForm, "name">) => Promise<void>;
   onDeleteAgent: (name: string) => Promise<void>;
+  onCopyAgent: (
+    sourceName: string,
+    input: { name: string; assignedRunnerId?: string | null; copyChannelMemberships?: boolean }
+  ) => Promise<void>;
+  onMoveAgent: (name: string, assignedRunnerId: string | null) => Promise<void>;
   onStartAgent: (name: string) => Promise<void>;
   onStopAgent: (name: string) => Promise<void>;
   onCleanupAgentWorkspace: (name: string) => Promise<void>;
@@ -124,6 +129,8 @@ export function DashboardDrawers({
   onCreateAgent,
   onUpdateAgent,
   onDeleteAgent,
+  onCopyAgent,
+  onMoveAgent,
   onStartAgent,
   onStopAgent,
   onCleanupAgentWorkspace,
@@ -155,6 +162,8 @@ export function DashboardDrawers({
         onCreateAgent={onCreateAgent}
         onUpdateAgent={onUpdateAgent}
         onDeleteAgent={onDeleteAgent}
+        onCopyAgent={onCopyAgent}
+        onMoveAgent={onMoveAgent}
         onStartAgent={onStartAgent}
         onStopAgent={onStopAgent}
         onCleanupAgentWorkspace={onCleanupAgentWorkspace}

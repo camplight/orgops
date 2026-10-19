@@ -32,13 +32,13 @@
     "@types/node": "^24.5.2",
     "concurrently": "^10.0.5",
     "dotenv-cli": "^8.0.0",
-    "tsx": "^4.20.5",
     "typescript": "^5.5.4",
     "vitest": "^5.0.3",
     "wait-on": "^8.0.5"
   },
   "dependencies": {
-    "cursor-agent": "^1.0.3"
+    "cursor-agent": "^1.0.3",
+    "tsx": "^4.20.5"
   },
   "overrides": {
     "@tootallnate/once": "^3.0.1",

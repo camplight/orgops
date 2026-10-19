@@ -698,6 +698,18 @@ const coreEventShapes: EventShapeDefinition[] = [
     source: "core",
     payloadSchema: z.record(z.string(), z.unknown()),
   },
+  {
+    type: "agent.control.copy",
+    description: "Agent copy management command.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
+  {
+    type: "agent.control.move",
+    description: "Agent runner reassignment management command.",
+    source: "core",
+    payloadSchema: z.record(z.string(), z.unknown()),
+  },
 ];
 
 export function getCoreEventShapes(): EventShapeDefinition[] {

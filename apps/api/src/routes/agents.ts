@@ -309,6 +309,22 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     return roots;
   }
 
+  function normalizeAgentNameInput(value: unknown) {
+    return typeof value === "string" ? value.trim() : "";
+  }
+
+  function normalizeAssignedRunnerInput(value: unknown): string | null {
+    if (value === null) return null;
+    if (typeof value !== "string") return null;
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  }
+
+  function normalizeDesiredStateInput(value: unknown, fallback: string) {
+    const normalized = typeof value === "string" ? value.trim().toUpperCase() : "";
+    return normalized === "RUNNING" || normalized === "STOPPED" ? normalized : fallback;
+  }
+
   app.get("/api/agents", (c) => {
     const url = new URL(c.req.url);
     const assignedRunnerId = (url.searchParams.get("assignedRunnerId") ?? "").trim();
@@ -868,6 +884,155 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       removedProcessCount: processRows.length,
       terminatedProcessCount
     });
+  });
+
+  app.post("/api/agents/:name/copy", async (c) => {
+    const sourceName = c.req.param("name");
+    const user = c.get("user") as RequestUser | undefined;
+    if (!access.canManageAgent(user, sourceName)) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
+    const source = orm.select().from(schema.agents).where(eq(schema.agents.name, sourceName)).get() as any;
+    if (!source) return jsonResponse(c, { error: "Not found" }, 404);
+    const body = await c.req.json().catch(() => ({}));
+    const targetName = normalizeAgentNameInput((body as Record<string, unknown>).name);
+    if (!targetName) return jsonResponse(c, { error: "name is required" }, 400);
+    if (targetName === sourceName) {
+      return jsonResponse(c, { error: "Copied agent name must differ from source agent" }, 400);
+    }
+    const assignedRunnerId =
+      Object.prototype.hasOwnProperty.call(body, "assignedRunnerId")
+        ? normalizeAssignedRunnerInput((body as Record<string, unknown>).assignedRunnerId)
+        : source.assigned_runner_id ?? null;
+    const workspacePath =
+      typeof (body as Record<string, unknown>).workspacePath === "string" &&
+      String((body as Record<string, unknown>).workspacePath).trim()
+        ? resolveWorkspacePath(String((body as Record<string, unknown>).workspacePath))
+        : resolveWorkspacePath(`.orgops-data/workspaces/${targetName}`);
+    const desiredState = normalizeDesiredStateInput(
+      (body as Record<string, unknown>).desiredState,
+      "STOPPED",
+    );
+    const runtimeState = desiredState === "RUNNING" ? "STARTING" : "STOPPED";
+    const now = Date.now();
+    const id = randomUUID();
+    orm
+      .insert(schema.agents)
+      .values({
+        id,
+        name: targetName,
+        icon: source.icon,
+        description: source.description,
+        model_id: source.model_id,
+        soul_contents: source.soul_contents ?? "",
+        workspace_path: workspacePath,
+        allow_outside_workspace: source.allow_outside_workspace ?? 0,
+        llm_call_timeout_ms: source.llm_call_timeout_ms ?? null,
+        classic_max_model_steps: source.classic_max_model_steps ?? null,
+        context_session_gap_ms: source.context_session_gap_ms ?? null,
+        emit_audit_events: source.emit_audit_events ?? 1,
+        memory_context_mode: source.memory_context_mode ?? "PER_CHANNEL_CROSS_CHANNEL",
+        mode: source.mode ?? "CLASSIC",
+        wrapped_config_json: source.wrapped_config_json ?? "{}",
+        visibility: source.visibility ?? AGENT_VISIBILITY.PUBLIC,
+        owner_human_id: source.owner_human_id ?? null,
+        assigned_runner_id: assignedRunnerId,
+        enabled_skills_json: source.enabled_skills_json ?? "[]",
+        always_preloaded_skills_json: source.always_preloaded_skills_json ?? "[]",
+        additional_skill_roots_json: source.additional_skill_roots_json ?? "[]",
+        allow_owner_human_secrets: source.allow_owner_human_secrets ?? 0,
+        desired_state: desiredState,
+        runtime_state: runtimeState,
+        last_heartbeat_at: null,
+        created_at: now,
+        updated_at: now,
+      })
+      .run();
+
+    if (Boolean((body as Record<string, unknown>).copyChannelMemberships)) {
+      const memberships = orm
+        .select({ channelId: schema.channelSubscriptions.channel_id })
+        .from(schema.channelSubscriptions)
+        .where(
+          and(
+            eq(schema.channelSubscriptions.subscriber_type, "AGENT"),
+            eq(schema.channelSubscriptions.subscriber_id, sourceName),
+          ),
+        )
+        .all();
+      if (memberships.length > 0) {
+        orm
+          .insert(schema.channelSubscriptions)
+          .values(
+            memberships.map((membership) => ({
+              channel_id: membership.channelId,
+              subscriber_type: "AGENT",
+              subscriber_id: targetName,
+            })),
+          )
+          .onConflictDoNothing()
+          .run();
+      }
+    }
+
+    publishDashboardRefresh("agent.copied", {
+      sourceAgentName: sourceName,
+      targetAgentName: targetName,
+    });
+    insertEvent({
+      type: "agent.control.copy",
+      payload: { sourceAgentName: sourceName, targetAgentName: targetName },
+      source: "system",
+    });
+    return jsonResponse(
+      c,
+      { ok: true, id, name: targetName, assignedRunnerId, workspacePath, desiredState },
+      201,
+    );
+  });
+
+  app.post("/api/agents/:name/move", async (c) => {
+    const name = c.req.param("name");
+    const user = c.get("user") as RequestUser | undefined;
+    if (!access.canManageAgent(user, name)) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
+    const existing = orm.select().from(schema.agents).where(eq(schema.agents.name, name)).get() as any;
+    if (!existing) return jsonResponse(c, { error: "Not found" }, 404);
+    const body = await c.req.json().catch(() => ({}));
+    if (!Object.prototype.hasOwnProperty.call(body, "assignedRunnerId")) {
+      return jsonResponse(c, { error: "assignedRunnerId is required; use null to unassign" }, 400);
+    }
+    const assignedRunnerId = normalizeAssignedRunnerInput(
+      (body as Record<string, unknown>).assignedRunnerId,
+    );
+    const desiredState = existing.desired_state ?? "STOPPED";
+    const runtimeState = desiredState === "RUNNING" ? "STARTING" : "STOPPED";
+    orm
+      .update(schema.agents)
+      .set({
+        assigned_runner_id: assignedRunnerId,
+        runtime_state: runtimeState,
+        updated_at: Date.now(),
+      })
+      .where(eq(schema.agents.name, name))
+      .run();
+    publishDashboardRefresh("agent.moved", { agentName: name, assignedRunnerId });
+    bus.publish("org:agentStatus", {
+      type: "agent_status",
+      topic: "org:agentStatus",
+      data: { agentName: name, runtimeState },
+    });
+    insertEvent({
+      type: "agent.control.move",
+      payload: {
+        agentName: name,
+        fromRunnerId: existing.assigned_runner_id ?? null,
+        toRunnerId: assignedRunnerId,
+      },
+      source: "system",
+    });
+    return jsonResponse(c, { ok: true, agentName: name, assignedRunnerId, runtimeState });
   });
 
   app.post("/api/agents/:name/:action", (c) => {

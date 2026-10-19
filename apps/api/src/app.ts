@@ -1,4 +1,7 @@
-import { registerGoogleAuthRoutes, type HumanSession } from './routes/google-auth';
+import {
+  registerGoogleAuthRoutes,
+  type HumanSession,
+} from "./routes/google-auth";
 import { Hono } from "hono";
 import { createNodeWebSocket } from "@hono/node-ws";
 import { mkdirSync } from "node:fs";
@@ -50,6 +53,7 @@ import { registerRunnersRoutes } from "./routes/runners";
 import { registerIntegrationKeysRoutes } from "./routes/integration-keys";
 import { registerEmbedRoutes } from "./routes/embed";
 import { registerBillingRoutes } from "./routes/billing";
+import { registerFederationRoutes } from "./routes/federation";
 import {
   findActiveRunnerTokenByToken,
   parseStringArraySafe as parseRunnerScopeChannels,
@@ -224,8 +228,14 @@ export function createApp(config: AppConfig = {}) {
       runnerScope: {
         mode,
         tokenId: scoped.id,
-        allowedAgentName: mode === "SCOPED" ? scoped.allowed_agent_name ?? undefined : undefined,
-        allowedRunnerId: mode === "SCOPED" ? scoped.allowed_runner_id ?? undefined : undefined,
+        allowedAgentName:
+          mode === "SCOPED"
+            ? (scoped.allowed_agent_name ?? undefined)
+            : undefined,
+        allowedRunnerId:
+          mode === "SCOPED"
+            ? (scoped.allowed_runner_id ?? undefined)
+            : undefined,
         allowedChannelIds:
           mode === "SCOPED"
             ? parseRunnerScopeChannels(scoped.allowed_channel_ids_json)
@@ -416,10 +426,18 @@ export function createApp(config: AppConfig = {}) {
 
   const access = createAccessControl({ orm });
 
-  registerGoogleAuthRoutes(app as any, {db, sessions, hashPassword, requireAuth});
+  registerGoogleAuthRoutes(app as any, {
+    db,
+    sessions,
+    hashPassword,
+    requireAuth,
+  });
 
   registerAuthRoutes(app as any, {
-    isGoogleHuman: (id) => Boolean(db.prepare("SELECT 1 FROM human_identities WHERE human_id=?").get(id)),
+    isGoogleHuman: (id) =>
+      Boolean(
+        db.prepare("SELECT 1 FROM human_identities WHERE human_id=?").get(id),
+      ),
     orm,
     humanSchema: schema.humans,
     RUNNER_TOKEN,
@@ -534,6 +552,12 @@ export function createApp(config: AppConfig = {}) {
     requireRunnerAuth,
     runnerToken: RUNNER_TOKEN,
     runnerApiUrl: RUNNER_API_URL,
+  });
+
+  registerFederationRoutes(app as any, {
+    orm,
+    jsonResponse,
+    requireAuth,
   });
 
   registerIntegrationKeysRoutes(app as any, { orm, jsonResponse, access });

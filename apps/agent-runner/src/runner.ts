@@ -197,6 +197,14 @@ async function pollAgent(agent: Agent) {
   }
   await ensureWorkspace(agent);
   const now = Date.now();
+  const shouldRebootstrap = agent.runtimeState === "STARTING";
+  if (shouldRebootstrap) {
+    state.bootstrappedAgents.delete(agent.name);
+    state.bootstrappedAgentKeys.delete(agent.name);
+    if ((agent.mode ?? "CLASSIC") === "WRAPPED") {
+      await stopWrappedAgentRuntime(agent.name);
+    }
+  }
   const previousHeartbeatAt = state.heartbeats.get(agent.name) ?? 0;
   const needsHeartbeat = now - previousHeartbeatAt >= HEARTBEAT_INTERVAL_MS;
   if (agent.runtimeState !== "RUNNING" || needsHeartbeat) {

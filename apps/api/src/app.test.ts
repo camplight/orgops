@@ -340,6 +340,172 @@ describe("api app", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("copies and moves agents through management endpoints", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const createSourceRes = await app.request("http://localhost/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "source-agent",
+        modelId: "openai:gpt-4o-mini",
+        workspacePath: ".orgops-data/workspaces/source-agent",
+        assignedRunnerId: "runner-a",
+        enabledSkills: ["slack"],
+        alwaysPreloadedSkills: ["slack"],
+      }),
+    });
+    expect(createSourceRes.status).toBe(201);
+
+    const channelRes = await app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ name: "copy-membership-channel" }),
+    });
+    expect(channelRes.status).toBe(201);
+    const channel = (await channelRes.json()) as { id: string };
+    const subscribeRes = await app.request(
+      `http://localhost/api/channels/${encodeURIComponent(channel.id)}/subscribe`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ subscriberType: "AGENT", subscriberId: "source-agent" }),
+      },
+    );
+    expect(subscribeRes.status).toBe(200);
+
+    const copyRes = await app.request("http://localhost/api/agents/source-agent/copy", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        name: "copied-agent",
+        assignedRunnerId: "runner-b",
+        copyChannelMemberships: true,
+      }),
+    });
+    expect(copyRes.status).toBe(201);
+
+    const copiedRes = await app.request("http://localhost/api/agents/copied-agent", {
+      headers: { cookie },
+    });
+    expect(copiedRes.status).toBe(200);
+    const copied = (await copiedRes.json()) as {
+      assignedRunnerId?: string | null;
+      desiredState?: string;
+      runtimeState?: string;
+      workspacePath?: string;
+      enabledSkills?: string[];
+    };
+    expect(copied.assignedRunnerId).toBe("runner-b");
+    expect(copied.desiredState).toBe("STOPPED");
+    expect(copied.runtimeState).toBe("STOPPED");
+    expect(copied.workspacePath).toContain("copied-agent");
+    expect(copied.enabledSkills).toEqual(["slack"]);
+
+    const orm = createDrizzleDb(db);
+    const copiedMembership = orm
+      .select()
+      .from(schema.channelSubscriptions)
+      .where(
+        and(
+          eq(schema.channelSubscriptions.channel_id, channel.id),
+          eq(schema.channelSubscriptions.subscriber_type, "AGENT"),
+          eq(schema.channelSubscriptions.subscriber_id, "copied-agent"),
+        ),
+      )
+      .get();
+    expect(copiedMembership).toBeTruthy();
+
+    const moveRes = await app.request("http://localhost/api/agents/copied-agent/move", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ assignedRunnerId: "runner-c" }),
+    });
+    expect(moveRes.status).toBe(200);
+    const moved = (await moveRes.json()) as { assignedRunnerId?: string; runtimeState?: string };
+    expect(moved.assignedRunnerId).toBe("runner-c");
+    expect(moved.runtimeState).toBe("STOPPED");
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("stores federated channel projections", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const instanceRes = await app.request("http://localhost/api/federation/instances", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ name: "peer-a", baseUrl: "https://peer.example/" }),
+    });
+    expect(instanceRes.status).toBe(201);
+    const instance = (await instanceRes.json()) as { id: string };
+
+    const projectionRes = await app.request("http://localhost/api/federation/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        role: "REMOTE_PROJECTION",
+        homeInstanceId: instance.id,
+        remoteChannelId: "remote-channel-1",
+        localName: "peer-a-shared",
+      }),
+    });
+    expect(projectionRes.status).toBe(201);
+    const projection = (await projectionRes.json()) as { localChannelId: string; role: string };
+    expect(projection.role).toBe("REMOTE_PROJECTION");
+
+    const listRes = await app.request("http://localhost/api/federation/channels", {
+      headers: { cookie },
+    });
+    expect(listRes.status).toBe(200);
+    const links = (await listRes.json()) as Array<{
+      localChannelId: string;
+      localChannelName: string;
+      remoteChannelId: string;
+      role: string;
+    }>;
+    expect(links).toEqual([
+      expect.objectContaining({
+        localChannelId: projection.localChannelId,
+        localChannelName: "peer-a-shared",
+        remoteChannelId: "remote-channel-1",
+        role: "REMOTE_PROJECTION",
+      }),
+    ]);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("persists wrapped agent configuration as editable JSON", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");

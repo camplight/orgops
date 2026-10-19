@@ -170,6 +170,16 @@ Stored in `runner_nodes`:
 
 Runner IDs are stable across restarts by persisting local `.agent-runner-id`.
 
+### Federation
+
+Federation is modeled around hoisted channels. A shared channel has one canonical
+home OrgOps instance; other instances may keep local projection channels for UI
+and runner compatibility. `federation_instances` stores known peer instances.
+`federation_channels` links a local channel to either a `LOCAL_HOME` role or a
+`REMOTE_PROJECTION` role with `home_instance_id` and `remote_channel_id`.
+Projection rows are caches/convenience records; the home instance is the source
+of truth for ordering and policy.
+
 ### Collaboration
 
 - `humans`: login users, password hash, `must_change_password`, inviter metadata
@@ -390,6 +400,9 @@ Published topics include:
 - supports `GET /api/agents?assignedRunnerId=<runnerId>&includeUnassigned=1`
 - `POST /api/agents/:name/:action` where action is one of:
   - `start`, `stop`, `restart`, `reload-skills`, `cleanup-workspace`
+- agent management utilities:
+  - `POST /api/agents/:name/copy` clones configuration into a new agent name; runtime state, memory, processes, and workspace files are not copied
+  - `POST /api/agents/:name/move` reassigns `assignedRunnerId`; `null` unassigns the agent
 - debug endpoint:
   - `GET /api/agents/:name/debug/system-prompt`
 - workspace browser endpoints:
@@ -490,6 +503,15 @@ Published topics include:
 - `DELETE /api/runners/:id` (also unassigns pinned agents from deleted runner)
 - scoped runner tokens must register/heartbeat only the runner ID bound into their scope
 
+### Federation
+
+- `GET /api/federation/instances`
+- `POST /api/federation/instances`
+- `GET /api/federation/channels`
+- `POST /api/federation/channels`
+  - `role=LOCAL_HOME` marks a local channel as canonical for federation
+  - `role=REMOTE_PROJECTION` creates or links a local projection to a home instance/channel
+
 ## Agent Runner Behavior
 
 Runner loop:
@@ -501,6 +523,7 @@ Runner loop:
    - ensure workspace exists
    - heartbeat runtime state to API
    - emit one-time lifecycle bootstrap event (`agent.lifecycle.started`) for native modes, or run wrapped lifecycle setup for `WRAPPED`
+   - if the API marks the agent `runtime_state=STARTING`, clear the runner bootstrap marker and re-run startup/setup; wrapped runtimes are stopped first so refreshed secret env is injected into new sidecars/setup
 5. Pull pending events with per-agent receipt semantics.
 6. Filter control/audit/self-authored/agent-authored events.
 7. Group remaining pending events by channel and process each channel as a single handling batch.

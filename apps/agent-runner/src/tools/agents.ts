@@ -17,6 +17,20 @@ const agentsSearchSchema = z.object({
   limit: z.number().int().min(1).max(500).optional(),
 });
 
+const agentsCopySchema = z.object({
+  sourceAgentName: z.string().min(1),
+  name: z.string().min(1),
+  assignedRunnerId: z.string().nullable().optional(),
+  workspacePath: z.string().min(1).optional(),
+  desiredState: desiredStateSchema.optional(),
+  copyChannelMemberships: z.boolean().optional(),
+});
+
+const agentsMoveSchema = z.object({
+  agentName: z.string().min(1),
+  assignedRunnerId: z.string().nullable(),
+});
+
 const agentsCreateSchema = z.object({
   name: z.string().min(1),
   icon: z.string().optional(),
@@ -102,6 +116,16 @@ export const agentsToolDefs: ToolDef[] = [
     agentsSearchSchema,
   ],
   [
+    "agents_copy",
+    "Copy an existing OrgOps agent config to a new agent name. Runtime state, memory, processes, and workspace files are not copied.",
+    agentsCopySchema,
+  ],
+  [
+    "agents_move",
+    "Move an existing OrgOps agent to another runner assignment. Use assignedRunnerId null to unassign.",
+    agentsMoveSchema,
+  ],
+  [
     "agents_update",
     "Update an existing OrgOps agent via the agent API. Use wrappedConfig for object input or wrappedConfigJson for a JSON string when patching wrapped runtime config.",
     agentsUpdateSchema,
@@ -185,6 +209,54 @@ export async function execute(
     });
     const limited = parsed.limit ? filtered.slice(0, parsed.limit) : filtered;
     return { agents: limited, totalMatched: filtered.length, filters: parsed };
+  }
+
+  if (tool === "agents_copy") {
+    const parsedResult = parseToolArgs(tool, agentsCopySchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const parsed = parsedResult.data;
+    const sourceAgentName = parsed.sourceAgentName.trim();
+    const name = parsed.name.trim();
+    const body: Record<string, unknown> = {
+      name,
+      ...(parsed.assignedRunnerId !== undefined
+        ? { assignedRunnerId: trimOptional(parsed.assignedRunnerId ?? undefined) ?? null }
+        : {}),
+      ...(parsed.workspacePath !== undefined ? { workspacePath: parsed.workspacePath.trim() } : {}),
+      ...(parsed.desiredState !== undefined ? { desiredState: parsed.desiredState } : {}),
+      ...(parsed.copyChannelMemberships !== undefined
+        ? { copyChannelMemberships: parsed.copyChannelMemberships }
+        : {}),
+    };
+    const response = await ctx.apiFetch(
+      `/api/agents/${encodeURIComponent(sourceAgentName)}/copy`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
+    const copied = await parseResponseBody(response);
+    return { ok: true, sourceAgentName, agentName: name, copied };
+  }
+
+  if (tool === "agents_move") {
+    const parsedResult = parseToolArgs(tool, agentsMoveSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const parsed = parsedResult.data;
+    const agentName = parsed.agentName.trim();
+    const response = await ctx.apiFetch(
+      `/api/agents/${encodeURIComponent(agentName)}/move`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          assignedRunnerId: trimOptional(parsed.assignedRunnerId ?? undefined) ?? null,
+        }),
+      },
+    );
+    const moved = await parseResponseBody(response);
+    return { ok: true, agentName, moved };
   }
 
   if (tool === "agents_update") {

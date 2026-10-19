@@ -115,6 +115,11 @@ type AgentsScreenProps = {
   onCreateAgent: (agent: AgentForm) => Promise<void>;
   onUpdateAgent: (name: string, agent: Omit<AgentForm, "name">) => Promise<void>;
   onDeleteAgent: (name: string) => Promise<void>;
+  onCopyAgent?: (
+    sourceName: string,
+    input: { name: string; assignedRunnerId?: string | null; copyChannelMemberships?: boolean }
+  ) => Promise<void>;
+  onMoveAgent?: (name: string, assignedRunnerId: string | null) => Promise<void>;
   onStartAgent: (name: string) => Promise<void>;
   onStopAgent: (name: string) => Promise<void>;
   onCleanupAgentWorkspace: (name: string) => Promise<void>;
@@ -154,6 +159,8 @@ export function AgentsScreen({
   onCreateAgent,
   onUpdateAgent,
   onDeleteAgent,
+  onCopyAgent,
+  onMoveAgent,
   onStartAgent,
   onStopAgent,
   onCleanupAgentWorkspace,
@@ -181,6 +188,8 @@ export function AgentsScreen({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isTogglingRuntime, setIsTogglingRuntime] = useState(false);
   const [isDeletingAgent, setIsDeletingAgent] = useState(false);
+  const [isCopyingAgent, setIsCopyingAgent] = useState(false);
+  const [isMovingAgent, setIsMovingAgent] = useState(false);
   const [agentEvents, setAgentEvents] = useState<EventRow[]>([]);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [eventsLoading, setEventsLoading] = useState(false);
@@ -690,6 +699,71 @@ export function AgentsScreen({
     }
   };
 
+  const handleCopyAgent = async () => {
+    if (!selectedAgent || !onCopyAgent) return;
+    const sourceName = selectedAgent.name;
+    const suggestedName = `${sourceName}-copy`;
+    const targetName = window.prompt("New agent name", suggestedName)?.trim();
+    if (!targetName) return;
+    if (targetName === sourceName) {
+      setSaveStatus({ kind: "error", message: "Copied agent name must differ from source." });
+      return;
+    }
+    const runnerValue = window.prompt(
+      "Assigned runner ID for the copy. Leave blank to unassign.",
+      selectedAgent.assignedRunnerId ?? ""
+    );
+    if (runnerValue === null) return;
+    const copyChannelMemberships = window.confirm(
+      "Copy this agent's channel memberships to the new agent?"
+    );
+    setIsCopyingAgent(true);
+    setSaveStatus(null);
+    try {
+      await onCopyAgent(sourceName, {
+        name: targetName,
+        assignedRunnerId: runnerValue.trim() || null,
+        copyChannelMemberships
+      });
+      setSelectedAgentName(targetName);
+      setIsCreating(false);
+      setActiveTab("details");
+      setSaveStatus({
+        kind: "success",
+        message: `Agent "${sourceName}" was copied to "${targetName}".`
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to copy agent.";
+      setSaveStatus({ kind: "error", message });
+    } finally {
+      setIsCopyingAgent(false);
+    }
+  };
+
+  const handleMoveAgent = async () => {
+    if (!selectedAgent || !onMoveAgent) return;
+    const agentName = selectedAgent.name;
+    const runnerValue = window.prompt(
+      "Move agent to runner ID. Leave blank to unassign.",
+      selectedAgent.assignedRunnerId ?? ""
+    );
+    if (runnerValue === null) return;
+    setIsMovingAgent(true);
+    setSaveStatus(null);
+    try {
+      await onMoveAgent(agentName, runnerValue.trim() || null);
+      setSaveStatus({
+        kind: "success",
+        message: `Agent "${agentName}" was moved.`
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to move agent.";
+      setSaveStatus({ kind: "error", message });
+    } finally {
+      setIsMovingAgent(false);
+    }
+  };
+
   const toggleSkill = (skillName: string) => {
     setIsFormDirty(true);
     setSaveStatus(null);
@@ -950,6 +1024,24 @@ export function AgentsScreen({
                           : "Start"}
                     </Button>
                   )}
+                  {!isCreating && selectedAgent && onCopyAgent ? (
+                    <Button
+                      variant="secondary"
+                      onClick={() => void handleCopyAgent()}
+                      disabled={isCopyingAgent}
+                    >
+                      {isCopyingAgent ? "Copying..." : "Copy"}
+                    </Button>
+                  ) : null}
+                  {!isCreating && selectedAgent && onMoveAgent ? (
+                    <Button
+                      variant="secondary"
+                      onClick={() => void handleMoveAgent()}
+                      disabled={isMovingAgent}
+                    >
+                      {isMovingAgent ? "Moving..." : "Move"}
+                    </Button>
+                  ) : null}
                 </>
               ) : null}
               <Button

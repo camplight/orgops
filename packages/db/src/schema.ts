@@ -68,6 +68,38 @@ export const runnerNodes = sqliteTable("runner_nodes", {
   last_seen_at: integer("last_seen_at").notNull()
 });
 
+
+export const federationInstances = sqliteTable("federation_instances", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull().unique(),
+  base_url: text("base_url").notNull(),
+  status: text("status").notNull().default("ACTIVE"),
+  metadata_json: text("metadata_json").notNull().default("{}"),
+  created_at: integer("created_at").notNull(),
+  updated_at: integer("updated_at").notNull(),
+  last_seen_at: integer("last_seen_at"),
+});
+
+export const federationChannels = sqliteTable(
+  "federation_channels",
+  {
+    local_channel_id: text("local_channel_id").primaryKey(),
+    home_instance_id: text("home_instance_id"),
+    remote_channel_id: text("remote_channel_id"),
+    role: text("role").notNull(),
+    sync_cursor: text("sync_cursor"),
+    metadata_json: text("metadata_json").notNull().default("{}"),
+    created_at: integer("created_at").notNull(),
+    updated_at: integer("updated_at").notNull(),
+  },
+  (table) => ({
+    idxFederationChannelsHome: index("idx_federation_channels_home").on(
+      table.home_instance_id,
+      table.remote_channel_id,
+    ),
+  }),
+);
+
 export const teams = sqliteTable("teams", {
   id: text("id").primaryKey(),
   name: text("name").notNull().unique(),
@@ -584,6 +616,8 @@ export const schema = {
   migrations,
   agents,
   runnerNodes,
+  federationInstances,
+  federationChannels,
   teams,
   humans,
   humanIdentities,
