@@ -54,12 +54,18 @@ export function FederationScreen({
   const [joinUrl, setJoinUrl] = useState("");
   const [joinPeerBaseUrl, setJoinPeerBaseUrl] = useState(() => window.location.origin);
   const [joinLocalName, setJoinLocalName] = useState("");
+  const [hostChannelId, setHostChannelId] = useState("");
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const instancesById = new Map(instances.map((instance) => [instance.id, instance]));
+  const localHomeLinks = channelLinks.filter((link) => link.role === "LOCAL_HOME");
+  const remoteProjectionLinks = channelLinks.filter((link) => link.role === "REMOTE_PROJECTION");
 
   const createInstance = async () => {
     setError(null);
+    setMessage(null);
     if (!instanceForm.name.trim() || !instanceForm.baseUrl.trim()) {
       setError("Peer name and base URL are required.");
       return;
@@ -86,6 +92,7 @@ export function FederationScreen({
     if (token === null) return;
     setPending(`token:${instance.id}`);
     setError(null);
+    setMessage(null);
     try {
       await onUpdateInstance(instance.id, { outboundToken: token.trim() || undefined });
       await onRefresh();
@@ -98,6 +105,7 @@ export function FederationScreen({
 
   const createChannelLink = async () => {
     setError(null);
+    setMessage(null);
     if (linkForm.role === "LOCAL_HOME" && !linkForm.localChannelId) {
       setError("Choose the local home channel.");
       return;
@@ -136,6 +144,7 @@ export function FederationScreen({
   const syncChannel = async (localChannelId: string) => {
     setPending(`sync:${localChannelId}`);
     setError(null);
+    setMessage(null);
     try {
       await onSyncChannel(localChannelId);
       await onRefresh();
@@ -149,12 +158,12 @@ export function FederationScreen({
   const createJoinLink = async (localChannelId: string) => {
     setPending(`join-link:${localChannelId}`);
     setError(null);
+    setMessage(null);
     try {
       const result = await onCreateJoinLink(localChannelId);
       await navigator.clipboard?.writeText(result.joinUrl).catch(() => undefined);
       setCreatedInboundToken("");
-      setError(null);
-      window.alert("Federation join URL copied to clipboard.");
+      setMessage("Join URL copied to clipboard.");
     } catch (linkError) {
       setError(linkError instanceof Error ? linkError.message : "Failed to create join URL.");
     } finally {
@@ -162,8 +171,35 @@ export function FederationScreen({
     }
   };
 
+  const hostChannelAndCopyJoinUrl = async () => {
+    setError(null);
+    setMessage(null);
+    if (!hostChannelId) {
+      setError("Choose a channel to host.");
+      return;
+    }
+    setPending("host-channel");
+    try {
+      const existing = channelLinks.find(
+        (link) => link.localChannelId === hostChannelId && link.role === "LOCAL_HOME",
+      );
+      if (!existing) {
+        await onCreateChannelLink({ role: "LOCAL_HOME", localChannelId: hostChannelId });
+      }
+      const result = await onCreateJoinLink(hostChannelId);
+      await navigator.clipboard?.writeText(result.joinUrl).catch(() => undefined);
+      setMessage("Channel is hosted. Join URL copied to clipboard.");
+      await onRefresh();
+    } catch (hostError) {
+      setError(hostError instanceof Error ? hostError.message : "Failed to host channel.");
+    } finally {
+      setPending(null);
+    }
+  };
+
   const joinFromUrl = async () => {
     setError(null);
+    setMessage(null);
     if (!joinUrl.trim() || !joinPeerBaseUrl.trim()) {
       setError("Join URL and this instance base URL are required.");
       return;
@@ -177,12 +213,25 @@ export function FederationScreen({
       });
       setJoinUrl("");
       setJoinLocalName("");
+      setMessage("Joined federated channel.");
       await onRefresh();
     } catch (joinError) {
       setError(joinError instanceof Error ? joinError.message : "Failed to join federated channel.");
     } finally {
       setPending(null);
     }
+  };
+
+  const roleLabel = (role: string) => {
+    if (role === "LOCAL_HOME") return "Hosted here";
+    if (role === "REMOTE_PROJECTION") return "Joined";
+    return role;
+  };
+
+  const homeLabel = (link: FederationChannelLink) => {
+    if (link.role === "LOCAL_HOME") return "This instance";
+    if (!link.homeInstanceId) return "-";
+    return instancesById.get(link.homeInstanceId)?.name ?? link.homeInstanceId;
   };
 
   return (
@@ -198,8 +247,87 @@ export function FederationScreen({
           <code className="rounded bg-slate-950 px-1 py-0.5">{createdInboundToken}</code>
         </div>
       ) : null}
+      {message ? (
+        <div className="rounded border border-emerald-900 bg-emerald-950/30 px-3 py-2 text-sm text-emerald-200">
+          {message}
+        </div>
+      ) : null}
+
+      <Card title="Federation Setup">
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div className="rounded border border-slate-800 bg-slate-950 p-3">
+            <div className="mb-1 text-sm font-medium text-slate-100">Join another OrgOps</div>
+            <p className="mb-3 text-xs text-slate-500">
+              Paste a join URL copied from the home instance. This creates the peer and local
+              projection channel automatically.
+            </p>
+            <div className="space-y-2">
+              <Input
+                value={joinUrl}
+                onChange={(event) => setJoinUrl(event.target.value)}
+                placeholder="Paste federation join URL"
+              />
+              <div className="grid gap-2 md:grid-cols-2">
+                <Input
+                  value={joinPeerBaseUrl}
+                  onChange={(event) => setJoinPeerBaseUrl(event.target.value)}
+                  placeholder="This instance public base URL"
+                />
+                <Input
+                  value={joinLocalName}
+                  onChange={(event) => setJoinLocalName(event.target.value)}
+                  placeholder="Optional local channel name"
+                />
+              </div>
+              <Button onClick={() => void joinFromUrl()} disabled={pending === "join-url"}>
+                {pending === "join-url" ? "Joining..." : "Join channel"}
+              </Button>
+            </div>
+          </div>
+
+          <div className="rounded border border-slate-800 bg-slate-950 p-3">
+            <div className="mb-1 text-sm font-medium text-slate-100">Share a local channel</div>
+            <p className="mb-3 text-xs text-slate-500">
+              Choose a channel to host here, then copy one URL for the peer instance to paste.
+            </p>
+            <div className="space-y-2">
+              <Select
+                value={hostChannelId}
+                onChange={(event) => setHostChannelId(event.target.value)}
+              >
+                <option value="">Choose local channel</option>
+                {channels.map((channel) => (
+                  <option key={channel.id} value={channel.id}>
+                    {channel.name}
+                  </option>
+                ))}
+              </Select>
+              <Button
+                onClick={() => void hostChannelAndCopyJoinUrl()}
+                disabled={pending === "host-channel"}
+              >
+                {pending === "host-channel" ? "Preparing..." : "Host and copy join URL"}
+              </Button>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-4 flex items-center justify-between border-t border-slate-800 pt-3">
+          <div className="text-xs text-slate-500">
+            Advanced setup is only needed for manual token exchange or debugging.
+          </div>
+          <Button variant="secondary" onClick={() => setShowAdvanced((value) => !value)}>
+            {showAdvanced ? "Hide advanced" : "Show advanced"}
+          </Button>
+        </div>
+      </Card>
 
       <Card title="Peer Instances">
+        <div className="mb-3 text-xs text-slate-500">
+          Peers are usually created by joining with a URL. Use manual setup only when connecting
+          older instances or rotating tokens.
+        </div>
+        {showAdvanced ? (
         <div className="mb-4 grid gap-2 md:grid-cols-4">
           <Input
             value={instanceForm.name}
@@ -222,6 +350,7 @@ export function FederationScreen({
             {pending === "instance" ? "Adding..." : "Add Peer"}
           </Button>
         </div>
+        ) : null}
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead>
@@ -266,30 +395,18 @@ export function FederationScreen({
         </div>
       </Card>
 
-      <Card title="Federated Channels">
-        <div className="mb-4 rounded border border-slate-800 bg-slate-950 p-3">
-          <div className="mb-2 text-sm font-medium text-slate-200">Join From URL</div>
-          <div className="grid gap-2 md:grid-cols-4">
-            <Input
-              value={joinUrl}
-              onChange={(event) => setJoinUrl(event.target.value)}
-              placeholder="Paste federation join URL"
-            />
-            <Input
-              value={joinPeerBaseUrl}
-              onChange={(event) => setJoinPeerBaseUrl(event.target.value)}
-              placeholder="This instance public base URL"
-            />
-            <Input
-              value={joinLocalName}
-              onChange={(event) => setJoinLocalName(event.target.value)}
-              placeholder="Optional local channel name"
-            />
-            <Button onClick={() => void joinFromUrl()} disabled={pending === "join-url"}>
-              {pending === "join-url" ? "Joining..." : "Join Channel"}
-            </Button>
+      <Card title={`Federated Channels (${channelLinks.length})`}>
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div className="text-xs text-slate-500">
+            {localHomeLinks.length} hosted here, {remoteProjectionLinks.length} joined from peers.
           </div>
+          <Button variant="secondary" onClick={() => void onRefresh()}>
+            Refresh
+          </Button>
         </div>
+        {showAdvanced ? (
+        <div className="mb-4 rounded border border-slate-800 bg-slate-950 p-3">
+          <div className="mb-2 text-sm font-medium text-slate-200">Manual channel link</div>
         <div className="mb-4 grid gap-2 md:grid-cols-5">
           <Select
             value={linkForm.role}
@@ -349,6 +466,8 @@ export function FederationScreen({
             {pending === "channel-link" ? "Saving..." : "Save Link"}
           </Button>
         </div>
+        </div>
+        ) : null}
 
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
@@ -369,11 +488,11 @@ export function FederationScreen({
                   <td className="px-2 py-2 text-slate-100">
                     {link.localChannelName ?? link.localChannelId}
                   </td>
-                  <td className="px-2 py-2 text-slate-400">{link.role}</td>
-                  <td className="px-2 py-2 text-slate-400">
-                    {link.homeInstanceId ? instancesById.get(link.homeInstanceId)?.name ?? link.homeInstanceId : "local"}
+                  <td className="px-2 py-2 text-slate-400">{roleLabel(link.role)}</td>
+                  <td className="px-2 py-2 text-slate-400">{homeLabel(link)}</td>
+                  <td className="max-w-[280px] truncate px-2 py-2 text-slate-400">
+                    {link.remoteChannelId ?? "-"}
                   </td>
-                  <td className="px-2 py-2 text-slate-400">{link.remoteChannelId ?? "-"}</td>
                   <td className="px-2 py-2 text-slate-400">
                     {link.role === "LOCAL_HOME" ? (
                       <span title={link.lastError ?? undefined}>
