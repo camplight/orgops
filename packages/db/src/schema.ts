@@ -21,8 +21,6 @@ export const agents = sqliteTable("agents", {
   icon: text("icon"),
   description: text("description"),
   model_id: text("model_id").notNull(),
-  system_instructions: text("system_instructions").notNull().default(""),
-  soul_path: text("soul_path").notNull(),
   soul_contents: text("soul_contents").notNull().default(""),
   workspace_path: text("workspace_path").notNull(),
   allow_outside_workspace: integer("allow_outside_workspace")

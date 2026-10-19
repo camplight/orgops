@@ -4,8 +4,6 @@ export type Agent = {
   runtimeState: string;
   desiredState: string;
   modelId?: string;
-  systemInstructions?: string;
-  soulPath?: string;
   soulContents?: string;
   enabledSkills?: string[];
   alwaysPreloadedSkills?: string[];

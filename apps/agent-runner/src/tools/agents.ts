@@ -22,8 +22,6 @@ const agentsCreateSchema = z.object({
   icon: z.string().optional(),
   description: z.string().optional(),
   modelId: z.string().min(1).optional(),
-  systemInstructions: z.string().optional(),
-  soulPath: z.string().min(1).optional(),
   soulContents: z.string().optional(),
   enabledSkills: z.array(z.string()).optional(),
   alwaysPreloadedSkills: z.array(z.string()).optional(),
@@ -52,8 +50,6 @@ const agentsUpdateSchema = z
     icon: z.string().nullable().optional(),
     description: z.string().nullable().optional(),
     modelId: z.string().min(1).optional(),
-    systemInstructions: z.string().optional(),
-    soulPath: z.string().min(1).optional(),
     soulContents: z.string().optional(),
     enabledSkills: z.array(z.string()).optional(),
     alwaysPreloadedSkills: z.array(z.string()).optional(),
@@ -209,10 +205,6 @@ export async function execute(
       ...(parsed.icon !== undefined ? { icon: parsed.icon } : {}),
       ...(parsed.description !== undefined ? { description: parsed.description } : {}),
       ...(parsed.modelId !== undefined ? { modelId: parsed.modelId.trim() } : {}),
-      ...(parsed.systemInstructions !== undefined
-        ? { systemInstructions: parsed.systemInstructions }
-        : {}),
-      ...(parsed.soulPath !== undefined ? { soulPath: parsed.soulPath.trim() } : {}),
       ...(parsed.soulContents !== undefined ? { soulContents: parsed.soulContents } : {}),
       ...(parsed.enabledSkills !== undefined ? { enabledSkills: parsed.enabledSkills } : {}),
       ...(parsed.alwaysPreloadedSkills !== undefined
@@ -291,10 +283,6 @@ export async function execute(
       desiredState: parsed.desiredState ?? "RUNNING",
       ...(parsed.icon !== undefined ? { icon: parsed.icon } : {}),
       ...(parsed.description !== undefined ? { description: parsed.description } : {}),
-      ...(parsed.systemInstructions !== undefined
-        ? { systemInstructions: parsed.systemInstructions }
-        : {}),
-      ...(parsed.soulPath !== undefined ? { soulPath: parsed.soulPath.trim() } : {}),
       ...(parsed.soulContents !== undefined ? { soulContents: parsed.soulContents } : {}),
       ...(parsed.enabledSkills !== undefined ? { enabledSkills: parsed.enabledSkills } : {}),
       ...(parsed.alwaysPreloadedSkills !== undefined

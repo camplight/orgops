@@ -615,7 +615,6 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       eventHistory = getMeaningfulEvents(fullChannelHistory);
     }
     const system = [
-      agent.systemInstructions,
       runnerGuidance,
       `Your own workspace:\n${agent.workspacePath}\n`,
       `OrgOps system path:\n${input.projectRoot}\n`,

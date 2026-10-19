@@ -7,8 +7,6 @@ describe("channel injection", () => {
   it("returns only new includable events and tracks seen ids", async () => {
     const agent: Agent = {
       name: "browser",
-      systemInstructions: "",
-      soulPath: "",
       workspacePath: "/tmp",
       modelId: "openai:gpt-4o-mini",
       desiredState: "RUNNING",

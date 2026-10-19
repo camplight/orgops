@@ -11,8 +11,7 @@ function makeAgent(name = "rlm-tester"): Agent {
   return {
     name,
     mode: "RLM_REPL",
-    systemInstructions: "You are a test agent.",
-    soulPath: "souls/test.md",
+    soulContents: "You are a test agent.",
     workspacePath: "/tmp",
     modelId: "openai:gpt-4o-mini",
     desiredState: "RUNNING",

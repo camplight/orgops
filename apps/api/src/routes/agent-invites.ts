@@ -620,8 +620,6 @@ export function registerAgentInviteRoutes(app: Hono<any>, deps: AgentInvitesDeps
           icon: null,
           description: `Joined via invite: ${invite.name}`,
           model_id: "wrapped:none",
-          system_instructions: "",
-          soul_path: `.orgops-data/souls/${invite.agent_name}.md`,
           soul_contents: "",
           workspace_path: `.orgops-data/workspaces/${invite.agent_name}`,
           allow_outside_workspace: 0,

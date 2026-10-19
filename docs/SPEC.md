@@ -34,7 +34,7 @@ packages/
   skills/         Skill discovery and loading
 skills/           Built-in skills (SKILL.md, optional event-shapes.ts)
 files/            Uploaded file storage
-.orgops-data/     Runtime DB/workspaces/soul files
+.orgops-data/     Runtime DB/workspaces
 ```
 
 ## Core Data Model
@@ -44,7 +44,7 @@ files/            Uploaded file storage
 Stored in `agents`:
 
 - identity/config: `id`, `name`, `icon`, `description`, `model_id`
-- prompting/runtime config: `system_instructions`, `soul_path`, `soul_contents`
+- prompting/runtime config: `soul_contents`
 - workspace/safety: `workspace_path`, `allow_outside_workspace`
 - per-agent runtime tuning: `llm_call_timeout_ms`, `classic_max_model_steps`, `context_session_gap_ms`, `emit_audit_events`, `memory_context_mode`
 - mode/state: `mode` (`CLASSIC` | `RLM_REPL` | `WRAPPED`), `desired_state`, `runtime_state`, `last_heartbeat_at`
@@ -56,7 +56,7 @@ Stored in `agents`:
 
 On API startup, when `agents` is empty, OrgOps seeds one public agent named `system` if `ORGOPS_SYSTEM_AGENT_MODEL` is set. The value is a provider (`openai`, `anthropic`/`claude`, `openrouter`/`or`) or `provider:model`. A bare provider uses `openai:gpt-5.2`, `anthropic:claude-3-5-sonnet-latest`, or `openrouter:openai/gpt-4o-mini`. Seeding also stores the matching provider API key (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `OPENROUTER_API_KEY`) as a public secret and inserts an enabled `models` row. The agent is skipped when the model is unset, the provider is unsupported, the API key is empty, `ORGOPS_MASTER_KEY` cannot encrypt the secret, or any agent row already exists. The seeded agent is unassigned; a runner executes it after `assigned_runner_id` is set.
 
-`WRAPPED` agents are orgops-owned lifecycle records whose turns are delegated to an external runtime. They do not use orgops memory summaries, prompt composition, skills, model calls, or `allow_outside_workspace` for turn handling. The wrapped runtime owns its own session/memory/tool state and filesystem policy. The normal `soul_path` / `soul_contents` fields may still be stored on the agent row for humans, opscli, and native management agents; the wrapper runner does not automatically inject them. The creator of the wrapped agent should translate those native fields into the selected harness configuration/setup/runtime behavior when that harness needs a soul file or prompt seed.
+`WRAPPED` agents are orgops-owned lifecycle records whose turns are delegated to an external runtime. They do not use orgops memory summaries, prompt composition, skills, model calls, or `allow_outside_workspace` for turn handling. The wrapped runtime owns its own session/memory/tool state and filesystem policy. `soul_contents` may still be stored on the agent row for humans, opscli, and native management agents; the wrapper runner does not automatically inject it. The creator of the wrapped agent should translate it into the selected harness configuration/setup/runtime behavior when that harness needs a soul or prompt seed.
 
 Example wrapped config:
 
@@ -240,6 +240,9 @@ Validation is dynamic and composed from:
 - Profile/password update: `PATCH /api/auth/profile`
 - Logout/me endpoints supported
 - Invited humans must rotate temporary password before accessing most API routes
+- Human invites can optionally land the new account in an existing channel (`channelId`)
+  or create a new private-by-default group channel (`channelName`) with initial
+  `agentParticipants[]`; the invited human is subscribed to the landing channel.
 
 ### Channel Visibility Rules
 
@@ -322,6 +325,13 @@ Published topics include:
 - password verification for sensitive reveals: `POST /api/events/:id/reveal-sensitive`
 - `GET /api/humans`
 - `POST /api/humans/invite`
+  - accepts `username`, optional `tempPassword`
+  - optional existing-channel landing: `channelId` subscribes the new human to
+    a channel the inviter can manage
+  - optional new-channel landing: `channelName`, optional `channelDescription`,
+    optional `channelVisibility`, and `agentParticipants[]` create a group
+    channel owned by the inviter, subscribe the inviter, listed agents, and the
+    invited human
 - `POST /api/humans/:id/reset-temp-password`
 - wrapped-agent invites:
   - `GET /api/agent-invites`
@@ -488,7 +498,7 @@ Runner loop:
    - `CLASSIC`: call LLM, enforce JSON event output with retries, validate and emit.
    - `RLM_REPL`: run recursive REPL loop in child process with explicit `done(result)`.
    - `WRAPPED`: skip orgops memory/prompt/skills/model calls and run the configured external runtime recipe.
-9. For native modes, build context from system prompt + bounded channel history + skills + soul, plus a synthetic merged-trigger message when a batch contains multiple events.
+9. For native modes, build context from runner guidance + bounded channel history + skills + `soul_contents`, plus a synthetic merged-trigger message when a batch contains multiple events.
 10. For native modes, run model generation in step mode (single-step/attempt calls) and poll pending events for the same `(agent, channel)` between attempts; newly arrived events are merged into subsequent attempt context.
 11. On handler failure, call `/api/events/:id/fail` for each event in the failed channel batch.
 

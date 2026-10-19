@@ -20,7 +20,6 @@ type AgentsDeps = {
   PROJECT_ROOT: string;
   jsonResponse: (c: any, data: unknown, status?: number) => Response;
   parseStringArraySafe: (input: string | null | undefined) => string[];
-  getDefaultSoulPath: (agentName: string) => string;
   resolveWorkspacePath: (workspacePath: string) => string;
   insertEvent: (input: any) => any;
   access: AccessControl;
@@ -39,7 +38,6 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     PROJECT_ROOT,
     jsonResponse,
     parseStringArraySafe,
-    getDefaultSoulPath,
     resolveWorkspacePath,
     insertEvent,
     access
@@ -338,8 +336,6 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         icon: row.icon,
         description: row.description,
         modelId: row.model_id,
-        systemInstructions: row.system_instructions,
-        soulPath: row.soul_path,
         soulContents: row.soul_contents ?? "",
         enabledSkills: parseStringArraySafe(row.enabled_skills_json),
         alwaysPreloadedSkills: parseStringArraySafe(row.always_preloaded_skills_json),
@@ -398,10 +394,6 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       scopedRunner?.allowedRunnerId ?? assignedRunnerId;
     const id = randomUUID();
     const now = Date.now();
-    const soulPath =
-      typeof body.soulPath === "string" && body.soulPath.trim()
-        ? body.soulPath.trim()
-        : getDefaultSoulPath(body.name);
     const workspacePath = resolveWorkspacePath(String(body.workspacePath ?? ""));
     if (!workspacePath.trim()) {
       return jsonResponse(c, { error: "workspacePath is required" }, 400);
@@ -488,8 +480,6 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         icon: body.icon ?? null,
         description: body.description ?? null,
         model_id: body.modelId,
-        system_instructions: body.systemInstructions ?? "",
-        soul_path: soulPath,
         soul_contents: soulContents,
         workspace_path: workspacePath,
         allow_outside_workspace: allowOutsideWorkspace ? 1 : 0,
@@ -531,8 +521,6 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       icon: row.icon,
       description: row.description,
       modelId: row.model_id,
-      systemInstructions: row.system_instructions,
-      soulPath: row.soul_path,
       soulContents: row.soul_contents ?? "",
       enabledSkills: parseStringArraySafe(row.enabled_skills_json),
       alwaysPreloadedSkills: parseStringArraySafe(row.always_preloaded_skills_json),
@@ -584,10 +572,6 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     ) {
       return jsonResponse(c, { error: "Agent rename is not supported" }, 400);
     }
-    const soulPath =
-      typeof body.soulPath === "string" && body.soulPath.trim()
-        ? body.soulPath.trim()
-        : (existing.soul_path as string);
     const workspacePath =
       body.workspacePath !== undefined
         ? resolveWorkspacePath(String(body.workspacePath))
@@ -728,8 +712,6 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         icon: body.icon ?? existing.icon,
         description: body.description ?? existing.description,
         model_id: body.modelId ?? existing.model_id,
-        system_instructions: body.systemInstructions ?? existing.system_instructions,
-        soul_path: soulPath ?? existing.soul_path,
         soul_contents:
           typeof body.soulContents === "string"
             ? body.soulContents

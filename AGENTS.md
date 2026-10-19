@@ -77,7 +77,7 @@ Pending events are grouped by channel and processed as **one batch per `(agent, 
 
 - `CLASSIC` — LLM tool-calling loop; model output is coerced into valid events, with a fallback `message.created` if it doesn't produce one.
 - `RLM_REPL` — recursive REPL: the model emits one JS snippet per step into a child-process VM, terminating with `done(result)`. See `rlm.ts` / `rlm-process.ts`.
-- `WRAPPED` — an OrgOps-owned lifecycle record whose turns are delegated to an **external** runtime (OpenClaw, Cursor, any CLI) described by `wrapped_config_json`. Wrapped agents deliberately bypass OrgOps memory, prompt composition, skills, model calls, and filesystem allowlisting — the external runtime owns all of that. `soul_path`/`soul_contents` are *not* auto-injected; whoever creates the agent must translate them into the harness config.
+- `WRAPPED` — an OrgOps-owned lifecycle record whose turns are delegated to an **external** runtime (OpenClaw, Cursor, any CLI) described by `wrapped_config_json`. Wrapped agents deliberately bypass OrgOps memory, prompt composition, skills, model calls, and filesystem allowlisting — the external runtime owns all of that. `soul_contents` is *not* auto-injected; whoever creates the agent must translate it into the harness config.
 
 To support a new external runtime (SDK, HTTP, daemon, MCP), add a harness module under `apps/agent-runner/src/wrapper-harness/` implementing `canHandle`/`ensureReady`/`runTurn` and register it in `registry.ts` — do not grow `wrapped-runtime.ts`. Note that `source`, `setup.command`, and `runtime.command` in a wrapped config are arbitrary host code execution; treat GitHub-derived recipes as privileged.
 

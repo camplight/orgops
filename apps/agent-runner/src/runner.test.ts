@@ -18,8 +18,6 @@ describe("agent runner", () => {
     const tools = createRunnerTools({
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
         desiredState: "RUNNING",
@@ -50,8 +48,6 @@ describe("agent runner", () => {
   it("builds model messages from all channel events", async () => {
     const agent: Agent = {
       name: "tester",
-      systemInstructions: "",
-      soulPath: "",
       workspacePath: "/tmp",
       modelId: "openai:gpt-4o-mini",
       desiredState: "RUNNING",
@@ -97,8 +93,6 @@ describe("agent runner", () => {
   it("includes image attachment parts when message payload references files", async () => {
     const agent: Agent = {
       name: "tester",
-      systemInstructions: "",
-      soulPath: "",
       workspacePath: "/tmp",
       modelId: "openai:gpt-4o-mini",
       desiredState: "RUNNING",
@@ -139,8 +133,6 @@ describe("agent runner", () => {
   it("resolves per-agent timeout and model-step overrides with sane defaults", () => {
     const baseAgent: Agent = {
       name: "tester",
-      systemInstructions: "",
-      soulPath: "",
       workspacePath: "/tmp",
       modelId: "openai:gpt-4o-mini",
       desiredState: "RUNNING",
@@ -193,8 +185,6 @@ describe("agent runner", () => {
   it("truncates oversized history to stay within model budget", async () => {
     const agent: Agent = {
       name: "tester",
-      systemInstructions: "",
-      soulPath: "",
       workspacePath: "/tmp",
       modelId: "openai:gpt-4o-mini",
       desiredState: "RUNNING",
@@ -225,8 +215,6 @@ describe("agent runner", () => {
   it("keeps newest events when history arrives newest-first", async () => {
     const agent: Agent = {
       name: "tester",
-      systemInstructions: "",
-      soulPath: "",
       workspacePath: "/tmp",
       modelId: "openai:gpt-4o-mini",
       desiredState: "RUNNING",
@@ -260,8 +248,6 @@ describe("agent runner", () => {
   it("omits latest user-like event from recent delta system context", () => {
     const agent: Agent = {
       name: "tester",
-      systemInstructions: "",
-      soulPath: "",
       workspacePath: "/tmp",
       modelId: "openai:gpt-4o-mini",
       desiredState: "RUNNING",
@@ -298,8 +284,6 @@ describe("agent runner", () => {
   it("injects memory summaries as system messages", async () => {
     const agent: Agent = {
       name: "tester",
-      systemInstructions: "",
-      soulPath: "",
       workspacePath: "/tmp",
       modelId: "openai:gpt-4o-mini",
       desiredState: "RUNNING",
@@ -337,8 +321,6 @@ describe("agent runner", () => {
   it("reconciles same turn when late injected channel events arrive", async () => {
     const agent: Agent = {
       name: "tester",
-      systemInstructions: "",
-      soulPath: "",
       workspacePath: "/tmp",
       modelId: "openai:gpt-4o-mini",
       desiredState: "RUNNING",
@@ -404,8 +386,6 @@ describe("agent runner", () => {
   it("does not keep tool result when matching start is truncated", async () => {
     const agent: Agent = {
       name: "tester",
-      systemInstructions: "",
-      soulPath: "",
       workspacePath: "/tmp",
       modelId: "openai:gpt-4o-mini",
       desiredState: "RUNNING",
@@ -448,8 +428,6 @@ describe("agent runner", () => {
   it("does not keep failed tool result when matching start is truncated", async () => {
     const agent: Agent = {
       name: "tester",
-      systemInstructions: "",
-      soulPath: "",
       workspacePath: "/tmp",
       modelId: "openai:gpt-4o-mini",
       desiredState: "RUNNING",
@@ -492,8 +470,6 @@ describe("agent runner", () => {
   it("filters control/audit/self but accepts other agent channel events", async () => {
     const agent: Agent = {
       name: "tester",
-      systemInstructions: "",
-      soulPath: "",
       workspacePath: "/tmp",
       modelId: "openai:gpt-4o-mini",
       desiredState: "RUNNING",
@@ -670,8 +646,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
         desiredState: "RUNNING",
@@ -736,8 +710,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
         desiredState: "RUNNING",
@@ -801,8 +773,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
         desiredState: "RUNNING",
@@ -861,8 +831,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
         desiredState: "RUNNING",
@@ -947,8 +915,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
         desiredState: "RUNNING",
@@ -1033,8 +999,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
         desiredState: "RUNNING",
@@ -1096,8 +1060,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
         desiredState: "RUNNING",
@@ -1166,8 +1128,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
         desiredState: "RUNNING",
@@ -1208,8 +1168,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
         desiredState: "RUNNING",
@@ -1265,8 +1223,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         soulContents: "role prompt",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
@@ -1328,8 +1284,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         soulContents: "role prompt",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
@@ -1387,8 +1341,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         soulContents: "role prompt",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
@@ -1447,8 +1399,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         soulContents: "role prompt",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
@@ -1520,8 +1470,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         soulContents: "role prompt",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
@@ -1578,8 +1526,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         soulContents: "role prompt",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
@@ -1659,8 +1605,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         soulContents: "role prompt",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
@@ -1712,8 +1656,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         soulContents: "role prompt",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
@@ -1757,8 +1699,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         soulContents: "role prompt",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
@@ -1812,8 +1752,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         soulContents: "role prompt",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
@@ -1883,8 +1821,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         soulContents: "role prompt",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
@@ -1936,8 +1872,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         soulContents: "role prompt",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
@@ -2007,8 +1941,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         soulContents: "role prompt",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
@@ -2048,8 +1980,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         soulContents: "role prompt",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
@@ -2089,8 +2019,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         soulContents: "role prompt",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
@@ -2140,8 +2068,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         soulContents: "role prompt",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
@@ -2193,8 +2119,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         soulContents: "role prompt",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
@@ -2241,8 +2165,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         soulContents: "role prompt",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
@@ -2304,8 +2226,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         soulContents: "role prompt",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
@@ -2364,8 +2284,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         soulContents: "role prompt",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
@@ -2429,8 +2347,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         soulContents: "role prompt",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
@@ -2487,8 +2403,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         soulContents: "role prompt",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
@@ -2557,8 +2471,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         soulContents: "role prompt",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
@@ -2625,8 +2537,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         soulContents: "role prompt",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
@@ -2695,8 +2605,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         soulContents: "role prompt",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
@@ -2761,8 +2669,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         soulContents: "role prompt",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
@@ -2830,8 +2736,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
         desiredState: "RUNNING",
@@ -2881,8 +2785,6 @@ describe("agent runner", () => {
     const ctx = {
       agent: {
         name: "tester",
-        systemInstructions: "",
-        soulPath: "",
         workspacePath: "/tmp",
         modelId: "openai:gpt-4o-mini",
         desiredState: "RUNNING",

@@ -4,8 +4,6 @@ import type { Agent, Event } from "./types";
 
 const agent: Agent = {
   name: "browser",
-  systemInstructions: "",
-  soulPath: "",
   workspacePath: "/tmp",
   modelId: "openai:gpt-4o-mini",
   desiredState: "RUNNING",

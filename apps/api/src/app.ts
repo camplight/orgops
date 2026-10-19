@@ -282,14 +282,6 @@ export function createApp(config: AppConfig = {}) {
     }
   }
 
-  function toSoulFilename(agentName: string) {
-    return `${agentName.replace(/[^a-zA-Z0-9._-]/g, "_")}.md`;
-  }
-
-  function getDefaultSoulPath(agentName: string) {
-    return join(DATA_DIR, "souls", toSoulFilename(agentName));
-  }
-
   function resolveWorkspacePath(workspacePath: string) {
     if (!workspacePath) return workspacePath;
     return workspacePath.startsWith("/")
@@ -460,7 +452,6 @@ export function createApp(config: AppConfig = {}) {
     PROJECT_ROOT,
     jsonResponse,
     parseStringArraySafe,
-    getDefaultSoulPath,
     resolveWorkspacePath,
     insertEvent,
     access,
@@ -686,11 +677,8 @@ function seedDefaultSystemAgent(
         name: SYSTEM_AGENT_NAME,
         description: "Default system agent",
         model_id: resolved.modelId,
-        system_instructions:
-          "You are the default OrgOps system agent for this instance.",
-        soul_path: join(dataDir, "souls", "system.md"),
         soul_contents:
-          "You are system, the default agent created when this OrgOps instance first started.",
+          "You are system, the default OrgOps agent created when this instance first started.",
         workspace_path: join(dataDir, "workspaces", "system"),
         created_at: now,
         updated_at: now,

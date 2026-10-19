@@ -1,8 +1,6 @@
 export type Agent = {
   id?: string;
   name: string;
-  systemInstructions: string;
-  soulPath: string;
   soulContents?: string;
   enabledSkills?: string[];
   alwaysPreloadedSkills?: string[];

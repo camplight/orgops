@@ -38,8 +38,6 @@ describe("wrapped runtime", () => {
     const emitted: unknown[] = [];
     const agent: Agent = {
       name: "wrapped-test",
-      systemInstructions: "",
-      soulPath: "",
       workspacePath,
       modelId: "wrapped:none",
       desiredState: "RUNNING",
@@ -103,8 +101,6 @@ describe("wrapped runtime", () => {
     const emitted: unknown[] = [];
     const agent: Agent = {
       name: "openclaw-test",
-      systemInstructions: "",
-      soulPath: "",
       workspacePath,
       modelId: "wrapped:none",
       desiredState: "RUNNING",
@@ -160,8 +156,6 @@ describe("wrapped runtime", () => {
     const emitted: unknown[] = [];
     const agent: Agent = {
       name: "shell-test",
-      systemInstructions: "",
-      soulPath: "",
       workspacePath,
       modelId: "wrapped:none",
       desiredState: "RUNNING",
@@ -218,8 +212,6 @@ describe("wrapped runtime", () => {
     const setupCwd = join(workspacePath, "missing", "wrapper");
     const agent: Agent = {
       name: "cwd-test",
-      systemInstructions: "",
-      soulPath: "",
       workspacePath,
       modelId: "wrapped:none",
       desiredState: "RUNNING",
@@ -266,8 +258,6 @@ describe("wrapped runtime", () => {
     const processRequests: Array<{ path: string; body: any }> = [];
     const agent: Agent = {
       name: "sidecar-test",
-      systemInstructions: "",
-      soulPath: "",
       workspacePath,
       modelId: "wrapped:none",
       desiredState: "RUNNING",
@@ -336,8 +326,6 @@ describe("wrapped runtime", () => {
     const emitted: unknown[] = [];
     const agent: Agent = {
       name: "wrapped-attachments-test",
-      systemInstructions: "",
-      soulPath: "",
       workspacePath,
       modelId: "wrapped:none",
       desiredState: "RUNNING",
@@ -398,8 +386,6 @@ describe("wrapped runtime", () => {
     const apiRequests: Array<{ path: string; body: any }> = [];
     const agent: Agent = {
       name: "wrapped-stream-test",
-      systemInstructions: "",
-      soulPath: "",
       workspacePath,
       modelId: "wrapped:none",
       desiredState: "RUNNING",
@@ -468,8 +454,6 @@ describe("wrapped runtime", () => {
     const emitted: unknown[] = [];
     const agent: Agent = {
       name: "wrapped-attachment-download-test",
-      systemInstructions: "",
-      soulPath: "",
       workspacePath,
       modelId: "wrapped:none",
       desiredState: "RUNNING",
@@ -555,8 +539,6 @@ describe("wrapped runtime", () => {
     const emitted: unknown[] = [];
     const agent: Agent = {
       name: "wrapped-secret-filter-test",
-      systemInstructions: "",
-      soulPath: "",
       workspacePath,
       modelId: "wrapped:none",
       desiredState: "RUNNING",
@@ -620,8 +602,6 @@ describe("wrapped runtime", () => {
     const emitted: unknown[] = [];
     const agent: Agent = {
       name: "wrapped-api-auth-test",
-      systemInstructions: "",
-      soulPath: "",
       workspacePath,
       modelId: "wrapped:none",
       desiredState: "RUNNING",
@@ -680,8 +660,6 @@ describe("wrapped runtime", () => {
     const emitted: unknown[] = [];
     const agent: Agent = {
       name: "wrapped-signal-fail-test",
-      systemInstructions: "",
-      soulPath: "",
       workspacePath,
       modelId: "wrapped:none",
       desiredState: "RUNNING",
@@ -736,8 +714,6 @@ describe("wrapped runtime", () => {
     const emitted: unknown[] = [];
     const agent: Agent = {
       name: "wrapped-timeout-fail-test",
-      systemInstructions: "",
-      soulPath: "",
       workspacePath,
       modelId: "wrapped:none",
       desiredState: "RUNNING",

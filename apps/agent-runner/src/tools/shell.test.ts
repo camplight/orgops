@@ -9,8 +9,6 @@ function createTestContext(workspacePath: string, injectionEnv: Record<string, s
   return {
     agent: {
       name: "tester",
-      systemInstructions: "",
-      soulPath: "",
       workspacePath,
       modelId: "openai:gpt-4o-mini",
       desiredState: "RUNNING",

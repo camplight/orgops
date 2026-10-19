@@ -10,8 +10,6 @@ describe("channel loop manager", () => {
   it("queues late same-channel events onto one running worker", async () => {
     const agent: Agent = {
       name: "browser",
-      systemInstructions: "",
-      soulPath: "",
       workspacePath: "/tmp",
       modelId: "openai:gpt-4o-mini",
       desiredState: "RUNNING",
@@ -69,8 +67,6 @@ describe("channel loop manager", () => {
   it("reports channel busy while worker is active", async () => {
     const agent: Agent = {
       name: "zoro",
-      systemInstructions: "",
-      soulPath: "",
       workspacePath: "/tmp",
       modelId: "openai:gpt-4o-mini",
       desiredState: "RUNNING",
@@ -107,8 +103,6 @@ describe("channel loop manager", () => {
   it("tracks busy state per agent and channel key", async () => {
     const zoro: Agent = {
       name: "zoro",
-      systemInstructions: "",
-      soulPath: "",
       workspacePath: "/tmp",
       modelId: "openai:gpt-4o-mini",
       desiredState: "RUNNING",
