@@ -15,6 +15,7 @@ import {
   TeamsScreen,
   ChannelsScreen,
   ChatScreen,
+  BillingScreen,
   EventsScreen,
   ProcessesScreen,
   RunnersScreen,
@@ -1176,6 +1177,8 @@ export default function App() {
           onFocusEventApplied={() => setFocusEventId(null)}
         />
       )}
+
+      {activeScreen === "billing" && <BillingScreen />}
 
       {activeScreen === "processes" && (
         <ProcessesScreen

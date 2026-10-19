@@ -16,6 +16,7 @@ const NAV_ITEMS: { screen: Screen; label: string }[] = [
   { screen: "channels", label: "Channels" },
   { screen: "chat", label: "Chat" },
   { screen: "events", label: "Events Explorer" },
+  { screen: "billing", label: "Billing" },
   { screen: "processes", label: "Processes" },
   { screen: "skills", label: "Skills" },
   { screen: "secrets", label: "Secrets" },

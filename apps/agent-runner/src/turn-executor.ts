@@ -41,6 +41,7 @@ import {
   estimateContextUsage,
   selectRecentDeltaEventsForPrompt,
 } from "./prompt-composer";
+import { recordLlmUsage } from "./billing";
 import type { Agent, Event } from "./types";
 import type { RunnerApi } from "./runner/api";
 
@@ -840,6 +841,19 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         continue;
       }
       if (result.usage) {
+        await recordLlmUsage(input.api.apiFetch, {
+          channelId,
+          agentName: agent.name,
+          modelId: agent.modelId,
+          runtime: "classic",
+          purpose: "turn",
+          triggerEventId: triggerEvent.id,
+          usage: result.usage,
+          metadata: {
+            attempt,
+            finishReason: result.finishReason ?? "unknown",
+          },
+        });
         await emitContextWindowTelemetry({
           ...buildProviderUsageTelemetry(
             result.usage,

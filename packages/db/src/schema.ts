@@ -406,6 +406,79 @@ export const models = sqliteTable("models", {
   created_at: integer("created_at").notNull()
 });
 
+export const llmModelPrices = sqliteTable(
+  "llm_model_prices",
+  {
+    id: text("id").primaryKey(),
+    provider: text("provider").notNull(),
+    model_id: text("model_id").notNull(),
+    model_name: text("model_name").notNull(),
+    currency: text("currency").notNull().default("USD"),
+    input_price_per_million: text("input_price_per_million").notNull(),
+    output_price_per_million: text("output_price_per_million").notNull(),
+    cached_input_price_per_million: text("cached_input_price_per_million"),
+    reasoning_price_per_million: text("reasoning_price_per_million"),
+    source: text("source").notNull(),
+    source_url: text("source_url"),
+    effective_at: integer("effective_at").notNull(),
+    fetched_at: integer("fetched_at"),
+    metadata_json: text("metadata_json").notNull().default("{}"),
+    created_at: integer("created_at").notNull()
+  },
+  (table) => ({
+    idxLlmModelPricesLookup: index("idx_llm_model_prices_lookup").on(
+      table.provider,
+      table.model_id,
+      table.effective_at
+    ),
+    uidxLlmModelPricesEffective: uniqueIndex("uidx_llm_model_prices_effective").on(
+      table.provider,
+      table.model_id,
+      table.effective_at
+    )
+  })
+);
+
+export const llmUsage = sqliteTable(
+  "llm_usage",
+  {
+    id: text("id").primaryKey(),
+    created_at: integer("created_at").notNull(),
+    channel_id: text("channel_id"),
+    agent_name: text("agent_name"),
+    provider: text("provider").notNull(),
+    model_id: text("model_id").notNull(),
+    model_name: text("model_name").notNull(),
+    runtime: text("runtime").notNull(),
+    purpose: text("purpose").notNull(),
+    trigger_event_id: text("trigger_event_id"),
+    usage_source: text("usage_source").notNull(),
+    input_tokens: integer("input_tokens").notNull().default(0),
+    output_tokens: integer("output_tokens").notNull().default(0),
+    total_tokens: integer("total_tokens").notNull().default(0),
+    reasoning_tokens: integer("reasoning_tokens").notNull().default(0),
+    cached_input_tokens: integer("cached_input_tokens").notNull().default(0),
+    cost_usd_micros: integer("cost_usd_micros").notNull().default(0),
+    price_snapshot_json: text("price_snapshot_json").notNull().default("{}"),
+    metadata_json: text("metadata_json").notNull().default("{}")
+  },
+  (table) => ({
+    idxLlmUsageCreatedAt: index("idx_llm_usage_created_at").on(table.created_at),
+    idxLlmUsageChannelCreated: index("idx_llm_usage_channel_created").on(
+      table.channel_id,
+      table.created_at
+    ),
+    idxLlmUsageAgentCreated: index("idx_llm_usage_agent_created").on(
+      table.agent_name,
+      table.created_at
+    ),
+    idxLlmUsageProviderCreated: index("idx_llm_usage_provider_created").on(
+      table.provider,
+      table.created_at
+    )
+  })
+);
+
 export const channelMemoryRecent = sqliteTable(
   "channel_memory_recent",
   {
@@ -532,6 +605,8 @@ export const schema = {
   files,
   secrets,
   models,
+  llmModelPrices,
+  llmUsage,
   channelMemoryRecent,
   channelMemoryFull,
   crossChannelMemoryRecent,

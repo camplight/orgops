@@ -240,6 +240,7 @@ export type Screen =
   | "channels"
   | "chat"
   | "events"
+  | "billing"
   | "processes"
   | "skills"
   | "secrets"

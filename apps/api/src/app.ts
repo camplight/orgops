@@ -49,6 +49,7 @@ import { registerHumansRoutes } from "./routes/humans";
 import { registerRunnersRoutes } from "./routes/runners";
 import { registerIntegrationKeysRoutes } from "./routes/integration-keys";
 import { registerEmbedRoutes } from "./routes/embed";
+import { registerBillingRoutes } from "./routes/billing";
 import {
   findActiveRunnerTokenByToken,
   parseStringArraySafe as parseRunnerScopeChannels,
@@ -537,6 +538,13 @@ export function createApp(config: AppConfig = {}) {
 
   registerIntegrationKeysRoutes(app as any, { orm, jsonResponse, access });
   registerEmbedRoutes(app as any, { orm, jsonResponse, insertEvent });
+  registerBillingRoutes(app as any, {
+    orm,
+    jsonResponse,
+    access,
+    requireAuth,
+    requireRunnerAuth,
+  });
 
   return { app, db, bus, injectWebSocket };
 }

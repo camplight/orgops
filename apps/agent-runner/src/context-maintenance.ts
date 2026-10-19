@@ -1,4 +1,5 @@
 import { generate } from "@orgops/llm";
+import { recordLlmUsage } from "./billing";
 import { listChannelEventsAfter } from "./channel-events";
 import type { Agent, Event } from "./types";
 
@@ -203,6 +204,9 @@ async function upsertCrossMemoryRecord(
 async function summarizeText(
   agent: Agent,
   env: Record<string, string>,
+  apiFetch: ApiFetch,
+  channelId: string | undefined,
+  purpose: string,
   systemPrompt: string,
   userPrompt: string,
 ): Promise<string> {
@@ -217,6 +221,14 @@ async function summarizeText(
       env,
     },
   );
+  await recordLlmUsage(apiFetch, {
+    channelId,
+    agentName: agent.name,
+    modelId: agent.modelId,
+    runtime: "memory",
+    purpose,
+    usage: result.usage,
+  });
   return trimText(result.text ?? "");
 }
 
@@ -274,6 +286,9 @@ export async function refreshChannelRecentMemory(input: {
   const summary = await summarizeText(
     input.agent,
     await input.getEnv(),
+    input.apiFetch,
+    input.channelId,
+    "memory.channel.recent",
     "You summarize the last 10 minutes of one channel for execution context. Keep it concise, factual, and action-oriented. Return plain text only.",
     [
       "Produce a rolling 10-minute channel summary for agent execution context.",
@@ -353,6 +368,9 @@ export async function refreshChannelFullMemory(input: {
     const nextSummary = await summarizeText(
       input.agent,
       await input.getEnv(),
+      input.apiFetch,
+      input.channelId,
+      "memory.channel.full",
       "You maintain a full rolling channel memory for execution context. Keep it concise, durable, and strictly factual. Return plain text only.",
       [
         "Update this full channel memory using existing memory + new events.",
@@ -445,6 +463,9 @@ async function refreshCrossChannelMemory(input: {
   const summaryText = await summarizeText(
     input.agent,
     await input.getEnv(),
+    input.apiFetch,
+    undefined,
+    `memory.cross.${input.mode}`,
     input.mode === "recent"
       ? "You summarize recent cross-channel context (last 10 minutes) for agent execution. Return plain text only."
       : "You maintain full cross-channel memory for agent execution. Return plain text only.",

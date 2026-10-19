@@ -1,8 +1,9 @@
 import { createRequire } from "node:module";
 import { inspect } from "node:util";
-import { generate, type LlmMessage, type LlmTool } from "@orgops/llm";
+import { generate, type LlmMessage, type LlmTool, type LlmUsage } from "@orgops/llm";
 import { createJsRuntimeSession, type JsRuntimeSession } from "@orgops/js-runtime";
 import { createRunnerTools, executeTool, type ExecuteContext } from "./tools";
+import { recordLlmUsage } from "./billing";
 import type { Agent, Event } from "./types";
 import { pullInjectedEventMessages } from "./channel-injection";
 import { shouldHandleEventForAgent } from "./event-routing";
@@ -108,7 +109,7 @@ type RlmGenerateFn = (
     maxSteps?: number;
     env?: Record<string, string | undefined>;
   },
-) => Promise<{ text: string }>;
+) => Promise<{ text: string; usage?: LlmUsage }>;
 
 const rootSessions = new Map<string, RlmSession>();
 const requireFromRunner = createRequire(import.meta.url);
@@ -758,6 +759,16 @@ async function runReplLoop(
     const response = await callGenerate(agent.modelId, messages, {
       maxSteps: 1,
       env: executeCtx.injectionEnv,
+    });
+    await recordLlmUsage(executeCtx.apiFetch, {
+      channelId,
+      agentName: agent.name,
+      modelId: agent.modelId,
+      runtime: "rlm",
+      purpose: "rlm.repl.step",
+      triggerEventId: event.id,
+      usage: response.usage,
+      metadata: { depth, step },
     });
     const rawCode = response.text ?? "";
     const extractedCode = extractCode(rawCode);

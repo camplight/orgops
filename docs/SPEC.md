@@ -196,6 +196,8 @@ Runner IDs are stable across restarts by persisting local `.agent-runner-id`.
 - `files`
 - `secrets`
 - `models`
+- `llm_model_prices`: provider/model price snapshots with source URL and effective time; OpenAI/Anthropic seed from curated docs, OpenRouter can refresh from its models API
+- `llm_usage`: append-only LLM call ledger storing channel/agent/provider/model dimensions, token counts, cost in USD micros, and the exact applied price snapshot
 
 ### Agent Invites / Runner Tokens
 
@@ -365,6 +367,14 @@ Published topics include:
 - `GET /api/models`
 - `POST /api/models`
 - `PATCH /api/models/:id`
+
+### Billing
+
+- `GET /api/billing/prices` returns known model price snapshots
+- `POST /api/billing/prices/refresh/openrouter` fetches OpenRouter's live model/pricing catalog and snapshots rates as `openrouter:<slug>` model IDs
+- `POST /api/billing/usage` is runner-authenticated and records provider token usage for native runner calls
+- `GET /api/billing/usage?groupBy=provider|model|agent|channel&since=<ms>&until=<ms>` returns visible aggregate usage/cost totals; the admin UI exposes predefined periods and custom start/end filters
+- Pricing is best-effort but reproducible: every usage row stores the exact price snapshot used, so historical totals do not change when provider prices change later.
 
 ### Agents
 
