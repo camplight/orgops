@@ -2343,7 +2343,7 @@ export default function App() {
               ref={channelSearchInputRef}
               value={channelQuery}
               onChange={(event) => setChannelQuery(event.target.value)}
-              placeholder="Search channels... (Cmd+Shift+K)"
+              placeholder="Cmd+Shift+K"
             />
           </label>
           <div className="channel-list">
