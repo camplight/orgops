@@ -657,8 +657,13 @@ describe("api app", () => {
         `http://localhost/api/events?channelId=${encodeURIComponent(homeChannel.id)}&limit=10`,
         { headers: { cookie: homeCookie } },
       );
-      const homeEvents = (await homeEventsRes.json()) as Array<{ payload?: { text?: string } }>;
+      const homeEvents = (await homeEventsRes.json()) as Array<{
+        payload?: { text?: string; _orgopsFederation?: { direction?: string; remote?: boolean } };
+      }>;
       expect(homeEvents.map((event) => event.payload?.text)).toEqual(["hello from projection"]);
+      expect(homeEvents[0]?.payload?._orgopsFederation).toEqual(
+        expect.objectContaining({ direction: "projection_to_home", remote: true }),
+      );
 
       const homeSecondRes = await home.app.request("http://localhost/api/events", {
         method: "POST",
@@ -672,7 +677,9 @@ describe("api app", () => {
       });
       expect(homeSecondRes.status).toBe(201);
 
-      let projectedEvents: Array<{ payload?: { text?: string } }> = [];
+      let projectedEvents: Array<{
+        payload?: { text?: string; _orgopsFederation?: { direction?: string; remote?: boolean } };
+      }> = [];
       for (let attempt = 0; attempt < 20; attempt += 1) {
         const projectedEventsRes = await projection.app.request(
           `http://localhost/api/events?channelId=${encodeURIComponent(
@@ -681,7 +688,7 @@ describe("api app", () => {
           { headers: { cookie: projectionCookie } },
         );
         projectedEvents = (await projectedEventsRes.json()) as Array<{
-          payload?: { text?: string };
+          payload?: { text?: string; _orgopsFederation?: { direction?: string; remote?: boolean } };
         }>;
         if (projectedEvents.length >= 2) break;
         await new Promise((resolve) => setTimeout(resolve, 10));
@@ -690,6 +697,9 @@ describe("api app", () => {
         "hello from projection",
         "hello from home",
       ]);
+      expect(projectedEvents[1]?.payload?._orgopsFederation).toEqual(
+        expect.objectContaining({ direction: "home_to_projection", remote: true }),
+      );
 
       const syncRes = await projection.app.request(
         `http://localhost/api/federation/channels/${encodeURIComponent(

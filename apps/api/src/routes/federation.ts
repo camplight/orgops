@@ -26,6 +26,30 @@ function parseJsonRecordSafe(input: string | null | undefined): Record<string, u
   }
 }
 
+function withFederationMetadata(
+  payload: unknown,
+  metadata: Record<string, unknown>,
+): Record<string, unknown> {
+  const base: Record<string, unknown> =
+    payload && typeof payload === "object" && !Array.isArray(payload)
+      ? { ...(payload as Record<string, unknown>) }
+      : { value: payload };
+  const existingMetadata =
+    base._orgopsFederation &&
+    typeof base._orgopsFederation === "object" &&
+    !Array.isArray(base._orgopsFederation)
+      ? (base._orgopsFederation as Record<string, unknown>)
+      : {};
+  return {
+    ...base,
+    _orgopsFederation: {
+      ...existingMetadata,
+      ...metadata,
+      remote: true,
+    },
+  };
+}
+
 function trimString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -131,7 +155,11 @@ export function registerFederationRoutes(app: Hono<any>, deps: FederationDeps) {
     const row = insertEvent({
       type: input.type,
       source: input.source,
-      payload: input.payload ?? {},
+      payload: withFederationMetadata(input.payload ?? {}, {
+        direction: "home_to_projection",
+        originInstanceId: input.homeInstanceId,
+        originEventId: input.remoteEventId,
+      }),
       channelId: input.localChannelId,
       parentEventId: input.parentEventId,
       deliverAt: input.deliverAt,
@@ -881,7 +909,14 @@ export function registerFederationRoutes(app: Hono<any>, deps: FederationDeps) {
     const row = insertEvent({
       type,
       source,
-      payload,
+      payload: withFederationMetadata(payload, {
+        direction: "projection_to_home",
+        originInstanceId: auth.peer.id,
+        originEventId:
+          trimString((body as Record<string, unknown>).originEventId) ||
+          trimString((body as Record<string, unknown>).idempotencyKey) ||
+          null,
+      }),
       channelId,
       parentEventId: trimString((body as Record<string, unknown>).parentEventId) || undefined,
       deliverAt:

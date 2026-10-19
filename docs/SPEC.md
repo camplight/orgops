@@ -180,7 +180,10 @@ hashed inbound bearer token for calls from that peer. `federation_channels`
 links a local channel to either a `LOCAL_HOME` role or a `REMOTE_PROJECTION`
 role with `home_instance_id`, `remote_channel_id`, and a pull `sync_cursor`.
 Projection rows are caches/convenience records; the home instance is the source
-of truth for ordering and policy.
+of truth for ordering and policy. Events inserted from federation carry
+`payload._orgopsFederation` metadata with `remote=true`, direction, origin
+instance, and origin event fields so runners can distinguish remote history from
+local actionable input.
 
 ### Collaboration
 
@@ -538,6 +541,13 @@ realtime delivery, remote projections register a webhook subscription with the
 home channel. When the home API inserts a canonical event, it pushes the event
 to subscribed projection instances; successful acks update `lastAckAt`, while
 failures update `lastError` and rely on the pull sync loop for repair.
+Federated agent-authored `message.created` events remain visible in channel
+history, but the runner does not wake local agents for untargeted remote agent
+messages. Remote human messages still wake subscribed local agents, and remote
+agent messages with `targetAgentName` or `targetAgentNames` still wake the
+explicit target. This prevents two OrgOps instances with stub or eager agents
+from ping-ponging replies forever while preserving explicit cross-instance
+agent collaboration.
 
 Chained federation is deliberately not enabled in this version. A local channel
 has one federation role (`LOCAL_HOME` or `REMOTE_PROJECTION`) so a channel cannot
