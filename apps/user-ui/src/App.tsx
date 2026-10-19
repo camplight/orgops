@@ -115,6 +115,7 @@ const CHANNEL_GROUPS = [
   { id: "channels", label: "Channels" },
   { id: "shared", label: "Shared channels" }
 ] as const;
+const PINNED_CHANNELS_STORAGE_KEY = "orgops.user-ui.pinnedChannels";
 
 type ChannelGroupId = (typeof CHANNEL_GROUPS)[number]["id"];
 
@@ -423,6 +424,7 @@ function participantType(participant: ChannelParticipant) {
   const type = normalizedSubscriberType(participant);
   if (type === "HUMAN") return "Human";
   if (type === "AGENT") return "Agent";
+  if (type === "TEAM") return "Team";
   return participant.subscriberType || "Participant";
 }
 
@@ -502,17 +504,35 @@ function readLinkedChannelId() {
   return new URL(window.location.href).searchParams.get("channel");
 }
 
+function slugifyChannelName(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+}
+
+function channelSlug(channel?: Channel | null, currentUsername?: string) {
+  if (!channel) return "";
+  return slugifyChannelName(channelDisplayName(channel, currentUsername) || channel.name);
+}
+
 function readPendingShareToken() {
   const token = new URL(window.location.href).searchParams.get("share");
   return token?.trim() || null;
 }
 
-function updateChannelDeepLink(channelId: string | null, replace = false) {
+function updateChannelDeepLink(channelId: string | null, replace = false, channel?: Channel | null, currentUsername?: string) {
   const url = new URL(window.location.href);
   if (channelId) {
     url.searchParams.set("channel", channelId);
+    const slug = channelSlug(channel, currentUsername);
+    if (slug) url.searchParams.set("slug", slug);
+    else url.searchParams.delete("slug");
   } else {
     url.searchParams.delete("channel");
+    url.searchParams.delete("slug");
   }
   const method = replace ? "replaceState" : "pushState";
   window.history[method](null, "", url);
@@ -524,7 +544,25 @@ function consumeShareToken(channelId?: string | null) {
   if (channelId) {
     url.searchParams.set("channel", channelId);
   }
+  url.searchParams.delete("slug");
   window.history.replaceState(null, "", url);
+}
+
+function readPinnedChannelIds() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PINNED_CHANNELS_STORAGE_KEY) ?? "[]") as unknown;
+    return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function writePinnedChannelIds(channelIds: string[]) {
+  try {
+    localStorage.setItem(PINNED_CHANNELS_STORAGE_KEY, JSON.stringify(channelIds));
+  } catch {
+    // Pinning is a convenience; keep the UI responsive if local storage is unavailable.
+  }
 }
 
 function adaptiveMessageBatchSize() {
@@ -597,7 +635,12 @@ export default function App() {
   const messagesPanelRef = useRef<HTMLElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const conversationNameInputRef = useRef<HTMLInputElement | null>(null);
+  const agentSearchInputRef = useRef<HTMLInputElement | null>(null);
+  const teamSearchInputRef = useRef<HTMLInputElement | null>(null);
   const activeChannelIdRef = useRef<string | null>(null);
+  const channelEventsCacheRef = useRef<Record<string, EventRow[]>>({});
+  const hasOlderMessagesByChannelRef = useRef<Record<string, boolean>>({});
   const lastSeenByChannelRef = useRef<Record<string, number>>({});
   const lastLoadedMessageAtByChannelRef = useRef<Record<string, number>>({});
   const lastLoadedTimelineAtByChannelRef = useRef<Record<string, number>>({});
@@ -633,6 +676,9 @@ export default function App() {
   const [conversationVisibility, setConversationVisibility] = useState<"PUBLIC" | "PRIVATE">("PRIVATE");
   const [selectedConversationAgents, setSelectedConversationAgents] = useState<string[]>([]);
   const [agentSearchQuery, setAgentSearchQuery] = useState("");
+  const [selectedConversationTeams, setSelectedConversationTeams] = useState<string[]>([]);
+  const [teamSearchQuery, setTeamSearchQuery] = useState("");
+  const [pinnedChannelIds, setPinnedChannelIds] = useState<string[]>(() => readPinnedChannelIds());
   const [showArchivedChannels, setShowArchivedChannels] = useState(false);
   const [showConversationDialog, setShowConversationDialog] = useState(false);
   const [showParticipantsDialog, setShowParticipantsDialog] = useState(false);
@@ -653,7 +699,7 @@ export default function App() {
   const [hasOlderMessages, setHasOlderMessages] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [participantKind, setParticipantKind] = useState<"HUMAN" | "AGENT">("AGENT");
+  const [participantKind, setParticipantKind] = useState<"HUMAN" | "AGENT" | "TEAM">("AGENT");
   const [participantValue, setParticipantValue] = useState("");
   const [participantSubmitting, setParticipantSubmitting] = useState(false);
   const [participantRemovingKey, setParticipantRemovingKey] = useState<string | null>(null);
@@ -803,11 +849,25 @@ export default function App() {
     return archivedChannels.filter((channel) => channelMatchesQuery(channel, query, username));
   }, [archivedChannels, channelQuery, username]);
 
+  const pinnedChannelIdSet = useMemo(() => new Set(pinnedChannelIds), [pinnedChannelIds]);
+  const sortChannelsForDisplay = (items: Channel[]) =>
+    [...items].sort((left, right) => {
+      const leftPinned = pinnedChannelIdSet.has(left.id) ? 1 : 0;
+      const rightPinned = pinnedChannelIdSet.has(right.id) ? 1 : 0;
+      if (leftPinned !== rightPinned) return rightPinned - leftPinned;
+      const leftUnread = unreadCounts[left.id] ? 1 : 0;
+      const rightUnread = unreadCounts[right.id] ? 1 : 0;
+      if (leftUnread !== rightUnread) return rightUnread - leftUnread;
+      const leftName = channelDisplayName(left, username).toLowerCase();
+      const rightName = channelDisplayName(right, username).toLowerCase();
+      return leftName.localeCompare(rightName);
+    });
+
   const groupedChannels = useMemo(
     () =>
       CHANNEL_GROUPS.map((group) => ({
         ...group,
-        channels: filteredChannels.filter((channel) => {
+        channels: sortChannelsForDisplay(filteredChannels.filter((channel) => {
           const shared = isSharedChannelForUser(channel, username);
           if (group.id === "shared") return shared;
           if (group.id === "direct") {
@@ -820,9 +880,9 @@ export default function App() {
           }
           if (shared) return false;
           return channelGroupId(channel) === "channels";
-        })
+        }))
       })).filter((group) => group.channels.length > 0),
-    [filteredChannels, username]
+    [filteredChannels, pinnedChannelIdSet, unreadCounts, username]
   );
 
   const isSearchingChannels = Boolean(channelQuery.trim());
@@ -834,11 +894,16 @@ export default function App() {
   const activeChannelManageable = canManageUserChannel(activeChannel, userId);
   const activeChannelCanPost = activeChannel ? activeChannel.canPost !== false : false;
   const canStartConversation =
-    Boolean(conversationName.trim()) || selectedConversationAgents.length === 1;
+    Boolean(conversationName.trim()) || selectedConversationAgents.length === 1 || selectedConversationTeams.length > 0;
   const selectedConversationAgentRecords = useMemo(
     () =>
       selectedConversationAgents.map((agentName) => visibleAgents.find((agent) => agent.name === agentName) ?? { name: agentName }),
     [visibleAgents, selectedConversationAgents]
+  );
+  const selectedConversationTeamRecords = useMemo(
+    () =>
+      selectedConversationTeams.map((teamId) => teams.find((team) => team.id === teamId) ?? { id: teamId, name: teamId }),
+    [teams, selectedConversationTeams]
   );
   const agentSuggestions = useMemo(() => {
     const query = agentSearchQuery.trim().toLowerCase();
@@ -847,6 +912,15 @@ export default function App() {
       .filter((agent) => !query || agent.name.toLowerCase().includes(query))
       .slice(0, 8);
   }, [agentSearchQuery, visibleAgents, selectedConversationAgents]);
+  const isSearchingAgents = Boolean(agentSearchQuery.trim());
+  const teamSuggestions = useMemo(() => {
+    const query = teamSearchQuery.trim().toLowerCase();
+    return teams
+      .filter((team) => !selectedConversationTeams.includes(team.id))
+      .filter((team) => !query || team.name.toLowerCase().includes(query) || team.id.toLowerCase().includes(query))
+      .slice(0, 8);
+  }, [teams, selectedConversationTeams, teamSearchQuery]);
+  const isSearchingTeams = Boolean(teamSearchQuery.trim());
 
   useEffect(() => {
     if (!activeChannel) return;
@@ -892,10 +966,12 @@ export default function App() {
     });
   }
 
-  function selectChannel(channelId: string | null, options?: { replace?: boolean }) {
+  function selectChannel(channelId: string | null, options?: { replace?: boolean; channels?: Channel[] }) {
+    const nextChannels = options?.channels ?? channelsRef.current;
+    const channel = channelId ? nextChannels.find((candidate) => candidate.id === channelId) ?? null : null;
     setActiveChannelId(channelId);
     setMobileSidebarOpen(false);
-    updateChannelDeepLink(channelId, options?.replace);
+    updateChannelDeepLink(channelId, options?.replace, channel, usernameRef.current);
   }
 
   async function loadSession() {
@@ -983,7 +1059,7 @@ export default function App() {
           ? activeChannelId
           : visibleChannels.find((channel) => !channel.archivedAt)?.id ?? null);
       if (linkedChannel?.archivedAt) setShowArchivedChannels(true);
-      selectChannel(nextActiveChannelId, { replace: true });
+      selectChannel(nextActiveChannelId, { replace: true, channels: nextChannels });
       await loadMessageNotifications({ initialize: true });
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Unable to load OrgOps");
@@ -1036,6 +1112,19 @@ export default function App() {
       delete next[channelId];
       return next;
     });
+  }
+
+  function updateCachedChannelEvents(channelId: string, incomingEvents: EventRow[]) {
+    const visibleEvents = incomingEvents.filter(
+      (event) => (event.type === "message.created" && !isHiddenUiActionMessage(event)) || isTraceEvent(event)
+    );
+    if (visibleEvents.length === 0) return channelEventsCacheRef.current[channelId] ?? [];
+    const nextEvents = mergeEventsChronologically(
+      channelEventsCacheRef.current[channelId] ?? [],
+      visibleEvents
+    );
+    channelEventsCacheRef.current[channelId] = nextEvents;
+    return nextEvents;
   }
 
   function rememberWsEvent(eventId: string) {
@@ -1109,8 +1198,13 @@ export default function App() {
       setEvents((current) =>
         options?.showLoading ? chronologicalEvents : mergeEventsChronologically(current, chronologicalEvents)
       );
+      channelEventsCacheRef.current[channelId] = options?.showLoading
+        ? chronologicalEvents
+        : mergeEventsChronologically(channelEventsCacheRef.current[channelId] ?? [], chronologicalEvents);
       if (options?.showLoading) {
-        setHasOlderMessages(messageEvents.length === limit);
+        const hasOlder = messageEvents.length === limit;
+        hasOlderMessagesByChannelRef.current[channelId] = hasOlder;
+        setHasOlderMessages(hasOlder);
       }
       markChannelSeen(channelId, nextEvents);
       lastLoadedMessageAtByChannelRef.current[channelId] = Math.max(
@@ -1189,18 +1283,21 @@ export default function App() {
       const chronologicalOlderEvents = [...olderEvents].reverse();
       setEvents((current) => {
         const existingIds = new Set(current.map((event) => event.id));
-        return [
+        const nextEvents = [
           ...chronologicalOlderEvents.filter((event) => !existingIds.has(event.id)),
           ...current
         ];
+        channelEventsCacheRef.current[channelId] = nextEvents;
+        return nextEvents;
       });
-      setHasOlderMessages(
+      const hasOlder =
         olderMessages.length === limit ||
           olderTurns.length === limit ||
           olderTools.length === limit ||
           olderWrappers.length === limit ||
-          olderProcesses.length === limit
-      );
+          olderProcesses.length === limit;
+      hasOlderMessagesByChannelRef.current[channelId] = hasOlder;
+      setHasOlderMessages(hasOlder);
       window.requestAnimationFrame(() => {
         const currentPanel = messagesPanelRef.current;
         if (!currentPanel) return;
@@ -1251,6 +1348,12 @@ export default function App() {
     if (!event.id || !rememberWsEvent(event.id)) return;
     const eventChannelId = event.channelId;
     if (!eventChannelId) return;
+
+    const cacheableRealtimeEvent =
+      (event.type === "message.created" && !isHiddenUiActionMessage(event)) || isTraceEvent(event);
+    if (cacheableRealtimeEvent) {
+      updateCachedChannelEvents(eventChannelId, [event]);
+    }
 
     const currentActiveId = activeChannelIdRef.current;
     if (eventChannelId === currentActiveId && (event.type === "message.created" || isTraceEvent(event))) {
@@ -1326,6 +1429,14 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const label = activeChannel ? channelLabel(activeChannel, username) : "";
+    document.title = label ? `${label} - OrgOps` : "OrgOps User UI";
+    if (activeChannelId) {
+      updateChannelDeepLink(activeChannelId, true, activeChannel, username);
+    }
+  }, [activeChannel, activeChannelId, username]);
+
+  useEffect(() => {
     if (!authenticated || mustChangePassword) return;
     void loadShell();
   }, [authenticated, mustChangePassword]);
@@ -1333,12 +1444,13 @@ export default function App() {
   useEffect(() => {
     messageFetchSeqRef.current += 1;
     activeChannelIdRef.current = activeChannelId;
-    loadingChannelIdRef.current = activeChannelId;
     forceScrollToBottomOnLoadRef.current = Boolean(activeChannelId);
-    setEvents([]);
-    setMessagesLoading(Boolean(activeChannelId));
+    const cachedEvents = activeChannelId ? channelEventsCacheRef.current[activeChannelId] : undefined;
+    loadingChannelIdRef.current = activeChannelId && !cachedEvents ? activeChannelId : null;
+    setEvents(cachedEvents ?? []);
+    setMessagesLoading(Boolean(activeChannelId && !cachedEvents));
     setLoadingOlderMessages(false);
-    setHasOlderMessages(false);
+    setHasOlderMessages(activeChannelId ? Boolean(hasOlderMessagesByChannelRef.current[activeChannelId]) : false);
     setHasNewMessagesBelow(false);
     setExpandedTraceEventId(null);
     setShowParticipantsDialog(false);
@@ -1356,12 +1468,21 @@ export default function App() {
       setEvents([]);
       return;
     }
+    const cachedEvents = channelEventsCacheRef.current[activeChannelId];
+    if (wsConnected && cachedEvents) {
+      markChannelSeen(activeChannelId, cachedEvents);
+      setEvents(cachedEvents);
+      setHasOlderMessages(Boolean(hasOlderMessagesByChannelRef.current[activeChannelId]));
+      setMessagesLoading(false);
+      scrollMessagesToBottom("auto");
+      return;
+    }
     void loadMessages(activeChannelId, {
       scrollBehavior: "auto",
       scrollToBottom: true,
       showLoading: true
     });
-  }, [activeChannelId, authenticated, mustChangePassword]);
+  }, [activeChannelId, authenticated, mustChangePassword, wsConnected]);
 
   useEffect(() => {
     if (!activeChannelId || messagesLoading) return;
@@ -1494,6 +1615,10 @@ export default function App() {
         event.preventDefault();
         setShowConversationDialog(true);
       }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "j") {
+        event.preventDefault();
+        composerTextareaRef.current?.focus();
+      }
       if (event.key === "Escape") {
         setShowConversationDialog(false);
       }
@@ -1501,6 +1626,11 @@ export default function App() {
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
   }, [authenticated, mustChangePassword]);
+
+  useEffect(() => {
+    if (!showConversationDialog) return;
+    window.requestAnimationFrame(() => conversationNameInputRef.current?.focus());
+  }, [showConversationDialog]);
 
   useEffect(() => {
     if (!authenticated || mustChangePassword) return;
@@ -1559,7 +1689,9 @@ export default function App() {
     setConversationDescription("");
     setConversationVisibility("PRIVATE");
     setSelectedConversationAgents([]);
+    setSelectedConversationTeams([]);
     setAgentSearchQuery("");
+    setTeamSearchQuery("");
     setShowArchivedChannels(false);
     setShowConversationDialog(false);
     setUnreadCounts({});
@@ -1659,6 +1791,28 @@ export default function App() {
     setSelectedConversationAgents((current) => current.filter((name) => name !== agentName));
   }
 
+  function addConversationTeam(teamId: string) {
+    setSelectedConversationTeams((current) =>
+      current.includes(teamId) ? current : [...current, teamId]
+    );
+    setTeamSearchQuery("");
+    setConversationVisibility("PRIVATE");
+  }
+
+  function removeConversationTeam(teamId: string) {
+    setSelectedConversationTeams((current) => current.filter((id) => id !== teamId));
+  }
+
+  function togglePinnedChannel(channelId: string) {
+    setPinnedChannelIds((current) => {
+      const next = current.includes(channelId)
+        ? current.filter((id) => id !== channelId)
+        : [channelId, ...current];
+      writePinnedChannelIds(next);
+      return next;
+    });
+  }
+
   async function refreshChannels(nextActiveChannelId?: string | null) {
     const nextChannels = await apiJson<Channel[]>("/api/channels?includeArchived=1");
     setChannels(nextChannels);
@@ -1672,7 +1826,7 @@ export default function App() {
             visibleChannels.some((channel) => channel.id === activeChannelId && !channel.archivedAt)
           ? activeChannelId
           : visibleChannels.find((channel) => !channel.archivedAt)?.id ?? null;
-    selectChannel(nextSelectedChannelId, { replace: true });
+    selectChannel(nextSelectedChannelId, { replace: true, channels: nextChannels });
     return nextChannels;
   }
 
@@ -1681,10 +1835,15 @@ export default function App() {
     const name = conversationName.trim();
     const description = conversationDescription.trim();
     const selectedAgents = selectedConversationAgents.filter(Boolean);
+    const selectedTeams = selectedConversationTeams.filter(Boolean);
     setError(null);
 
-    if (!name && selectedAgents.length !== 1) {
+    if (!name && selectedAgents.length !== 1 && selectedTeams.length === 0) {
       setError("Choose one agent for a direct message, or add a channel name.");
+      return;
+    }
+    if (!name && selectedTeams.length > 0) {
+      setError("Add a channel name for team channels.");
       return;
     }
 
@@ -1705,7 +1864,7 @@ export default function App() {
           body: JSON.stringify({
             name,
             description: description || undefined,
-            visibility: conversationVisibility
+            visibility: selectedTeams.length > 0 ? "PRIVATE" : conversationVisibility
           })
         });
         await Promise.all([
@@ -1722,6 +1881,13 @@ export default function App() {
               headers: getApiHeaders(),
               body: JSON.stringify({ subscriberType: "AGENT", subscriberId: agentName })
             })
+          ),
+          ...selectedTeams.map((teamId) =>
+            apiFetch(`/api/channels/${encodeURIComponent(created.id)}/subscribe`, {
+              method: "POST",
+              headers: getApiHeaders(),
+              body: JSON.stringify({ subscriberType: "TEAM", subscriberId: teamId })
+            })
           )
         ]);
         setCollapsedChannelGroups((current) => ({ ...current, channels: false }));
@@ -1730,8 +1896,10 @@ export default function App() {
       setConversationName("");
       setConversationDescription("");
       setSelectedConversationAgents([]);
+      setSelectedConversationTeams([]);
       setConversationVisibility("PRIVATE");
       setAgentSearchQuery("");
+      setTeamSearchQuery("");
       setChannelQuery("");
       setShowConversationDialog(false);
     } catch (conversationError) {
@@ -1898,6 +2066,8 @@ export default function App() {
       const url = new URL(window.location.href);
       url.searchParams.set("share", created.token);
       url.searchParams.set("channel", created.channelId);
+      const slug = channelSlug(activeChannel, username);
+      if (slug) url.searchParams.set("slug", slug);
       const shareLink = url.toString();
       await navigator.clipboard.writeText(shareLink);
       setShareLinkCopied(true);
@@ -2172,16 +2342,33 @@ export default function App() {
 
                   {!isCollapsed ? (
                     <div className="channel-group-items">
-                      {group.channels.map((channel) => (
-                        <button
-                          key={channel.id}
-                          className={channel.id === activeChannelId ? "active" : undefined}
-                          onClick={() => selectChannel(channel.id)}
-                        >
-                          <span>{channelLabel(channel, username)}</span>
-                          {unreadCounts[channel.id] ? <em>{unreadCounts[channel.id]}</em> : null}
-                        </button>
-                      ))}
+                      {group.channels.map((channel) => {
+                        const pinned = pinnedChannelIdSet.has(channel.id);
+                        return (
+                          <div
+                            className={`channel-list-row${channel.id === activeChannelId ? " active" : ""}`}
+                            key={channel.id}
+                          >
+                            <button
+                              className="channel-select-button"
+                              onClick={() => selectChannel(channel.id)}
+                              type="button"
+                            >
+                              <span>{channelLabel(channel, username)}</span>
+                              {unreadCounts[channel.id] ? <em>{unreadCounts[channel.id]}</em> : null}
+                            </button>
+                            <button
+                              aria-label={pinned ? "Unpin channel" : "Pin channel"}
+                              className={`channel-pin-button${pinned ? " pinned" : ""}`}
+                              onClick={() => togglePinnedChannel(channel.id)}
+                              title={pinned ? "Unpin channel" : "Pin channel"}
+                              type="button"
+                            >
+                              {pinned ? "Pinned" : "Pin"}
+                            </button>
+                          </div>
+                        );
+                      })}
                     </div>
                   ) : null}
                 </section>
@@ -2612,8 +2799,8 @@ export default function App() {
                   ? "This channel is shared with you as read-only"
                 : activeChannel
                   ? isConversationEmpty
-                    ? `Message ${channelLabel(activeChannel, username)}`
-                    : `Message ${channelLabel(activeChannel, username)} (Enter to send, Shift+Enter for newline)`
+                    ? `Message ${channelLabel(activeChannel, username)} - Cmd+J focuses here`
+                    : `Message ${channelLabel(activeChannel, username)} (Cmd+J focuses here, Enter to send, Shift+Enter for newline)`
                   : "Select a channel first"
             }
             disabled={!activeChannel || Boolean(activeChannel.archivedAt) || !activeChannelCanPost || sending}
@@ -2735,13 +2922,36 @@ export default function App() {
                 Close
               </button>
             </header>
-            <form className="conversation-form" onSubmit={handleStartConversation}>
+            <form
+              className="conversation-form"
+              onSubmit={handleStartConversation}
+              onKeyDown={(event) => {
+                if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                  event.preventDefault();
+                  event.currentTarget.requestSubmit();
+                }
+              }}
+            >
               <label>
                 <span>Channel name</span>
                 <input
                   autoFocus
+                  ref={conversationNameInputRef}
                   value={conversationName}
                   onChange={(event) => setConversationName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (
+                      event.key === "Enter" &&
+                      !event.metaKey &&
+                      !event.ctrlKey &&
+                      conversationName.trim() &&
+                      selectedConversationAgents.length === 0 &&
+                      selectedConversationTeams.length === 0
+                    ) {
+                      event.preventDefault();
+                      agentSearchInputRef.current?.focus();
+                    }
+                  }}
                   placeholder="Leave blank for a DM"
                 />
               </label>
@@ -2764,6 +2974,9 @@ export default function App() {
                   <option value="PRIVATE">Private</option>
                   <option value="PUBLIC">Public</option>
                 </select>
+                {selectedConversationTeams.length > 0 ? (
+                  <em className="field-hint">Team channels are created as private and shared with selected teams.</em>
+                ) : null}
               </label>
               <div className="agent-combobox">
                 <span>Agents</span>
@@ -2783,33 +2996,113 @@ export default function App() {
                 ) : (
                   <p className="agent-picker-hint">Select one agent for a DM, or many for a channel.</p>
                 )}
-                <label className="agent-search-field">
-                  <span>Search agents</span>
-                  <input
-                    value={agentSearchQuery}
-                    onChange={(event) => setAgentSearchQuery(event.target.value)}
-                    placeholder="Type an agent name..."
-                  />
-                </label>
+                <div className="picker-anchor">
+                  <label className="agent-search-field">
+                    <span>Search agents</span>
+                    <input
+                      ref={agentSearchInputRef}
+                      value={agentSearchQuery}
+                      onChange={(event) => setAgentSearchQuery(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && agentSuggestions[0]) {
+                          event.preventDefault();
+                          addConversationAgent(agentSuggestions[0].name);
+                        }
+                      }}
+                      placeholder="Type an agent name..."
+                    />
+                  </label>
+                  {isSearchingAgents ? (
+                    <div className="picker-results">
+                      {agentSuggestions.length > 0 ? (
+                        <div className="agent-suggestions">
+                          {agentSuggestions.map((agent) => (
+                            <button
+                              key={agent.name}
+                              onClick={() => addConversationAgent(agent.name)}
+                              type="button"
+                            >
+                              <span>{agent.name}</span>
+                              <em>{agent.runtimeState === "RUNNING" ? "Running" : "Off"}</em>
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="agent-picker-hint">No matching agents.</p>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
                 {visibleAgents.length === 0 ? (
                   <p className="sidebar-note">No available agents.</p>
-                ) : agentSuggestions.length > 0 ? (
-                  <div className="agent-suggestions">
-                    {agentSuggestions.map((agent) => (
+                ) : (
+                  <span aria-hidden="true" className="picker-hint-placeholder" />
+                )}
+              </div>
+              <div className="agent-combobox">
+                <span>Teams</span>
+                {selectedConversationTeamRecords.length > 0 ? (
+                  <div className="selected-agent-chips">
+                    {selectedConversationTeamRecords.map((team) => (
                       <button
-                        key={agent.name}
-                        onClick={() => addConversationAgent(agent.name)}
+                        key={team.id}
+                        onClick={() => removeConversationTeam(team.id)}
                         type="button"
                       >
-                        <span>{agent.name}</span>
-                        <em>{agent.runtimeState === "RUNNING" ? "Running" : "Off"}</em>
+                        {team.name}
+                        <span>Remove</span>
                       </button>
                     ))}
                   </div>
                 ) : (
-                  <p className="agent-picker-hint">No matching agents.</p>
+                  <p className="agent-picker-hint">Add teams so all current team members can see and post in the private channel.</p>
+                )}
+                <div className="picker-anchor">
+                  <label className="agent-search-field">
+                    <span>Search teams</span>
+                    <input
+                      ref={teamSearchInputRef}
+                      value={teamSearchQuery}
+                      onChange={(event) => setTeamSearchQuery(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && teamSuggestions[0]) {
+                          event.preventDefault();
+                          addConversationTeam(teamSuggestions[0].id);
+                        }
+                      }}
+                      placeholder="Type a team name..."
+                    />
+                  </label>
+                  {isSearchingTeams ? (
+                    <div className="picker-results">
+                      {teamSuggestions.length > 0 ? (
+                        <div className="agent-suggestions">
+                          {teamSuggestions.map((team) => (
+                            <button
+                              key={team.id}
+                              onClick={() => addConversationTeam(team.id)}
+                              type="button"
+                            >
+                              <span>{team.name}</span>
+                              <em>Team</em>
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="agent-picker-hint">No matching teams.</p>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+                {teams.length === 0 ? (
+                  <p className="sidebar-note">You are not a member of any teams.</p>
+                ) : (
+                  <span aria-hidden="true" className="picker-hint-placeholder" />
                 )}
               </div>
+              <p className="dialog-shortcuts">
+                Press Enter after a channel name to jump to agents, Enter in a search to add the first match, and Cmd+Enter to start.
+              </p>
               <button disabled={loading || !canStartConversation}>Start</button>
             </form>
           </section>
@@ -2846,15 +3139,31 @@ export default function App() {
             <form className="participant-form" onSubmit={handleAddParticipant}>
               <select
                 value={participantKind}
-                onChange={(event) => setParticipantKind(event.target.value === "HUMAN" ? "HUMAN" : "AGENT")}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setParticipantKind(value === "HUMAN" || value === "TEAM" ? value : "AGENT");
+                }}
                 disabled={participantSubmitting}
               >
                 <option value="AGENT">Agent</option>
                 <option value="HUMAN">Human</option>
+                <option value="TEAM">Team</option>
               </select>
               <input
-                list={participantKind === "AGENT" ? "agent-participant-options" : "human-participant-options"}
-                placeholder={participantKind === "AGENT" ? "agent name" : "username"}
+                list={
+                  participantKind === "AGENT"
+                    ? "agent-participant-options"
+                    : participantKind === "TEAM"
+                      ? "team-participant-options"
+                      : "human-participant-options"
+                }
+                placeholder={
+                  participantKind === "AGENT"
+                    ? "agent name"
+                    : participantKind === "TEAM"
+                      ? "team id"
+                      : "username"
+                }
                 value={participantValue}
                 onChange={(event) => setParticipantValue(event.target.value)}
                 disabled={participantSubmitting}
@@ -2870,6 +3179,11 @@ export default function App() {
               <datalist id="human-participant-options">
                 {humans.map((human) => (
                   <option key={human.username} value={human.username} />
+                ))}
+              </datalist>
+              <datalist id="team-participant-options">
+                {teams.map((team) => (
+                  <option key={team.id} value={team.id} label={team.name} />
                 ))}
               </datalist>
             </form>

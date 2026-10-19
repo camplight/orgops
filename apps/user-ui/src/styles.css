@@ -211,12 +211,26 @@ button {
   gap: 7px;
 }
 
-.channel-group-items button {
+.channel-list-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  border-radius: 14px;
+  background: transparent;
+}
+
+.channel-list-row.active {
+  background: #1e293b;
+}
+
+.channel-select-button {
   display: flex;
   justify-content: space-between;
   gap: 10px;
   align-items: center;
-  width: 100%;
+  flex: 1 1 auto;
   min-width: 0;
   padding: 11px 12px;
   border: 0;
@@ -227,16 +241,39 @@ button {
   font-weight: 800;
 }
 
-.channel-group-items button span {
+.channel-select-button span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.channel-group-items button.active {
-  background: #1e293b;
+.channel-list-row.active .channel-select-button {
   color: #fff;
+}
+
+.channel-pin-button {
+  flex: 0 0 auto;
+  margin-right: 6px;
+  padding: 4px 7px;
+  border: 1px solid rgba(203, 213, 225, 0.2);
+  border-radius: 999px;
+  background: transparent;
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 900;
+  opacity: 0;
+}
+
+.channel-list-row:hover .channel-pin-button,
+.channel-list-row:focus-within .channel-pin-button,
+.channel-pin-button.pinned {
+  opacity: 1;
+}
+
+.channel-pin-button.pinned {
+  border-color: rgba(45, 212, 191, 0.35);
+  color: #5eead4;
 }
 
 .channel-list em {
@@ -310,6 +347,10 @@ button {
   min-width: 0;
 }
 
+.picker-anchor {
+  position: relative;
+}
+
 .selected-agent-chips {
   display: flex;
   flex-wrap: wrap;
@@ -351,7 +392,22 @@ button {
 .agent-suggestions {
   display: grid;
   gap: 7px;
-  max-height: 210px;
+  max-height: 100%;
+  overflow-y: auto;
+}
+
+.picker-results {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 6px);
+  right: 0;
+  left: 0;
+  max-height: 176px;
+  padding: 8px;
+  border: 1px solid #dbe6ef;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 18px 50px rgba(15, 23, 42, 0.16);
   overflow-y: auto;
 }
 
@@ -387,6 +443,21 @@ button {
   margin: 0;
   color: #64748b;
   font-size: 13px;
+  line-height: 1.4;
+}
+
+.picker-hint-placeholder {
+  display: block;
+  height: 18px;
+  visibility: hidden;
+}
+
+.field-hint,
+.dialog-shortcuts {
+  margin: 0;
+  color: #64748b;
+  font-size: 12px;
+  font-style: normal;
   line-height: 1.4;
 }
 
