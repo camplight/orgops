@@ -1054,6 +1054,52 @@ describe("api app", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("allows a private channel owner to copy a federation join URL without participant membership", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+    });
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+    const channelRes = await app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ name: "owner-only-home", visibility: "PRIVATE" }),
+    });
+    const channel = (await channelRes.json()) as { id: string };
+    db.prepare(
+      "DELETE FROM channel_subscriptions WHERE channel_id = ? AND subscriber_type = 'HUMAN' AND subscriber_id = 'admin'",
+    ).run(channel.id);
+
+    const hostRes = await app.request("http://localhost/api/federation/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ role: "LOCAL_HOME", localChannelId: channel.id }),
+    });
+    expect(hostRes.status).toBe(201);
+    const joinLinkRes = await app.request(
+      `http://localhost/api/federation/channels/${encodeURIComponent(channel.id)}/join-link`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({}),
+      },
+    );
+    expect(joinLinkRes.status).toBe(200);
+    const body = (await joinLinkRes.json()) as { joinUrl?: string };
+    expect(body.joinUrl).toContain("/federation/join");
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("persists wrapped agent configuration as editable JSON", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");
