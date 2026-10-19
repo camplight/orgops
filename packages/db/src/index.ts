@@ -66,6 +66,29 @@ export function migrate(db: OrgOpsDb, migrationsDir = join(THIS_DIR, "..", "migr
     db.exec(sql);
     insert.run(file, now);
   }
+  repairFederationSchema(db);
+}
+
+function repairFederationSchema(db: OrgOpsDb) {
+  const tables = db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+    .all() as Array<{ name: string }>;
+  if (!tables.some((table) => table.name === "federation_instances")) return;
+
+  const columns = db
+    .prepare("PRAGMA table_info(federation_instances)")
+    .all() as Array<{ name: string }>;
+  const columnNames = new Set(columns.map((column) => column.name));
+  const missingColumns: Array<{ name: string; definition: string }> = [
+    { name: "last_seen_at", definition: "last_seen_at INTEGER" },
+    { name: "outbound_token", definition: "outbound_token TEXT" },
+    { name: "inbound_token_hash", definition: "inbound_token_hash TEXT" },
+    { name: "inbound_token_prefix", definition: "inbound_token_prefix TEXT" },
+  ].filter((column) => !columnNames.has(column.name));
+
+  for (const column of missingColumns) {
+    db.exec(`ALTER TABLE federation_instances ADD COLUMN ${column.definition};`);
+  }
 }
 
 export { schema };
