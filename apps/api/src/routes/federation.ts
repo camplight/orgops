@@ -643,6 +643,14 @@ export function registerFederationRoutes(app: Hono<any>, deps: FederationDeps) {
     if (!homeBaseUrl || !remoteChannelId || !outboundToken) {
       return jsonResponse(c, { error: "joinUrl is missing homeBaseUrl, channelId, or token" }, 400);
     }
+    const localInvite = orm
+      .select({ id: schema.federationInstances.id })
+      .from(schema.federationInstances)
+      .where(eq(schema.federationInstances.inbound_token_hash, hashToken(outboundToken)))
+      .get();
+    if (localInvite) {
+      return jsonResponse(c, { error: "Cannot join a federation URL created by this instance" }, 400);
+    }
     const existingInstance = orm
       .select()
       .from(schema.federationInstances)

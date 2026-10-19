@@ -1003,6 +1003,57 @@ describe("api app", () => {
     }
   });
 
+  it("rejects joining a federation URL created by the same instance", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const { app } = createApp({
+      db: openDb(":memory:"),
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+    });
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+    const channelRes = await app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ name: "self-join-home" }),
+    });
+    const channel = (await channelRes.json()) as { id: string };
+    await app.request("http://localhost/api/federation/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ role: "LOCAL_HOME", localChannelId: channel.id }),
+    });
+    const joinLinkRes = await app.request(
+      `http://localhost/api/federation/channels/${encodeURIComponent(channel.id)}/join-link`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({}),
+      },
+    );
+    const joinLink = (await joinLinkRes.json()) as { joinUrl: string };
+
+    const selfJoinRes = await app.request("http://localhost/api/federation/join", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        joinUrl: joinLink.joinUrl,
+        peerBaseUrl: "http://localhost",
+        localName: "self-join-projection",
+      }),
+    });
+    expect(selfJoinRes.status).toBe(400);
+    const body = (await selfJoinRes.json()) as { error?: string };
+    expect(body.error).toBe("Cannot join a federation URL created by this instance");
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("persists wrapped agent configuration as editable JSON", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");
