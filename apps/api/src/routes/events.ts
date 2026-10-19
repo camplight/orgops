@@ -726,6 +726,93 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     }
   }
 
+  function federatedEventIdempotencyKey(instanceId: string, remoteEventId: string) {
+    return `federation:${instanceId}:${remoteEventId}`;
+  }
+
+  async function forwardRemoteProjectionEvent(input: {
+    type: string;
+    source: string;
+    payload: unknown;
+    channelId?: string;
+    parentEventId?: string;
+    deliverAt?: number;
+    idempotencyKey?: string;
+  }): Promise<any | null> {
+    if (!input.channelId) return null;
+    const link = orm
+      .select()
+      .from(schema.federationChannels)
+      .where(
+        and(
+          eq(schema.federationChannels.local_channel_id, input.channelId),
+          eq(schema.federationChannels.role, "REMOTE_PROJECTION"),
+        ),
+      )
+      .get() as any;
+    if (!link) return null;
+    const instance = orm
+      .select()
+      .from(schema.federationInstances)
+      .where(eq(schema.federationInstances.id, link.home_instance_id ?? ""))
+      .get() as any;
+    if (!instance) throw new Error("Federation home instance not found.");
+    const token = typeof instance.outbound_token === "string" ? instance.outbound_token.trim() : "";
+    if (!token) throw new Error(`Federation peer "${instance.name}" has no outbound token.`);
+    const baseUrl = String(instance.base_url ?? "").replace(/\/+$/, "");
+    const response = await fetch(
+      `${baseUrl}/api/federation/channels/${encodeURIComponent(link.remote_channel_id)}/events`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          type: input.type,
+          source: input.source,
+          payload: input.payload,
+          parentEventId: input.parentEventId,
+          deliverAt: input.deliverAt,
+          idempotencyKey: input.idempotencyKey,
+        }),
+      },
+    );
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Federation forward failed: ${response.status} ${text}`);
+    }
+    const remoteEvent = (await response.json()) as {
+      id?: string;
+      type?: string;
+      source?: string;
+      payload?: unknown;
+      parentEventId?: string;
+      deliverAt?: number;
+    };
+    const remoteEventId = typeof remoteEvent.id === "string" ? remoteEvent.id : "";
+    const localIdempotencyKey = remoteEventId
+      ? federatedEventIdempotencyKey(instance.id, remoteEventId)
+      : undefined;
+    if (localIdempotencyKey) {
+      const existing = orm
+        .select()
+        .from(schema.events)
+        .where(eq(schema.events.idempotency_key, localIdempotencyKey))
+        .get() as any;
+      if (existing) return existing;
+    }
+    return insertEvent({
+      type: remoteEvent.type ?? input.type,
+      source: remoteEvent.source ?? input.source,
+      payload: remoteEvent.payload ?? input.payload,
+      channelId: input.channelId,
+      parentEventId: remoteEvent.parentEventId ?? input.parentEventId,
+      deliverAt: remoteEvent.deliverAt ?? input.deliverAt,
+      idempotencyKey: localIdempotencyKey,
+    });
+  }
+
   app.post("/api/events", async (c) => {
     const raw = await c.req.text();
     let body: any = {};
@@ -800,6 +887,21 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     );
     if (postMembershipError) {
       return jsonResponse(c, { error: postMembershipError }, 400);
+    }
+
+    try {
+      const federatedRow = await forwardRemoteProjectionEvent({
+        type,
+        source,
+        payload: normalizedPayload,
+        channelId: parsed.data.channelId,
+        parentEventId: parsed.data.parentEventId,
+        deliverAt: parsed.data.deliverAt,
+        idempotencyKey: parsed.data.idempotencyKey,
+      });
+      if (federatedRow) return jsonResponse(c, eventRowToApi(federatedRow), 201);
+    } catch (error) {
+      return jsonResponse(c, { error: String(error) }, 502);
     }
 
     if (parsed.data.idempotencyKey) {

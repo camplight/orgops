@@ -225,6 +225,13 @@ export function registerAuthRoutes(app: Hono<any>, deps: AuthDeps) {
     if (c.req.path.startsWith("/api/agent-invites/public/")) {
       return next();
     }
+    if (
+      /^\/api\/federation\/channels\/[^/]+\/events$/.test(c.req.path) ||
+      /^\/api\/federation\/channels\/[^/]+\/subscribers$/.test(c.req.path) ||
+      /^\/api\/federation\/projections\/[^/]+\/events$/.test(c.req.path)
+    ) {
+      return next();
+    }
     if (RUNNER_TOKEN && c.req.header("x-orgops-runner-token") === RUNNER_TOKEN) {
       (c as any).set("user", { username: "runner", mustChangePassword: false });
       return next();

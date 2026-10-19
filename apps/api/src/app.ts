@@ -335,6 +335,78 @@ export function createApp(config: AppConfig = {}) {
     }
   }
 
+  async function pushFederatedEvent(row: any) {
+    const channelId = typeof row.channel_id === "string" ? row.channel_id : "";
+    if (!channelId) return;
+    const subscribers = orm
+      .select()
+      .from(schema.federationChannelSubscribers)
+      .where(eq(schema.federationChannelSubscribers.local_channel_id, channelId))
+      .all() as any[];
+    if (subscribers.length === 0) return;
+    const event = eventRowToApi(row);
+    for (const subscriber of subscribers) {
+      const instance = orm
+        .select()
+        .from(schema.federationInstances)
+        .where(eq(schema.federationInstances.id, subscriber.instance_id))
+        .get() as any;
+      const now = Date.now();
+      if (!instance?.outbound_token || !instance?.base_url) {
+        orm
+          .update(schema.federationChannelSubscribers)
+          .set({
+            last_push_at: now,
+            last_error: "Missing outbound federation token or base URL",
+            updated_at: now,
+          })
+          .where(eq(schema.federationChannelSubscribers.id, subscriber.id))
+          .run();
+        continue;
+      }
+      try {
+        const baseUrl = String(instance.base_url).replace(/\/+$/, "");
+        const response = await fetch(
+          `${baseUrl}/api/federation/projections/${encodeURIComponent(
+            subscriber.remote_channel_id,
+          )}/events`,
+          {
+            method: "POST",
+            headers: {
+              authorization: `Bearer ${String(instance.outbound_token).trim()}`,
+              "content-type": "application/json",
+            },
+            body: JSON.stringify(event),
+          },
+        );
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(`${response.status} ${text}`);
+        }
+        orm
+          .update(schema.federationChannelSubscribers)
+          .set({
+            last_push_at: now,
+            last_ack_at: Date.now(),
+            last_error: null,
+            updated_at: Date.now(),
+          })
+          .where(eq(schema.federationChannelSubscribers.id, subscriber.id))
+          .run();
+      } catch (error) {
+        orm
+          .update(schema.federationChannelSubscribers)
+          .set({
+            last_push_at: now,
+            last_error: error instanceof Error ? error.message : String(error),
+            updated_at: Date.now(),
+          })
+          .where(eq(schema.federationChannelSubscribers.id, subscriber.id))
+          .run();
+      }
+    }
+  }
+
   function publishProcessOutput(processId: string, payload: any) {
     bus.publish(`process:${processId}`, {
       type: "process_output",
@@ -421,6 +493,7 @@ export function createApp(config: AppConfig = {}) {
         .run();
     }
     publishEvent(row);
+    void pushFederatedEvent(row);
     return row;
   }
 
@@ -558,6 +631,8 @@ export function createApp(config: AppConfig = {}) {
     orm,
     jsonResponse,
     requireAuth,
+    insertEvent,
+    eventRowToApi,
   });
 
   registerIntegrationKeysRoutes(app as any, { orm, jsonResponse, access });

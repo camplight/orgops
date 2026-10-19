@@ -5,6 +5,7 @@ export { ChannelsScreen } from "./ChannelsScreen";
 export { ChatScreen } from "./ChatScreen";
 export { DashboardScreen } from "./DashboardScreen";
 export { EventsScreen } from "./EventsScreen";
+export { FederationScreen } from "./FederationScreen";
 export { HumansScreen } from "./HumansScreen";
 export { IntegrationKeysScreen } from "./IntegrationKeysScreen";
 export { ProcessesScreen } from "./ProcessesScreen";

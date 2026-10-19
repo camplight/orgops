@@ -17,6 +17,7 @@ import {
   ChatScreen,
   BillingScreen,
   EventsScreen,
+  FederationScreen,
   ProcessesScreen,
   RunnersScreen,
   SkillsScreen,
@@ -464,6 +465,7 @@ export default function App() {
       if (screen === "agents") data.refreshRunners();
       if (screen === "runners") data.refreshDashboard();
       if (screen === "channels") data.refreshChannels();
+      if (screen === "federation") data.refreshFederation();
       if (screen === "teams") {
         data.refreshTeams();
         data.refreshHumans();
@@ -1134,6 +1136,83 @@ export default function App() {
               await data.loadChannelParticipants(channelId);
               await data.loadChannelEvents(channelId);
             }
+          }}
+        />
+      )}
+
+      {activeScreen === "federation" && (
+        <FederationScreen
+          instances={data.federationInstances}
+          channelLinks={data.federationChannels}
+          channels={data.channels}
+          onRefresh={async () => {
+            await data.refreshFederation();
+            await data.refreshChannels();
+          }}
+          onCreateInstance={async (input) => {
+            const response = await data.apiFetch("/api/federation/instances", {
+              method: "POST",
+              headers: data.getApiHeaders(),
+              body: JSON.stringify(input)
+            });
+            const created = (await response.json()) as {
+              id: string;
+              name: string;
+              baseUrl: string;
+              inboundToken?: string;
+              inboundTokenPrefix?: string;
+              hasOutboundToken?: boolean;
+              createdAt?: number;
+              updatedAt?: number;
+            };
+            return {
+              ...created,
+              createdAt: created.createdAt ?? Date.now(),
+              updatedAt: created.updatedAt ?? Date.now()
+            };
+          }}
+          onUpdateInstance={async (id, input) => {
+            await data.apiFetch(`/api/federation/instances/${encodeURIComponent(id)}`, {
+              method: "PATCH",
+              headers: data.getApiHeaders(),
+              body: JSON.stringify(input)
+            });
+          }}
+          onCreateChannelLink={async (input) => {
+            await data.apiFetch("/api/federation/channels", {
+              method: "POST",
+              headers: data.getApiHeaders(),
+              body: JSON.stringify(input)
+            });
+          }}
+          onSyncChannel={async (localChannelId) => {
+            await data.apiFetch(
+              `/api/federation/channels/${encodeURIComponent(localChannelId)}/sync`,
+              {
+                method: "POST",
+                headers: data.getApiHeaders()
+              }
+            );
+          }}
+          onCreateJoinLink={async (localChannelId) => {
+            const response = await data.apiFetch(
+              `/api/federation/channels/${encodeURIComponent(localChannelId)}/join-link`,
+              {
+                method: "POST",
+                headers: data.getApiHeaders(),
+                body: JSON.stringify({})
+              }
+            );
+            return (await response.json()) as { joinUrl: string };
+          }}
+          onJoinFromUrl={async (input) => {
+            await data.apiFetch("/api/federation/join", {
+              method: "POST",
+              headers: data.getApiHeaders(),
+              body: JSON.stringify(input)
+            });
+            await data.refreshFederation();
+            await data.refreshChannels();
           }}
         />
       )}

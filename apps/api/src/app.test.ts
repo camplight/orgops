@@ -506,6 +506,340 @@ describe("api app", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("forwards remote projection posts to the home channel and syncs canonical events", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "orgops-api-home-"));
+    const projectionDir = mkdtempSync(join(tmpdir(), "orgops-api-projection-"));
+    const homeDb = openDb(":memory:");
+    const projectionDb = openDb(":memory:");
+    const home = createApp({
+      db: homeDb,
+      dataDir: homeDir,
+      adminUser: "admin",
+      adminPass: "admin",
+    });
+    const projection = createApp({
+      db: projectionDb,
+      dataDir: projectionDir,
+      adminUser: "admin",
+      adminPass: "admin",
+    });
+
+    const homeLogin = await home.app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    const projectionLogin = await projection.app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    const homeCookie = homeLogin.headers.get("set-cookie") ?? "";
+    const projectionCookie = projectionLogin.headers.get("set-cookie") ?? "";
+
+    const homePeerRes = await home.app.request("http://localhost/api/federation/instances", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: homeCookie },
+      body: JSON.stringify({ name: "projection", baseUrl: "http://projection.test" }),
+    });
+    expect(homePeerRes.status).toBe(201);
+    const homePeer = (await homePeerRes.json()) as { id: string; inboundToken: string };
+
+    const projectionPeerRes = await projection.app.request(
+      "http://localhost/api/federation/instances",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: projectionCookie },
+        body: JSON.stringify({
+          name: "home",
+          baseUrl: "http://home.test",
+          outboundToken: homePeer.inboundToken,
+        }),
+      },
+    );
+    expect(projectionPeerRes.status).toBe(201);
+    const projectionPeer = (await projectionPeerRes.json()) as { id: string; inboundToken: string };
+    const homeOutboundRes = await home.app.request(
+      `http://localhost/api/federation/instances/${encodeURIComponent(homePeer.id)}`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json", cookie: homeCookie },
+        body: JSON.stringify({ outboundToken: projectionPeer.inboundToken }),
+      },
+    );
+    expect(homeOutboundRes.status).toBe(200);
+
+    const homeChannelRes = await home.app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: homeCookie },
+      body: JSON.stringify({ name: "home-shared" }),
+    });
+    expect(homeChannelRes.status).toBe(201);
+    const homeChannel = (await homeChannelRes.json()) as { id: string };
+    const markHomeRes = await home.app.request("http://localhost/api/federation/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: homeCookie },
+      body: JSON.stringify({ role: "LOCAL_HOME", localChannelId: homeChannel.id }),
+    });
+    expect(markHomeRes.status).toBe(201);
+
+    const projectionLinkRes = await projection.app.request(
+      "http://localhost/api/federation/channels",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: projectionCookie },
+        body: JSON.stringify({
+          role: "REMOTE_PROJECTION",
+          homeInstanceId: projectionPeer.id,
+          remoteChannelId: homeChannel.id,
+          localName: "home-shared-projection",
+        }),
+      },
+    );
+    expect(projectionLinkRes.status).toBe(201);
+    const projectionLink = (await projectionLinkRes.json()) as { localChannelId: string };
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(typeof input === "string" ? input : input.toString());
+      if (url.hostname === "home.test") {
+        const headers: Record<string, string> = {};
+        new Headers(init?.headers).forEach((value, key) => {
+          headers[key] = value;
+        });
+        return home.app.request(`http://localhost${url.pathname}${url.search}`, {
+          ...(init as any),
+          headers,
+        });
+      }
+      if (url.hostname === "projection.test") {
+        const headers: Record<string, string> = {};
+        new Headers(init?.headers).forEach((value, key) => {
+          headers[key] = value;
+        });
+        return projection.app.request(`http://localhost${url.pathname}${url.search}`, {
+          ...(init as any),
+          headers,
+        });
+      }
+      return originalFetch(input as any, init);
+    }) as typeof fetch;
+
+    try {
+      const registrationRetryRes = await projection.app.request(
+        "http://localhost/api/federation/channels",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", cookie: projectionCookie },
+          body: JSON.stringify({
+            role: "REMOTE_PROJECTION",
+            localChannelId: projectionLink.localChannelId,
+            homeInstanceId: projectionPeer.id,
+            remoteChannelId: homeChannel.id,
+          }),
+        },
+      );
+      expect(registrationRetryRes.status).toBe(201);
+
+      const projectedPostRes = await projection.app.request("http://localhost/api/events", {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: projectionCookie },
+        body: JSON.stringify({
+          type: "message.created",
+          source: "human:admin",
+          channelId: projectionLink.localChannelId,
+          payload: { text: "hello from projection" },
+        }),
+      });
+      expect(projectedPostRes.status).toBe(201);
+
+      const homeEventsRes = await home.app.request(
+        `http://localhost/api/events?channelId=${encodeURIComponent(homeChannel.id)}&limit=10`,
+        { headers: { cookie: homeCookie } },
+      );
+      const homeEvents = (await homeEventsRes.json()) as Array<{ payload?: { text?: string } }>;
+      expect(homeEvents.map((event) => event.payload?.text)).toEqual(["hello from projection"]);
+
+      const homeSecondRes = await home.app.request("http://localhost/api/events", {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: homeCookie },
+        body: JSON.stringify({
+          type: "message.created",
+          source: "human:admin",
+          channelId: homeChannel.id,
+          payload: { text: "hello from home" },
+        }),
+      });
+      expect(homeSecondRes.status).toBe(201);
+
+      let projectedEvents: Array<{ payload?: { text?: string } }> = [];
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        const projectedEventsRes = await projection.app.request(
+          `http://localhost/api/events?channelId=${encodeURIComponent(
+            projectionLink.localChannelId,
+          )}&limit=10`,
+          { headers: { cookie: projectionCookie } },
+        );
+        projectedEvents = (await projectedEventsRes.json()) as Array<{
+          payload?: { text?: string };
+        }>;
+        if (projectedEvents.length >= 2) break;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(projectedEvents.map((event) => event.payload?.text)).toEqual([
+        "hello from projection",
+        "hello from home",
+      ]);
+
+      const syncRes = await projection.app.request(
+        `http://localhost/api/federation/channels/${encodeURIComponent(
+          projectionLink.localChannelId,
+        )}/sync`,
+        { method: "POST", headers: { cookie: projectionCookie } },
+      );
+      expect(syncRes.status).toBe(200);
+      const sync = (await syncRes.json()) as { inserted: number };
+      expect(sync.inserted).toBe(0);
+
+      const projectedEventsRes = await projection.app.request(
+        `http://localhost/api/events?channelId=${encodeURIComponent(
+          projectionLink.localChannelId,
+        )}&limit=10`,
+        { headers: { cookie: projectionCookie } },
+      );
+      const projectedEventsAfterSync = (await projectedEventsRes.json()) as Array<{
+        payload?: { text?: string };
+      }>;
+      expect(projectedEventsAfterSync.map((event) => event.payload?.text)).toEqual([
+        "hello from projection",
+        "hello from home",
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+      rmSync(homeDir, { recursive: true, force: true });
+      rmSync(projectionDir, { recursive: true, force: true });
+    }
+  });
+
+  it("joins a federated channel from a copied home URL", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "orgops-api-home-"));
+    const peerDir = mkdtempSync(join(tmpdir(), "orgops-api-peer-"));
+    const home = createApp({
+      db: openDb(":memory:"),
+      dataDir: homeDir,
+      adminUser: "admin",
+      adminPass: "admin",
+    });
+    const peer = createApp({
+      db: openDb(":memory:"),
+      dataDir: peerDir,
+      adminUser: "admin",
+      adminPass: "admin",
+    });
+    const homeLogin = await home.app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    const peerLogin = await peer.app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    const homeCookie = homeLogin.headers.get("set-cookie") ?? "";
+    const peerCookie = peerLogin.headers.get("set-cookie") ?? "";
+    const homeChannelRes = await home.app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: homeCookie },
+      body: JSON.stringify({ name: "join-home" }),
+    });
+    const homeChannel = (await homeChannelRes.json()) as { id: string };
+    await home.app.request("http://localhost/api/federation/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: homeCookie },
+      body: JSON.stringify({ role: "LOCAL_HOME", localChannelId: homeChannel.id }),
+    });
+    const joinLinkRes = await home.app.request(
+      `http://localhost/api/federation/channels/${encodeURIComponent(homeChannel.id)}/join-link`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: homeCookie,
+          "x-forwarded-proto": "http",
+          "x-forwarded-host": "home.test",
+        },
+        body: JSON.stringify({}),
+      },
+    );
+    expect(joinLinkRes.status).toBe(200);
+    const joinLink = (await joinLinkRes.json()) as { joinUrl: string };
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(typeof input === "string" ? input : input.toString());
+      if (url.hostname === "home.test") {
+        const headers: Record<string, string> = {};
+        new Headers(init?.headers).forEach((value, key) => {
+          headers[key] = value;
+        });
+        return home.app.request(`http://localhost${url.pathname}${url.search}`, {
+          ...(init as any),
+          headers,
+        });
+      }
+      return originalFetch(input as any, init);
+    }) as typeof fetch;
+    try {
+      const joinRes = await peer.app.request("http://localhost/api/federation/join", {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: peerCookie },
+        body: JSON.stringify({
+          joinUrl: joinLink.joinUrl,
+          peerBaseUrl: "http://peer.test",
+          localName: "joined-home",
+        }),
+      });
+      expect(joinRes.status).toBe(201);
+      const joined = (await joinRes.json()) as {
+        localChannelId: string;
+        registeredWithHome: boolean;
+      };
+      expect(joined.registeredWithHome).toBe(true);
+
+      const peerLinksRes = await peer.app.request("http://localhost/api/federation/channels", {
+        headers: { cookie: peerCookie },
+      });
+      const peerLinks = (await peerLinksRes.json()) as Array<{
+        localChannelId: string;
+        role: string;
+        remoteChannelId: string;
+      }>;
+      expect(peerLinks).toEqual([
+        expect.objectContaining({
+          localChannelId: joined.localChannelId,
+          role: "REMOTE_PROJECTION",
+          remoteChannelId: homeChannel.id,
+        }),
+      ]);
+
+      const homeLinksRes = await home.app.request("http://localhost/api/federation/channels", {
+        headers: { cookie: homeCookie },
+      });
+      const homeLinks = (await homeLinksRes.json()) as Array<{
+        localChannelId: string;
+        subscriberCount?: number;
+      }>;
+      expect(homeLinks[0]).toEqual(
+        expect.objectContaining({ localChannelId: homeChannel.id, subscriberCount: 1 }),
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+      rmSync(homeDir, { recursive: true, force: true });
+      rmSync(peerDir, { recursive: true, force: true });
+    }
+  });
+
   it("persists wrapped agent configuration as editable JSON", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");

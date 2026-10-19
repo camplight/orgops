@@ -174,9 +174,11 @@ Runner IDs are stable across restarts by persisting local `.agent-runner-id`.
 
 Federation is modeled around hoisted channels. A shared channel has one canonical
 home OrgOps instance; other instances may keep local projection channels for UI
-and runner compatibility. `federation_instances` stores known peer instances.
-`federation_channels` links a local channel to either a `LOCAL_HOME` role or a
-`REMOTE_PROJECTION` role with `home_instance_id` and `remote_channel_id`.
+and runner compatibility. `federation_instances` stores known peer instances,
+their base URL, an optional outbound bearer token for calls to that peer, and a
+hashed inbound bearer token for calls from that peer. `federation_channels`
+links a local channel to either a `LOCAL_HOME` role or a `REMOTE_PROJECTION`
+role with `home_instance_id`, `remote_channel_id`, and a pull `sync_cursor`.
 Projection rows are caches/convenience records; the home instance is the source
 of truth for ordering and policy.
 
@@ -507,10 +509,49 @@ Published topics include:
 
 - `GET /api/federation/instances`
 - `POST /api/federation/instances`
+  - returns a one-time `inboundToken` to configure as the peer's outbound token
+- `PATCH /api/federation/instances/:id`
 - `GET /api/federation/channels`
 - `POST /api/federation/channels`
   - `role=LOCAL_HOME` marks a local channel as canonical for federation
   - `role=REMOTE_PROJECTION` creates or links a local projection to a home instance/channel
+- simplified join flow:
+  - `POST /api/federation/channels/:channelId/join-link` creates a one-time-ish join URL for a `LOCAL_HOME` channel
+  - `POST /api/federation/join` accepts a pasted join URL plus the peer's public base URL, then creates the peer record, projection channel, and webhook subscription
+- federation bearer-token endpoints:
+  - `GET /api/federation/channels/:channelId/events?after=<cursor>` exposes canonical home-channel events to peers
+  - `POST /api/federation/channels/:channelId/events` accepts a peer-authenticated write into the canonical home channel
+  - `POST /api/federation/channels/:channelId/subscribers` registers a remote projection webhook subscriber
+  - `POST /api/federation/projections/:localChannelId/events` accepts pushed canonical events into a projection channel
+- projection sync:
+  - `POST /api/federation/channels/:localChannelId/sync` pulls canonical home events into a local projection channel, using idempotency keys shaped as `federation:<homeInstanceId>:<remoteEventId>`
+
+When a user or local agent posts to a `REMOTE_PROJECTION` channel through
+`POST /api/events`, the API validates the event locally, forwards the write to
+the home instance, then stores the canonical event as a local projection event.
+Projection events create ordinary local receipts so local runners can keep their
+existing polling behavior. The home instance remains authoritative for channel
+ordering. The API also runs a lightweight projection sync loop every
+`ORGOPS_FEDERATION_SYNC_INTERVAL_MS` milliseconds (default `15000`; set `0` to
+disable) and the UI exposes a manual sync button for retry/diagnostics. For
+realtime delivery, remote projections register a webhook subscription with the
+home channel. When the home API inserts a canonical event, it pushes the event
+to subscribed projection instances; successful acks update `lastAckAt`, while
+failures update `lastError` and rely on the pull sync loop for repair.
+
+Chained federation is deliberately not enabled in this version. A local channel
+has one federation role (`LOCAL_HOME` or `REMOTE_PROJECTION`) so a channel cannot
+simultaneously be a canonical home and a projection of another home. This avoids
+multi-hop loops, ambiguous ordering, and hard-to-explain access policy. If
+multi-hop federation becomes necessary, model it explicitly as a DAG with an
+origin instance/event ID, hop limits, and per-link policy rather than making every
+projection silently re-host downstream.
+
+Operator UX: on the home instance, mark a channel `LOCAL_HOME` and copy its join
+URL from the Federation screen. On the peer instance, paste that URL into
+"Join From URL" and provide the peer's public base URL. The peer stores the home
+token for outbound writes/sync and registers its own inbound token with the home
+so realtime webhook push works without manually configuring reverse credentials.
 
 ## Agent Runner Behavior
 
@@ -628,6 +669,7 @@ Security note: wrapped `source`, `setup.command`, and `runtime.command` are host
 - `ORGOPS_COOKIE_SECURE`
 - `ORGOPS_EVENT_MAX_FAILURES`
 - `ORGOPS_EVENT_SHAPES_CACHE_TTL_MS`
+- `ORGOPS_FEDERATION_SYNC_INTERVAL_MS`
 - `ORGOPS_RUNNER_ONLINE_THRESHOLD_MS`
 - `ORGOPS_PROJECT_ROOT`
 - `ORGOPS_SKILL_ROOTS` (optional comma-separated additional skill roots; repo `skills/` remains first)

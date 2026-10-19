@@ -142,6 +142,34 @@ export type ChannelParticipant = {
   subscriberId: string;
 };
 
+export type FederationInstance = {
+  id: string;
+  name: string;
+  baseUrl: string;
+  inboundTokenPrefix?: string | null;
+  inboundToken?: string;
+  hasOutboundToken?: boolean;
+  status?: string;
+  createdAt: number;
+  updatedAt: number;
+  lastSeenAt?: number | null;
+};
+
+export type FederationChannelLink = {
+  localChannelId: string;
+  localChannelName?: string | null;
+  homeInstanceId?: string | null;
+  remoteChannelId?: string | null;
+  role: "LOCAL_HOME" | "REMOTE_PROJECTION" | string;
+  syncCursor?: string | null;
+  subscriberCount?: number;
+  lastPushAt?: number | null;
+  lastAckAt?: number | null;
+  lastError?: string | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
 export type Team = {
   id: string;
   name: string;
@@ -238,6 +266,7 @@ export type Screen =
   | "runners"
   | "teams"
   | "channels"
+  | "federation"
   | "chat"
   | "events"
   | "billing"
