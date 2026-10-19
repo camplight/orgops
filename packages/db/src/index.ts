@@ -70,6 +70,8 @@ export function migrate(db: OrgOpsDb, migrationsDir = join(THIS_DIR, "..", "migr
 }
 
 function repairFederationSchema(db: OrgOpsDb) {
+  db.exec("DROP INDEX IF EXISTS uidx_federation_instances_base_url;");
+
   const tables = db
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
     .all() as Array<{ name: string }>;
