@@ -6,28 +6,6 @@ function getPayloadTargetAgentName(payload: unknown): string {
   return typeof targetAgentName === "string" ? targetAgentName.trim() : "";
 }
 
-function hasValidTargetAgentNames(payload: unknown): boolean {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
-  if (!("targetAgentNames" in payload)) return false;
-  const names = (payload as { targetAgentNames?: unknown }).targetAgentNames;
-  return (
-    Array.isArray(names) &&
-    names.length > 0 &&
-    names.every((name) => typeof name === "string" && Boolean(name.trim()))
-  );
-}
-
-function isRemoteFederatedEvent(payload: unknown): boolean {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
-  const metadata = (payload as { _orgopsFederation?: unknown })._orgopsFederation;
-  return Boolean(
-    metadata &&
-      typeof metadata === "object" &&
-      !Array.isArray(metadata) &&
-      (metadata as { remote?: unknown }).remote === true,
-  );
-}
-
 export function shouldHandleEventForAgent(agent: Agent, event: Event): boolean {
   if (event.type?.startsWith("agent.control.")) return false;
   // Turn lifecycle events are runner bookkeeping, not actionable input.
@@ -51,15 +29,6 @@ export function shouldHandleEventForAgent(agent: Agent, event: Event): boolean {
       names.some(name => typeof name !== "string" || !name.trim()) ||
       !names.some(name => name.trim() === agent.name)
     ) return false;
-  }
-  const hasExplicitTarget = Boolean(payloadTargetAgentName) || hasValidTargetAgentNames(event.payload);
-  if (
-    event.type === "message.created" &&
-    String(event.source ?? "").startsWith("agent:") &&
-    isRemoteFederatedEvent(event.payload) &&
-    !hasExplicitTarget
-  ) {
-    return false;
   }
   if (event.type === "agent.scheduled.trigger") {
     // Scheduled trigger events should only wake their intended target.

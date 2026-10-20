@@ -13,6 +13,9 @@ import { AGENT_VISIBILITY, isAgentVisibility, schema, type OrgOpsDrizzleDb } fro
 import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import type { EventBus } from "@orgops/event-bus";
 import type { AccessControl, RequestUser } from "./access";
+import type { AgentTransferBundle, createAgentTransfer } from "../agent-transfer";
+
+type AgentTransfer = ReturnType<typeof createAgentTransfer>;
 
 type AgentsDeps = {
   orm: OrgOpsDrizzleDb;
@@ -23,6 +26,8 @@ type AgentsDeps = {
   resolveWorkspacePath: (workspacePath: string) => string;
   insertEvent: (input: any) => any;
   access: AccessControl;
+  agentTransfer: AgentTransfer;
+  transferToPeer: (instanceId: string, bundle: AgentTransferBundle) => Promise<unknown>;
 };
 
 const AGENT_MEMORY_CONTEXT_MODES = new Set([
@@ -40,7 +45,9 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     parseStringArraySafe,
     resolveWorkspacePath,
     insertEvent,
-    access
+    access,
+    agentTransfer,
+    transferToPeer,
   } = deps;
   const publishDashboardRefresh = (reason: string, meta?: Record<string, unknown>) => {
     bus.publish("org:dashboard", {
@@ -788,19 +795,39 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     return jsonResponse(c, { ok: true });
   });
 
-  app.delete("/api/agents/:name", (c) => {
-    const name = c.req.param("name");
-    const user = c.get("user") as RequestUser | undefined;
-    const existing = orm
-      .select({ name: schema.agents.name })
-      .from(schema.agents)
-      .where(eq(schema.agents.name, name))
-      .get() as { name: string } | undefined;
-    if (!existing) return jsonResponse(c, { error: "Not found" }, 404);
-    if (!access.canManageAgent(user, name)) {
-      return jsonResponse(c, { error: "Forbidden" }, 403);
+  function stopAgentProcesses(name: string) {
+    const processRows = orm
+      .select({
+        id: schema.processes.id,
+        pid: schema.processes.pid,
+        state: schema.processes.state,
+      })
+      .from(schema.processes)
+      .where(eq(schema.processes.agent_name, name))
+      .all() as Array<{ id: string; pid: number | null; state: string }>;
+    let stoppedCount = 0;
+    const now = Date.now();
+    for (const row of processRows) {
+      if (row.state !== "RUNNING" && row.state !== "STARTING") continue;
+      if (row.pid !== null && row.pid !== undefined) {
+        try {
+          process.kill(row.pid, "SIGTERM");
+        } catch {
+          // Process already ended or cannot be signaled.
+        }
+      }
+      orm
+        .update(schema.processes)
+        .set({ state: "EXITED", ended_at: now })
+        .where(eq(schema.processes.id, row.id))
+        .run();
+      stoppedCount += 1;
     }
+    return stoppedCount;
+  }
 
+  function purgeAgent(name: string) {
+    stopAgentProcesses(name);
     const processRows = orm
       .select({
         id: schema.processes.id,
@@ -875,15 +902,49 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       .where(eq(schema.crossChannelMemoryFull.agent_name, name))
       .run();
     orm.delete(schema.agents).where(eq(schema.agents.name, name)).run();
+    orm
+      .delete(schema.secrets)
+      .where(and(eq(schema.secrets.scope_type, "private"), eq(schema.secrets.scope_id, name)))
+      .run();
 
     publishDashboardRefresh("agent.deleted", { agentName: name });
+    return {
+      removedProcessCount: processRows.length,
+      terminatedProcessCount,
+    };
+  }
+
+  app.delete("/api/agents/:name", (c) => {
+    const name = c.req.param("name");
+    const user = c.get("user") as RequestUser | undefined;
+    const existing = orm
+      .select({ name: schema.agents.name })
+      .from(schema.agents)
+      .where(eq(schema.agents.name, name))
+      .get() as { name: string } | undefined;
+    if (!existing) return jsonResponse(c, { error: "Not found" }, 404);
+    if (!access.canManageAgent(user, name)) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
+    const purged = purgeAgent(name);
     return jsonResponse(c, {
       ok: true,
       deleted: true,
       name,
-      removedProcessCount: processRows.length,
-      terminatedProcessCount
+      removedProcessCount: purged.removedProcessCount,
+      terminatedProcessCount: purged.terminatedProcessCount,
     });
+  });
+
+  app.get("/api/agents/:name/transfer", (c) => {
+    const name = c.req.param("name");
+    const user = c.get("user") as RequestUser | undefined;
+    if (!access.canManageAgent(user, name)) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
+    const bundle = agentTransfer.exportAgent(name);
+    if (!bundle) return jsonResponse(c, { error: "Not found" }, 404);
+    return jsonResponse(c, bundle);
   });
 
   app.post("/api/agents/:name/copy", async (c) => {
@@ -913,6 +974,37 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       (body as Record<string, unknown>).desiredState,
       "STOPPED",
     );
+    const federationInstanceId =
+      typeof (body as Record<string, unknown>).federationInstanceId === "string"
+        ? String((body as Record<string, unknown>).federationInstanceId).trim()
+        : "";
+    if (federationInstanceId) {
+      const bundle = agentTransfer.exportAgent(sourceName);
+      if (!bundle) return jsonResponse(c, { error: "Not found" }, 404);
+      bundle.agent.name = targetName;
+      bundle.agent.assignedRunnerId = Object.prototype.hasOwnProperty.call(body, "assignedRunnerId")
+        ? assignedRunnerId
+        : null;
+      try {
+        const imported = await transferToPeer(federationInstanceId, bundle);
+        insertEvent({
+          type: "agent.control.copy",
+          payload: {
+            sourceAgentName: sourceName,
+            targetAgentName: targetName,
+            federationInstanceId,
+          },
+          source: "system",
+        });
+        return jsonResponse(
+          c,
+          { ok: true, name: targetName, federationInstanceId, imported },
+          201,
+        );
+      } catch (error) {
+        return jsonResponse(c, { error: error instanceof Error ? error.message : "Federation copy failed" }, 502);
+      }
+    }
     const runtimeState = desiredState === "RUNNING" ? "STARTING" : "STOPPED";
     const now = Date.now();
     const id = randomUUID();
@@ -975,18 +1067,23 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       }
     }
 
+    const transferred = agentTransfer.applyLocalCopy({
+      source,
+      targetName,
+      workspacePath,
+    });
     publishDashboardRefresh("agent.copied", {
       sourceAgentName: sourceName,
       targetAgentName: targetName,
     });
     insertEvent({
       type: "agent.control.copy",
-      payload: { sourceAgentName: sourceName, targetAgentName: targetName },
+      payload: { sourceAgentName: sourceName, targetAgentName: targetName, ...transferred },
       source: "system",
     });
     return jsonResponse(
       c,
-      { ok: true, id, name: targetName, assignedRunnerId, workspacePath, desiredState },
+      { ok: true, id, name: targetName, assignedRunnerId, workspacePath, desiredState, ...transferred },
       201,
     );
   });
@@ -1000,12 +1097,49 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     const existing = orm.select().from(schema.agents).where(eq(schema.agents.name, name)).get() as any;
     if (!existing) return jsonResponse(c, { error: "Not found" }, 404);
     const body = await c.req.json().catch(() => ({}));
+    const federationInstanceId =
+      typeof (body as Record<string, unknown>).federationInstanceId === "string"
+        ? String((body as Record<string, unknown>).federationInstanceId).trim()
+        : "";
+    if (federationInstanceId) {
+      const targetName =
+        typeof (body as Record<string, unknown>).name === "string" &&
+        String((body as Record<string, unknown>).name).trim()
+          ? String((body as Record<string, unknown>).name).trim()
+          : name;
+      const bundle = agentTransfer.exportAgent(name);
+      if (!bundle) return jsonResponse(c, { error: "Not found" }, 404);
+      bundle.agent.name = targetName;
+      bundle.agent.assignedRunnerId = Object.prototype.hasOwnProperty.call(body, "assignedRunnerId")
+        ? normalizeAssignedRunnerInput((body as Record<string, unknown>).assignedRunnerId)
+        : null;
+      try {
+        const imported = await transferToPeer(federationInstanceId, bundle);
+        purgeAgent(name);
+        insertEvent({
+          type: "agent.control.move",
+          payload: { agentName: name, targetAgentName: targetName, federationInstanceId },
+          source: "system",
+        });
+        return jsonResponse(c, {
+          ok: true,
+          agentName: name,
+          targetAgentName: targetName,
+          federationInstanceId,
+          moved: true,
+          imported,
+        });
+      } catch (error) {
+        return jsonResponse(c, { error: error instanceof Error ? error.message : "Federation move failed" }, 502);
+      }
+    }
     if (!Object.prototype.hasOwnProperty.call(body, "assignedRunnerId")) {
       return jsonResponse(c, { error: "assignedRunnerId is required; use null to unassign" }, 400);
     }
     const assignedRunnerId = normalizeAssignedRunnerInput(
       (body as Record<string, unknown>).assignedRunnerId,
     );
+    const stoppedProcessCount = stopAgentProcesses(name);
     const desiredState = existing.desired_state ?? "STOPPED";
     const runtimeState = desiredState === "RUNNING" ? "STARTING" : "STOPPED";
     orm
@@ -1029,10 +1163,11 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         agentName: name,
         fromRunnerId: existing.assigned_runner_id ?? null,
         toRunnerId: assignedRunnerId,
+        stoppedProcessCount,
       },
       source: "system",
     });
-    return jsonResponse(c, { ok: true, agentName: name, assignedRunnerId, runtimeState });
+    return jsonResponse(c, { ok: true, agentName: name, assignedRunnerId, runtimeState, stoppedProcessCount });
   });
 
   app.post("/api/agents/:name/:action", (c) => {

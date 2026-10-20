@@ -24,12 +24,26 @@ const agentsCopySchema = z.object({
   workspacePath: z.string().min(1).optional(),
   desiredState: desiredStateSchema.optional(),
   copyChannelMemberships: z.boolean().optional(),
+  federationInstanceId: z.string().min(1).optional(),
 });
 
-const agentsMoveSchema = z.object({
-  agentName: z.string().min(1),
-  assignedRunnerId: z.string().nullable(),
-});
+const agentsMoveSchema = z
+  .object({
+    agentName: z.string().min(1),
+    assignedRunnerId: z.string().nullable().optional(),
+    federationInstanceId: z.string().min(1).optional(),
+    name: z.string().min(1).optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.federationInstanceId) return;
+    if (value.assignedRunnerId === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["assignedRunnerId"],
+        message: "assignedRunnerId is required for a local move; use null to unassign.",
+      });
+    }
+  });
 
 const agentsCreateSchema = z.object({
   name: z.string().min(1),
@@ -117,12 +131,12 @@ export const agentsToolDefs: ToolDef[] = [
   ],
   [
     "agents_copy",
-    "Copy an existing OrgOps agent config to a new agent name. Runtime state, memory, processes, and workspace files are not copied.",
+    "Copy an agent, including enabled skills, agent-local skills, private secrets that are not already public or package secrets, workspace files, and channel plus cross-channel memory. Pass federationInstanceId to copy onto a federated peer.",
     agentsCopySchema,
   ],
   [
     "agents_move",
-    "Move an existing OrgOps agent to another runner assignment. Use assignedRunnerId null to unassign.",
+    "Move an agent to another local runner, or pass federationInstanceId to move it to a federated peer with its skills, private secrets, workspace files, and memory. Running processes are stopped. Local moves keep the workspace path. Use assignedRunnerId null to unassign.",
     agentsMoveSchema,
   ],
   [
@@ -227,6 +241,9 @@ export async function execute(
       ...(parsed.copyChannelMemberships !== undefined
         ? { copyChannelMemberships: parsed.copyChannelMemberships }
         : {}),
+      ...(parsed.federationInstanceId !== undefined
+        ? { federationInstanceId: parsed.federationInstanceId.trim() }
+        : {}),
     };
     const response = await ctx.apiFetch(
       `/api/agents/${encodeURIComponent(sourceAgentName)}/copy`,
@@ -251,7 +268,13 @@ export async function execute(
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          assignedRunnerId: trimOptional(parsed.assignedRunnerId ?? undefined) ?? null,
+          ...(parsed.assignedRunnerId !== undefined
+            ? { assignedRunnerId: trimOptional(parsed.assignedRunnerId ?? undefined) ?? null }
+            : {}),
+          ...(parsed.federationInstanceId !== undefined
+            ? { federationInstanceId: parsed.federationInstanceId.trim() }
+            : {}),
+          ...(parsed.name !== undefined ? { name: parsed.name.trim() } : {}),
         }),
       },
     );

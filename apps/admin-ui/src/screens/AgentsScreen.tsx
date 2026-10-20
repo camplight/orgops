@@ -4,10 +4,11 @@ import type {
   AgentWorkspaceFileResponse,
   AgentWorkspaceListResponse,
   EventRow,
+  FederationInstance,
   RunnerNode,
   SkillMeta
 } from "../types";
-import { Button, Card, Input, Textarea } from "../components/ui";
+import { Button, Card, Input, SelectAutocomplete, Textarea } from "../components/ui";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 import { formatTimestamp } from "../utils/formatTimestamp";
 
@@ -99,6 +100,18 @@ function readWrappedDisplayValue(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+const LOCAL_TRANSFER_TARGET = "local";
+const UNASSIGNED_RUNNER = "unassigned";
+
+function formatAgentSkills(agent: Pick<Agent, "enabledSkills" | "alwaysPreloadedSkills">) {
+  const enabled = agent.enabledSkills ?? [];
+  if (enabled.length === 0) return "—";
+  const preloaded = new Set(agent.alwaysPreloadedSkills ?? []);
+  return enabled
+    .map((name) => (preloaded.has(name) ? `${name} (preload)` : name))
+    .join(", ");
+}
+
 function formatAgentModelLabel(agent: Agent): string {
   if ((agent.mode ?? "CLASSIC") !== "WRAPPED") return agent.modelId ?? "-";
   const config = agent.wrappedConfig ?? {};
@@ -112,14 +125,23 @@ type AgentsScreenProps = {
   agents: Agent[];
   runners: RunnerNode[];
   skills: SkillMeta[];
+  federationInstances?: FederationInstance[];
   onCreateAgent: (agent: AgentForm) => Promise<void>;
   onUpdateAgent: (name: string, agent: Omit<AgentForm, "name">) => Promise<void>;
   onDeleteAgent: (name: string) => Promise<void>;
   onCopyAgent?: (
     sourceName: string,
-    input: { name: string; assignedRunnerId?: string | null; copyChannelMemberships?: boolean }
+    input: {
+      name: string;
+      assignedRunnerId?: string | null;
+      copyChannelMemberships?: boolean;
+      federationInstanceId?: string;
+    }
   ) => Promise<void>;
-  onMoveAgent?: (name: string, assignedRunnerId: string | null) => Promise<void>;
+  onMoveAgent?: (
+    name: string,
+    input: { assignedRunnerId?: string | null; federationInstanceId?: string; name?: string }
+  ) => Promise<void>;
   onStartAgent: (name: string) => Promise<void>;
   onStopAgent: (name: string) => Promise<void>;
   onCleanupAgentWorkspace: (name: string) => Promise<void>;
@@ -156,6 +178,7 @@ export function AgentsScreen({
   agents,
   runners,
   skills,
+  federationInstances = [],
   onCreateAgent,
   onUpdateAgent,
   onDeleteAgent,
@@ -190,6 +213,12 @@ export function AgentsScreen({
   const [isDeletingAgent, setIsDeletingAgent] = useState(false);
   const [isCopyingAgent, setIsCopyingAgent] = useState(false);
   const [isMovingAgent, setIsMovingAgent] = useState(false);
+  const [transferMode, setTransferMode] = useState<"copy" | "move" | null>(null);
+  const [transferName, setTransferName] = useState("");
+  const [transferTargetId, setTransferTargetId] = useState(LOCAL_TRANSFER_TARGET);
+  const [transferRunnerId, setTransferRunnerId] = useState(UNASSIGNED_RUNNER);
+  const [transferCopyMemberships, setTransferCopyMemberships] = useState(true);
+  const [transferError, setTransferError] = useState<string | null>(null);
   const [agentEvents, setAgentEvents] = useState<EventRow[]>([]);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [eventsLoading, setEventsLoading] = useState(false);
@@ -239,6 +268,19 @@ export function AgentsScreen({
     () => agents.find((agent) => agent.name === selectedAgentName) ?? null,
     [agents, selectedAgentName]
   );
+  const configurableSkills = useMemo(() => {
+    const byName = new Map(skills.map((skill) => [skill.name, skill]));
+    for (const name of [...form.enabledSkills, ...form.alwaysPreloadedSkills]) {
+      if (!byName.has(name)) {
+        byName.set(name, {
+          name,
+          description: "Enabled on this agent",
+          path: name
+        });
+      }
+    }
+    return [...byName.values()];
+  }, [form.alwaysPreloadedSkills, form.enabledSkills, skills]);
   const selectedEvent = useMemo(
     () => agentEvents.find((event) => event.id === selectedEventId) ?? null,
     [agentEvents, selectedEventId]
@@ -374,6 +416,7 @@ export function AgentsScreen({
     setSystemPromptError(null);
     setSystemPromptText("");
     setSystemPromptMeta(null);
+    setTransferMode(null);
   };
 
   const closeDrawer = () => {
@@ -384,6 +427,7 @@ export function AgentsScreen({
     setSelectedEventId(null);
     setOpenFile(null);
     setCrossMemoryDrawerOpen(false);
+    setTransferMode(null);
   };
 
   useEscapeKey(
@@ -391,8 +435,13 @@ export function AgentsScreen({
       eventDetailsDrawerOpen ||
       crossMemoryDrawerOpen ||
       systemPromptDrawerOpen ||
+      transferMode !== null ||
       Boolean(openFile),
     () => {
+      if (transferMode) {
+        setTransferMode(null);
+        return;
+      }
       if (systemPromptDrawerOpen) {
         setSystemPromptDrawerOpen(false);
         return;
@@ -699,66 +748,112 @@ export function AgentsScreen({
     }
   };
 
-  const handleCopyAgent = async () => {
-    if (!selectedAgent || !onCopyAgent) return;
-    const sourceName = selectedAgent.name;
-    const suggestedName = `${sourceName}-copy`;
-    const targetName = window.prompt("New agent name", suggestedName)?.trim();
-    if (!targetName) return;
-    if (targetName === sourceName) {
-      setSaveStatus({ kind: "error", message: "Copied agent name must differ from source." });
-      return;
-    }
-    const runnerValue = window.prompt(
-      "Assigned runner ID for the copy. Leave blank to unassign.",
-      selectedAgent.assignedRunnerId ?? ""
-    );
-    if (runnerValue === null) return;
-    const copyChannelMemberships = window.confirm(
-      "Copy this agent's channel memberships to the new agent?"
-    );
-    setIsCopyingAgent(true);
-    setSaveStatus(null);
-    try {
-      await onCopyAgent(sourceName, {
-        name: targetName,
-        assignedRunnerId: runnerValue.trim() || null,
-        copyChannelMemberships
-      });
-      setSelectedAgentName(targetName);
-      setIsCreating(false);
-      setActiveTab("details");
-      setSaveStatus({
-        kind: "success",
-        message: `Agent "${sourceName}" was copied to "${targetName}".`
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to copy agent.";
-      setSaveStatus({ kind: "error", message });
-    } finally {
-      setIsCopyingAgent(false);
-    }
+  const openTransferDrawer = (mode: "copy" | "move") => {
+    if (!selectedAgent) return;
+    setTransferMode(mode);
+    setTransferName(mode === "copy" ? `${selectedAgent.name}-copy` : selectedAgent.name);
+    setTransferTargetId(LOCAL_TRANSFER_TARGET);
+    setTransferRunnerId(selectedAgent.assignedRunnerId || UNASSIGNED_RUNNER);
+    setTransferCopyMemberships(mode === "copy");
+    setTransferError(null);
   };
 
-  const handleMoveAgent = async () => {
-    if (!selectedAgent || !onMoveAgent) return;
-    const agentName = selectedAgent.name;
-    const runnerValue = window.prompt(
-      "Move agent to runner ID. Leave blank to unassign.",
-      selectedAgent.assignedRunnerId ?? ""
-    );
-    if (runnerValue === null) return;
+  const destinationOptions = useMemo(
+    () => [
+      {
+        id: LOCAL_TRANSFER_TARGET,
+        label: "This instance",
+        meta: "Stay on this OrgOps"
+      },
+      ...federationInstances
+        .filter((instance) => instance.baseUrl.trim())
+        .map((instance) => ({
+          id: instance.id,
+          label: instance.name,
+          meta: instance.baseUrl
+        }))
+    ],
+    [federationInstances]
+  );
+
+  const runnerOptions = useMemo(
+    () => [
+      { id: UNASSIGNED_RUNNER, label: "Unassigned", meta: "No runner" },
+      ...runners.map((runner) => ({
+        id: runner.id,
+        label: runner.displayName || runner.id,
+        meta: `${runner.online ? "online" : "offline"}${runner.hostname ? ` · ${runner.hostname}` : ""}`
+      }))
+    ],
+    [runners]
+  );
+
+  const submitTransfer = async () => {
+    if (!selectedAgent || !transferMode) return;
+    const targetName = transferName.trim();
+    if (!targetName) {
+      setTransferError("Name is required.");
+      return;
+    }
+    const isRemote = transferTargetId !== LOCAL_TRANSFER_TARGET;
+    const assignedRunnerId =
+      !isRemote && transferRunnerId !== UNASSIGNED_RUNNER ? transferRunnerId : null;
+    if (transferMode === "copy") {
+      if (!onCopyAgent) return;
+      if (targetName === selectedAgent.name) {
+        setTransferError("Copied agent name must differ from the source.");
+        return;
+      }
+      setIsCopyingAgent(true);
+      setTransferError(null);
+      try {
+        await onCopyAgent(selectedAgent.name, {
+          name: targetName,
+          assignedRunnerId,
+          copyChannelMemberships: isRemote ? false : transferCopyMemberships,
+          ...(isRemote ? { federationInstanceId: transferTargetId } : {})
+        });
+        if (!isRemote) {
+          setSelectedAgentName(targetName);
+          setIsCreating(false);
+          setActiveTab("details");
+        }
+        setTransferMode(null);
+        setSaveStatus({
+          kind: "success",
+          message: isRemote
+            ? `Agent "${selectedAgent.name}" was copied to ${destinationOptions.find((option) => option.id === transferTargetId)?.label ?? "the peer"}.`
+            : `Agent "${selectedAgent.name}" was copied to "${targetName}".`
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to copy agent.";
+        setTransferError(message);
+      } finally {
+        setIsCopyingAgent(false);
+      }
+      return;
+    }
+    if (!onMoveAgent) return;
     setIsMovingAgent(true);
-    setSaveStatus(null);
+    setTransferError(null);
     try {
-      await onMoveAgent(agentName, runnerValue.trim() || null);
+      await onMoveAgent(selectedAgent.name, {
+        assignedRunnerId,
+        ...(isRemote
+          ? { federationInstanceId: transferTargetId, name: targetName }
+          : {})
+      });
+      if (isRemote) setSelectedAgentName(null);
+      setTransferMode(null);
       setSaveStatus({
         kind: "success",
-        message: `Agent "${agentName}" was moved.`
+        message: isRemote
+          ? `Agent "${selectedAgent.name}" was moved to ${destinationOptions.find((option) => option.id === transferTargetId)?.label ?? "the peer"}.`
+          : `Agent "${selectedAgent.name}" was moved.`
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to move agent.";
-      setSaveStatus({ kind: "error", message });
+      setTransferError(message);
     } finally {
       setIsMovingAgent(false);
     }
@@ -855,6 +950,9 @@ export function AgentsScreen({
         <td className="whitespace-nowrap px-2 py-2 text-slate-400">
           {agent.assignedRunnerId ?? "-"}
         </td>
+        <td className="max-w-[280px] truncate px-2 py-2 text-slate-400">
+          {formatAgentSkills(agent)}
+        </td>
         <td className="max-w-[420px] truncate px-2 py-2 text-slate-500">
           {agent.workspacePath ?? "-"}
         </td>
@@ -890,6 +988,7 @@ export function AgentsScreen({
                 <th className="px-2 py-2">Mode</th>
                 <th className="px-2 py-2">Memory Context</th>
                 <th className="px-2 py-2">Runner</th>
+                <th className="px-2 py-2">Skills</th>
                 <th className="px-2 py-2">Workspace</th>
               </tr>
             </thead>
@@ -917,8 +1016,9 @@ export function AgentsScreen({
                   <th className="px-2 py-2">Model</th>
                   <th className="px-2 py-2">Mode</th>
                   <th className="px-2 py-2">Memory Context</th>
-                  <th className="px-2 py-2">Runner</th>
-                  <th className="px-2 py-2">Workspace</th>
+                <th className="px-2 py-2">Runner</th>
+                <th className="px-2 py-2">Skills</th>
+                <th className="px-2 py-2">Workspace</th>
                 </tr>
               </thead>
               <tbody>{renderAgentRows(privateAgents)}</tbody>
@@ -1027,7 +1127,7 @@ export function AgentsScreen({
                   {!isCreating && selectedAgent && onCopyAgent ? (
                     <Button
                       variant="secondary"
-                      onClick={() => void handleCopyAgent()}
+                      onClick={() => openTransferDrawer("copy")}
                       disabled={isCopyingAgent}
                     >
                       {isCopyingAgent ? "Copying..." : "Copy"}
@@ -1036,7 +1136,7 @@ export function AgentsScreen({
                   {!isCreating && selectedAgent && onMoveAgent ? (
                     <Button
                       variant="secondary"
-                      onClick={() => void handleMoveAgent()}
+                      onClick={() => openTransferDrawer("move")}
                       disabled={isMovingAgent}
                     >
                       {isMovingAgent ? "Moving..." : "Move"}
@@ -1394,7 +1494,7 @@ export function AgentsScreen({
                     <div className="space-y-2">
                       <div className="text-sm text-slate-400">Enabled skills</div>
                       <div className="grid gap-2 sm:grid-cols-2">
-                        {skills.map((skill) => (
+                        {configurableSkills.map((skill) => (
                           <div
                             key={skill.path}
                             className="flex items-start gap-2 rounded border border-slate-800 bg-slate-950 px-2 py-2 text-sm text-slate-300"
@@ -1846,6 +1946,133 @@ export function AgentsScreen({
                     {systemPromptError}
                   </div>
                 ) : null}
+              </div>
+            </div>
+          </div>
+
+          <div
+            className={`absolute inset-0 z-30 flex justify-end bg-black/40 transition-opacity ${
+              transferMode
+                ? "pointer-events-auto opacity-100"
+                : "pointer-events-none opacity-0"
+            }`}
+            onClick={() => {
+              if (!isCopyingAgent && !isMovingAgent) setTransferMode(null);
+            }}
+          >
+            <div
+              className={`pointer-events-auto flex h-full w-full max-w-xl flex-col border-l border-slate-800 bg-slate-950 shadow-2xl transition-transform duration-300 ${
+                transferMode ? "translate-x-0" : "translate-x-full"
+              }`}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+                <div>
+                  <h4 className="text-sm font-semibold text-slate-100">
+                    {transferMode === "move" ? "Move agent" : "Copy agent"}
+                  </h4>
+                  <p className="text-xs text-slate-500">
+                    {selectedAgent ? selectedAgent.name : "No agent selected"}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="px-2 py-1 text-xs"
+                  disabled={isCopyingAgent || isMovingAgent}
+                  onClick={() => setTransferMode(null)}
+                >
+                  Close
+                </Button>
+              </div>
+              <div className="min-h-0 flex-1 space-y-4 overflow-visible px-4 py-4">
+                <p className="text-sm text-slate-400">
+                  {transferMode === "move"
+                    ? "Skills, private secrets, workspace files, and memory stay with the agent. Running processes are stopped."
+                    : "The copy includes skills, private secrets, workspace files, and memory. Processes stay with the source agent."}
+                </p>
+                <div className="space-y-1">
+                  <div className="text-sm text-slate-400">
+                    {transferMode === "move" ? "Name on the destination" : "New agent name"}
+                  </div>
+                  <Input
+                    value={transferName}
+                    onChange={(event) => {
+                      setTransferName(event.target.value);
+                      setTransferError(null);
+                    }}
+                    placeholder="Agent name"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <div className="text-sm text-slate-400">Destination</div>
+                  <SelectAutocomplete
+                    value={transferTargetId}
+                    options={destinationOptions}
+                    placeholder="Search this instance or a peer..."
+                    onChange={(id) => {
+                      setTransferTargetId(id);
+                      setTransferError(null);
+                      if (id !== LOCAL_TRANSFER_TARGET) setTransferRunnerId(UNASSIGNED_RUNNER);
+                    }}
+                  />
+                </div>
+                {transferTargetId === LOCAL_TRANSFER_TARGET ? (
+                  <div className="space-y-1">
+                    <div className="text-sm text-slate-400">Runner</div>
+                    <SelectAutocomplete
+                      value={transferRunnerId}
+                      options={runnerOptions}
+                      placeholder="Search runners..."
+                      onChange={(id) => {
+                        setTransferRunnerId(id);
+                        setTransferError(null);
+                      }}
+                    />
+                  </div>
+                ) : (
+                  <div className="rounded border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-400">
+                    The agent arrives unassigned on the peer. Choose a runner there after it lands.
+                  </div>
+                )}
+                {transferMode === "copy" && transferTargetId === LOCAL_TRANSFER_TARGET ? (
+                  <label className="flex items-center gap-2 rounded border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={transferCopyMemberships}
+                      onChange={(event) => setTransferCopyMemberships(event.target.checked)}
+                    />
+                    <span>Copy channel memberships</span>
+                  </label>
+                ) : null}
+                {transferError ? (
+                  <div className="rounded border border-rose-900/60 bg-rose-950/30 px-3 py-2 text-sm text-rose-300">
+                    {transferError}
+                  </div>
+                ) : null}
+              </div>
+              <div className="flex items-center justify-end gap-2 border-t border-slate-800 px-4 py-3">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={isCopyingAgent || isMovingAgent}
+                  onClick={() => setTransferMode(null)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  disabled={isCopyingAgent || isMovingAgent || !transferName.trim()}
+                  onClick={() => void submitTransfer()}
+                >
+                  {isCopyingAgent
+                    ? "Copying..."
+                    : isMovingAgent
+                      ? "Moving..."
+                      : transferMode === "move"
+                        ? "Move agent"
+                        : "Copy agent"}
+                </Button>
               </div>
             </div>
           </div>

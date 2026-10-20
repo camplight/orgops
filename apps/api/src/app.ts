@@ -40,6 +40,7 @@ import {
 } from "@orgops/skills";
 import { registerAuthRoutes } from "./routes/auth";
 import { registerModelsRoutes } from "./routes/models";
+import { createAgentTransfer, type AgentTransferBundle } from "./agent-transfer";
 import { registerAgentsRoutes } from "./routes/agents";
 import { registerCollabRoutes } from "./routes/collab";
 import { registerEventsRoutes } from "./routes/events";
@@ -545,6 +546,46 @@ export function createApp(config: AppConfig = {}) {
 
   registerModelsRoutes(app as any, { orm, jsonResponse, parseJson });
 
+  const agentTransfer = createAgentTransfer({
+    orm,
+    skillRoots: SKILL_ROOTS,
+    resolveWorkspacePath,
+    parseStringArraySafe,
+  });
+
+  async function transferToPeer(instanceId: string, bundle: AgentTransferBundle) {
+    const instance = orm
+      .select()
+      .from(schema.federationInstances)
+      .where(eq(schema.federationInstances.id, instanceId))
+      .get() as { base_url?: string | null; outbound_token?: string | null; name?: string } | undefined;
+    if (!instance) throw new Error("Federation peer not found");
+    const token = String(instance.outbound_token ?? "").trim();
+    const baseUrl = String(instance.base_url ?? "").replace(/\/+$/, "");
+    if (!token || !baseUrl) {
+      throw new Error(`Federation peer "${instance.name ?? instanceId}" is missing a base URL or outbound token.`);
+    }
+    const response = await fetch(`${baseUrl}/api/federation/agents/transfer`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(bundle),
+    });
+    const text = await response.text();
+    let parsed: any = {};
+    try {
+      parsed = text ? JSON.parse(text) : {};
+    } catch {
+      parsed = { error: text };
+    }
+    if (!response.ok) {
+      throw new Error(parsed?.error || `Federation request failed: ${response.status}`);
+    }
+    return parsed;
+  }
+
   registerAgentsRoutes(app as any, {
     orm,
     bus,
@@ -554,6 +595,8 @@ export function createApp(config: AppConfig = {}) {
     resolveWorkspacePath,
     insertEvent,
     access,
+    agentTransfer,
+    transferToPeer,
   });
 
   registerCollabRoutes(app as any, { orm, jsonResponse, access });
@@ -639,6 +682,7 @@ export function createApp(config: AppConfig = {}) {
     requireAuth,
     insertEvent,
     eventRowToApi,
+    agentTransfer,
   });
 
   registerIntegrationKeysRoutes(app as any, { orm, jsonResponse, access });

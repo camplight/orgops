@@ -139,6 +139,40 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
     };
   }
 
+  function projectedParticipantsFromMetadata(metadata: Record<string, unknown> | null) {
+    const federation =
+      metadata?.federation &&
+      typeof metadata.federation === "object" &&
+      !Array.isArray(metadata.federation)
+        ? (metadata.federation as Record<string, unknown>)
+        : null;
+    const projected = Array.isArray(federation?.participants) ? federation.participants : [];
+    return projected.flatMap((participant) => {
+      const item =
+        participant && typeof participant === "object"
+          ? (participant as Record<string, unknown>)
+          : {};
+      const subscriberType = String(item.subscriberType ?? "").trim().toUpperCase();
+      const subscriberId = String(item.subscriberId ?? "").trim();
+      return subscriberType && subscriberId ? [{ subscriberType, subscriberId }] : [];
+    });
+  }
+
+  function mergeParticipants(
+    local: Array<{ subscriberType: string; subscriberId: string }>,
+    projected: Array<{ subscriberType: string; subscriberId: string }>,
+  ) {
+    const unique = new Map<string, { subscriberType: string; subscriberId: string }>();
+    for (const participant of [...local, ...projected]) {
+      unique.set(`${participant.subscriberType}:${participant.subscriberId}`, participant);
+    }
+    return [...unique.values()].sort((left, right) =>
+      `${left.subscriberType}:${left.subscriberId}`.localeCompare(
+        `${right.subscriberType}:${right.subscriberId}`,
+      ),
+    );
+  }
+
   function parseStoredMetadata(input: unknown) {
     if (typeof input !== "string" || !input.trim()) return null;
     try {
@@ -446,6 +480,7 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
           subscriberType: participant.subscriber_type,
           subscriberId: participant.subscriber_id,
         }));
+      const metadata = parseStoredMetadata(channel.metadata_json);
       const shares = orm
         .select({
           viewer_type: schema.channelViewers.viewer_type,
@@ -469,11 +504,11 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
             ? CHANNEL_VISIBILITY.PRIVATE
             : CHANNEL_VISIBILITY.PUBLIC,
         ownerHumanId: channel.owner_human_id ?? null,
-        metadata: parseStoredMetadata(channel.metadata_json),
+        metadata,
+        participants: mergeParticipants(participants, projectedParticipantsFromMetadata(metadata)),
         kind: channel.kind ?? CHANNEL_KINDS.GROUP,
         directParticipantKey: channel.direct_participant_key ?? undefined,
         archivedAt: channel.archived_at ?? null,
-        participants,
         shares,
         canPost: access.canPostToChannel(user, channel.id),
         canManage: access.canManageChannel(user, channel.id),
@@ -1059,6 +1094,11 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
     if (!access.canViewChannel(user, id)) {
       return jsonResponse(c, { error: "Forbidden" }, 403);
     }
+    const channel = orm
+      .select({ metadataJson: schema.channels.metadata_json })
+      .from(schema.channels)
+      .where(eq(schema.channels.id, id))
+      .get() as { metadataJson?: string | null } | undefined;
     const rows = orm
       .select({
         subscriber_type: schema.channelSubscriptions.subscriber_type,
@@ -1073,10 +1113,13 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
       .all() as { subscriber_type: string; subscriber_id: string }[];
     return jsonResponse(
       c,
-      rows.map((row) => ({
-        subscriberType: row.subscriber_type,
-        subscriberId: row.subscriber_id,
-      })),
+      mergeParticipants(
+        rows.map((row) => ({
+          subscriberType: row.subscriber_type,
+          subscriberId: row.subscriber_id,
+        })),
+        projectedParticipantsFromMetadata(parseStoredMetadata(channel?.metadataJson)),
+      ),
     );
   });
 

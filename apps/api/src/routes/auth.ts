@@ -227,8 +227,11 @@ export function registerAuthRoutes(app: Hono<any>, deps: AuthDeps) {
     }
     if (
       /^\/api\/federation\/channels\/[^/]+\/events$/.test(c.req.path) ||
+      /^\/api\/federation\/channels\/[^/]+\/participants$/.test(c.req.path) ||
       /^\/api\/federation\/channels\/[^/]+\/subscribers$/.test(c.req.path) ||
-      /^\/api\/federation\/projections\/[^/]+\/events$/.test(c.req.path)
+      /^\/api\/federation\/projections\/[^/]+\/events$/.test(c.req.path) ||
+      /^\/api\/federation\/agents\/[^/]+\/transfer$/.test(c.req.path) ||
+      c.req.path === "/api/federation/agents/transfer"
     ) {
       return next();
     }

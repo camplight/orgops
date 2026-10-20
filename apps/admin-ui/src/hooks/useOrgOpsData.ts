@@ -216,10 +216,11 @@ export function useOrgOpsData(authenticated: boolean) {
 
   const loadChannelEvents = useCallback(async (channelId: string) => {
     const data = await apiJson<EventRow[]>(
-      `/api/events?channelId=${channelId}&limit=200`,
+      `/api/events?channelId=${encodeURIComponent(channelId)}&limit=200&order=desc`,
     );
-    setChannelEvents(data);
-    return data;
+    const chronological = data.slice().reverse();
+    setChannelEvents(chronological);
+    return chronological;
   }, []);
 
   const loadChannelParticipants = useCallback(async (channelId: string) => {

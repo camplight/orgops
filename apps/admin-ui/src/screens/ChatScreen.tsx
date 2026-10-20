@@ -808,6 +808,7 @@ export function ChatScreen({
     window.print();
   };
   const handleSendWithAttachments = async () => {
+    isPinnedToBottomRef.current = true;
     await onSendMessage({ attachments: readyAttachments });
     setPendingAttachments([]);
   };

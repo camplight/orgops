@@ -14,6 +14,7 @@ type FederationScreenProps = {
     outboundToken?: string;
   }) => Promise<FederationInstance>;
   onUpdateInstance: (id: string, input: { outboundToken?: string }) => Promise<void>;
+  onDeleteInstance: (id: string) => Promise<void>;
   onCreateChannelLink: (input: {
     role: "LOCAL_HOME" | "REMOTE_PROJECTION";
     localChannelId?: string;
@@ -21,8 +22,13 @@ type FederationScreenProps = {
     homeInstanceId?: string;
     remoteChannelId?: string;
   }) => Promise<void>;
+  onDeleteChannelLink: (
+    localChannelId: string,
+    input?: { deleteLocalChannel?: boolean },
+  ) => Promise<void>;
   onSyncChannel: (localChannelId: string) => Promise<void>;
   onCreateJoinLink: (localChannelId: string) => Promise<{ joinUrl: string }>;
+  onClearPendingJoinLinks: (channelId?: string) => Promise<{ deletedCount?: number } | void>;
   onJoinFromUrl: (input: { joinUrl: string; peerBaseUrl: string; localName?: string }) => Promise<void>;
 };
 
@@ -33,9 +39,12 @@ export function FederationScreen({
   onRefresh,
   onCreateInstance,
   onUpdateInstance,
+  onDeleteInstance,
   onCreateChannelLink,
+  onDeleteChannelLink,
   onSyncChannel,
   onCreateJoinLink,
+  onClearPendingJoinLinks,
   onJoinFromUrl,
 }: FederationScreenProps) {
   const [instanceForm, setInstanceForm] = useState({
@@ -105,6 +114,25 @@ export function FederationScreen({
     }
   };
 
+  const deleteInstance = async (instance: FederationInstance) => {
+    const confirmed = window.confirm(
+      `Remove peer "${instance.name}"? Remote projection links from this peer will be disconnected.`,
+    );
+    if (!confirmed) return;
+    setPending(`delete-instance:${instance.id}`);
+    setError(null);
+    setMessage(null);
+    try {
+      await onDeleteInstance(instance.id);
+      setMessage(`Removed peer "${instance.name}".`);
+      await onRefresh();
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "Failed to remove peer.");
+    } finally {
+      setPending(null);
+    }
+  };
+
   const createChannelLink = async () => {
     setError(null);
     setMessage(null);
@@ -152,6 +180,50 @@ export function FederationScreen({
       await onRefresh();
     } catch (syncError) {
       setError(syncError instanceof Error ? syncError.message : "Failed to sync channel.");
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const deleteChannelLink = async (link: FederationChannelLink) => {
+    const isProjection = link.role === "REMOTE_PROJECTION";
+    const label = link.localChannelName ?? link.localChannelId;
+    const confirmed = window.confirm(
+      isProjection
+        ? `Remove joined channel "${label}" and delete its local projection channel?`
+        : `Stop sharing "${label}" through federation?`,
+    );
+    if (!confirmed) return;
+    setPending(`delete-link:${link.localChannelId}`);
+    setError(null);
+    setMessage(null);
+    try {
+      await onDeleteChannelLink(link.localChannelId, {
+        deleteLocalChannel: isProjection,
+      });
+      setMessage(isProjection ? "Deleted projection channel." : "Stopped sharing channel.");
+      await onRefresh();
+    } catch (deleteError) {
+      setError(
+        deleteError instanceof Error ? deleteError.message : "Failed to remove federation link.",
+      );
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const clearPendingJoinLinks = async () => {
+    const confirmed = window.confirm("Clear all pending federation join URLs?");
+    if (!confirmed) return;
+    setPending("clear-pending-join-links");
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await onClearPendingJoinLinks();
+      setMessage(`Cleared ${result?.deletedCount ?? 0} pending join URL(s).`);
+      await onRefresh();
+    } catch (clearError) {
+      setError(clearError instanceof Error ? clearError.message : "Failed to clear join URLs.");
     } finally {
       setPending(null);
     }
@@ -325,9 +397,22 @@ export function FederationScreen({
       </Card>
 
       <Card title={`Peer Instances (${connectedInstances.length})`}>
-        <div className="mb-3 text-xs text-slate-500">
-          Peers appear here after another OrgOps joins or when you add one manually. Pending join
-          URLs are not shown as peers{pendingInviteCount > 0 ? ` (${pendingInviteCount} pending)` : ""}.
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div className="text-xs text-slate-500">
+            Peers appear here after another OrgOps joins or when you add one manually. Pending join
+            URLs are not shown as peers
+            {pendingInviteCount > 0 ? ` (${pendingInviteCount} pending)` : ""}.
+          </div>
+          {pendingInviteCount > 0 ? (
+            <Button
+              variant="secondary"
+              className="px-2 py-1 text-xs"
+              onClick={() => void clearPendingJoinLinks()}
+              disabled={pending === "clear-pending-join-links"}
+            >
+              {pending === "clear-pending-join-links" ? "Clearing..." : "Clear pending URLs"}
+            </Button>
+          ) : null}
         </div>
         {showAdvanced ? (
         <div className="mb-4 grid gap-2 md:grid-cols-4">
@@ -377,7 +462,7 @@ export function FederationScreen({
                   <td className="px-2 py-2 text-slate-400">
                     {instance.lastSeenAt ? formatTimestamp(instance.lastSeenAt) : "-"}
                   </td>
-                  <td className="px-2 py-2">
+                  <td className="space-x-2 px-2 py-2">
                     <Button
                       variant="secondary"
                       className="px-2 py-1 text-xs"
@@ -385,6 +470,14 @@ export function FederationScreen({
                       disabled={pending === `token:${instance.id}`}
                     >
                       Set token
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      className="px-2 py-1 text-xs text-red-200"
+                      onClick={() => void deleteInstance(instance)}
+                      disabled={pending === `delete-instance:${instance.id}`}
+                    >
+                      {pending === `delete-instance:${instance.id}` ? "Removing..." : "Remove"}
                     </Button>
                   </td>
                 </tr>
@@ -508,7 +601,7 @@ export function FederationScreen({
                     )}
                   </td>
                   <td className="px-2 py-2 text-slate-400">{link.syncCursor ?? "-"}</td>
-                  <td className="px-2 py-2">
+                  <td className="space-x-2 px-2 py-2">
                     {link.role === "REMOTE_PROJECTION" ? (
                       <Button
                         variant="secondary"
@@ -530,6 +623,18 @@ export function FederationScreen({
                     ) : (
                       <span className="text-xs text-slate-500">Home</span>
                     )}
+                    <Button
+                      variant="secondary"
+                      className="px-2 py-1 text-xs text-red-200"
+                      onClick={() => void deleteChannelLink(link)}
+                      disabled={pending === `delete-link:${link.localChannelId}`}
+                    >
+                      {pending === `delete-link:${link.localChannelId}`
+                        ? "Removing..."
+                        : link.role === "REMOTE_PROJECTION"
+                          ? "Delete projection"
+                          : "Stop sharing"}
+                    </Button>
                   </td>
                 </tr>
               ))}

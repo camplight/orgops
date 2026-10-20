@@ -2,6 +2,9 @@ import type { Hono } from "hono";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { CHANNEL_KINDS, CHANNEL_VISIBILITY, schema, type OrgOpsDrizzleDb } from "@orgops/db";
 import { and, asc, eq, gt } from "drizzle-orm";
+import type { AgentTransferBundle, createAgentTransfer } from "../agent-transfer";
+
+type AgentTransfer = ReturnType<typeof createAgentTransfer>;
 
 type FederationDeps = {
   orm: OrgOpsDrizzleDb;
@@ -9,10 +12,12 @@ type FederationDeps = {
   requireAuth: (c: any, next: any) => Response | Promise<Response>;
   insertEvent: (input: any) => any;
   eventRowToApi: (row: any) => any;
+  agentTransfer: AgentTransfer;
 };
 
 const FEDERATION_ROLES = new Set(["LOCAL_HOME", "REMOTE_PROJECTION"]);
 const DEFAULT_FEDERATION_SYNC_INTERVAL_MS = 15_000;
+const FEDERATION_PARTICIPANT_TYPES = new Set(["AGENT", "HUMAN", "TEAM"]);
 
 function parseJsonRecordSafe(input: string | null | undefined): Record<string, unknown> {
   if (!input) return {};
@@ -26,32 +31,25 @@ function parseJsonRecordSafe(input: string | null | undefined): Record<string, u
   }
 }
 
-function withFederationMetadata(
-  payload: unknown,
-  metadata: Record<string, unknown>,
-): Record<string, unknown> {
-  const base: Record<string, unknown> =
-    payload && typeof payload === "object" && !Array.isArray(payload)
-      ? { ...(payload as Record<string, unknown>) }
-      : { value: payload };
-  const existingMetadata =
-    base._orgopsFederation &&
-    typeof base._orgopsFederation === "object" &&
-    !Array.isArray(base._orgopsFederation)
-      ? (base._orgopsFederation as Record<string, unknown>)
-      : {};
-  return {
-    ...base,
-    _orgopsFederation: {
-      ...existingMetadata,
-      ...metadata,
-      remote: true,
-    },
-  };
-}
-
 function trimString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeFederationParticipants(input: unknown) {
+  const values = Array.isArray(input) ? input : [];
+  const unique = new Map<string, { subscriberType: string; subscriberId: string }>();
+  for (const value of values) {
+    const item = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+    const subscriberType = trimString(item.subscriberType).toUpperCase();
+    const subscriberId = trimString(item.subscriberId);
+    if (!FEDERATION_PARTICIPANT_TYPES.has(subscriberType) || !subscriberId) continue;
+    unique.set(`${subscriberType}:${subscriberId}`, { subscriberType, subscriberId });
+  }
+  return [...unique.values()].sort((left, right) =>
+    `${left.subscriberType}:${left.subscriberId}`.localeCompare(
+      `${right.subscriberType}:${right.subscriberId}`,
+    ),
+  );
 }
 
 function normalizeBaseUrl(value: unknown) {
@@ -92,7 +90,7 @@ function remoteEventIdempotencyKey(instanceId: string, remoteEventId: string) {
 }
 
 export function registerFederationRoutes(app: Hono<any>, deps: FederationDeps) {
-  const { orm, jsonResponse, requireAuth, insertEvent, eventRowToApi } = deps;
+  const { orm, jsonResponse, requireAuth, insertEvent, eventRowToApi, agentTransfer } = deps;
 
   function resolveFederationPeer(c: any) {
     const token = bearerToken(c);
@@ -155,11 +153,7 @@ export function registerFederationRoutes(app: Hono<any>, deps: FederationDeps) {
     const row = insertEvent({
       type: input.type,
       source: input.source,
-      payload: withFederationMetadata(input.payload ?? {}, {
-        direction: "home_to_projection",
-        originInstanceId: input.homeInstanceId,
-        originEventId: input.remoteEventId,
-      }),
+      payload: input.payload ?? {},
       channelId: input.localChannelId,
       parentEventId: input.parentEventId,
       deliverAt: input.deliverAt,
@@ -176,54 +170,69 @@ export function registerFederationRoutes(app: Hono<any>, deps: FederationDeps) {
       .where(eq(schema.federationInstances.id, link.home_instance_id ?? ""))
       .get() as any;
     if (!instance) throw new Error("Home instance not found");
-    const after = link.sync_cursor ? Number(link.sync_cursor) : 0;
-    const response = await fetchPeer(
-      instance,
-      `/api/federation/channels/${encodeURIComponent(link.remote_channel_id)}/events?after=${encodeURIComponent(
-        String(after || 0),
-      )}`,
-    );
-    const payload = (await response.json()) as {
-      events?: Array<{
-        id: string;
-        type: string;
-        source: string;
-        payload?: unknown;
-        parentEventId?: string;
-        deliverAt?: number;
-        createdAt?: number;
-      }>;
-      nextCursor?: number | null;
-    };
-    const events = Array.isArray(payload.events) ? payload.events : [];
+    const batchLimit = 500;
+    const maxBatches = 20;
+    let cursor = link.sync_cursor ? Number(link.sync_cursor) : 0;
+    let fetched = 0;
     let inserted = 0;
-    for (const event of events) {
-      const remoteEventId = trimString(event.id);
-      if (!remoteEventId) continue;
-      const projected = insertProjectedEvent({
-        homeInstanceId: instance.id,
-        localChannelId,
-        remoteEventId,
-        type: event.type,
-        source: event.source,
-        payload: event.payload ?? {},
-        parentEventId: event.parentEventId,
-        deliverAt: event.deliverAt,
-      });
-      if (projected.inserted) inserted += 1;
+    let nextCursor = String(cursor || 0);
+    const participantCount = await syncProjectionParticipants(link, instance);
+    for (let batch = 0; batch < maxBatches; batch += 1) {
+      const response = await fetchPeer(
+        instance,
+        `/api/federation/channels/${encodeURIComponent(
+          link.remote_channel_id,
+        )}/events?after=${encodeURIComponent(String(cursor || 0))}&limit=${batchLimit}`,
+      );
+      const payload = (await response.json()) as {
+        events?: Array<{
+          id: string;
+          type: string;
+          source: string;
+          payload?: unknown;
+          parentEventId?: string;
+          deliverAt?: number;
+          createdAt?: number;
+        }>;
+        nextCursor?: number | null;
+      };
+      const events = Array.isArray(payload.events) ? payload.events : [];
+      fetched += events.length;
+      for (const event of events) {
+        const remoteEventId = trimString(event.id);
+        if (!remoteEventId) continue;
+        const projected = insertProjectedEvent({
+          homeInstanceId: instance.id,
+          localChannelId,
+          remoteEventId,
+          type: event.type,
+          source: event.source,
+          payload: event.payload ?? {},
+          parentEventId: event.parentEventId,
+          deliverAt: event.deliverAt,
+        });
+        if (projected.inserted) inserted += 1;
+      }
+      const candidateCursor =
+        typeof payload.nextCursor === "number" && Number.isFinite(payload.nextCursor)
+          ? payload.nextCursor
+          : events.length > 0
+            ? Number(events[events.length - 1].createdAt ?? cursor)
+            : cursor;
+      if (!Number.isFinite(candidateCursor) || candidateCursor <= cursor) {
+        nextCursor = String(cursor || 0);
+        break;
+      }
+      cursor = candidateCursor;
+      nextCursor = String(cursor);
+      if (events.length < batchLimit) break;
     }
-    const nextCursor =
-      typeof payload.nextCursor === "number" && Number.isFinite(payload.nextCursor)
-        ? String(payload.nextCursor)
-        : events.length > 0
-          ? String(events[events.length - 1].createdAt ?? after)
-          : String(after || 0);
     orm
       .update(schema.federationChannels)
       .set({ sync_cursor: nextCursor, updated_at: Date.now() })
       .where(eq(schema.federationChannels.local_channel_id, localChannelId))
       .run();
-    return { fetched: events.length, inserted, nextCursor };
+    return { fetched, inserted, nextCursor, participantCount };
   }
 
   async function syncAllProjectionChannels() {
@@ -258,6 +267,98 @@ export function registerFederationRoutes(app: Hono<any>, deps: FederationDeps) {
       void syncAllProjectionChannels();
     }, syncIntervalMs);
     timer.unref?.();
+  }
+
+  function deletePendingJoinInvites(channelId?: string) {
+    const pending = orm
+      .select()
+      .from(schema.federationInstances)
+      .where(eq(schema.federationInstances.base_url, ""))
+      .all() as any[];
+    let deletedCount = 0;
+    for (const invite of pending) {
+      const metadata = parseJsonRecordSafe(invite.metadata_json);
+      if (channelId && metadata.joinChannelId !== channelId) continue;
+      orm
+        .delete(schema.federationChannelSubscribers)
+        .where(eq(schema.federationChannelSubscribers.instance_id, invite.id))
+        .run();
+      orm
+        .delete(schema.federationInstances)
+        .where(eq(schema.federationInstances.id, invite.id))
+        .run();
+      deletedCount += 1;
+    }
+    return deletedCount;
+  }
+
+  function deleteChannelRow(channelId: string) {
+    orm
+      .delete(schema.channelSubscriptions)
+      .where(eq(schema.channelSubscriptions.channel_id, channelId))
+      .run();
+    orm
+      .delete(schema.channelShareLinks)
+      .where(eq(schema.channelShareLinks.channel_id, channelId))
+      .run();
+    orm
+      .delete(schema.channelViewers)
+      .where(eq(schema.channelViewers.channel_id, channelId))
+      .run();
+    orm.delete(schema.channels).where(eq(schema.channels.id, channelId)).run();
+  }
+
+  function getChannelParticipants(channelId: string) {
+    const rows = orm
+      .select({
+        subscriberType: schema.channelSubscriptions.subscriber_type,
+        subscriberId: schema.channelSubscriptions.subscriber_id,
+      })
+      .from(schema.channelSubscriptions)
+      .where(eq(schema.channelSubscriptions.channel_id, channelId))
+      .orderBy(
+        asc(schema.channelSubscriptions.subscriber_type),
+        asc(schema.channelSubscriptions.subscriber_id),
+      )
+      .all() as Array<{ subscriberType: string; subscriberId: string }>;
+    return normalizeFederationParticipants(rows);
+  }
+
+  function updateProjectionParticipants(localChannelId: string, participants: unknown) {
+    const normalized = normalizeFederationParticipants(participants);
+    const channel = orm
+      .select({ metadataJson: schema.channels.metadata_json })
+      .from(schema.channels)
+      .where(eq(schema.channels.id, localChannelId))
+      .get() as { metadataJson?: string | null } | undefined;
+    const metadata = parseJsonRecordSafe(channel?.metadataJson);
+    const federation =
+      metadata.federation && typeof metadata.federation === "object" && !Array.isArray(metadata.federation)
+        ? (metadata.federation as Record<string, unknown>)
+        : {};
+    orm
+      .update(schema.channels)
+      .set({
+        metadata_json: JSON.stringify({
+          ...metadata,
+          federation: {
+            ...federation,
+            participants: normalized,
+          },
+        }),
+      })
+      .where(eq(schema.channels.id, localChannelId))
+      .run();
+    return normalized.length;
+  }
+
+  async function syncProjectionParticipants(link: any, instance: any) {
+    const response = await fetchPeer(
+      instance,
+      `/api/federation/channels/${encodeURIComponent(link.remote_channel_id)}/participants`,
+    );
+    const payload = (await response.json()) as { participants?: unknown };
+    return updateProjectionParticipants(link.local_channel_id, payload.participants);
   }
 
   app.get("/api/federation/instances", requireAuth, (c) => {
@@ -346,6 +447,34 @@ export function registerFederationRoutes(app: Hono<any>, deps: FederationDeps) {
       .where(eq(schema.federationInstances.id, id))
       .run();
     return jsonResponse(c, { ok: true });
+  });
+
+  app.delete("/api/federation/instances/:id", requireAuth, (c) => {
+    const id = c.req.param("id");
+    const existing = orm
+      .select({ id: schema.federationInstances.id })
+      .from(schema.federationInstances)
+      .where(eq(schema.federationInstances.id, id))
+      .get();
+    orm
+      .delete(schema.federationChannelSubscribers)
+      .where(eq(schema.federationChannelSubscribers.instance_id, id))
+      .run();
+    orm
+      .delete(schema.federationChannels)
+      .where(eq(schema.federationChannels.home_instance_id, id))
+      .run();
+    orm
+      .delete(schema.federationInstances)
+      .where(eq(schema.federationInstances.id, id))
+      .run();
+    return jsonResponse(c, { ok: true, deleted: Boolean(existing) });
+  });
+
+  app.delete("/api/federation/join-links", requireAuth, (c) => {
+    const channelId = trimString(new URL(c.req.url).searchParams.get("channelId"));
+    const deletedCount = deletePendingJoinInvites(channelId || undefined);
+    return jsonResponse(c, { ok: true, deletedCount });
   });
 
   app.get("/api/federation/channels", requireAuth, (c) => {
@@ -481,6 +610,7 @@ export function registerFederationRoutes(app: Hono<any>, deps: FederationDeps) {
 
     let registeredWithHome = false;
     let registrationError: string | null = null;
+    let participantCount: number | null = null;
     if (role === "REMOTE_PROJECTION" && homeInstanceId && remoteChannelId) {
       const instance = orm
         .select()
@@ -496,6 +626,14 @@ export function registerFederationRoutes(app: Hono<any>, deps: FederationDeps) {
       } catch (error) {
         registrationError = error instanceof Error ? error.message : String(error);
       }
+      try {
+        participantCount = await syncProjectionParticipants(
+          { local_channel_id: localChannelId, remote_channel_id: remoteChannelId },
+          instance,
+        );
+      } catch {
+        participantCount = null;
+      }
     }
 
     return jsonResponse(
@@ -508,9 +646,41 @@ export function registerFederationRoutes(app: Hono<any>, deps: FederationDeps) {
         role,
         registeredWithHome,
         registrationError,
+        participantCount,
       },
       201,
     );
+  });
+
+  app.delete("/api/federation/channels/:localChannelId", requireAuth, (c) => {
+    const localChannelId = c.req.param("localChannelId");
+    const link = orm
+      .select()
+      .from(schema.federationChannels)
+      .where(eq(schema.federationChannels.local_channel_id, localChannelId))
+      .get() as any;
+    if (!link) return jsonResponse(c, { ok: true, deleted: false });
+    const deleteLocalChannel =
+      new URL(c.req.url).searchParams.get("deleteLocalChannel") === "1";
+    orm
+      .delete(schema.federationChannelSubscribers)
+      .where(eq(schema.federationChannelSubscribers.local_channel_id, localChannelId))
+      .run();
+    orm
+      .delete(schema.federationChannels)
+      .where(eq(schema.federationChannels.local_channel_id, localChannelId))
+      .run();
+    const pendingJoinUrlCount =
+      link.role === "LOCAL_HOME" ? deletePendingJoinInvites(localChannelId) : 0;
+    if (link.role === "REMOTE_PROJECTION" && deleteLocalChannel) {
+      deleteChannelRow(localChannelId);
+    }
+    return jsonResponse(c, {
+      ok: true,
+      deleted: true,
+      localChannelDeleted: Boolean(link.role === "REMOTE_PROJECTION" && deleteLocalChannel),
+      pendingJoinUrlCount,
+    });
   });
 
   app.post("/api/federation/channels/:channelId/subscribers", async (c) => {
@@ -580,6 +750,24 @@ export function registerFederationRoutes(app: Hono<any>, deps: FederationDeps) {
       })
       .run();
     return jsonResponse(c, { ok: true, id }, 201);
+  });
+
+  app.get("/api/federation/channels/:channelId/participants", (c) => {
+    const auth = requireFederationPeer(c);
+    if ("response" in auth) return auth.response;
+    const channelId = c.req.param("channelId");
+    const channelLink = orm
+      .select()
+      .from(schema.federationChannels)
+      .where(
+        and(
+          eq(schema.federationChannels.local_channel_id, channelId),
+          eq(schema.federationChannels.role, "LOCAL_HOME"),
+        ),
+      )
+      .get();
+    if (!channelLink) return jsonResponse(c, { error: "Federated home channel not found" }, 404);
+    return jsonResponse(c, { participants: getChannelParticipants(channelId) });
   });
 
   app.post("/api/federation/channels/:channelId/join-link", requireAuth, async (c) => {
@@ -773,6 +961,7 @@ export function registerFederationRoutes(app: Hono<any>, deps: FederationDeps) {
       .run();
     let registeredWithHome = false;
     let registrationError: string | null = null;
+    let participantCount: number | null = null;
     const instance = orm
       .select()
       .from(schema.federationInstances)
@@ -791,6 +980,14 @@ export function registerFederationRoutes(app: Hono<any>, deps: FederationDeps) {
     } catch (error) {
       registrationError = error instanceof Error ? error.message : String(error);
     }
+    try {
+      participantCount = await syncProjectionParticipants(
+        { local_channel_id: localChannelId, remote_channel_id: remoteChannelId },
+        instance,
+      );
+    } catch {
+      participantCount = null;
+    }
     return jsonResponse(
       c,
       {
@@ -799,6 +996,7 @@ export function registerFederationRoutes(app: Hono<any>, deps: FederationDeps) {
         localChannelId,
         registeredWithHome,
         registrationError,
+        participantCount,
       },
       201,
     );
@@ -827,6 +1025,12 @@ export function registerFederationRoutes(app: Hono<any>, deps: FederationDeps) {
     if (!remoteEventId || !type || !source) {
       return jsonResponse(c, { error: "id, type, and source are required" }, 400);
     }
+    let participantCount: number | null = null;
+    try {
+      participantCount = await syncProjectionParticipants(link, auth.peer);
+    } catch {
+      participantCount = null;
+    }
     const projected = insertProjectedEvent({
       homeInstanceId: auth.peer.id,
       localChannelId,
@@ -840,7 +1044,12 @@ export function registerFederationRoutes(app: Hono<any>, deps: FederationDeps) {
           ? (body as Record<string, number>).deliverAt
           : undefined,
     });
-    return jsonResponse(c, { ok: true, inserted: projected.inserted, event: eventRowToApi(projected.row) });
+    return jsonResponse(c, {
+      ok: true,
+      inserted: projected.inserted,
+      participantCount,
+      event: eventRowToApi(projected.row),
+    });
   });
 
   app.get("/api/federation/channels/:channelId/events", (c) => {
@@ -909,14 +1118,7 @@ export function registerFederationRoutes(app: Hono<any>, deps: FederationDeps) {
     const row = insertEvent({
       type,
       source,
-      payload: withFederationMetadata(payload, {
-        direction: "projection_to_home",
-        originInstanceId: auth.peer.id,
-        originEventId:
-          trimString((body as Record<string, unknown>).originEventId) ||
-          trimString((body as Record<string, unknown>).idempotencyKey) ||
-          null,
-      }),
+      payload,
       channelId,
       parentEventId: trimString((body as Record<string, unknown>).parentEventId) || undefined,
       deliverAt:
@@ -940,5 +1142,48 @@ export function registerFederationRoutes(app: Hono<any>, deps: FederationDeps) {
     }
     const result = await syncProjectionLink(link);
     return jsonResponse(c, { ok: true, ...result });
+  });
+
+  app.get("/api/federation/agents/:name/transfer", (c) => {
+    const auth = requireFederationPeer(c);
+    if ("response" in auth) return auth.response;
+    const bundle = agentTransfer.exportAgent(c.req.param("name"));
+    if (!bundle) return jsonResponse(c, { error: "Not found" }, 404);
+    return jsonResponse(c, bundle);
+  });
+
+  app.post("/api/federation/agents/transfer", async (c) => {
+    const auth = requireFederationPeer(c);
+    if ("response" in auth) return auth.response;
+    const body = (await c.req.json().catch(() => null)) as AgentTransferBundle | null;
+    if (!body || typeof body !== "object" || !body.agent) {
+      return jsonResponse(c, { error: "Invalid agent transfer bundle" }, 400);
+    }
+    const targetName = trimString(body.agent.name);
+    if (!targetName) return jsonResponse(c, { error: "name is required" }, 400);
+    try {
+      const imported = agentTransfer.importAgent(body, {
+        name: targetName,
+        assignedRunnerId:
+          body.agent.assignedRunnerId === undefined
+            ? null
+            : (body.agent.assignedRunnerId as string | null),
+        desiredState: trimString(body.agent.desiredState) || "STOPPED",
+      });
+      insertEvent({
+        type: "agent.control.copy",
+        payload: {
+          sourceAgentName: trimString(body.agent.name),
+          targetAgentName: targetName,
+          federationInstanceId: auth.peer.id,
+        },
+        source: "system",
+      });
+      return jsonResponse(c, { ok: true, ...imported }, 201);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Agent transfer failed";
+      const status = message === "Resource already exists" ? 409 : 400;
+      return jsonResponse(c, { error: message }, status);
+    }
   });
 }

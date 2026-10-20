@@ -65,49 +65,6 @@ describe("event routing", () => {
     ).toBe(true);
   });
 
-  it("does not wake agents for untargeted remote federated agent messages", () => {
-    expect(
-      shouldHandleEventForAgent(
-        agent,
-        makeEvent({
-          type: "message.created",
-          source: "agent:remote-worker",
-          payload: {
-            text: "remote reply",
-            _orgopsFederation: { remote: true, direction: "home_to_projection" },
-          },
-        }),
-      ),
-    ).toBe(false);
-    expect(
-      shouldHandleEventForAgent(
-        agent,
-        makeEvent({
-          type: "message.created",
-          source: "agent:remote-worker",
-          payload: {
-            text: "remote targeted reply",
-            targetAgentName: "browser",
-            _orgopsFederation: { remote: true, direction: "home_to_projection" },
-          },
-        }),
-      ),
-    ).toBe(true);
-    expect(
-      shouldHandleEventForAgent(
-        agent,
-        makeEvent({
-          type: "message.created",
-          source: "human:remote-admin",
-          payload: {
-            text: "remote human message",
-            _orgopsFederation: { remote: true, direction: "home_to_projection" },
-          },
-        }),
-      ),
-    ).toBe(true);
-  });
-
   it("only handles scheduled triggers for the target agent", () => {
     expect(
       shouldHandleEventForAgent(

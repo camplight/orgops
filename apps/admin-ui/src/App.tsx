@@ -668,6 +668,7 @@ export default function App() {
             agents={data.agents}
             runners={data.runners}
             skills={data.skills}
+            federationInstances={data.federationInstances}
             events={data.events}
             channels={data.channels}
             eventTypes={data.eventTypes}
@@ -720,11 +721,11 @@ export default function App() {
               data.refreshDashboard();
               data.refreshChannels();
             }}
-            onMoveAgent={async (name, assignedRunnerId) => {
+            onMoveAgent={async (name, input) => {
               await data.apiFetch(`/api/agents/${encodeURIComponent(name)}/move`, {
                 method: "POST",
                 headers: data.getApiHeaders(),
-                body: JSON.stringify({ assignedRunnerId })
+                body: JSON.stringify(input)
               });
               data.refreshDashboard();
             }}
@@ -845,6 +846,7 @@ export default function App() {
           agents={data.agents}
           runners={data.runners}
           skills={data.skills}
+          federationInstances={data.federationInstances}
           onCreateAgent={async (agent) => {
             await data.apiFetch("/api/agents", {
               method: "POST",
@@ -880,11 +882,11 @@ export default function App() {
             data.refreshDashboard();
             data.refreshChannels();
           }}
-          onMoveAgent={async (name, assignedRunnerId) => {
+          onMoveAgent={async (name, input) => {
             await data.apiFetch(`/api/agents/${encodeURIComponent(name)}/move`, {
               method: "POST",
               headers: data.getApiHeaders(),
-              body: JSON.stringify({ assignedRunnerId })
+              body: JSON.stringify(input)
             });
             data.refreshDashboard();
           }}
@@ -1178,12 +1180,35 @@ export default function App() {
               body: JSON.stringify(input)
             });
           }}
+          onDeleteInstance={async (id) => {
+            await data.apiFetch(`/api/federation/instances/${encodeURIComponent(id)}`, {
+              method: "DELETE",
+              headers: data.getApiHeaders()
+            });
+            await data.refreshFederation();
+          }}
           onCreateChannelLink={async (input) => {
             await data.apiFetch("/api/federation/channels", {
               method: "POST",
               headers: data.getApiHeaders(),
               body: JSON.stringify(input)
             });
+          }}
+          onDeleteChannelLink={async (localChannelId, input) => {
+            const searchParams = new URLSearchParams();
+            if (input?.deleteLocalChannel) searchParams.set("deleteLocalChannel", "1");
+            const query = searchParams.toString();
+            await data.apiFetch(
+              `/api/federation/channels/${encodeURIComponent(localChannelId)}${
+                query ? `?${query}` : ""
+              }`,
+              {
+                method: "DELETE",
+                headers: data.getApiHeaders()
+              }
+            );
+            await data.refreshFederation();
+            await data.refreshChannels();
           }}
           onSyncChannel={async (localChannelId) => {
             await data.apiFetch(
@@ -1204,6 +1229,17 @@ export default function App() {
               }
             );
             return (await response.json()) as { joinUrl: string };
+          }}
+          onClearPendingJoinLinks={async (channelId) => {
+            const searchParams = new URLSearchParams();
+            if (channelId) searchParams.set("channelId", channelId);
+            const query = searchParams.toString();
+            const response = await data.apiFetch(`/api/federation/join-links${query ? `?${query}` : ""}`, {
+              method: "DELETE",
+              headers: data.getApiHeaders()
+            });
+            await data.refreshFederation();
+            return (await response.json()) as { deletedCount?: number };
           }}
           onJoinFromUrl={async (input) => {
             await data.apiFetch("/api/federation/join", {
