@@ -23,6 +23,10 @@ function isHumanOperator(
   return Boolean(user?.username && user.username !== "runner");
 }
 
+function isRunnerUser(user: RequestUser | undefined): boolean {
+  return user?.username === "runner";
+}
+
 function toApiKey(row: IntegrationKeyRow, token?: string) {
   const body: Record<string, unknown> = {
     id: row.id,
@@ -69,8 +73,8 @@ export function registerIntegrationKeysRoutes(app: Hono<any>, deps: IntegrationK
 
   app.post("/api/integration-keys", async (c) => {
     const user = c.get("user") as RequestUser | undefined;
-    if (!isHumanOperator(user)) {
-      return jsonResponse(c, { error: "Human authentication required" }, 403);
+    if (!isHumanOperator(user) && !isRunnerUser(user)) {
+      return jsonResponse(c, { error: "Authentication required" }, 403);
     }
     const body = await c.req.json().catch(() => ({}));
     const name = typeof body.name === "string" ? body.name.trim() : "";
@@ -97,7 +101,7 @@ export function registerIntegrationKeysRoutes(app: Hono<any>, deps: IntegrationK
       agent_name: agentName,
       token_hash: generated.hash,
       token_prefix: generated.prefix,
-      created_by_human_id: user.id ?? null,
+      created_by_human_id: isHumanOperator(user) ? user.id ?? null : null,
       created_at: now,
       last_used_at: null,
       revoked_at: null,

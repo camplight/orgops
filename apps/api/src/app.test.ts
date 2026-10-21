@@ -7199,13 +7199,27 @@ describe("api app", () => {
       headers: {
         "content-type": "application/json",
         "x-orgops-runner-token": "test-token",
+        "x-orgops-agent-name": "invoice-receiver",
       },
       body: JSON.stringify({
         name: "runner-key",
         agentName: "invoice-receiver",
       }),
     });
-    expect(runnerCreate.status).toBe(403);
+    expect(runnerCreate.status).toBe(201);
+    const runnerCreated = (await runnerCreate.json()) as {
+      agentName: string;
+      token: string;
+      tokenHash?: string;
+    };
+    expect(runnerCreated.agentName).toBe("invoice-receiver");
+    expect(runnerCreated.token.startsWith("org_sk_")).toBe(true);
+    expect(runnerCreated.tokenHash).toBeUndefined();
+
+    const runnerMeRes = await app.request("http://localhost/v1/me", {
+      headers: { authorization: `Bearer ${runnerCreated.token}` },
+    });
+    expect(runnerMeRes.status).toBe(200);
 
     const revokeRes = await app.request(
       `http://localhost/api/integration-keys/${created.id}/revoke`,

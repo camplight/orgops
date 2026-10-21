@@ -69,6 +69,11 @@ const agentsListPublicationsSchema = z.object({
   agentName: z.string().min(1).optional(),
 });
 
+const agentsCreateIntegrationKeySchema = z.object({
+  agentName: z.string().min(1).optional(),
+  name: z.string().min(1),
+});
+
 const agentsCreateSchema = z.object({
   name: z.string().min(1),
   icon: z.string().optional(),
@@ -177,6 +182,11 @@ export const agentsToolDefs: ToolDef[] = [
     "agents_list_publications",
     "List workspace publications for an agent. Defaults to the current agent when agentName is omitted.",
     agentsListPublicationsSchema,
+  ],
+  [
+    "agents_create_integration_key",
+    "Create an integration API key for an agent. Defaults agentName to the current agent. The returned org_sk token is shown once, so store or share it immediately.",
+    agentsCreateIntegrationKeySchema,
   ],
   [
     "agents_update",
@@ -435,6 +445,26 @@ export async function execute(
     );
     const deleted = await parseResponseBody(response);
     return { ok: true, agentName, publicationId, deleted };
+  }
+
+  if (tool === "agents_create_integration_key") {
+    const parsedResult = parseToolArgs(tool, agentsCreateIntegrationKeySchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const parsed = parsedResult.data;
+    const agentName = trimOptional(parsed.agentName) ?? ctx.agent.name;
+    const response = await ctx.apiFetch("/api/integration-keys", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orgops-agent-name": ctx.agent.name,
+      },
+      body: JSON.stringify({
+        name: parsed.name.trim(),
+        agentName,
+      }),
+    });
+    const created = await parseResponseBody(response);
+    return { ok: true, agentName, key: created };
   }
 
   if (tool === "agents_update") {
