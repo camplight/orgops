@@ -68,6 +68,25 @@ describe("schemas", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("validates message.created with plaintext sensitive content for API encryption", () => {
+    const result = validateEventAgainstShapes(
+      {
+        type: "message.created",
+        source: "agent:worker-a",
+        channelId: "chan-1",
+        payload: {
+          text: "Sensitive message locked. Reveal with your password.",
+          sensitive: {
+            plaintext: "org_sk_secret-token-shown-once",
+            hint: "Integration API key",
+          },
+        },
+      },
+      getCoreEventShapes(),
+    );
+    expect(result.ok).toBe(true);
+  });
+
   it("validates agent.intent.timeout core event shape", () => {
     const result = validateEventAgainstShapes(
       {

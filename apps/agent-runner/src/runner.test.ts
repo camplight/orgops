@@ -46,6 +46,54 @@ describe("agent runner", () => {
     expect(Object.keys(tools)).toContain("agents_create_integration_key");
   });
 
+  it("redacts one-time integration tokens from persisted tool events", async () => {
+    const emitted: Event[] = [];
+    const tools = createRunnerTools({
+      agent: {
+        name: "tester",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      event: {
+        id: "evt-1",
+        type: "message.created",
+        payload: {},
+        source: "human:alice",
+      },
+      channelId: "chan-1",
+      runTool: async () => ({
+        ok: true,
+        key: {
+          token: "org_sk_abcdefghijklmnopqrstuvwxyz1234567890",
+          tokenPrefix: "org_sk_abcde",
+        },
+      }),
+      apiFetch: async () => new Response(),
+      emitEvent: async (event) => {
+        emitted.push(event as Event);
+      },
+    });
+
+    const output = (await tools.agents_create_integration_key?.execute?.({
+      name: "embed",
+    })) as { key?: { token?: string; tokenPrefix?: string } };
+
+    expect(output.key?.token).toBe("org_sk_abcdefghijklmnopqrstuvwxyz1234567890");
+    const executed = emitted.find((event) => event.type === "tool.executed");
+    expect(executed?.payload).toMatchObject({
+      tool: "agents_create_integration_key",
+      sensitiveOutputRedacted: true,
+      output: {
+        key: {
+          token: "[REDACTED: one-time secret]",
+          tokenPrefix: "org_sk_abcde",
+        },
+      },
+    });
+  });
+
   it("builds model messages from all channel events", async () => {
     const agent: Agent = {
       name: "tester",

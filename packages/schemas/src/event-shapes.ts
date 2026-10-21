@@ -117,12 +117,24 @@ const coreEventShapes: EventShapeDefinition[] = [
           targetAgentNames: z.array(z.string().trim().min(1)).min(1).max(30).optional(),
           sensitive: z
             .object({
-              ciphertextB64: z.string().min(1),
+              ciphertextB64: z.string().min(1).optional(),
+              plaintext: z.string().min(1).optional(),
+              text: z.string().min(1).optional(),
+              value: z.string().min(1).optional(),
+              previewText: z.string().min(1).optional(),
               algorithm: z.string().min(1).optional(),
               hint: z.string().min(1).optional(),
               requiresPassword: z.boolean().optional(),
             })
             .passthrough()
+            .refine(
+              (value) =>
+                Boolean(value.ciphertextB64 || value.plaintext || value.text || value.value),
+              {
+                message:
+                  "sensitive requires ciphertextB64 or plaintext/text/value for API-side encryption",
+              },
+            )
             .optional(),
           hopCount: z.number().int().nonnegative().optional(),
           inReplyTo: z.string().min(1).optional(),

@@ -185,7 +185,7 @@ export const agentsToolDefs: ToolDef[] = [
   ],
   [
     "agents_create_integration_key",
-    "Create an integration API key for an agent. Defaults agentName to the current agent. The returned org_sk token is shown once, so store or share it immediately.",
+    "Create an integration API key for an agent. Defaults agentName to the current agent. The returned org_sk token is shown once. When sharing it in a message.created event, put the token in payload.sensitive.plaintext and keep payload.text as a non-secret preview.",
     agentsCreateIntegrationKeySchema,
   ],
   [

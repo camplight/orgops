@@ -64,6 +64,7 @@ export function buildRunnerGuidance(
     "- Return your final event only as JSON output; do not call `events_emit` for the same final event.",
     "- Use `events_emit` only for intentional extra side effects (for example intermediate updates, other agents, etc) that are different from your final returned event.",
     "- Do not include markdown or prose outside of JSON.",
+    "- When a message must share a secret or one-time token, keep `message.created.payload.text` as a safe preview and put the secret in `message.created.payload.sensitive.plaintext` so the API encrypts it before persistence.",
     `- Current UTC time is ${nowIso} (${nowMs} unix ms).`,
     formatRunnerHostInfoSection(hostInfo),
     formatCoreEventTypesSection(coreEventTypes),

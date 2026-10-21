@@ -45,6 +45,35 @@ export type CreateExecuteFn = (
   toolName: string,
 ) => (args: Record<string, unknown>) => Promise<unknown>;
 
+const REDACTED_ONE_TIME_SECRET = "[REDACTED: one-time secret]";
+const ORGOPS_INTEGRATION_TOKEN_RE = /org_sk_[A-Za-z0-9]{20,}/g;
+
+function redactIntegrationTokenStrings(value: unknown): unknown {
+  if (typeof value === "string") {
+    return value.replace(ORGOPS_INTEGRATION_TOKEN_RE, REDACTED_ONE_TIME_SECRET);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => redactIntegrationTokenStrings(item));
+  }
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [
+      key,
+      key === "token" ? REDACTED_ONE_TIME_SECRET : redactIntegrationTokenStrings(entry),
+    ]),
+  );
+}
+
+export function redactPersistedToolOutput(toolName: string, output: unknown) {
+  if (toolName !== "agents_create_integration_key") {
+    return { output, redacted: false };
+  }
+  return {
+    output: redactIntegrationTokenStrings(output),
+    redacted: true,
+  };
+}
+
 export function createWrapExecute(deps: RunnerToolDeps): CreateExecuteFn {
   const { agent, event, channelId, runTool, apiFetch, emitEvent } = deps;
   return (toolName: string) => async (args: Record<string, unknown>) => {
@@ -75,9 +104,15 @@ export function createWrapExecute(deps: RunnerToolDeps): CreateExecuteFn {
         });
       }
       phase = "emit_executed";
+      const persistedOutput = redactPersistedToolOutput(toolName, output);
       await emitEvent({
         type: "tool.executed",
-        payload: { tool: toolName, args, output },
+        payload: {
+          tool: toolName,
+          args,
+          output: persistedOutput.output,
+          ...(persistedOutput.redacted ? { sensitiveOutputRedacted: true } : {}),
+        },
         source: `agent:${agent.name}`,
         ...(channelId ? { channelId } : {}),
       });
