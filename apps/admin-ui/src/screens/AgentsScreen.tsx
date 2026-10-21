@@ -1804,6 +1804,25 @@ export function AgentsScreen({
 
             {activeTab === "workspace" && (
               <div className="space-y-3 rounded border border-slate-800 bg-slate-950 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-800 bg-slate-900/40 p-3">
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-200">Web Publications</h3>
+                    <p className="text-xs text-slate-500">
+                      {workspacePublications.length} folder
+                      {workspacePublications.length === 1 ? "" : "s"} published. Use a
+                      workspace subfolder, not the root.
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    className="px-3 py-1.5 text-xs"
+                    onClick={() => void openPublicationDrawer()}
+                    disabled={!selectedAgent}
+                  >
+                    Manage Web Publications
+                  </Button>
+                </div>
+
                 <div className="flex flex-wrap items-center gap-2 text-xs">
                   <Button
                     variant="secondary"
@@ -1834,25 +1853,6 @@ export function AgentsScreen({
                     disabled={!selectedAgent || publicationsLoading}
                   >
                     {publicationsLoading ? "Refreshing publications..." : "Refresh Publications"}
-                  </Button>
-                </div>
-
-                <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-800 bg-slate-900/40 p-3">
-                  <div>
-                    <h3 className="text-sm font-semibold text-slate-200">Web Publications</h3>
-                    <p className="text-xs text-slate-500">
-                      {workspacePublications.length} folder
-                      {workspacePublications.length === 1 ? "" : "s"} published. Use a
-                      workspace subfolder, not the root.
-                    </p>
-                  </div>
-                  <Button
-                    type="button"
-                    className="px-3 py-1.5 text-xs"
-                    onClick={() => void openPublicationDrawer()}
-                    disabled={!selectedAgent}
-                  >
-                    Manage Web Publications
                   </Button>
                 </div>
 
@@ -1974,18 +1974,6 @@ export function AgentsScreen({
               </div>
 
               <div className="min-h-0 flex-1 space-y-4 overflow-auto px-4 py-4">
-                <div className="rounded border border-slate-800 bg-slate-900/40 p-3 text-sm text-slate-300">
-                  <div className="font-medium text-slate-200">Human preview</div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    Example: publish workspace folder <code>dist</code> at{" "}
-                    <code>
-                      {publicationForm.publicPath ||
-                        `/agents/${selectedAgent?.name ?? "agent"}/site/`}
-                    </code>.
-                    After saving, open the generated link to review the end result.
-                  </div>
-                </div>
-
                 <div className="rounded border border-slate-800 bg-slate-900 p-3">
                   <div className="mb-3 flex items-center justify-between gap-2">
                     <div>
@@ -2168,7 +2156,11 @@ export function AgentsScreen({
                             {publication.enabled ? "" : " | disabled"}
                           </div>
                           <div className="text-xs text-slate-500">
-                            Last published: {formatTimestamp(publication.lastPublishedAt ?? undefined)}
+                            {publication.syncMode === "DIRECT_LOCAL"
+                              ? "Live from workspace"
+                              : publication.lastPublishedAt
+                                ? `Last published: ${formatTimestamp(publication.lastPublishedAt)}`
+                                : "Not synced yet"}
                             {publication.lastError ? ` | Error: ${publication.lastError}` : ""}
                           </div>
                         </div>

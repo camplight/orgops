@@ -479,12 +479,24 @@ export function registerWorkspacePublicationRoutes(
     });
   }
 
-  app.get("/agents/:name/:slug", (c) =>
-    servePublication(c, getPublication(c.req.param("name"), c.req.param("slug"))),
-  );
-  app.get("/agents/:name/:slug/*", (c) =>
-    servePublication(c, getPublication(c.req.param("name"), c.req.param("slug")), c.req.param("*")),
-  );
+  function publicationForLegacyAgentsPath(c: any, wildcardPath?: string) {
+    const pathname = new URL(c.req.url).pathname;
+    const pathMatch = findPublicationForPath(pathname);
+    if (pathMatch) return pathMatch;
+    return {
+      publication: getPublication(c.req.param("name"), c.req.param("slug")),
+      requestPath: wildcardPath,
+    };
+  }
+
+  app.get("/agents/:name/:slug", (c) => {
+    const match = publicationForLegacyAgentsPath(c);
+    return servePublication(c, match.publication, match.requestPath);
+  });
+  app.get("/agents/:name/:slug/*", (c) => {
+    const match = publicationForLegacyAgentsPath(c, c.req.param("*"));
+    return servePublication(c, match.publication, match.requestPath);
+  });
   app.get("*", (c, next) => {
     const pathname = new URL(c.req.url).pathname;
     if (
