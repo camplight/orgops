@@ -22,6 +22,8 @@ npm run lint                  # tsc --noEmit across every workspace (there is no
 npm run build                 # UI only — backend apps have no build step
 ```
 
+When starting local dev, **do not overwrite an existing `.env`**. If `.env` already exists and has content, keep it and only add missing keys deliberately; use `.env.example` as a reference, not as a replacement.
+
 Single test file / single test:
 
 ```bash

@@ -206,7 +206,7 @@ of truth for ordering and policy.
 
 - `processes` (includes `execution_mode` and process state fields), `process_output`
 - `files`
-- `workspace_publications` — explicitly published agent workspace subfolders exposed at configurable public paths such as `/agent/<name>/`
+- `workspace_publications` — explicitly published agent workspace subfolders exposed at configurable public paths such as `/agents/<name>/<subfolder>/`
 - `workspace_publication_blobs` and `workspace_publication_revisions` — content-addressed snapshot storage and atomic manifests for runner-synced publications
 - `secrets`
 - `models`
@@ -425,7 +425,7 @@ Published topics include:
   - `PATCH /api/workspace-publications/:id`
   - `DELETE /api/workspace-publications/:id`
 - public workspace publications:
-  - `GET <publication.publicPath>...` (for example `/agent/system/`)
+  - `GET <publication.publicPath>...` (for example `/agents/system/dist/`)
   - legacy `GET /agents/:name/:slug/...` remains accepted for publication rows
   - password-protected publications use HTTP Basic auth in this version
 
@@ -632,7 +632,7 @@ Current tool families exposed to models:
 
 ### Workspace Publications
 
-Agents can publish explicit subfolders from their workspace to unauthenticated web URLs. Publications are configured from the admin UI or by agent tools. The human-facing mount is `publicPath`, defaulting in the UI to `/agent/<agent-name>/`, and operators may set another non-reserved absolute path such as `/sites/report/`. The internal `slug` remains unique per agent for management compatibility.
+Agents can publish explicit subfolders from their workspace to unauthenticated web URLs. Publications are configured from the admin UI or by agent tools. The human-facing mount is `publicPath`, defaulting in the UI to `/agents/<agent-name>/<subfolder>/`, and operators may set another non-reserved absolute path such as `/sites/report/`. The internal `slug` remains unique per agent for management compatibility.
 
 Two serving modes are supported:
 

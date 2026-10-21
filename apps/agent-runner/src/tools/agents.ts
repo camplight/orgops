@@ -165,7 +165,7 @@ export const agentsToolDefs: ToolDef[] = [
   ],
   [
     "agents_publish_workspace",
-    "Publish an agent workspace subfolder at a public URL path such as /agent/<agentName>/. Re-running with the same publicPath updates that publication. Serving mode is selected automatically from runner/API placement.",
+    "Publish an agent workspace subfolder at a public URL path such as /agents/<agentName>/<subfolder>/. Re-running with the same publicPath updates that publication. Serving mode is selected automatically from runner/API placement.",
     agentsPublishWorkspaceSchema,
   ],
   [
@@ -346,7 +346,7 @@ export async function execute(
     const parsed = parsedResult.data;
     const agentName = trimOptional(parsed.agentName) ?? ctx.agent.name;
     const publicPath = normalizePublicPathInput(
-      trimOptional(parsed.publicPath) ?? `/agent/${agentName}/`,
+      trimOptional(parsed.publicPath) ?? `/agents/${agentName}/site/`,
     );
     const slug = trimOptional(parsed.slug)?.toLowerCase();
     const listResponse = await ctx.apiFetch(

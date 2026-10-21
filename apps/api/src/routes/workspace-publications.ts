@@ -129,7 +129,7 @@ function normalizePublicPath(raw: unknown): string | null {
 }
 
 function defaultPublicPath(agentName: string) {
-  return normalizePublicPath(`/agent/${agentName}/`) ?? `/agent/${encodeURIComponent(agentName)}/`;
+  return normalizePublicPath(`/agents/${agentName}/site/`) ?? `/agents/${encodeURIComponent(agentName)}/site/`;
 }
 
 function slugFromPublicPath(publicPath: string) {

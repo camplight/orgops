@@ -341,7 +341,7 @@ describe("api app", () => {
         method: "POST",
         headers: { "content-type": "application/json", cookie },
         body: JSON.stringify({
-          publicPath: "/agent/root-blocked/",
+          publicPath: "/agents/root-blocked/dist/",
           sourcePath: ".",
         }),
       },
@@ -366,7 +366,7 @@ describe("api app", () => {
         method: "POST",
         headers: { "content-type": "application/json", cookie },
         body: JSON.stringify({
-          publicPath: "/agent/snapshot-publisher/",
+          publicPath: "/agents/snapshot-publisher/dist/",
           sourcePath: "dist",
           authType: "PASSWORD",
           password: "publish-pass",
@@ -428,11 +428,11 @@ describe("api app", () => {
     expect(revisionRes.status).toBe(200);
 
     const unauthenticatedPublic = await app.request(
-      "http://localhost/agent/snapshot-publisher/",
+      "http://localhost/agents/snapshot-publisher/dist/",
     );
     expect(unauthenticatedPublic.status).toBe(401);
     const authenticatedPublic = await app.request(
-      "http://localhost/agent/snapshot-publisher/",
+      "http://localhost/agents/snapshot-publisher/dist/",
       {
         headers: {
           authorization: `Basic ${Buffer.from("viewer:publish-pass").toString("base64")}`,

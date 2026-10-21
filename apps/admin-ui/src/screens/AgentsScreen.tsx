@@ -122,6 +122,11 @@ function formatAgentModelLabel(agent: Agent): string {
   return `wrapped: ${kind ?? name ?? harness ?? "custom"}`;
 }
 
+function defaultPublicationPublicPath(agentName: string, sourcePath: string) {
+  const folderName = sourcePath.split("/").filter(Boolean).at(-1) ?? "site";
+  return `/agents/${agentName}/${folderName}/`;
+}
+
 type AgentsScreenProps = {
   agents: Agent[];
   runners: RunnerNode[];
@@ -541,10 +546,15 @@ export function AgentsScreen({
       setWorkspaceData(data);
       const publications = await loadAgentPublications(selectedAgent.name);
       setWorkspacePublications(publications);
+      const proposedSourcePath = data.path === "." ? "" : data.path;
       setPublicationForm((prev) => ({
         ...prev,
-        publicPath: prev.publicPath || `/agent/${selectedAgent.name}/`,
-        sourcePath: data.path === "." ? prev.sourcePath || "" : data.path
+        publicPath:
+          prev.publicPath ||
+          (proposedSourcePath
+            ? defaultPublicationPublicPath(selectedAgent.name, proposedSourcePath)
+            : ""),
+        sourcePath: proposedSourcePath
       }));
     } catch (error) {
       const message =
@@ -574,19 +584,23 @@ export function AgentsScreen({
 
   const openPublicationDrawer = async (sourcePath?: string) => {
     if (!selectedAgent) return;
+    const proposedSourcePath =
+      sourcePath && sourcePath !== "."
+        ? sourcePath
+        : workspaceData?.path && workspaceData.path !== "."
+          ? workspaceData.path
+          : "";
     setPublicationDrawerOpen(true);
     setPanelError(null);
     setPublicationForm((prev) => ({
       ...prev,
       id: "",
       slug: "",
-      publicPath: prev.publicPath || `/agent/${selectedAgent.name}/`,
-      sourcePath:
-        sourcePath && sourcePath !== "."
-          ? sourcePath
-          : workspaceData?.path && workspaceData.path !== "."
-            ? workspaceData.path
-            : "",
+      publicPath:
+        proposedSourcePath
+          ? defaultPublicationPublicPath(selectedAgent.name, proposedSourcePath)
+          : prev.publicPath,
+      sourcePath: proposedSourcePath,
       title: "",
       enabled: true,
       authType: "PUBLIC",
@@ -632,8 +646,11 @@ export function AgentsScreen({
       setPublicationForm({
         id: "",
         slug: "",
-        publicPath: selectedAgent ? `/agent/${selectedAgent.name}/` : "",
-        sourcePath: workspaceData?.path && workspaceData.path !== "." ? workspaceData.path : ".",
+        publicPath:
+          selectedAgent && workspaceData?.path && workspaceData.path !== "."
+            ? defaultPublicationPublicPath(selectedAgent.name, workspaceData.path)
+            : "",
+        sourcePath: workspaceData?.path && workspaceData.path !== "." ? workspaceData.path : "",
         title: "",
         enabled: true,
         authType: "PUBLIC",
@@ -1961,7 +1978,10 @@ export function AgentsScreen({
                   <div className="font-medium text-slate-200">Human preview</div>
                   <div className="mt-1 text-xs text-slate-500">
                     Example: publish workspace folder <code>dist</code> at{" "}
-                    <code>{publicationForm.publicPath || `/agent/${selectedAgent?.name ?? "agent"}/`}</code>.
+                    <code>
+                      {publicationForm.publicPath ||
+                        `/agents/${selectedAgent?.name ?? "agent"}/site/`}
+                    </code>.
                     After saving, open the generated link to review the end result.
                   </div>
                 </div>
@@ -1985,7 +2005,10 @@ export function AgentsScreen({
                           setPublicationForm({
                             id: "",
                             slug: "",
-                            publicPath: selectedAgent ? `/agent/${selectedAgent.name}/` : "",
+                            publicPath:
+                              selectedAgent && workspaceData?.path && workspaceData.path !== "."
+                                ? defaultPublicationPublicPath(selectedAgent.name, workspaceData.path)
+                                : "",
                             sourcePath:
                               workspaceData?.path && workspaceData.path !== "."
                                 ? workspaceData.path
@@ -2013,7 +2036,7 @@ export function AgentsScreen({
                             publicPath: event.target.value
                           }))
                         }
-                        placeholder={`/agent/${selectedAgent?.name ?? "agent"}/`}
+                        placeholder={`/agents/${selectedAgent?.name ?? "agent"}/site/`}
                       />
                     </label>
                     <label className="space-y-1 text-xs text-slate-400">
@@ -2023,7 +2046,14 @@ export function AgentsScreen({
                         onChange={(event) =>
                           setPublicationForm((prev) => ({
                             ...prev,
-                            sourcePath: event.target.value
+                            sourcePath: event.target.value,
+                            publicPath:
+                              !prev.id && selectedAgent && event.target.value.trim()
+                                ? defaultPublicationPublicPath(
+                                    selectedAgent.name,
+                                    event.target.value.trim()
+                                  )
+                                : prev.publicPath
                           }))
                         }
                         placeholder="dist"
