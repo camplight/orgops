@@ -9,7 +9,8 @@ import type {
   ProcessRow,
   RunnerNode,
   SkillMeta,
-  FederationInstance
+  FederationInstance,
+  WorkspacePublication
 } from "../../types";
 import { AgentsScreen, EventsScreen, ProcessesScreen } from "../../screens";
 
@@ -104,6 +105,21 @@ type DashboardDrawersProps = {
     triggerEventId?: string | null;
   }>;
   onDownloadAgentWorkspaceFile: (name: string, path: string) => void;
+  loadAgentPublications: (name: string) => Promise<WorkspacePublication[]>;
+  onSaveAgentPublication: (
+    name: string,
+    input: {
+      id?: string;
+      slug: string;
+      sourcePath: string;
+      title?: string;
+      enabled: boolean;
+      authType: "PUBLIC" | "PASSWORD";
+      password?: string;
+      syncMode: "SNAPSHOT" | "DIRECT_LOCAL";
+    }
+  ) => Promise<WorkspacePublication>;
+  onDeleteAgentPublication: (id: string) => Promise<void>;
   onApplyEventFilters: (filters?: EventFilters) => void;
   onExportEvents: (filters?: EventFilters) => void;
   onClearEvents: () => Promise<void>;
@@ -151,6 +167,9 @@ export function DashboardDrawers({
   loadAgentWorkspaceFile,
   loadAgentSystemPrompt,
   onDownloadAgentWorkspaceFile,
+  loadAgentPublications,
+  onSaveAgentPublication,
+  onDeleteAgentPublication,
   onApplyEventFilters,
   onExportEvents,
   onClearEvents,
@@ -185,6 +204,9 @@ export function DashboardDrawers({
         loadAgentWorkspaceFile={loadAgentWorkspaceFile}
         loadAgentSystemPrompt={loadAgentSystemPrompt}
         onDownloadAgentWorkspaceFile={onDownloadAgentWorkspaceFile}
+        loadAgentPublications={loadAgentPublications}
+        onSaveAgentPublication={onSaveAgentPublication}
+        onDeleteAgentPublication={onDeleteAgentPublication}
         focusAgentName={focusAgentName}
         onFocusAgentApplied={onFocusAgentApplied}
       />

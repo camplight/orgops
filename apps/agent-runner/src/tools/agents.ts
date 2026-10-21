@@ -45,6 +45,30 @@ const agentsMoveSchema = z
     }
   });
 
+const publicationAuthTypeSchema = z.enum(["PUBLIC", "PASSWORD"]);
+const publicationSyncModeSchema = z.enum(["SNAPSHOT", "DIRECT_LOCAL"]);
+
+const agentsPublishWorkspaceSchema = z.object({
+  agentName: z.string().min(1).optional(),
+  slug: z.string().min(1),
+  sourcePath: z.string().min(1).optional(),
+  title: z.string().optional(),
+  enabled: z.boolean().optional(),
+  authType: publicationAuthTypeSchema.optional(),
+  password: z.string().optional(),
+  syncMode: publicationSyncModeSchema.optional(),
+});
+
+const agentsUnpublishWorkspaceSchema = z.object({
+  publicationId: z.string().min(1).optional(),
+  agentName: z.string().min(1).optional(),
+  slug: z.string().min(1).optional(),
+});
+
+const agentsListPublicationsSchema = z.object({
+  agentName: z.string().min(1).optional(),
+});
+
 const agentsCreateSchema = z.object({
   name: z.string().min(1),
   icon: z.string().optional(),
@@ -138,6 +162,21 @@ export const agentsToolDefs: ToolDef[] = [
     "agents_move",
     "Move an agent to another local runner, or pass federationInstanceId to move it to a federated peer with its skills, private secrets, workspace files, and memory. Running processes are stopped. Local moves keep the workspace path. Use assignedRunnerId null to unassign.",
     agentsMoveSchema,
+  ],
+  [
+    "agents_publish_workspace",
+    "Publish an agent workspace folder at /agents/<agentName>/<slug>/. Re-running with the same slug updates that publication. Snapshot mode is synced by the runner; direct-local mode serves from the API host filesystem.",
+    agentsPublishWorkspaceSchema,
+  ],
+  [
+    "agents_unpublish_workspace",
+    "Delete a workspace publication by publicationId, or by agentName plus slug. Defaults agentName to the current agent when omitted.",
+    agentsUnpublishWorkspaceSchema,
+  ],
+  [
+    "agents_list_publications",
+    "List workspace publications for an agent. Defaults to the current agent when agentName is omitted.",
+    agentsListPublicationsSchema,
   ],
   [
     "agents_update",
@@ -280,6 +319,98 @@ export async function execute(
     );
     const moved = await parseResponseBody(response);
     return { ok: true, agentName, moved };
+  }
+
+  if (tool === "agents_list_publications") {
+    const parsedResult = parseToolArgs(tool, agentsListPublicationsSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const agentName = trimOptional(parsedResult.data.agentName) ?? ctx.agent.name;
+    const response = await ctx.apiFetch(
+      `/api/agents/${encodeURIComponent(agentName)}/publications`,
+      {
+        headers: { "x-orgops-agent-name": ctx.agent.name },
+      },
+    );
+    const publications = await parseResponseBody(response);
+    return { ok: true, agentName, publications };
+  }
+
+  if (tool === "agents_publish_workspace") {
+    const parsedResult = parseToolArgs(tool, agentsPublishWorkspaceSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const parsed = parsedResult.data;
+    const agentName = trimOptional(parsed.agentName) ?? ctx.agent.name;
+    const slug = parsed.slug.trim().toLowerCase();
+    const listResponse = await ctx.apiFetch(
+      `/api/agents/${encodeURIComponent(agentName)}/publications`,
+      {
+        headers: { "x-orgops-agent-name": ctx.agent.name },
+      },
+    );
+    const existingList = (await parseResponseBody(listResponse)) as Array<{ id?: string; slug?: string }>;
+    const existing = Array.isArray(existingList)
+      ? existingList.find((publication) => publication.slug === slug)
+      : undefined;
+    const body: Record<string, unknown> = {
+      slug,
+      sourcePath: trimOptional(parsed.sourcePath) ?? ".",
+      ...(parsed.title !== undefined ? { title: parsed.title } : {}),
+      ...(parsed.enabled !== undefined ? { enabled: parsed.enabled } : {}),
+      ...(parsed.authType !== undefined ? { authType: parsed.authType } : {}),
+      ...(parsed.password !== undefined ? { password: parsed.password } : {}),
+      ...(parsed.syncMode !== undefined ? { syncMode: parsed.syncMode } : {}),
+    };
+    const response = existing?.id
+      ? await ctx.apiFetch(`/api/workspace-publications/${encodeURIComponent(existing.id)}`, {
+          method: "PATCH",
+          headers: {
+            "content-type": "application/json",
+            "x-orgops-agent-name": ctx.agent.name,
+          },
+          body: JSON.stringify(body),
+        })
+      : await ctx.apiFetch(`/api/agents/${encodeURIComponent(agentName)}/publications`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-orgops-agent-name": ctx.agent.name,
+          },
+          body: JSON.stringify(body),
+        });
+    const publication = await parseResponseBody(response);
+    return { ok: true, agentName, slug, publication };
+  }
+
+  if (tool === "agents_unpublish_workspace") {
+    const parsedResult = parseToolArgs(tool, agentsUnpublishWorkspaceSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const parsed = parsedResult.data;
+    let publicationId = trimOptional(parsed.publicationId);
+    const agentName = trimOptional(parsed.agentName) ?? ctx.agent.name;
+    if (!publicationId) {
+      const slug = trimOptional(parsed.slug);
+      if (!slug) return { error: "Provide publicationId or slug." };
+      const listResponse = await ctx.apiFetch(
+        `/api/agents/${encodeURIComponent(agentName)}/publications`,
+        {
+          headers: { "x-orgops-agent-name": ctx.agent.name },
+        },
+      );
+      const existingList = (await parseResponseBody(listResponse)) as Array<{ id?: string; slug?: string }>;
+      publicationId = Array.isArray(existingList)
+        ? existingList.find((publication) => publication.slug === slug.toLowerCase())?.id
+        : undefined;
+      if (!publicationId) return { ok: true, agentName, deleted: false, reason: "Publication not found" };
+    }
+    const response = await ctx.apiFetch(
+      `/api/workspace-publications/${encodeURIComponent(publicationId)}`,
+      {
+        method: "DELETE",
+        headers: { "x-orgops-agent-name": ctx.agent.name },
+      },
+    );
+    const deleted = await parseResponseBody(response);
+    return { ok: true, agentName, publicationId, deleted };
   }
 
   if (tool === "agents_update") {

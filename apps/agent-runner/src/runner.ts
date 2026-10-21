@@ -30,6 +30,7 @@ import {
   stopWrappedAgentRuntime,
 } from "./wrapped-runtime";
 import { buildModelMessages, selectRecentDeltaEventsForPrompt } from "./prompt-composer";
+import { createWorkspacePublicationSync } from "./workspace-publication-sync";
 import type { Agent, Event } from "./types";
 
 const API_URL = process.env.ORGOPS_API_URL ?? "http://localhost:8787";
@@ -52,6 +53,7 @@ const DEFAULT_CROSS_FULL_MEMORY_INTERVAL_MS = 120_000;
 const DEFAULT_LLM_CALL_TIMEOUT_MS = 10_800_000;
 const DEFAULT_AGENT_INTENT_TIMEOUT_MS = 45_000;
 const DEFAULT_AGENT_INTENT_MAX_TIMEOUTS = 3;
+const DEFAULT_WORKSPACE_PUBLICATION_SYNC_INTERVAL_MS = 2000;
 
 function readPositiveIntEnv(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
@@ -85,6 +87,10 @@ const AGENT_INTENT_TIMEOUT_MS = readPositiveIntEnv(
 const AGENT_INTENT_MAX_TIMEOUTS = readPositiveIntEnv(
   process.env.ORGOPS_AGENT_INTENT_MAX_TIMEOUTS,
   DEFAULT_AGENT_INTENT_MAX_TIMEOUTS,
+);
+const WORKSPACE_PUBLICATION_SYNC_INTERVAL_MS = readPositiveIntEnv(
+  process.env.ORGOPS_WORKSPACE_PUBLICATION_SYNC_INTERVAL_MS,
+  DEFAULT_WORKSPACE_PUBLICATION_SYNC_INTERVAL_MS,
 );
 
 const state = createRunnerState();
@@ -121,6 +127,11 @@ const maintenanceLoop = createMaintenanceLoop({
   channelFullMemoryIntervalMs: CHANNEL_FULL_MEMORY_INTERVAL_MS,
   crossRecentMemoryIntervalMs: CROSS_RECENT_MEMORY_INTERVAL_MS,
   crossFullMemoryIntervalMs: CROSS_FULL_MEMORY_INTERVAL_MS,
+});
+const workspacePublicationSync = createWorkspacePublicationSync({
+  apiFetch: api.apiFetch,
+  getRunnerId: () => state.registeredRunnerId,
+  intervalMs: WORKSPACE_PUBLICATION_SYNC_INTERVAL_MS,
 });
 
 const channelLoopManager = createChannelLoopManager({
@@ -387,6 +398,7 @@ export async function loop() {
           console.error("runner.poll_agent_failed", summarizeError(result.reason));
         }
       }
+      await workspacePublicationSync.sync(agents);
     } catch (error) {
       console.error("runner.loop_iteration_failed", summarizeError(error));
     }

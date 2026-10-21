@@ -437,6 +437,67 @@ export const files = sqliteTable("files", {
   created_at: integer("created_at").notNull()
 });
 
+export const workspacePublications = sqliteTable(
+  "workspace_publications",
+  {
+    id: text("id").primaryKey(),
+    agent_name: text("agent_name").notNull(),
+    slug: text("slug").notNull(),
+    title: text("title"),
+    source_path: text("source_path").notNull().default("."),
+    enabled: integer("enabled").notNull().default(1),
+    auth_type: text("auth_type").notNull().default("PUBLIC"),
+    password_hash: text("password_hash"),
+    sync_mode: text("sync_mode").notNull().default("SNAPSHOT"),
+    active_revision_id: text("active_revision_id"),
+    created_by_type: text("created_by_type").notNull(),
+    created_by_id: text("created_by_id"),
+    created_at: integer("created_at").notNull(),
+    updated_at: integer("updated_at").notNull(),
+    last_published_at: integer("last_published_at"),
+    last_error: text("last_error"),
+  },
+  (table) => ({
+    uidxWorkspacePublicationsAgentSlug: uniqueIndex(
+      "uidx_workspace_publications_agent_slug",
+    ).on(table.agent_name, table.slug),
+    idxWorkspacePublicationsAgent: index("idx_workspace_publications_agent").on(
+      table.agent_name,
+    ),
+    idxWorkspacePublicationsActiveRevision: index(
+      "idx_workspace_publications_active_revision",
+    ).on(table.active_revision_id),
+  }),
+);
+
+export const workspacePublicationBlobs = sqliteTable(
+  "workspace_publication_blobs",
+  {
+    sha256: text("sha256").primaryKey(),
+    storage_path: text("storage_path").notNull(),
+    size: integer("size").notNull(),
+    created_at: integer("created_at").notNull(),
+  },
+);
+
+export const workspacePublicationRevisions = sqliteTable(
+  "workspace_publication_revisions",
+  {
+    id: text("id").primaryKey(),
+    publication_id: text("publication_id").notNull(),
+    manifest_json: text("manifest_json").notNull(),
+    file_count: integer("file_count").notNull(),
+    total_bytes: integer("total_bytes").notNull(),
+    created_by_agent_name: text("created_by_agent_name"),
+    created_at: integer("created_at").notNull(),
+  },
+  (table) => ({
+    idxWorkspacePublicationRevisionsPublication: index(
+      "idx_workspace_publication_revisions_publication",
+    ).on(table.publication_id, table.created_at),
+  }),
+);
+
 export const secrets = sqliteTable(
   "secrets",
   {
@@ -665,6 +726,9 @@ export const schema = {
   processes,
   processOutput,
   files,
+  workspacePublications,
+  workspacePublicationBlobs,
+  workspacePublicationRevisions,
   secrets,
   models,
   llmModelPrices,

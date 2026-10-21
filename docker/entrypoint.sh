@@ -105,13 +105,14 @@ frontend orgops_frontend
   bind *:${PROXY_PORT}
   acl is_health path -i /health
   acl is_api path_beg /api
+  acl is_agent_publication path_beg /agents
   acl is_ws path_beg /ws
   acl is_admin path_beg /admin
 EOF
 
   if [[ "${ENABLED["api"]}" -eq 1 ]]; then
     cat >> "${config_path}" <<EOF
-  use_backend api_backend if is_health || is_api || is_ws
+  use_backend api_backend if is_health || is_api || is_agent_publication || is_ws
 EOF
   fi
 

@@ -37,7 +37,8 @@ import type {
   ProcessOutputRow,
   RunnerInviteConfig,
   RunnerSetupConfig,
-  TeamMember
+  TeamMember,
+  WorkspacePublication
 } from "./types";
 
 type ChatTarget = { kind: "channel"; id: string };
@@ -804,6 +805,40 @@ export default function App() {
               link.click();
               link.remove();
             }}
+            loadAgentPublications={(name) =>
+              data.apiJson<WorkspacePublication[]>(
+                `/api/agents/${encodeURIComponent(name)}/publications`
+              )
+            }
+            onSaveAgentPublication={async (name, input) => {
+              const body = JSON.stringify(input);
+              if (input.id) {
+                const response = await data.apiFetch(
+                  `/api/workspace-publications/${encodeURIComponent(input.id)}`,
+                  {
+                    method: "PATCH",
+                    headers: data.getApiHeaders(),
+                    body
+                  }
+                );
+                return (await response.json()) as WorkspacePublication;
+              }
+              const response = await data.apiFetch(
+                `/api/agents/${encodeURIComponent(name)}/publications`,
+                {
+                  method: "POST",
+                  headers: data.getApiHeaders(),
+                  body
+                }
+              );
+              return (await response.json()) as WorkspacePublication;
+            }}
+            onDeleteAgentPublication={async (id) => {
+              await data.apiFetch(`/api/workspace-publications/${encodeURIComponent(id)}`, {
+                method: "DELETE",
+                headers: data.getApiHeaders()
+              });
+            }}
             onApplyEventFilters={handleApplyEventFilters}
             onExportEvents={handleExportEvents}
             onClearEvents={handleClearEvents}
@@ -966,6 +1001,40 @@ export default function App() {
             document.body.appendChild(link);
             link.click();
             link.remove();
+          }}
+          loadAgentPublications={(name) =>
+            data.apiJson<WorkspacePublication[]>(
+              `/api/agents/${encodeURIComponent(name)}/publications`
+            )
+          }
+          onSaveAgentPublication={async (name, input) => {
+            const body = JSON.stringify(input);
+            if (input.id) {
+              const response = await data.apiFetch(
+                `/api/workspace-publications/${encodeURIComponent(input.id)}`,
+                {
+                  method: "PATCH",
+                  headers: data.getApiHeaders(),
+                  body
+                }
+              );
+              return (await response.json()) as WorkspacePublication;
+            }
+            const response = await data.apiFetch(
+              `/api/agents/${encodeURIComponent(name)}/publications`,
+              {
+                method: "POST",
+                headers: data.getApiHeaders(),
+                body
+              }
+            );
+            return (await response.json()) as WorkspacePublication;
+          }}
+          onDeleteAgentPublication={async (id) => {
+            await data.apiFetch(`/api/workspace-publications/${encodeURIComponent(id)}`, {
+              method: "DELETE",
+              headers: data.getApiHeaders()
+            });
           }}
         />
       )}

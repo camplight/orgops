@@ -570,6 +570,18 @@ const coreEventShapes: EventShapeDefinition[] = [
     source: "core",
     payloadSchema: z.record(z.string(), z.unknown()),
   },
+  ...(
+    [
+      "audit.workspace_publication.created",
+      "audit.workspace_publication.updated",
+      "audit.workspace_publication.deleted",
+    ] as const
+  ).map((type) => ({
+    type,
+    description: "Audit record for workspace publication management.",
+    source: "core" as const,
+    payloadSchema: z.record(z.string(), z.unknown()),
+  })),
   {
     type: "tool.started",
     description: "Audit record for tool invocation start.",

@@ -6,7 +6,8 @@ import type {
   EventRow,
   FederationInstance,
   RunnerNode,
-  SkillMeta
+  SkillMeta,
+  WorkspacePublication
 } from "../types";
 import { Button, Card, Input, SelectAutocomplete, Textarea } from "../components/ui";
 import { useEscapeKey } from "../hooks/useEscapeKey";
@@ -169,6 +170,21 @@ type AgentsScreenProps = {
     triggerEventId?: string | null;
   }>;
   onDownloadAgentWorkspaceFile: (name: string, path: string) => void;
+  loadAgentPublications: (name: string) => Promise<WorkspacePublication[]>;
+  onSaveAgentPublication: (
+    name: string,
+    input: {
+      id?: string;
+      slug: string;
+      sourcePath: string;
+      title?: string;
+      enabled: boolean;
+      authType: "PUBLIC" | "PASSWORD";
+      password?: string;
+      syncMode: "SNAPSHOT" | "DIRECT_LOCAL";
+    }
+  ) => Promise<WorkspacePublication>;
+  onDeleteAgentPublication: (id: string) => Promise<void>;
   focusAgentName?: string | null;
   onFocusAgentApplied?: () => void;
   drawerOnly?: boolean;
@@ -193,6 +209,9 @@ export function AgentsScreen({
   loadAgentWorkspaceFile,
   loadAgentSystemPrompt,
   onDownloadAgentWorkspaceFile,
+  loadAgentPublications,
+  onSaveAgentPublication,
+  onDeleteAgentPublication,
   focusAgentName,
   onFocusAgentApplied,
   drawerOnly = false
@@ -226,6 +245,19 @@ export function AgentsScreen({
     null
   );
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
+  const [workspacePublications, setWorkspacePublications] = useState<WorkspacePublication[]>([]);
+  const [publicationsLoading, setPublicationsLoading] = useState(false);
+  const [publicationSaving, setPublicationSaving] = useState(false);
+  const [publicationForm, setPublicationForm] = useState({
+    id: "",
+    slug: "",
+    sourcePath: ".",
+    title: "",
+    enabled: true,
+    authType: "PUBLIC" as "PUBLIC" | "PASSWORD",
+    password: "",
+    syncMode: "SNAPSHOT" as "SNAPSHOT" | "DIRECT_LOCAL"
+  });
   const [fileLoadingPath, setFileLoadingPath] = useState<string | null>(null);
   const [openFile, setOpenFile] = useState<AgentWorkspaceFileResponse | null>(null);
   const [panelError, setPanelError] = useState<string | null>(null);
@@ -368,6 +400,7 @@ export function AgentsScreen({
       setAgentEvents([]);
       setSelectedEventId(null);
       setWorkspaceData(null);
+      setWorkspacePublications([]);
       setOpenFile(null);
       setCrossMemoryDrawerOpen(false);
       setSystemPromptDrawerOpen(false);
@@ -393,6 +426,7 @@ export function AgentsScreen({
     setPanelError(null);
     setSelectedEventId(null);
     setOpenFile(null);
+    setWorkspacePublications([]);
     setCrossMemoryDrawerOpen(false);
     setSystemPromptDrawerOpen(false);
     setSystemPromptLoading(false);
@@ -492,6 +526,12 @@ export function AgentsScreen({
     try {
       const data = await loadAgentWorkspace(selectedAgent.name, path);
       setWorkspaceData(data);
+      const publications = await loadAgentPublications(selectedAgent.name);
+      setWorkspacePublications(publications);
+      setPublicationForm((prev) => ({
+        ...prev,
+        sourcePath: data.path === "." ? prev.sourcePath || "." : data.path
+      }));
     } catch (error) {
       const message =
         error instanceof Error
@@ -500,6 +540,88 @@ export function AgentsScreen({
       setPanelError(message);
     } finally {
       setWorkspaceLoading(false);
+    }
+  };
+
+  const refreshWorkspacePublications = async () => {
+    if (!selectedAgent) return;
+    setPublicationsLoading(true);
+    try {
+      const publications = await loadAgentPublications(selectedAgent.name);
+      setWorkspacePublications(publications);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to load workspace publications.";
+      setPanelError(message);
+    } finally {
+      setPublicationsLoading(false);
+    }
+  };
+
+  const handleEditPublication = (publication: WorkspacePublication) => {
+    setPublicationForm({
+      id: publication.id,
+      slug: publication.slug,
+      sourcePath: publication.sourcePath,
+      title: publication.title ?? "",
+      enabled: publication.enabled,
+      authType: publication.authType,
+      password: "",
+      syncMode: publication.syncMode
+    });
+  };
+
+  const handleSavePublication = async () => {
+    if (!selectedAgent || !publicationForm.slug.trim() || !publicationForm.sourcePath.trim()) {
+      return;
+    }
+    setPublicationSaving(true);
+    setPanelError(null);
+    try {
+      const saved = await onSaveAgentPublication(selectedAgent.name, {
+        id: publicationForm.id || undefined,
+        slug: publicationForm.slug.trim(),
+        sourcePath: publicationForm.sourcePath.trim(),
+        title: publicationForm.title.trim() || undefined,
+        enabled: publicationForm.enabled,
+        authType: publicationForm.authType,
+        password: publicationForm.password.trim() || undefined,
+        syncMode: publicationForm.syncMode
+      });
+      setWorkspacePublications((prev) => {
+        const without = prev.filter((publication) => publication.id !== saved.id);
+        return [saved, ...without].sort((left, right) => right.updatedAt - left.updatedAt);
+      });
+      setPublicationForm({
+        id: "",
+        slug: "",
+        sourcePath: workspaceData?.path && workspaceData.path !== "." ? workspaceData.path : ".",
+        title: "",
+        enabled: true,
+        authType: "PUBLIC",
+        password: "",
+        syncMode: "SNAPSHOT"
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to save workspace publication.";
+      setPanelError(message);
+    } finally {
+      setPublicationSaving(false);
+    }
+  };
+
+  const handleDeletePublication = async (publication: WorkspacePublication) => {
+    const confirmed = confirm(`Delete publication ${publication.agentName}/${publication.slug}?`);
+    if (!confirmed) return;
+    setPanelError(null);
+    try {
+      await onDeleteAgentPublication(publication.id);
+      setWorkspacePublications((prev) => prev.filter((item) => item.id !== publication.id));
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to delete workspace publication.";
+      setPanelError(message);
     }
   };
 
@@ -1651,6 +1773,212 @@ export function AgentsScreen({
                       </Button>
                     );
                   })}
+                  <Button
+                    variant="secondary"
+                    className="px-2 py-1 text-xs"
+                    onClick={refreshWorkspacePublications}
+                    disabled={!selectedAgent || publicationsLoading}
+                  >
+                    {publicationsLoading ? "Refreshing publications..." : "Refresh Publications"}
+                  </Button>
+                </div>
+
+                <div className="rounded border border-slate-800 bg-slate-900/40 p-3">
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h3 className="text-sm font-semibold text-slate-200">
+                        Web Publications
+                      </h3>
+                      <p className="text-xs text-slate-500">
+                        Publish a workspace folder at /agents/&lt;name&gt;/&lt;slug&gt;.
+                      </p>
+                    </div>
+                    {publicationForm.id ? (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        className="px-2 py-1 text-xs"
+                        onClick={() =>
+                          setPublicationForm({
+                            id: "",
+                            slug: "",
+                            sourcePath:
+                              workspaceData?.path && workspaceData.path !== "."
+                                ? workspaceData.path
+                                : ".",
+                            title: "",
+                            enabled: true,
+                            authType: "PUBLIC",
+                            password: "",
+                            syncMode: "SNAPSHOT"
+                          })
+                        }
+                      >
+                        New Publication
+                      </Button>
+                    ) : null}
+                  </div>
+
+                  <div className="grid gap-2 md:grid-cols-6">
+                    <Input
+                      value={publicationForm.slug}
+                      onChange={(event) =>
+                        setPublicationForm((prev) => ({
+                          ...prev,
+                          slug: event.target.value
+                        }))
+                      }
+                      placeholder="slug"
+                    />
+                    <Input
+                      value={publicationForm.sourcePath}
+                      onChange={(event) =>
+                        setPublicationForm((prev) => ({
+                          ...prev,
+                          sourcePath: event.target.value
+                        }))
+                      }
+                      placeholder="folder path"
+                    />
+                    <Input
+                      value={publicationForm.title}
+                      onChange={(event) =>
+                        setPublicationForm((prev) => ({
+                          ...prev,
+                          title: event.target.value
+                        }))
+                      }
+                      placeholder="optional title"
+                    />
+                    <select
+                      className="rounded border border-slate-700 bg-slate-950 px-2 py-2 text-sm text-slate-100"
+                      value={publicationForm.authType}
+                      onChange={(event) =>
+                        setPublicationForm((prev) => ({
+                          ...prev,
+                          authType: event.target.value as "PUBLIC" | "PASSWORD"
+                        }))
+                      }
+                    >
+                      <option value="PUBLIC">Public</option>
+                      <option value="PASSWORD">Password</option>
+                    </select>
+                    <select
+                      className="rounded border border-slate-700 bg-slate-950 px-2 py-2 text-sm text-slate-100"
+                      value={publicationForm.syncMode}
+                      onChange={(event) =>
+                        setPublicationForm((prev) => ({
+                          ...prev,
+                          syncMode: event.target.value as "SNAPSHOT" | "DIRECT_LOCAL"
+                        }))
+                      }
+                    >
+                      <option value="SNAPSHOT">Snapshot</option>
+                      <option value="DIRECT_LOCAL">Direct local</option>
+                    </select>
+                    <label className="flex items-center gap-2 text-sm text-slate-300">
+                      <input
+                        type="checkbox"
+                        checked={publicationForm.enabled}
+                        onChange={(event) =>
+                          setPublicationForm((prev) => ({
+                            ...prev,
+                            enabled: event.target.checked
+                          }))
+                        }
+                      />
+                      Enabled
+                    </label>
+                  </div>
+
+                  {publicationForm.authType === "PASSWORD" ? (
+                    <div className="mt-2 max-w-sm">
+                      <Input
+                        type="password"
+                        value={publicationForm.password}
+                        onChange={(event) =>
+                          setPublicationForm((prev) => ({
+                            ...prev,
+                            password: event.target.value
+                          }))
+                        }
+                        placeholder={
+                          publicationForm.id
+                            ? "leave blank to keep current password"
+                            : "publication password"
+                        }
+                      />
+                    </div>
+                  ) : null}
+
+                  <div className="mt-2">
+                    <Button
+                      type="button"
+                      className="px-3 py-1.5 text-xs"
+                      disabled={publicationSaving || !publicationForm.slug.trim()}
+                      onClick={handleSavePublication}
+                    >
+                      {publicationSaving
+                        ? "Saving..."
+                        : publicationForm.id
+                          ? "Update Publication"
+                          : "Create Publication"}
+                    </Button>
+                  </div>
+
+                  <div className="mt-3 space-y-2">
+                    {workspacePublications.map((publication) => (
+                      <div
+                        key={publication.id}
+                        className="rounded border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <a
+                              href={publication.publicUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="font-medium text-sky-300 hover:text-sky-200"
+                            >
+                              {publication.slug}
+                            </a>
+                            <div className="text-xs text-slate-500">
+                              {publication.sourcePath} | {publication.syncMode} |{" "}
+                              {publication.authType}
+                              {publication.enabled ? "" : " | disabled"}
+                            </div>
+                            <div className="text-xs text-slate-500">
+                              Last published: {formatTimestamp(publication.lastPublishedAt ?? undefined)}
+                              {publication.lastError ? ` | Error: ${publication.lastError}` : ""}
+                            </div>
+                          </div>
+                          <div className="flex gap-2">
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              className="px-2 py-1 text-xs"
+                              onClick={() => handleEditPublication(publication)}
+                            >
+                              Edit
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              className="bg-rose-900 px-2 py-1 text-xs text-rose-100 hover:bg-rose-800"
+                              onClick={() => handleDeletePublication(publication)}
+                            >
+                              Delete
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    {!publicationsLoading && workspacePublications.length === 0 ? (
+                      <div className="text-sm text-slate-500">
+                        No workspace folders are published yet.
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
 
                 {workspaceLoading && (

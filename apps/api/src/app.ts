@@ -55,6 +55,7 @@ import { registerIntegrationKeysRoutes } from "./routes/integration-keys";
 import { registerEmbedRoutes } from "./routes/embed";
 import { registerBillingRoutes } from "./routes/billing";
 import { registerFederationRoutes } from "./routes/federation";
+import { registerWorkspacePublicationRoutes } from "./routes/workspace-publications";
 import {
   findActiveRunnerTokenByToken,
   parseStringArraySafe as parseRunnerScopeChannels,
@@ -585,6 +586,19 @@ export function createApp(config: AppConfig = {}) {
     }
     return parsed;
   }
+
+  registerWorkspacePublicationRoutes(app as any, {
+    orm,
+    DATA_DIR,
+    jsonResponse,
+    requireAuth,
+    requireRunnerAuth,
+    resolveWorkspacePath,
+    access,
+    hashPassword,
+    verifyPassword,
+    insertEvent,
+  });
 
   registerAgentsRoutes(app as any, {
     orm,

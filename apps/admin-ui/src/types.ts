@@ -82,6 +82,24 @@ export type AgentWorkspaceFileResponse = {
   content: string;
 };
 
+export type WorkspacePublication = {
+  id: string;
+  agentName: string;
+  slug: string;
+  title?: string | null;
+  sourcePath: string;
+  enabled: boolean;
+  authType: "PUBLIC" | "PASSWORD";
+  hasPassword?: boolean;
+  syncMode: "SNAPSHOT" | "DIRECT_LOCAL";
+  activeRevisionId?: string | null;
+  createdAt: number;
+  updatedAt: number;
+  lastPublishedAt?: number | null;
+  lastError?: string | null;
+  publicUrl: string;
+};
+
 export type EventRow = {
   id: string;
   type: string;
