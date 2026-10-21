@@ -444,6 +444,7 @@ export const workspacePublications = sqliteTable(
     agent_name: text("agent_name").notNull(),
     slug: text("slug").notNull(),
     title: text("title"),
+    public_path: text("public_path").notNull(),
     source_path: text("source_path").notNull().default("."),
     enabled: integer("enabled").notNull().default(1),
     auth_type: text("auth_type").notNull().default("PUBLIC"),
@@ -467,6 +468,9 @@ export const workspacePublications = sqliteTable(
     idxWorkspacePublicationsActiveRevision: index(
       "idx_workspace_publications_active_revision",
     ).on(table.active_revision_id),
+    uidxWorkspacePublicationsPublicPath: uniqueIndex(
+      "uidx_workspace_publications_public_path",
+    ).on(table.public_path),
   }),
 );
 

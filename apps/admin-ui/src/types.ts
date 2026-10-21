@@ -87,6 +87,7 @@ export type WorkspacePublication = {
   agentName: string;
   slug: string;
   title?: string | null;
+  publicPath: string;
   sourcePath: string;
   enabled: boolean;
   authType: "PUBLIC" | "PASSWORD";

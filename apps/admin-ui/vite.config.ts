@@ -17,6 +17,7 @@ export default defineConfig({
     proxy: {
       "/api": apiProxyTarget,
       "/agents": apiProxyTarget,
+      "/agent": apiProxyTarget,
       "/ws": {
         target: wsProxyTarget,
         ws: true

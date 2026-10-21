@@ -175,13 +175,13 @@ type AgentsScreenProps = {
     name: string,
     input: {
       id?: string;
-      slug: string;
+      slug?: string;
+      publicPath: string;
       sourcePath: string;
       title?: string;
       enabled: boolean;
       authType: "PUBLIC" | "PASSWORD";
       password?: string;
-      syncMode: "SNAPSHOT" | "DIRECT_LOCAL";
     }
   ) => Promise<WorkspacePublication>;
   onDeleteAgentPublication: (id: string) => Promise<void>;
@@ -248,15 +248,16 @@ export function AgentsScreen({
   const [workspacePublications, setWorkspacePublications] = useState<WorkspacePublication[]>([]);
   const [publicationsLoading, setPublicationsLoading] = useState(false);
   const [publicationSaving, setPublicationSaving] = useState(false);
+  const [publicationDrawerOpen, setPublicationDrawerOpen] = useState(false);
   const [publicationForm, setPublicationForm] = useState({
     id: "",
     slug: "",
+    publicPath: "",
     sourcePath: ".",
     title: "",
     enabled: true,
     authType: "PUBLIC" as "PUBLIC" | "PASSWORD",
-    password: "",
-    syncMode: "SNAPSHOT" as "SNAPSHOT" | "DIRECT_LOCAL"
+    password: ""
   });
   const [fileLoadingPath, setFileLoadingPath] = useState<string | null>(null);
   const [openFile, setOpenFile] = useState<AgentWorkspaceFileResponse | null>(null);
@@ -326,6 +327,10 @@ export function AgentsScreen({
     workspaceData && workspaceData.path !== "."
       ? workspaceData.path.split("/").filter(Boolean)
       : [];
+  const publishedSourcePaths = useMemo(
+    () => new Set(workspacePublications.filter((item) => item.enabled).map((item) => item.sourcePath)),
+    [workspacePublications]
+  );
   const headerValidationMessage =
     !form.name.trim()
       ? "Name is required."
@@ -401,6 +406,7 @@ export function AgentsScreen({
       setSelectedEventId(null);
       setWorkspaceData(null);
       setWorkspacePublications([]);
+      setPublicationDrawerOpen(false);
       setOpenFile(null);
       setCrossMemoryDrawerOpen(false);
       setSystemPromptDrawerOpen(false);
@@ -427,6 +433,7 @@ export function AgentsScreen({
     setSelectedEventId(null);
     setOpenFile(null);
     setWorkspacePublications([]);
+    setPublicationDrawerOpen(false);
     setCrossMemoryDrawerOpen(false);
     setSystemPromptDrawerOpen(false);
     setSystemPromptLoading(false);
@@ -451,6 +458,7 @@ export function AgentsScreen({
     setSystemPromptText("");
     setSystemPromptMeta(null);
     setTransferMode(null);
+    setPublicationDrawerOpen(false);
   };
 
   const closeDrawer = () => {
@@ -469,11 +477,16 @@ export function AgentsScreen({
       eventDetailsDrawerOpen ||
       crossMemoryDrawerOpen ||
       systemPromptDrawerOpen ||
+      publicationDrawerOpen ||
       transferMode !== null ||
       Boolean(openFile),
     () => {
       if (transferMode) {
         setTransferMode(null);
+        return;
+      }
+      if (publicationDrawerOpen) {
+        setPublicationDrawerOpen(false);
         return;
       }
       if (systemPromptDrawerOpen) {
@@ -530,7 +543,8 @@ export function AgentsScreen({
       setWorkspacePublications(publications);
       setPublicationForm((prev) => ({
         ...prev,
-        sourcePath: data.path === "." ? prev.sourcePath || "." : data.path
+        publicPath: prev.publicPath || `/agent/${selectedAgent.name}/`,
+        sourcePath: data.path === "." ? prev.sourcePath || "" : data.path
       }));
     } catch (error) {
       const message =
@@ -558,21 +572,44 @@ export function AgentsScreen({
     }
   };
 
+  const openPublicationDrawer = async (sourcePath?: string) => {
+    if (!selectedAgent) return;
+    setPublicationDrawerOpen(true);
+    setPanelError(null);
+    setPublicationForm((prev) => ({
+      ...prev,
+      id: "",
+      slug: "",
+      publicPath: prev.publicPath || `/agent/${selectedAgent.name}/`,
+      sourcePath:
+        sourcePath && sourcePath !== "."
+          ? sourcePath
+          : workspaceData?.path && workspaceData.path !== "."
+            ? workspaceData.path
+            : "",
+      title: "",
+      enabled: true,
+      authType: "PUBLIC",
+      password: ""
+    }));
+    await refreshWorkspacePublications();
+  };
+
   const handleEditPublication = (publication: WorkspacePublication) => {
     setPublicationForm({
       id: publication.id,
       slug: publication.slug,
+      publicPath: publication.publicPath,
       sourcePath: publication.sourcePath,
       title: publication.title ?? "",
       enabled: publication.enabled,
       authType: publication.authType,
-      password: "",
-      syncMode: publication.syncMode
+      password: ""
     });
   };
 
   const handleSavePublication = async () => {
-    if (!selectedAgent || !publicationForm.slug.trim() || !publicationForm.sourcePath.trim()) {
+    if (!selectedAgent || !publicationForm.publicPath.trim() || !publicationForm.sourcePath.trim()) {
       return;
     }
     setPublicationSaving(true);
@@ -580,13 +617,13 @@ export function AgentsScreen({
     try {
       const saved = await onSaveAgentPublication(selectedAgent.name, {
         id: publicationForm.id || undefined,
-        slug: publicationForm.slug.trim(),
+        slug: publicationForm.slug.trim() || undefined,
+        publicPath: publicationForm.publicPath.trim(),
         sourcePath: publicationForm.sourcePath.trim(),
         title: publicationForm.title.trim() || undefined,
         enabled: publicationForm.enabled,
         authType: publicationForm.authType,
-        password: publicationForm.password.trim() || undefined,
-        syncMode: publicationForm.syncMode
+        password: publicationForm.password.trim() || undefined
       });
       setWorkspacePublications((prev) => {
         const without = prev.filter((publication) => publication.id !== saved.id);
@@ -595,12 +632,12 @@ export function AgentsScreen({
       setPublicationForm({
         id: "",
         slug: "",
+        publicPath: selectedAgent ? `/agent/${selectedAgent.name}/` : "",
         sourcePath: workspaceData?.path && workspaceData.path !== "." ? workspaceData.path : ".",
         title: "",
         enabled: true,
         authType: "PUBLIC",
-        password: "",
-        syncMode: "SNAPSHOT"
+        password: ""
       });
     } catch (error) {
       const message =
@@ -1783,202 +1820,23 @@ export function AgentsScreen({
                   </Button>
                 </div>
 
-                <div className="rounded border border-slate-800 bg-slate-900/40 p-3">
-                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <h3 className="text-sm font-semibold text-slate-200">
-                        Web Publications
-                      </h3>
-                      <p className="text-xs text-slate-500">
-                        Publish a workspace folder at /agents/&lt;name&gt;/&lt;slug&gt;.
-                      </p>
-                    </div>
-                    {publicationForm.id ? (
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        className="px-2 py-1 text-xs"
-                        onClick={() =>
-                          setPublicationForm({
-                            id: "",
-                            slug: "",
-                            sourcePath:
-                              workspaceData?.path && workspaceData.path !== "."
-                                ? workspaceData.path
-                                : ".",
-                            title: "",
-                            enabled: true,
-                            authType: "PUBLIC",
-                            password: "",
-                            syncMode: "SNAPSHOT"
-                          })
-                        }
-                      >
-                        New Publication
-                      </Button>
-                    ) : null}
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-800 bg-slate-900/40 p-3">
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-200">Web Publications</h3>
+                    <p className="text-xs text-slate-500">
+                      {workspacePublications.length} folder
+                      {workspacePublications.length === 1 ? "" : "s"} published. Use a
+                      workspace subfolder, not the root.
+                    </p>
                   </div>
-
-                  <div className="grid gap-2 md:grid-cols-6">
-                    <Input
-                      value={publicationForm.slug}
-                      onChange={(event) =>
-                        setPublicationForm((prev) => ({
-                          ...prev,
-                          slug: event.target.value
-                        }))
-                      }
-                      placeholder="slug"
-                    />
-                    <Input
-                      value={publicationForm.sourcePath}
-                      onChange={(event) =>
-                        setPublicationForm((prev) => ({
-                          ...prev,
-                          sourcePath: event.target.value
-                        }))
-                      }
-                      placeholder="folder path"
-                    />
-                    <Input
-                      value={publicationForm.title}
-                      onChange={(event) =>
-                        setPublicationForm((prev) => ({
-                          ...prev,
-                          title: event.target.value
-                        }))
-                      }
-                      placeholder="optional title"
-                    />
-                    <select
-                      className="rounded border border-slate-700 bg-slate-950 px-2 py-2 text-sm text-slate-100"
-                      value={publicationForm.authType}
-                      onChange={(event) =>
-                        setPublicationForm((prev) => ({
-                          ...prev,
-                          authType: event.target.value as "PUBLIC" | "PASSWORD"
-                        }))
-                      }
-                    >
-                      <option value="PUBLIC">Public</option>
-                      <option value="PASSWORD">Password</option>
-                    </select>
-                    <select
-                      className="rounded border border-slate-700 bg-slate-950 px-2 py-2 text-sm text-slate-100"
-                      value={publicationForm.syncMode}
-                      onChange={(event) =>
-                        setPublicationForm((prev) => ({
-                          ...prev,
-                          syncMode: event.target.value as "SNAPSHOT" | "DIRECT_LOCAL"
-                        }))
-                      }
-                    >
-                      <option value="SNAPSHOT">Snapshot</option>
-                      <option value="DIRECT_LOCAL">Direct local</option>
-                    </select>
-                    <label className="flex items-center gap-2 text-sm text-slate-300">
-                      <input
-                        type="checkbox"
-                        checked={publicationForm.enabled}
-                        onChange={(event) =>
-                          setPublicationForm((prev) => ({
-                            ...prev,
-                            enabled: event.target.checked
-                          }))
-                        }
-                      />
-                      Enabled
-                    </label>
-                  </div>
-
-                  {publicationForm.authType === "PASSWORD" ? (
-                    <div className="mt-2 max-w-sm">
-                      <Input
-                        type="password"
-                        value={publicationForm.password}
-                        onChange={(event) =>
-                          setPublicationForm((prev) => ({
-                            ...prev,
-                            password: event.target.value
-                          }))
-                        }
-                        placeholder={
-                          publicationForm.id
-                            ? "leave blank to keep current password"
-                            : "publication password"
-                        }
-                      />
-                    </div>
-                  ) : null}
-
-                  <div className="mt-2">
-                    <Button
-                      type="button"
-                      className="px-3 py-1.5 text-xs"
-                      disabled={publicationSaving || !publicationForm.slug.trim()}
-                      onClick={handleSavePublication}
-                    >
-                      {publicationSaving
-                        ? "Saving..."
-                        : publicationForm.id
-                          ? "Update Publication"
-                          : "Create Publication"}
-                    </Button>
-                  </div>
-
-                  <div className="mt-3 space-y-2">
-                    {workspacePublications.map((publication) => (
-                      <div
-                        key={publication.id}
-                        className="rounded border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
-                      >
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <div>
-                            <a
-                              href={publication.publicUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="font-medium text-sky-300 hover:text-sky-200"
-                            >
-                              {publication.slug}
-                            </a>
-                            <div className="text-xs text-slate-500">
-                              {publication.sourcePath} | {publication.syncMode} |{" "}
-                              {publication.authType}
-                              {publication.enabled ? "" : " | disabled"}
-                            </div>
-                            <div className="text-xs text-slate-500">
-                              Last published: {formatTimestamp(publication.lastPublishedAt ?? undefined)}
-                              {publication.lastError ? ` | Error: ${publication.lastError}` : ""}
-                            </div>
-                          </div>
-                          <div className="flex gap-2">
-                            <Button
-                              type="button"
-                              variant="secondary"
-                              className="px-2 py-1 text-xs"
-                              onClick={() => handleEditPublication(publication)}
-                            >
-                              Edit
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="secondary"
-                              className="bg-rose-900 px-2 py-1 text-xs text-rose-100 hover:bg-rose-800"
-                              onClick={() => handleDeletePublication(publication)}
-                            >
-                              Delete
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                    {!publicationsLoading && workspacePublications.length === 0 ? (
-                      <div className="text-sm text-slate-500">
-                        No workspace folders are published yet.
-                      </div>
-                    ) : null}
-                  </div>
+                  <Button
+                    type="button"
+                    className="px-3 py-1.5 text-xs"
+                    onClick={() => void openPublicationDrawer()}
+                    disabled={!selectedAgent}
+                  >
+                    Manage Web Publications
+                  </Button>
                 </div>
 
                 {workspaceLoading && (
@@ -1997,28 +1855,57 @@ export function AgentsScreen({
                         </tr>
                       </thead>
                       <tbody>
-                        {workspaceData.entries.map((entry) => (
+                        {workspaceData.entries.map((entry) => {
+                          const isPublishedFolder =
+                            entry.kind === "directory" && publishedSourcePaths.has(entry.path);
+                          return (
                           <tr
                             key={entry.path}
                             className="cursor-pointer border-b border-slate-900 hover:bg-slate-900/40"
                             onClick={() => handleOpenWorkspaceEntry(entry)}
                           >
-                            <td className="px-2 py-2 text-slate-200">{entry.name}</td>
+                            <td className="px-2 py-2 text-slate-200">
+                              <span className="inline-flex items-center gap-2">
+                                {entry.name}
+                                {isPublishedFolder ? (
+                                  <span className="rounded bg-sky-900/70 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-sky-200">
+                                    Web
+                                  </span>
+                                ) : null}
+                              </span>
+                            </td>
                             <td className="px-2 py-2 text-slate-400">{entry.kind}</td>
                             <td className="whitespace-nowrap px-2 py-2 text-slate-500">
                               {entry.kind === "file" ? (entry.size ?? "-") : "-"}
                             </td>
                             <td className="px-2 py-2 text-slate-300">
-                              {entry.kind === "directory"
-                                ? "Open"
-                                : entry.isTextFile
-                                  ? fileLoadingPath === entry.path
-                                    ? "Opening..."
-                                    : "Preview"
-                                  : "Download"}
+                              <div className="flex flex-wrap gap-2">
+                                <span>
+                                  {entry.kind === "directory"
+                                    ? "Open"
+                                    : entry.isTextFile
+                                      ? fileLoadingPath === entry.path
+                                        ? "Opening..."
+                                        : "Preview"
+                                      : "Download"}
+                                </span>
+                                {entry.kind === "directory" ? (
+                                  <button
+                                    type="button"
+                                    className="text-sky-300 hover:text-sky-200"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      void openPublicationDrawer(entry.path);
+                                    }}
+                                  >
+                                    Publish
+                                  </button>
+                                ) : null}
+                              </div>
                             </td>
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
                     {workspaceData.entries.length === 0 && (
@@ -2036,6 +1923,254 @@ export function AgentsScreen({
                 {panelError}
               </div>
             )}
+          </div>
+
+          <div
+            className={`absolute inset-0 z-30 flex justify-end bg-black/35 transition-opacity ${
+              publicationDrawerOpen
+                ? "pointer-events-auto opacity-100"
+                : "pointer-events-none opacity-0"
+            }`}
+            onClick={() => setPublicationDrawerOpen(false)}
+          >
+            <div
+              className={`pointer-events-auto flex h-full w-full max-w-3xl flex-col border-l border-slate-800 bg-slate-950 shadow-2xl transition-transform duration-300 ${
+                publicationDrawerOpen ? "translate-x-0" : "translate-x-full"
+              }`}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+                <div>
+                  <h4 className="text-sm font-semibold text-slate-100">Web Publications</h4>
+                  <p className="text-xs text-slate-500">
+                    {selectedAgent ? selectedAgent.name : "No agent selected"}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="px-2 py-1 text-xs"
+                  onClick={() => setPublicationDrawerOpen(false)}
+                >
+                  Back
+                </Button>
+              </div>
+
+              <div className="min-h-0 flex-1 space-y-4 overflow-auto px-4 py-4">
+                <div className="rounded border border-slate-800 bg-slate-900/40 p-3 text-sm text-slate-300">
+                  <div className="font-medium text-slate-200">Human preview</div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    Example: publish workspace folder <code>dist</code> at{" "}
+                    <code>{publicationForm.publicPath || `/agent/${selectedAgent?.name ?? "agent"}/`}</code>.
+                    After saving, open the generated link to review the end result.
+                  </div>
+                </div>
+
+                <div className="rounded border border-slate-800 bg-slate-900 p-3">
+                  <div className="mb-3 flex items-center justify-between gap-2">
+                    <div>
+                      <div className="text-sm font-semibold text-slate-200">
+                        {publicationForm.id ? "Edit Publication" : "Add Publication"}
+                      </div>
+                      <div className="text-xs text-slate-500">
+                        Serving mode is selected automatically from runner/API placement.
+                      </div>
+                    </div>
+                    {publicationForm.id ? (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        className="px-2 py-1 text-xs"
+                        onClick={() =>
+                          setPublicationForm({
+                            id: "",
+                            slug: "",
+                            publicPath: selectedAgent ? `/agent/${selectedAgent.name}/` : "",
+                            sourcePath:
+                              workspaceData?.path && workspaceData.path !== "."
+                                ? workspaceData.path
+                                : "",
+                            title: "",
+                            enabled: true,
+                            authType: "PUBLIC",
+                            password: ""
+                          })
+                        }
+                      >
+                        New
+                      </Button>
+                    ) : null}
+                  </div>
+
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <label className="space-y-1 text-xs text-slate-400">
+                      Public path
+                      <Input
+                        value={publicationForm.publicPath}
+                        onChange={(event) =>
+                          setPublicationForm((prev) => ({
+                            ...prev,
+                            publicPath: event.target.value
+                          }))
+                        }
+                        placeholder={`/agent/${selectedAgent?.name ?? "agent"}/`}
+                      />
+                    </label>
+                    <label className="space-y-1 text-xs text-slate-400">
+                      Workspace subfolder
+                      <Input
+                        value={publicationForm.sourcePath}
+                        onChange={(event) =>
+                          setPublicationForm((prev) => ({
+                            ...prev,
+                            sourcePath: event.target.value
+                          }))
+                        }
+                        placeholder="dist"
+                      />
+                    </label>
+                    <label className="space-y-1 text-xs text-slate-400">
+                      Title
+                      <Input
+                        value={publicationForm.title}
+                        onChange={(event) =>
+                          setPublicationForm((prev) => ({
+                            ...prev,
+                            title: event.target.value
+                          }))
+                        }
+                        placeholder="optional title"
+                      />
+                    </label>
+                    <label className="space-y-1 text-xs text-slate-400">
+                      Access
+                      <select
+                        className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-2 text-sm text-slate-100"
+                        value={publicationForm.authType}
+                        onChange={(event) =>
+                          setPublicationForm((prev) => ({
+                            ...prev,
+                            authType: event.target.value as "PUBLIC" | "PASSWORD"
+                          }))
+                        }
+                      >
+                        <option value="PUBLIC">Public</option>
+                        <option value="PASSWORD">Password</option>
+                      </select>
+                    </label>
+                  </div>
+
+                  {publicationForm.authType === "PASSWORD" ? (
+                    <div className="mt-3 max-w-sm">
+                      <Input
+                        type="password"
+                        value={publicationForm.password}
+                        onChange={(event) =>
+                          setPublicationForm((prev) => ({
+                            ...prev,
+                            password: event.target.value
+                          }))
+                        }
+                        placeholder={
+                          publicationForm.id
+                            ? "leave blank to keep current password"
+                            : "publication password"
+                        }
+                      />
+                    </div>
+                  ) : null}
+
+                  <label className="mt-3 flex items-center gap-2 text-sm text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={publicationForm.enabled}
+                      onChange={(event) =>
+                        setPublicationForm((prev) => ({
+                          ...prev,
+                          enabled: event.target.checked
+                        }))
+                      }
+                    />
+                    Enabled
+                  </label>
+
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      className="px-3 py-1.5 text-xs"
+                      disabled={
+                        publicationSaving ||
+                        !publicationForm.publicPath.trim() ||
+                        !publicationForm.sourcePath.trim()
+                      }
+                      onClick={handleSavePublication}
+                    >
+                      {publicationSaving
+                        ? "Saving..."
+                        : publicationForm.id
+                          ? "Update Publication"
+                          : "Create Publication"}
+                    </Button>
+                    <span className="text-xs text-slate-500">
+                      Root workspace publication is not allowed.
+                    </span>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  {workspacePublications.map((publication) => (
+                    <div
+                      key={publication.id}
+                      className="rounded border border-slate-800 bg-slate-900 px-3 py-2 text-sm"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <a
+                            href={publication.publicUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="font-medium text-sky-300 hover:text-sky-200"
+                          >
+                            {publication.publicPath}
+                          </a>
+                          <div className="text-xs text-slate-500">
+                            {publication.sourcePath} | {publication.syncMode} | {publication.authType}
+                            {publication.enabled ? "" : " | disabled"}
+                          </div>
+                          <div className="text-xs text-slate-500">
+                            Last published: {formatTimestamp(publication.lastPublishedAt ?? undefined)}
+                            {publication.lastError ? ` | Error: ${publication.lastError}` : ""}
+                          </div>
+                        </div>
+                        <div className="flex gap-2">
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            className="px-2 py-1 text-xs"
+                            onClick={() => handleEditPublication(publication)}
+                          >
+                            Edit
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            className="bg-rose-900 px-2 py-1 text-xs text-rose-100 hover:bg-rose-800"
+                            onClick={() => handleDeletePublication(publication)}
+                          >
+                            Delete
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {!publicationsLoading && workspacePublications.length === 0 ? (
+                    <div className="rounded border border-slate-800 bg-slate-900 px-3 py-6 text-center text-sm text-slate-500">
+                      No workspace folders are published yet.
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </div>
           </div>
 
           <div

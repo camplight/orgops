@@ -110,13 +110,13 @@ type DashboardDrawersProps = {
     name: string,
     input: {
       id?: string;
-      slug: string;
+      slug?: string;
+      publicPath: string;
       sourcePath: string;
       title?: string;
       enabled: boolean;
       authType: "PUBLIC" | "PASSWORD";
       password?: string;
-      syncMode: "SNAPSHOT" | "DIRECT_LOCAL";
     }
   ) => Promise<WorkspacePublication>;
   onDeleteAgentPublication: (id: string) => Promise<void>;

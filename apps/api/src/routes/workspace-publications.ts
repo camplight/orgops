@@ -7,7 +7,8 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { basename, extname, join, relative, resolve, sep } from "node:path";
+import { hostname } from "node:os";
+import { extname, join, resolve, sep } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 import { and, desc, eq, inArray } from "drizzle-orm";
 
@@ -44,8 +45,8 @@ type Manifest = {
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const AUTH_TYPES = new Set(["PUBLIC", "PASSWORD"]);
-const SYNC_MODES = new Set(["SNAPSHOT", "DIRECT_LOCAL"]);
 const MAX_BLOB_BYTES = 50 * 1024 * 1024;
+const RESERVED_PUBLIC_PATH_PREFIXES = ["/api/", "/ws/", "/admin/", "/health/"];
 
 const MIME_BY_EXTENSION = new Map<string, string>([
   [".html", "text/html; charset=utf-8"],
@@ -105,11 +106,37 @@ function normalizeRequestPath(raw: string | undefined) {
 function normalizeSourcePath(raw: unknown): string | null {
   let value = typeof raw === "string" ? raw.trim() : "";
   value = value.replace(/^\.\/+/, "").replace(/\/+$/, "");
-  if (!value) return ".";
-  if (value === ".") return ".";
+  if (!value || value === ".") return null;
   if (value.startsWith("/") || value.includes("\\") || value.includes("\0")) return null;
   if (value.split("/").some((part) => !part || part === "." || part === "..")) return null;
   return value;
+}
+
+function normalizePublicPath(raw: unknown): string | null {
+  let value = typeof raw === "string" ? raw.trim() : "";
+  if (!value) return null;
+  if (!value.startsWith("/")) value = `/${value}`;
+  value = value.replace(/\/+/g, "/");
+  if (!value.endsWith("/")) value = `${value}/`;
+  if (value === "/") return null;
+  if (value.includes("\\") || value.includes("\0")) return null;
+  if (value.split("/").some((part) => part === ".." || part === ".")) return null;
+  const lowered = value.toLowerCase();
+  if (RESERVED_PUBLIC_PATH_PREFIXES.some((prefix) => lowered === prefix || lowered.startsWith(prefix))) {
+    return null;
+  }
+  return value;
+}
+
+function defaultPublicPath(agentName: string) {
+  return normalizePublicPath(`/agent/${agentName}/`) ?? `/agent/${encodeURIComponent(agentName)}/`;
+}
+
+function slugFromPublicPath(publicPath: string) {
+  const segments = publicPath.split("/").filter(Boolean);
+  const raw = segments[segments.length - 1] ?? "site";
+  const slug = raw.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
+  return validateSlug(slug) ? slug : "site";
 }
 
 function validateSlug(slug: string) {
@@ -149,6 +176,7 @@ function serializePublication(row: PublicationRow, origin: string) {
     agentName: row.agent_name,
     slug: row.slug,
     title: row.title ?? null,
+    publicPath: row.public_path,
     sourcePath: row.source_path,
     enabled: Boolean(row.enabled),
     authType: row.auth_type,
@@ -161,7 +189,7 @@ function serializePublication(row: PublicationRow, origin: string) {
     updatedAt: row.updated_at,
     lastPublishedAt: row.last_published_at ?? null,
     lastError: row.last_error ?? null,
-    publicUrl: `${origin}/agents/${encodeURIComponent(row.agent_name)}/${encodeURIComponent(row.slug)}/`,
+    publicUrl: `${origin}${row.public_path}`,
   };
 }
 
@@ -194,6 +222,23 @@ function resolveWorkspaceForAgent(
     workspacePath: resolveWorkspacePath(row.workspacePath),
     assignedRunnerId: row.assignedRunnerId ?? null,
   };
+}
+
+function resolveAutoSyncMode(orm: OrgOpsDrizzleDb, agentName: string) {
+  const row = orm
+    .select({
+      assignedRunnerId: schema.agents.assigned_runner_id,
+    })
+    .from(schema.agents)
+    .where(eq(schema.agents.name, agentName))
+    .get() as { assignedRunnerId: string | null } | undefined;
+  if (!row?.assignedRunnerId) return "SNAPSHOT";
+  const runner = orm
+    .select({ hostname: schema.runnerNodes.hostname })
+    .from(schema.runnerNodes)
+    .where(eq(schema.runnerNodes.id, row.assignedRunnerId))
+    .get() as { hostname: string | null } | undefined;
+  return runner?.hostname && runner.hostname === hostname() ? "DIRECT_LOCAL" : "SNAPSHOT";
 }
 
 function resolveSafeLocalTarget(workspacePath: string, sourcePath: string, requestPath: string) {
@@ -263,6 +308,35 @@ export function registerWorkspacePublicationRoutes(
       .get() as PublicationRow | undefined;
   }
 
+  function makeUniqueSlug(agentName: string, baseSlug: string, existingId?: string) {
+    let candidate = baseSlug;
+    for (let index = 2; index < 1000; index += 1) {
+      const existing = getPublication(agentName, candidate);
+      if (!existing || existing.id === existingId) return candidate;
+      candidate = `${baseSlug}-${index}`;
+    }
+    return `${baseSlug}-${Date.now()}`;
+  }
+
+  function findPublicationForPath(pathname: string) {
+    const normalizedPath = pathname.endsWith("/") ? pathname : `${pathname}/`;
+    const rows = orm
+      .select()
+      .from(schema.workspacePublications)
+      .where(eq(schema.workspacePublications.enabled, 1))
+      .all() as PublicationRow[];
+    const matches = rows
+      .filter((row) => normalizedPath === row.public_path || normalizedPath.startsWith(row.public_path))
+      .sort((left, right) => right.public_path.length - left.public_path.length);
+    const publication = matches[0];
+    if (!publication) return null;
+    const requestPath =
+      pathname === publication.public_path.replace(/\/+$/, "")
+        ? ""
+        : pathname.slice(publication.public_path.length);
+    return { publication, requestPath };
+  }
+
   function emitAudit(type: string, publication: PublicationRow, actor: { type: string; id: string | null }) {
     insertEvent({
       type,
@@ -277,10 +351,7 @@ export function registerWorkspacePublicationRoutes(
     });
   }
 
-  async function handlePublicRequest(c: any, wildcardPath?: string) {
-    const agentName = c.req.param("name");
-    const slug = c.req.param("slug");
-    const publication = getPublication(agentName, slug);
+  async function servePublication(c: any, publication: PublicationRow | undefined, wildcardPath?: string) {
     if (!publication || !publication.enabled) {
       return jsonResponse(c, { error: "Not found" }, 404);
     }
@@ -347,8 +418,26 @@ export function registerWorkspacePublicationRoutes(
     });
   }
 
-  app.get("/agents/:name/:slug", (c) => handlePublicRequest(c));
-  app.get("/agents/:name/:slug/*", (c) => handlePublicRequest(c, c.req.param("*")));
+  app.get("/agents/:name/:slug", (c) =>
+    servePublication(c, getPublication(c.req.param("name"), c.req.param("slug"))),
+  );
+  app.get("/agents/:name/:slug/*", (c) =>
+    servePublication(c, getPublication(c.req.param("name"), c.req.param("slug")), c.req.param("*")),
+  );
+  app.get("*", (c, next) => {
+    const pathname = new URL(c.req.url).pathname;
+    if (
+      pathname === "/health" ||
+      pathname.startsWith("/api/") ||
+      pathname.startsWith("/ws/") ||
+      pathname.startsWith("/admin/")
+    ) {
+      return next();
+    }
+    const match = findPublicationForPath(pathname);
+    if (!match) return next();
+    return servePublication(c, match.publication, match.requestPath);
+  });
 
   app.get("/api/agents/:name/publications", requireAuth as any, (c) => {
     const agentName = c.req.param("name");
@@ -373,7 +462,12 @@ export function registerWorkspacePublicationRoutes(
       return jsonResponse(c, { error: "Not found" }, 404);
     }
     const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
-    const slug = String(body.slug ?? "").trim().toLowerCase();
+    const publicPath = normalizePublicPath(body.publicPath ?? defaultPublicPath(agentName));
+    if (!publicPath) {
+      return jsonResponse(c, { error: "publicPath must be an absolute non-reserved URL path." }, 400);
+    }
+    const requestedSlug = String(body.slug ?? slugFromPublicPath(publicPath)).trim().toLowerCase();
+    const slug = makeUniqueSlug(agentName, requestedSlug);
     if (!validateSlug(slug)) {
       return jsonResponse(c, { error: "Slug must be lowercase letters, numbers, or dashes." }, 400);
     }
@@ -383,8 +477,7 @@ export function registerWorkspacePublicationRoutes(
     }
     const authType = String(body.authType ?? "PUBLIC").toUpperCase();
     if (!AUTH_TYPES.has(authType)) return jsonResponse(c, { error: "Invalid authType" }, 400);
-    const syncMode = String(body.syncMode ?? "SNAPSHOT").toUpperCase();
-    if (!SYNC_MODES.has(syncMode)) return jsonResponse(c, { error: "Invalid syncMode" }, 400);
+    const syncMode = resolveAutoSyncMode(orm, agentName);
     const password = typeof body.password === "string" ? body.password : "";
     if (authType === "PASSWORD" && !password.trim()) {
       return jsonResponse(c, { error: "Password is required for password-protected publications." }, 400);
@@ -396,6 +489,7 @@ export function registerWorkspacePublicationRoutes(
       agent_name: agentName,
       slug,
       title: typeof body.title === "string" && body.title.trim() ? body.title.trim() : null,
+      public_path: publicPath,
       source_path: sourcePath,
       enabled: body.enabled === false ? 0 : 1,
       auth_type: authType,
@@ -443,6 +537,16 @@ export function registerWorkspacePublicationRoutes(
       if (!validateSlug(slug)) return jsonResponse(c, { error: "Invalid slug" }, 400);
       patch.slug = slug;
     }
+    if (body.publicPath !== undefined) {
+      const publicPath = normalizePublicPath(body.publicPath);
+      if (!publicPath) {
+        return jsonResponse(c, { error: "publicPath must be an absolute non-reserved URL path." }, 400);
+      }
+      patch.public_path = publicPath;
+      if (body.slug === undefined) {
+        patch.slug = makeUniqueSlug(existing.agent_name, slugFromPublicPath(publicPath), existing.id);
+      }
+    }
     if (body.title !== undefined) {
       patch.title = typeof body.title === "string" && body.title.trim() ? body.title.trim() : null;
     }
@@ -454,11 +558,7 @@ export function registerWorkspacePublicationRoutes(
       patch.source_path = sourcePath;
     }
     if (body.enabled !== undefined) patch.enabled = body.enabled ? 1 : 0;
-    if (body.syncMode !== undefined) {
-      const syncMode = String(body.syncMode).toUpperCase();
-      if (!SYNC_MODES.has(syncMode)) return jsonResponse(c, { error: "Invalid syncMode" }, 400);
-      patch.sync_mode = syncMode;
-    }
+    patch.sync_mode = resolveAutoSyncMode(orm, existing.agent_name);
     if (body.authType !== undefined) {
       const authType = String(body.authType).toUpperCase();
       if (!AUTH_TYPES.has(authType)) return jsonResponse(c, { error: "Invalid authType" }, 400);

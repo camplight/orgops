@@ -206,7 +206,7 @@ of truth for ordering and policy.
 
 - `processes` (includes `execution_mode` and process state fields), `process_output`
 - `files`
-- `workspace_publications` — explicitly published agent workspace folders exposed at `/agents/<name>/<slug>/...`
+- `workspace_publications` — explicitly published agent workspace subfolders exposed at configurable public paths such as `/agent/<name>/`
 - `workspace_publication_blobs` and `workspace_publication_revisions` — content-addressed snapshot storage and atomic manifests for runner-synced publications
 - `secrets`
 - `models`
@@ -419,11 +419,14 @@ Published topics include:
 - workspace publication management:
   - `GET /api/agents/:name/publications`
   - `POST /api/agents/:name/publications`
-    - accepts `slug`, `sourcePath`, optional `title`, `enabled`, `authType` (`PUBLIC` or `PASSWORD`), optional `password`, and `syncMode` (`SNAPSHOT` or `DIRECT_LOCAL`)
+    - accepts `publicPath`, `sourcePath`, optional `slug`, `title`, `enabled`, `authType` (`PUBLIC` or `PASSWORD`), and optional `password`
+    - `sourcePath` must name a workspace subfolder; publishing the workspace root is rejected
+    - serving mode is selected automatically: `DIRECT_LOCAL` when the assigned runner hostname matches the API host, otherwise `SNAPSHOT`
   - `PATCH /api/workspace-publications/:id`
   - `DELETE /api/workspace-publications/:id`
 - public workspace publications:
-  - `GET /agents/:name/:slug/...`
+  - `GET <publication.publicPath>...` (for example `/agent/system/`)
+  - legacy `GET /agents/:name/:slug/...` remains accepted for publication rows
   - password-protected publications use HTTP Basic auth in this version
 
 ### Teams / Channels / Conversations
@@ -629,12 +632,12 @@ Current tool families exposed to models:
 
 ### Workspace Publications
 
-Agents can publish explicit folders from their workspace to unauthenticated web URLs shaped as `/agents/<agent-name>/<slug>/...`. Publications are configured from the admin UI or by agent tools. The slug is unique per agent, so each agent can expose multiple folders.
+Agents can publish explicit subfolders from their workspace to unauthenticated web URLs. Publications are configured from the admin UI or by agent tools. The human-facing mount is `publicPath`, defaulting in the UI to `/agent/<agent-name>/`, and operators may set another non-reserved absolute path such as `/sites/report/`. The internal `slug` remains unique per agent for management compatibility.
 
 Two serving modes are supported:
 
-- `DIRECT_LOCAL` serves from the live workspace filesystem. This is useful when API and runner share the same host/filesystem.
-- `SNAPSHOT` is the default. The assigned runner scans enabled publication folders on a short interval, hashes files, uploads missing content-addressed blobs to the API, then commits an atomic revision manifest. The API serves public traffic from the latest complete revision, so internet requests do not depend on live runner availability.
+- `DIRECT_LOCAL` serves from the live workspace filesystem. It is selected automatically when the assigned runner hostname matches the API host.
+- `SNAPSHOT` is selected when the assigned runner is elsewhere or unknown. The assigned runner scans enabled publication folders on a short interval, hashes files, uploads missing content-addressed blobs to the API, then commits an atomic revision manifest. The API serves public traffic from the latest complete revision, so internet requests do not depend on live runner availability.
 
 Runner sync endpoints are runner-authenticated:
 
@@ -644,7 +647,7 @@ Runner sync endpoints are runner-authenticated:
 - `POST /api/workspace-publications/:id/revisions` commits the manifest as the active revision.
 - `POST /api/workspace-publications/:id/sync-error` records sync diagnostics.
 
-Snapshot sync skips common secret/control paths such as dotfiles, `.env*`, VCS directories, and `node_modules`, enforces per-file size limits, and rejects symlink escapes. Passwords are stored with the same scrypt hashing helper used for human passwords; plaintext publication passwords are never stored.
+Snapshot sync skips common secret/control paths such as dotfiles, `.env*`, VCS directories, and `node_modules`, enforces per-file size limits, and rejects symlink escapes. Passwords are stored with the same scrypt hashing helper used for human passwords; plaintext publication passwords are never stored. Publishing the root workspace folder is rejected; create a subfolder such as `dist`, `public`, or `site` and publish that.
 
 Audit events are emitted around tool/process operations and RLM execution.
 
@@ -689,7 +692,7 @@ Security note: wrapped `source`, `setup.command`, and `runtime.command` are host
 - Root `Dockerfile` builds a single reusable image containing `api`, `agent-runner`, `admin-ui`, and `user-ui`.
 - `docker/entrypoint.sh` supports runtime component selection through `ORGOPS_COMPONENTS` (CSV of `api`, `runner`, `admin-ui`, `user-ui`).
 - When any HTTP-serving component is enabled, HAProxy runs in-container as the public listener (default port `8787`) and routes:
-  - `/api`, `/agents`, `/ws`, `/health` -> API backend
+  - `/api`, `/agents`, `/agent`, `/ws`, `/health` -> API backend
   - `/admin` -> admin UI preview backend
   - `/` -> user UI preview backend (fallback order: user UI -> admin UI -> API)
 - Runner startup waits for local API readiness only when both `api` and `runner` are enabled in the same container.
