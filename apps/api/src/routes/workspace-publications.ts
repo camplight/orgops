@@ -276,6 +276,70 @@ function timingSafePasswordFromBasicAuth(
   }
 }
 
+function publicationAuthCookieName(publicationId: string) {
+  return `orgops_pub_${publicationId.replace(/[^a-zA-Z0-9]/g, "_")}`;
+}
+
+function publicationAuthCookieValue(publication: PublicationRow) {
+  return createHash("sha256")
+    .update(`${publication.id}:${publication.password_hash ?? ""}`)
+    .digest("hex");
+}
+
+function hasPublicationAuthCookie(c: any, publication: PublicationRow) {
+  const cookieHeader = String(c.req.header("cookie") ?? "");
+  const expectedName = publicationAuthCookieName(publication.id);
+  const expectedValue = publicationAuthCookieValue(publication);
+  return cookieHeader
+    .split(";")
+    .map((part) => part.trim())
+    .some((part) => part === `${expectedName}=${expectedValue}`);
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function passwordPage(publication: PublicationRow, failed = false) {
+  const title = escapeHtml(publication.title ?? `${publication.agent_name}/${publication.slug}`);
+  return new Response(
+    `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Protected publication</title>
+    <style>
+      body { font-family: system-ui, sans-serif; background: #020617; color: #e2e8f0; display: grid; min-height: 100vh; place-items: center; margin: 0; }
+      form { width: min(420px, calc(100vw - 32px)); border: 1px solid #1e293b; border-radius: 12px; background: #0f172a; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,.35); }
+      h1 { font-size: 18px; margin: 0 0 8px; }
+      p { color: #94a3b8; margin: 0 0 16px; font-size: 14px; }
+      input { box-sizing: border-box; width: 100%; border: 1px solid #334155; border-radius: 8px; background: #020617; color: #e2e8f0; padding: 10px 12px; font-size: 14px; }
+      button { margin-top: 12px; width: 100%; border: 0; border-radius: 8px; background: #2563eb; color: white; padding: 10px 12px; font-weight: 600; cursor: pointer; }
+      .error { color: #fca5a5; margin-bottom: 12px; }
+    </style>
+  </head>
+  <body>
+    <form method="post">
+      <h1>${title}</h1>
+      <p>This published folder is password protected.</p>
+      ${failed ? `<div class="error">Incorrect password.</div>` : ""}
+      <input name="password" type="password" autocomplete="current-password" autofocus placeholder="Password" />
+      <button type="submit">Open publication</button>
+    </form>
+  </body>
+</html>`,
+    {
+      status: failed ? 401 : 200,
+      headers: { "content-type": "text/html; charset=utf-8" },
+    },
+  );
+}
+
 export function registerWorkspacePublicationRoutes(
   app: Hono<any>,
   deps: WorkspacePublicationDeps,
@@ -357,13 +421,10 @@ export function registerWorkspacePublicationRoutes(
     }
     if (publication.auth_type === "PASSWORD") {
       const password = timingSafePasswordFromBasicAuth(c.req.header("authorization"));
-      if (!password || !publication.password_hash || !verifyPassword(password, publication.password_hash)) {
-        return new Response("Authentication required", {
-          status: 401,
-          headers: {
-            "www-authenticate": `Basic realm="OrgOps ${publication.agent_name}/${publication.slug}"`,
-          },
-        });
+      const basicAuthOk =
+        Boolean(password && publication.password_hash && verifyPassword(password, publication.password_hash));
+      if (!basicAuthOk && !hasPublicationAuthCookie(c, publication)) {
+        return passwordPage(publication);
       }
     }
 
@@ -438,6 +499,42 @@ export function registerWorkspacePublicationRoutes(
     if (!match) return next();
     return servePublication(c, match.publication, match.requestPath);
   });
+
+  async function handlePublicationPasswordPost(c: any, next: any) {
+    const pathname = new URL(c.req.url).pathname;
+    if (
+      pathname === "/health" ||
+      pathname.startsWith("/api/") ||
+      pathname.startsWith("/ws/") ||
+      pathname.startsWith("/admin/")
+    ) {
+      return next();
+    }
+    const match = findPublicationForPath(pathname);
+    if (!match) return next();
+    const publication = match.publication;
+    if (publication.auth_type !== "PASSWORD" || !publication.password_hash) {
+      return next();
+    }
+    const bodyText = await c.req.text();
+    const password = new URLSearchParams(bodyText).get("password") ?? "";
+    if (!verifyPassword(password, publication.password_hash)) {
+      return passwordPage(publication, true);
+    }
+    const cookieName = publicationAuthCookieName(publication.id);
+    const cookieValue = publicationAuthCookieValue(publication);
+    return new Response(null, {
+      status: 303,
+      headers: {
+        location: pathname,
+        "set-cookie": `${cookieName}=${cookieValue}; Path=${publication.public_path}; HttpOnly; SameSite=Lax`,
+      },
+    });
+  }
+
+  app.post("/agents/:name/:slug", (c, next) => handlePublicationPasswordPost(c, next));
+  app.post("/agents/:name/:slug/*", (c, next) => handlePublicationPasswordPost(c, next));
+  app.post("*", (c, next) => handlePublicationPasswordPost(c, next));
 
   app.get("/api/agents/:name/publications", requireAuth as any, (c) => {
     const agentName = c.req.param("name");

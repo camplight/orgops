@@ -430,7 +430,26 @@ describe("api app", () => {
     const unauthenticatedPublic = await app.request(
       "http://localhost/agents/snapshot-publisher/dist/",
     );
-    expect(unauthenticatedPublic.status).toBe(401);
+    expect(unauthenticatedPublic.status).toBe(200);
+    expect(await unauthenticatedPublic.text()).toContain("This published folder is password protected.");
+    const wrongPassword = await app.request("http://localhost/agents/snapshot-publisher/dist/", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ password: "wrong" }).toString(),
+    });
+    expect(wrongPassword.status).toBe(401);
+    const formLogin = await app.request("http://localhost/agents/snapshot-publisher/dist/", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ password: "publish-pass" }).toString(),
+    });
+    expect(formLogin.status).toBe(303);
+    const authCookie = formLogin.headers.get("set-cookie") ?? "";
+    const cookiePublic = await app.request("http://localhost/agents/snapshot-publisher/dist/", {
+      headers: { cookie: authCookie },
+    });
+    expect(cookiePublic.status).toBe(200);
+    expect(await cookiePublic.text()).toBe("<h1>snapshot</h1>");
     const authenticatedPublic = await app.request(
       "http://localhost/agents/snapshot-publisher/dist/",
       {
