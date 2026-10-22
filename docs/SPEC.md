@@ -262,6 +262,16 @@ sessions. This does not introduce a general role-management API or an OS sandbox
 
 ### Human Auth
 
+Password sign-in and publication password verification use asynchronous scrypt with
+the existing stored-hash format. Missing accounts perform a dummy derivation before
+the same credential error, reducing username timing disclosure. Login admits at
+most four concurrent derivations, 60 attempts per instance/minute and eight per
+username/minute (also for nonexistent usernames), returning 429 with Retry-After.
+The bounded counters do not trust caller-supplied forwarding headers. Authentication
+JSON bodies are capped at 4 KB and malformed login JSON returns 400. Password
+sessions expire after eight hours; password/profile identity changes rotate the
+current cookie and revoke that human's other sessions. Clients must adopt Set-Cookie.
+
 - Session-cookie login: `POST /api/auth/login`
 - Profile/password update: `PATCH /api/auth/profile`
 - Logout/me endpoints supported

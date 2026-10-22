@@ -65,7 +65,7 @@ type EventsDeps = {
     shapes: EventShapeDefinition[],
   ) => Array<{ type: string; description: string; source: string; payloadExample?: unknown }>;
   access: AccessControl;
-  verifyPassword: (password: string, hashed: string) => boolean;
+  verifyPassword: (password: string, hashed: string) => Promise<boolean>;
 };
 
 export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
@@ -1138,7 +1138,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       .from(schema.humans)
       .where(eq(schema.humans.username, user.username))
       .get() as { id: string; username: string; passwordHash: string } | undefined;
-    if (!human || !verifyPassword(password, human.passwordHash)) {
+    if (!human || !await verifyPassword(password, human.passwordHash)) {
       return jsonResponse(c, { error: "Invalid credentials" }, 401);
     }
 
