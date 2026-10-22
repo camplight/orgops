@@ -41,6 +41,22 @@ files/            Uploaded file storage
 
 ### Agents
 
+Ordinary humans receive server-generated agent workspace paths under
+`ORGOPS_WORKSPACE_ROOT` (default `.orgops-data/workspaces`). Creation records their
+ownership for public agents too. Arbitrary path changes, ownership reassignment,
+wrapped host commands, outside-workspace access and extra skill roots require an
+instance operator. Scoped external runners can configure host runtimes only for
+their own assigned runner ID. Legacy unowned public agents remain operator-managed.
+Agent copy/move/export operations require an instance operator.
+
+Workspace browsing/downloads check canonical containment and reject symlink
+escapes. Non-operators cannot browse legacy workspaces outside the managed root.
+Cleanup refuses the root itself and every path outside it, even for operators.
+Existing paths and files are not migrated or deleted automatically. API clients
+must read the generated workspace path instead of assuming a submitted path was
+accepted. These checks do not sandbox native shell execution: runner OS isolation
+and the trust of humans who can direct agents remain deployment responsibilities.
+
 Stored in `agents`:
 
 - identity/config: `id`, `name`, `icon`, `description`, `model_id`

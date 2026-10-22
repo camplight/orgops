@@ -5466,6 +5466,7 @@ describe("api app", () => {
     const { app } = createApp({
       db,
       dataDir,
+      projectRoot: dataDir,
       adminUser: "admin",
       adminPass: "admin",
       runnerToken: "test-token",
@@ -5479,7 +5480,7 @@ describe("api app", () => {
     expect(loginRes.status).toBe(200);
     const cookie = loginRes.headers.get("set-cookie") ?? "";
 
-    const workspacePath = join(dataDir, "workspaces", "agent-cleanup");
+    const workspacePath = join(dataDir, ".orgops-data", "workspaces", "agent-cleanup");
     const testFilePath = join(workspacePath, "stale.txt");
     mkdirSync(workspacePath, { recursive: true });
     writeFileSync(testFilePath, "stale-data", "utf-8");
@@ -5564,6 +5565,7 @@ describe("api app", () => {
     const { app } = createApp({
       db,
       dataDir,
+      projectRoot: dataDir,
       adminUser: "admin",
       adminPass: "admin",
       runnerToken: "test-token",
@@ -5578,7 +5580,7 @@ describe("api app", () => {
     const cookie = loginRes.headers.get("set-cookie") ?? "";
 
     const agentName = "agent-cleanup-lifecycle";
-    const workspacePath = join(dataDir, "workspaces", agentName);
+    const workspacePath = join(dataDir, ".orgops-data", "workspaces", agentName);
     mkdirSync(workspacePath, { recursive: true });
     const createAgentRes = await app.request("http://localhost/api/agents", {
       method: "POST",

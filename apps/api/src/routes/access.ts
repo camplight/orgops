@@ -79,6 +79,12 @@ export function createAccessControl(deps: AccessDeps) {
     return owner?.id === user.id;
   }
 
+  function canConfigureHostRuntime(user:RequestUser|undefined,runnerId:unknown):boolean{
+    if(canManageInstance(user))return true;
+    const scoped=getScopedRunner(user);
+    return Boolean(scoped?.allowedRunnerId&&scoped.allowedRunnerId===runnerId);
+  }
+
   function listViewerTeamIds(user: RequestUser | undefined): string[] {
     if (!isHumanUser(user)) return [];
     return orm
@@ -481,13 +487,14 @@ export function createAccessControl(deps: AccessDeps) {
     const agent = getAgent(agentName);
     if (!agent) return false;
     const visibility = normalizeAgentVisibility(agent.visibility);
-    // Public existing agents do not have owners because this rollout has no backfill.
-    if (visibility === AGENT_VISIBILITY.PUBLIC) return true;
+    // Legacy unowned public agents remain configurable by instance operators.
+    if (visibility === AGENT_VISIBILITY.PUBLIC) return canManageInstance(user)||Boolean(agent.ownerHumanId&&agent.ownerHumanId===user.id);
     return Boolean(agent.ownerHumanId && user.id && agent.ownerHumanId === user.id);
   }
 
   return {
     canManageInstance,
+    canConfigureHostRuntime,
     canViewChannel,
     canManageChannel,
     canPostToChannel,
