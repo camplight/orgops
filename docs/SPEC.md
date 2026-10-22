@@ -251,6 +251,15 @@ Validation is dynamic and composed from:
 
 ## Auth and Access
 
+Instance-level administration uses the existing bootstrap-owner policy: the human
+with the earliest `(created_at,id)` (also used for Google sign-in settings), or a
+global runner credential. Scoped runner credentials are not instance administrators.
+Inviting accounts, resetting temporary passwords, runner bootstrap credentials and
+runner invites, and bulk event deletion require this authority. Channel message
+clearing requires channel management, not merely posting access. Temporary password
+generation uses cryptographic randomness and a reset revokes that human's active
+sessions. This does not introduce a general role-management API or an OS sandbox.
+
 ### Human Auth
 
 - Session-cookie login: `POST /api/auth/login`

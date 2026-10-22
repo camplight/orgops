@@ -1193,6 +1193,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
   });
 
   app.delete("/api/events", (c) => {
+    if (!access.canManageInstance(c.get('user'))) return jsonResponse(c, {error:'Instance owner required'}, 403);
     const url = new URL(c.req.url);
     const params = url.searchParams;
     const channelId = params.get("channelId");
@@ -1302,7 +1303,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
   app.delete("/api/channels/:channelId/messages", (c) => {
     const channelId = c.req.param("channelId");
     const user = c.get("user") as RequestUser | undefined;
-    if (!access.canPostToChannel(user, channelId)) {
+    if (!access.canManageChannel(user, channelId)) {
       return jsonResponse(c, { error: "Forbidden" }, 403);
     }
     const whereExpr = and(
