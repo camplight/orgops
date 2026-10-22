@@ -668,6 +668,10 @@ export function createApp(config: AppConfig = {}) {
   });
 
   registerWsRoutes(app as any, {
+    canViewProcess: (user,id) => {
+      const row=orm.select().from(schema.processes).where(eq(schema.processes.id,id)).get();
+      return Boolean(row&&access.canViewAgent(user,row.agent_name)&&(!row.channel_id||access.canViewChannel(user,row.channel_id)));
+    },
     bus,
     upgradeWebSocket,
     resolveRequestUser: (c: any) => {

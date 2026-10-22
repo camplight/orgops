@@ -17,6 +17,7 @@ export type WsServerMessage =
   | { type: "error"; message: string };
 
 type WsDeps = {
+  canViewProcess?: (user: RequestUser, id: string) => boolean;
   bus: EventBus<WsServerMessage>;
   upgradeWebSocket: (createEvents: any) => any;
   resolveRequestUser: (c: any) => RequestUser | null;
@@ -50,6 +51,26 @@ export function getDeferredWsDeliveryDelayMs(
 
 export function registerWsRoutes(app: Hono<any>, deps: WsDeps) {
   const { bus, upgradeWebSocket, resolveRequestUser, access } = deps;
+  const canSubscribe = (user:RequestUser, topic:string) => {
+    if(topic.startsWith('channel:'))return access.canViewChannel(user,topic.slice(8));
+    if(topic.startsWith('agent:'))return access.canViewAgent(user,topic.slice(6));
+    if(topic.startsWith('process:'))return deps.canViewProcess?.(user,topic.slice(8)) ?? false;
+    return ['org:events','org:dashboard','org:agentStatus','pong'].includes(topic);
+  };
+  const canReceive = (user:RequestUser, payload:WsServerMessage) => {
+    if(payload.type==='error')return true;
+    if(!canSubscribe(user,payload.topic))return false;
+    if(payload.type==='event'){
+      const data=payload.data as {channelId?:unknown} | null;
+      if(typeof data?.channelId==='string')return access.canViewChannel(user,data.channelId);
+      return access.canManageInstance(user);
+    }
+    if(payload.type==='agent_status'){
+      const data=payload.data as {agentName?:unknown} | null;
+      return typeof data?.agentName==='string'&&access.canViewAgent(user,data.agentName);
+    }
+    return true;
+  };
 
   app.get(
     "/ws",
@@ -66,7 +87,13 @@ export function registerWsRoutes(app: Hono<any>, deps: WsDeps) {
         return false;
       };
       const send = (ws: Socket, data: WsServerMessage) => {
-        if (validSession(ws)) ws.send(JSON.stringify(data));
+        if (!validSession(ws)) return;
+        const current=resolveRequestUser(c)!;
+        if (!canReceive(current,data)) return;
+        // Refresh notifications are useful to everyone; resource metadata is not.
+        const visible=data.type==='dashboard_refresh'&&!access.canManageInstance(current)
+          ? {...data,data:{reason:'refresh'}} : data;
+        ws.send(JSON.stringify(visible));
       };
       const clearDeferredForTopic = (topic: string) => {
         for (const [key, timer] of deferredSendTimers.entries()) {
@@ -79,19 +106,20 @@ export function registerWsRoutes(app: Hono<any>, deps: WsDeps) {
         onMessage: (event: { data: string | Uint8Array }, ws: { send: (data: string) => void }) => {
           if (!user) return ws.send(JSON.stringify({type: "error", message: "Unauthorized"}));
           if (!validSession(ws)) return;
-          const message = JSON.parse(event.data.toString()) as WsMessage;
+          let message:WsMessage;
+          try{message=JSON.parse(event.data.toString());}catch{return send(ws,{type:'error',message:'Invalid message'});}
+          if(!message||typeof message!=='object')return;
           if (message.type === "ping") {
             return send(ws, { type: "subscribed", topic: "pong" });
           }
           if (message.type === "subscribe") {
-            if (
-              message.topic.startsWith("channel:") &&
-              !access.canViewChannel(user, message.topic.slice("channel:".length))
-            ) {
+            if (typeof message.topic!=='string'||message.topic.length>256||!canSubscribe(resolveRequestUser(c)!,message.topic)) {
               return send(ws, { type: "error", message: "Forbidden topic subscription" });
             }
+            if(subscriptions.has(message.topic))return send(ws,{type:'subscribed',topic:message.topic});
             subscriptions.add(message.topic);
             const unsubscribe = bus.subscribe(message.topic, (payload) => {
+              if(!validSession(ws)||!canReceive(resolveRequestUser(c)!,payload))return;
               const deferredDelayMs = getDeferredWsDeliveryDelayMs(user, payload);
               if (deferredDelayMs !== null) {
                 const eventId =
@@ -118,6 +146,7 @@ export function registerWsRoutes(app: Hono<any>, deps: WsDeps) {
             return send(ws, { type: "subscribed", topic: message.topic });
           }
           if (message.type === "unsubscribe") {
+            if(typeof message.topic!=='string')return;
             subscriptions.delete(message.topic);
             clearDeferredForTopic(message.topic);
             const handler = unsubscribeByTopic.get(message.topic);

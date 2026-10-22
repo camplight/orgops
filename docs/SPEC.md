@@ -272,6 +272,13 @@ sessions. This does not introduce a general role-management API or an OS sandbox
 
 ### Channel Visibility Rules
 
+WebSocket resource authorization is rechecked on every delivery, including org-wide
+event subscriptions, agent/process topics, delayed events and existing sockets
+after membership revocation. Unknown topics are refused. Org-wide refresh notices
+omit private resource metadata for non-administrators. Uploaded active content
+is served as an attachment with an inert MIME, `nosniff` and sandbox CSP; only
+PNG/JPEG/GIF/WebP/AVIF retain inline image previews.
+
 - `PUBLIC` channels are visible to all authenticated humans.
 - `PRIVATE` channels are visible to:
   - the owner (`channels.owner_human_id`)

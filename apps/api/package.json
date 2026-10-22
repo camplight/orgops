@@ -20,5 +20,8 @@
     "google-auth-library": "11.2.0",
     "hono": "^4.13.8",
     "tsx": "^4.20.5"
+  },
+  "devDependencies": {
+    "@types/ws": "8.18.2"
   }
 }

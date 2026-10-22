@@ -83,7 +83,16 @@ export function registerRuntimeRoutes(app: Hono<any>, deps: RuntimeDeps) {
     const row = orm.select().from(schema.files).where(eq(schema.files.id, id)).get() as any;
     if (!row) return jsonResponse(c, { error: "Not found" }, 404);
     const data = readFileSync(row.storage_path);
-    return new Response(data, { headers: { "content-type": row.mime } });
+    const safeImage = new Set(['image/png','image/jpeg','image/gif','image/webp','image/avif']).has(row.mime);
+    const filename = encodeURIComponent(String(row.original_name || 'download').replace(/[\r\n]/g,''));
+    return new Response(data, { headers: {
+      'content-type':safeImage?row.mime:'application/octet-stream',
+      'content-disposition':`${safeImage?'inline':'attachment'}; filename*=UTF-8''${filename}`,
+      'x-content-type-options':'nosniff',
+      'content-security-policy':"default-src 'none'; sandbox",
+      'cache-control':'private, no-store',
+      'referrer-policy':'no-referrer',
+    } });
   });
 
   app.get("/api/files/:id/meta", (c) => {
