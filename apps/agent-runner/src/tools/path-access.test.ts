@@ -14,6 +14,15 @@ describe("resolveAgentPath", () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
+  it("rejects paths descending through an existing regular file", () => {
+    const root = mkdtempSync(join(tmpdir(), "orgops-path-"));
+    try {
+      writeFileSync(join(root, "file.txt"), "not a directory");
+      const agent = { workspacePath: root, allowOutsideWorkspace: false } as any;
+      expect(() => resolveAgentPath(agent, "file.txt/child.txt")).toThrow();
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it("resolves safe in-root symlinks to their canonical target", () => {
     const root = mkdtempSync(join(tmpdir(), "orgops-path-"));
     try {

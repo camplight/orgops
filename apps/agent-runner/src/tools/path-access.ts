@@ -9,7 +9,11 @@ function canonicalize(pathValue: string) {
     let stat;
     try {
       stat = lstatSync(current);
-    } catch {
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException | undefined)?.code;
+      if (code !== "ENOENT") {
+        throw new Error(`Unable to resolve path: ${pathValue}`);
+      }
       const parent = dirname(current);
       if (parent === current) {
         throw new Error(`Unable to resolve path: ${pathValue}`);
