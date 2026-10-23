@@ -510,7 +510,7 @@ Published topics include:
   - scope types: `public`, `team`, `private`, `human` (`package` remains supported as legacy compatibility scope)
   - env resolution precedence: `private > human > team > public > package(legacy)`
 - skills:
-  - `GET /api/skills` (authenticated humans and global runners; scoped runners are forbidden)
+  - `GET /api/skills` (authenticated humans only; GLOBAL and SCOPED runners are forbidden)
   - the API resolves the skill root from `ORGOPS_PROJECT_ROOT` when set, otherwise from the API module location; `createApp({ projectRoot })` provides an explicit embedding/test override
 
 ### Runners

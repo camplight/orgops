@@ -1,26 +1,34 @@
-import { lstatSync, readlinkSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { lstatSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { Agent } from "../types";
 
 function canonicalize(pathValue: string) {
-  let current: string = sep;
-  let remaining = resolve(pathValue).slice(1).split(sep).filter(Boolean);
-  for (let hop = 0; hop < 40 && remaining.length > 0; hop += 1) {
-    const next = join(current, remaining.shift()!);
+  let current = resolve(pathValue);
+  const missing: string[] = [];
+  while (true) {
+    let stat;
     try {
-      const stat = lstatSync(next);
-      if (stat.isSymbolicLink()) {
-        const link = readlinkSync(next);
-        current = resolve(dirname(next), link);
-      } else {
-        current = next;
-      }
+      stat = lstatSync(current);
     } catch {
-      current = join(current, next.slice(dirname(next).length + 1), ...remaining);
-      break;
+      const parent = dirname(current);
+      if (parent === current) {
+        throw new Error(`Unable to resolve path: ${pathValue}`);
+      }
+      missing.push(basename(current));
+      current = parent;
+      continue;
     }
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Refusing unresolved symlink path: ${pathValue}`);
+    }
+    let canonical: string;
+    try {
+      canonical = realpathSync(current);
+    } catch {
+      throw new Error(`Unable to resolve path: ${pathValue}`);
+    }
+    return missing.length > 0 ? join(canonical, ...missing.reverse()) : canonical;
   }
-  return current;
 }
 
 function isInside(root: string, candidate: string) {

@@ -14,28 +14,38 @@ describe("resolveAgentPath", () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it("rejects symlink escapes and broken symlinks escaping the workspace", () => {
+  it("rejects multi-hop, broken, and cyclic symlink escapes", () => {
     const root = mkdtempSync(join(tmpdir(), "orgops-path-"));
     const outside = mkdtempSync(join(tmpdir(), "orgops-outside-"));
     try {
       writeFileSync(join(outside, "secret.txt"), "secret");
       symlinkSync(outside, join(root, "escape"));
       symlinkSync(join(outside, "missing.txt"), join(root, "broken"));
+      symlinkSync("second", join(root, "first"));
+      symlinkSync(outside, join(root, "second"));
+      symlinkSync("cycle-b", join(root, "cycle-a"));
+      symlinkSync("cycle-a", join(root, "cycle-b"));
       const agent = { workspacePath: root, allowOutsideWorkspace: false } as any;
       expect(() => resolveAgentPath(agent, "escape/secret.txt")).toThrow();
       expect(() => resolveAgentPath(agent, "broken")).toThrow();
+      expect(() => resolveAgentPath(agent, "first/secret.txt")).toThrow();
+      expect(() => resolveAgentPath(agent, "cycle-a/file.txt")).toThrow();
     } finally {
       rmSync(root, { recursive: true, force: true });
       rmSync(outside, { recursive: true, force: true });
     }
   });
 
-  it("permits enabled skill roots and all host paths when explicitly enabled", () => {
+  it("permits long ordinary paths, enabled skill roots, and all host paths when explicitly enabled", () => {
     const root = mkdtempSync(join(tmpdir(), "orgops-path-"));
     const skill = mkdtempSync(join(tmpdir(), "orgops-skill-"));
     try {
       mkdirSync(join(skill, "assets"));
+      const longParts = Array.from({ length: 45 }, (_, index) => `part-${index}`);
+      const longPath = join(root, ...longParts, "file.txt");
+      mkdirSync(join(root, ...longParts), { recursive: true });
       const agent = { workspacePath: root, allowOutsideWorkspace: false } as any;
+      expect(resolveAgentPath(agent, longPath)).toBe(longPath);
       expect(resolveAgentPath(agent, join(skill, "assets/tool"), [skill])).toBe(join(skill, "assets/tool"));
       const unrestricted = { workspacePath: root, allowOutsideWorkspace: true } as any;
       expect(resolveAgentPath(unrestricted, "/etc/hosts")).toBe("/etc/hosts");
