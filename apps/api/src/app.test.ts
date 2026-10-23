@@ -8261,4 +8261,130 @@ describe("api app", () => {
     else process.env.ORGOPS_MASTER_KEY = previousMasterKey;
     rmSync(dataDir, { recursive: true, force: true });
   });
+
+  it("denies runner protected-field mutation and cross-human secret escalation", async () => {
+    const previousMasterKey = process.env.ORGOPS_MASTER_KEY;
+    process.env.ORGOPS_MASTER_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({ db, dataDir, adminUser: "admin", adminPass: "admin", runnerToken: "global-token" });
+    const login = await app.request("http://localhost/api/auth/login", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    const adminCookie = login.headers.get("set-cookie") ?? "";
+    const victimInvite = await app.request("http://localhost/api/humans/invite", {
+      method: "POST", headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ username: "victim" }),
+    });
+    expect(victimInvite.status).toBe(201);
+    const victim = (await victimInvite.json()) as { id: string; temporaryPassword: string };
+    const victimLogin = await app.request("http://localhost/api/auth/login", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "victim", password: victim.temporaryPassword }),
+    });
+    const victimCookie = victimLogin.headers.get("set-cookie") ?? "";
+    const victimProfile = await app.request("http://localhost/api/auth/profile", {
+      method: "PATCH", headers: { "content-type": "application/json", cookie: victimCookie },
+      body: JSON.stringify({ username: "victim", newPassword: "victim-password-123" }),
+    });
+    expect(victimProfile.status).toBe(200);
+    const secretCreate = await app.request("http://localhost/api/secrets", {
+      method: "POST", headers: { "content-type": "application/json", cookie: victimCookie },
+      body: JSON.stringify({ name: "VICTIM_ONLY", scopeType: "human", scopeId: victim.id, value: "victim-secret" }),
+    });
+    expect(secretCreate.status).toBe(201);
+    const inviteRes = await app.request("http://localhost/api/agent-invites", {
+      method: "POST", headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ agentName: "scoped-secret-agent", name: "scoped-secret-invite", visibility: "PRIVATE", channelIds: [] }),
+    });
+    expect(inviteRes.status).toBe(201);
+    const invite = (await inviteRes.json()) as { inviteLink: string };
+    const inviteToken = decodeURIComponent(invite.inviteLink.split("/public/")[1] ?? "");
+    const redeemRes = await app.request(`http://localhost/api/agent-invites/public/${encodeURIComponent(inviteToken)}/redeem`, { method: "POST" });
+    expect(redeemRes.status).toBe(200);
+    const redeemed = (await redeemRes.json()) as { runner: { token: string } };
+    const before = await app.request("http://localhost/api/agents/scoped-secret-agent", { headers: { "x-orgops-runner-token": redeemed.runner.token } });
+    expect(before.status).toBe(200);
+    const beforeBody = (await before.json()) as { ownerHumanId: string | null; allowOwnerHumanSecrets: boolean };
+    expect(beforeBody.ownerHumanId).toBeNull();
+    expect(beforeBody.allowOwnerHumanSecrets).toBe(false);
+    const scopedPatch = await app.request("http://localhost/api/agents/scoped-secret-agent", {
+      method: "PATCH", headers: { "content-type": "application/json", "x-orgops-runner-token": redeemed.runner.token },
+      body: JSON.stringify({ ownerHumanId: victim.id, allowOwnerHumanSecrets: true }),
+    });
+    expect(scopedPatch.status).toBe(403);
+    const globalPatch = await app.request("http://localhost/api/agents/scoped-secret-agent", {
+      method: "PATCH", headers: { "content-type": "application/json", "x-orgops-runner-token": "global-token" },
+      body: JSON.stringify({ ownerHumanId: victim.id, allowOwnerHumanSecrets: true }),
+    });
+    expect(globalPatch.status).toBe(403);
+    const after = await app.request("http://localhost/api/agents/scoped-secret-agent", { headers: { "x-orgops-runner-token": redeemed.runner.token } });
+    expect(after.status).toBe(200);
+    const afterBody = (await after.json()) as { ownerHumanId: string | null; allowOwnerHumanSecrets: boolean };
+    expect(afterBody.ownerHumanId).toBe(beforeBody.ownerHumanId);
+    expect(afterBody.allowOwnerHumanSecrets).toBe(false);
+    const env = await app.request("http://localhost/api/secrets/env", { headers: { "x-orgops-runner-token": redeemed.runner.token, "x-orgops-agent-name": "scoped-secret-agent" } });
+    expect(env.status).toBe(200);
+    const envBody = (await env.json()) as Record<string, string>;
+    expect(envBody.VICTIM_ONLY).toBeUndefined();
+    if (previousMasterKey === undefined) delete process.env.ORGOPS_MASTER_KEY; else process.env.ORGOPS_MASTER_KEY = previousMasterKey;
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("rejects runner skill roots while preserving ordinary runner updates", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({ db, dataDir, adminUser: "admin", adminPass: "admin", runnerToken: "global-token" });
+    const create = await app.request("http://localhost/api/agents", {
+      method: "POST", headers: { "content-type": "application/json", "x-orgops-runner-token": "global-token" },
+      body: JSON.stringify({ name: "runner-root-agent", modelId: "openai:gpt-4o-mini", workspacePath: ".orgops-data/workspaces/runner-root-agent", additionalSkillRoots: ["/tmp/evil"] }),
+    });
+    expect(create.status).toBe(403);
+    const ordinary = await app.request("http://localhost/api/agents", {
+      method: "POST", headers: { "content-type": "application/json", "x-orgops-runner-token": "global-token" },
+      body: JSON.stringify({ name: "runner-root-agent", modelId: "openai:gpt-4o-mini", workspacePath: ".orgops-data/workspaces/runner-root-agent" }),
+    });
+    expect(ordinary.status).toBe(201);
+    const update = await app.request("http://localhost/api/agents/runner-root-agent", {
+      method: "PATCH", headers: { "content-type": "application/json", "x-orgops-runner-token": "global-token" },
+      body: JSON.stringify({ description: "permitted runner update" }),
+    });
+    expect(update.status).toBe(200);
+    const rejectedUpdate = await app.request("http://localhost/api/agents/runner-root-agent", {
+      method: "PATCH", headers: { "content-type": "application/json", "x-orgops-runner-token": "global-token" },
+      body: JSON.stringify({ additionalSkillRoots: ["/tmp/evil"] }),
+    });
+    expect(rejectedUpdate.status).toBe(403);
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("protects the skills listing by authentication and runner scope", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({ db, dataDir, adminUser: "admin", adminPass: "admin", runnerToken: "global-token" });
+    const unauthenticated = await app.request("http://localhost/api/skills");
+    expect(unauthenticated.status).toBe(401);
+
+    const login = await app.request("http://localhost/api/auth/login", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    const cookie = login.headers.get("set-cookie") ?? "";
+    expect((await app.request("http://localhost/api/skills", { headers: { cookie } })).status).toBe(200);
+    expect((await app.request("http://localhost/api/skills", { headers: { "x-orgops-runner-token": "global-token" } })).status).toBe(200);
+    expect((await app.request("http://localhost/api/skills", { headers: { "x-orgops-runner-token": "global-token", cookie } })).status).toBe(200);
+
+    const inviteRes = await app.request("http://localhost/api/agent-invites", {
+      method: "POST", headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ agentName: "scoped-skills-agent", visibility: "PRIVATE", channelIds: [] }),
+    });
+    const invite = (await inviteRes.json()) as { inviteLink: string };
+    const inviteToken = decodeURIComponent(invite.inviteLink.split("/public/")[1] ?? "");
+    const redeemRes = await app.request(`http://localhost/api/agent-invites/public/${encodeURIComponent(inviteToken)}/redeem`, { method: "POST" });
+    const redeemed = (await redeemRes.json()) as { runner: { token: string } };
+    expect((await app.request("http://localhost/api/skills", { headers: { "x-orgops-runner-token": redeemed.runner.token } })).status).toBe(403);
+    expect((await app.request("http://localhost/api/skills", { headers: { "x-orgops-runner-token": redeemed.runner.token, cookie } })).status).toBe(403);
+    rmSync(dataDir, { recursive: true, force: true });
+  });
 });

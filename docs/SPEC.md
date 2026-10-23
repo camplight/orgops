@@ -277,6 +277,7 @@ Validation is dynamic and composed from:
 - Trusted runner token header: `x-orgops-runner-token`
 - Runner-only endpoint for secret env injection: `GET /api/secrets/env`
 - Runner secret env requests must include `x-orgops-agent-name`; optional `x-orgops-channel-id` enables team-scope resolution for that channel context.
+- Scoped and global runner tokens cannot mutate agent ownership, human-secret delegation, visibility, or additional skill roots.
 - Invite redemption can mint runner tokens in either mode:
   - `SCOPED` (default): restricted to one agent and one runner ID, and by default restricted to invite-approved channels.
   - `GLOBAL`: behaves like a normal unrestricted runner token (full runner access).
@@ -290,6 +291,7 @@ Runner tools resolve paths through an allowlist:
 - default: agent workspace root only
 - if `allowOutsideWorkspace=true`: full host root allowed
 - extra allowed roots: enabled skill directories (from repo skill root, configured extra roots, and per-agent additional roots)
+- authorization canonicalizes existing paths and symlink targets, while allowing non-existing descendants beneath authorized roots; broken or escaping symlinks are rejected
 
 This applies to native OrgOps tools only. `WRAPPED` agents do not use OrgOps tool filesystem access; their external runtime enforces its own filesystem policy.
 
@@ -508,7 +510,7 @@ Published topics include:
   - scope types: `public`, `team`, `private`, `human` (`package` remains supported as legacy compatibility scope)
   - env resolution precedence: `private > human > team > public > package(legacy)`
 - skills:
-  - `GET /api/skills`
+  - `GET /api/skills` (authenticated humans and global runners; scoped runners are forbidden)
   - the API resolves the skill root from `ORGOPS_PROJECT_ROOT` when set, otherwise from the API module location; `createApp({ projectRoot })` provides an explicit embedding/test override
 
 ### Runners

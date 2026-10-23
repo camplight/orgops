@@ -649,7 +649,7 @@ export function createApp(config: AppConfig = {}) {
     access,
   });
 
-  registerSkillsRoutes(app as any, { SKILL_ROOTS, jsonResponse, listSkills });
+  registerSkillsRoutes(app as any, { SKILL_ROOTS, jsonResponse, listSkills, requireAuth });
 
   registerSecretsRoutes(app as any, {
     orm,

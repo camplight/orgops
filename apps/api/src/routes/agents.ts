@@ -396,6 +396,14 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       user?.username === "runner" && user.runnerScope?.mode === "SCOPED"
         ? user.runnerScope
         : null;
+    if (
+      user?.username === "runner" &&
+      ["additionalSkillRoots", "ownerHumanId", "allowOwnerHumanSecrets", "visibility"].some(
+        (field) => Object.prototype.hasOwnProperty.call(body ?? {}, field),
+      )
+    ) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
     if (user?.username === "runner" && user.runnerScope?.mode === "SCOPED") {
       const allowedAgentName = user.runnerScope.allowedAgentName ?? "";
       if ((body?.name ?? "").trim() !== allowedAgentName) {
@@ -586,6 +594,14 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       return jsonResponse(c, { error: "Forbidden" }, 403);
     }
     const body = await c.req.json();
+    if (
+      user?.username === "runner" &&
+      ["additionalSkillRoots", "ownerHumanId", "allowOwnerHumanSecrets", "visibility"].some(
+        (field) => Object.prototype.hasOwnProperty.call(body ?? {}, field),
+      )
+    ) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
     const existing = orm.select().from(schema.agents).where(eq(schema.agents.name, name)).get() as any;
     if (!existing) return jsonResponse(c, { error: "Not found" }, 404);
     if (

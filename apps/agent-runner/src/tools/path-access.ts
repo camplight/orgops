@@ -1,5 +1,27 @@
-import { isAbsolute, relative, resolve } from "node:path";
+import { lstatSync, readlinkSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Agent } from "../types";
+
+function canonicalize(pathValue: string) {
+  let current: string = sep;
+  let remaining = resolve(pathValue).slice(1).split(sep).filter(Boolean);
+  for (let hop = 0; hop < 40 && remaining.length > 0; hop += 1) {
+    const next = join(current, remaining.shift()!);
+    try {
+      const stat = lstatSync(next);
+      if (stat.isSymbolicLink()) {
+        const link = readlinkSync(next);
+        current = resolve(dirname(next), link);
+      } else {
+        current = next;
+      }
+    } catch {
+      current = join(current, next.slice(dirname(next).length + 1), ...remaining);
+      break;
+    }
+  }
+  return current;
+}
 
 function isInside(root: string, candidate: string) {
   const rel = relative(root, candidate);
@@ -18,16 +40,16 @@ export function resolveAgentPath(
   value: string,
   extraAllowedRoots: string[] = [],
 ): string {
-  const workspaceRoot = resolve(agent.workspacePath);
-  const candidate = isAbsolute(value)
-    ? resolve(value)
-    : resolve(workspaceRoot, value);
+  const workspaceRoot = canonicalize(agent.workspacePath);
+  const candidate = canonicalize(
+    isAbsolute(value) ? resolve(value) : resolve(workspaceRoot, value),
+  );
   const allowedRoots = [
-    ...getAllowedRoots(agent),
+    ...getAllowedRoots(agent).map(canonicalize),
     ...extraAllowedRoots
       .map((root) => root.trim())
       .filter(Boolean)
-      .map((root) => resolve(root)),
+      .map((root) => canonicalize(root)),
   ];
   if (allowedRoots.some((root) => isInside(root, candidate))) {
     return candidate;
