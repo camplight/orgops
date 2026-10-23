@@ -1,4 +1,5 @@
 import type { Hono } from "hono";
+import {federationFetch} from '../federation-transport';
 import { openDb, schema, type OrgOpsDrizzleDb } from "@orgops/db";
 import type { SkillMeta, SkillRoot } from "@orgops/skills";
 import type { EventShapeDefinition } from "@orgops/schemas";
@@ -766,7 +767,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     const token = typeof instance.outbound_token === "string" ? instance.outbound_token.trim() : "";
     if (!token) throw new Error(`Federation peer "${instance.name}" has no outbound token.`);
     const baseUrl = String(instance.base_url ?? "").replace(/\/+$/, "");
-    const response = await fetch(
+    const response = await federationFetch(
       `${baseUrl}/api/federation/channels/${encodeURIComponent(link.remote_channel_id)}/events`,
       {
         method: "POST",

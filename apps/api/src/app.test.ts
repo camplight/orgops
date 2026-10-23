@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, afterEach, describe, expect, it } from "vitest";
 import {
   existsSync,
   mkdirSync,
@@ -15,6 +15,11 @@ import { and, eq } from "drizzle-orm";
 import { decryptSecret, parseMasterKey } from "@orgops/crypto";
 import { createDrizzleDb, migrate, openDb, schema } from "@orgops/db";
 import { createApp } from "./app";
+
+// These origins are synthetic in-process peers. Production has no implicit HTTP/private trust.
+let priorFederationOrigins:string|undefined;
+beforeEach(()=>{priorFederationOrigins=process.env.ORGOPS_FEDERATION_TRUSTED_ORIGINS;process.env.ORGOPS_FEDERATION_TRUSTED_ORIGINS='http://127.0.0.1:8787,http://home.test,http://localhost,http://localhost:8787,http://orgops.exe.xyz,http://peer.cleanup,http://peer.test,http://projection.test';});
+afterEach(()=>{if(priorFederationOrigins===undefined)delete process.env.ORGOPS_FEDERATION_TRUSTED_ORIGINS;else process.env.ORGOPS_FEDERATION_TRUSTED_ORIGINS=priorFederationOrigins;});
 
 type TestApp = ReturnType<typeof createApp>["app"];
 
@@ -800,7 +805,7 @@ describe("api app", () => {
     const peerInstance = await peerApp.request("http://localhost/api/federation/instances", {
       method: "POST",
       headers: { "content-type": "application/json", cookie: peerCookie },
-      body: JSON.stringify({ name: "home", baseUrl: "http://127.0.0.1:8787" }),
+      body: JSON.stringify({ name: "home", baseUrl: "http://127.0.0.1:8787", metadata:{allowedAgentImports:["memory-peer","federated-agent"]} }),
     });
     const peer = (await peerInstance.json()) as { inboundToken: string };
     const importRes = await peerApp.request("http://localhost/api/federation/agents/transfer", {
@@ -809,7 +814,7 @@ describe("api app", () => {
         "content-type": "application/json",
         authorization: `Bearer ${peer.inboundToken}`,
       },
-      body: JSON.stringify(bundle),
+      body: JSON.stringify({...bundle,secrets:[]}),
     });
     expect(importRes.status).toBe(201);
     const peerOrm = createDrizzleDb(peerDb);
@@ -826,7 +831,7 @@ describe("api app", () => {
     rmSync(peerDir, { recursive: true, force: true });
   });
 
-  it("copies skills, private secrets, and workspace files locally and across federation", async () => {
+  it("copies private secrets locally and transfers skills and files without secrets across federation", async () => {
     const previousMasterKey = process.env.ORGOPS_MASTER_KEY;
     process.env.ORGOPS_MASTER_KEY = Buffer.alloc(32, 7).toString("base64");
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
@@ -961,7 +966,7 @@ describe("api app", () => {
       const peerRes = await peerApp.request("http://localhost/api/federation/instances", {
         method: "POST",
         headers: { "content-type": "application/json", cookie: peerCookie },
-        body: JSON.stringify({ name: "home", baseUrl: "http://127.0.0.1:8787" }),
+        body: JSON.stringify({ name: "home", baseUrl: "http://127.0.0.1:8787", metadata:{allowedAgentImports:["memory-peer","federated-agent"]} }),
       });
       expect(peerRes.status).toBe(201);
       const peer = (await peerRes.json()) as { inboundToken: string };
@@ -971,7 +976,7 @@ describe("api app", () => {
           "content-type": "application/json",
           authorization: `Bearer ${peer.inboundToken}`,
         },
-        body: JSON.stringify(bundle),
+        body: JSON.stringify({...bundle,secrets:[]}),
       });
       expect(importRes.status).toBe(201);
       const imported = (await importRes.json()) as {
@@ -981,7 +986,7 @@ describe("api app", () => {
       };
       expect(imported.skillsInstalled).toEqual(["local-skill"]);
       expect(imported.skillsReusedFromRepo).toEqual(["repo-skill"]);
-      expect(imported.secretsCopied).toEqual({ copied: 1, skippedShared: 1 });
+      expect(imported.secretsCopied).toEqual({ copied: 0, skippedShared: 0 });
       const importedAgent = await peerApp.request("http://localhost/api/agents/federated-agent", {
         headers: { cookie: peerCookie },
       });
@@ -1132,6 +1137,7 @@ describe("api app", () => {
     });
     expect(homeChannelRes.status).toBe(201);
     const homeChannel = (await homeChannelRes.json()) as { id: string };
+    expect((await home.app.request(`/api/federation/instances/${homePeer.id}`,{method:'PATCH',headers:{'content-type':'application/json',cookie:homeCookie},body:JSON.stringify({metadata:{allowedChannelIds:[homeChannel.id]}})})).status).toBe(200);
     const markHomeRes = await home.app.request("http://localhost/api/federation/channels", {
       method: "POST",
       headers: { "content-type": "application/json", cookie: homeCookie },
@@ -1467,7 +1473,7 @@ describe("api app", () => {
       headers: { "content-type": "application/json", cookie: homeCookie },
       body: JSON.stringify({ name: "projection", baseUrl: "http://projection.test" }),
     });
-    const homePeer = (await homePeerRes.json()) as { inboundToken: string };
+    const homePeer = (await homePeerRes.json()) as { id: string; inboundToken: string };
     const projectionPeerRes = await projection.app.request(
       "http://localhost/api/federation/instances",
       {
@@ -1488,6 +1494,7 @@ describe("api app", () => {
       body: JSON.stringify({ name: "busy-home" }),
     });
     const homeChannel = (await homeChannelRes.json()) as { id: string };
+    expect((await home.app.request(`/api/federation/instances/${homePeer.id}`,{method:'PATCH',headers:{'content-type':'application/json',cookie:homeCookie},body:JSON.stringify({metadata:{allowedChannelIds:[homeChannel.id]}})})).status).toBe(200);
     await home.app.request("http://localhost/api/federation/channels", {
       method: "POST",
       headers: { "content-type": "application/json", cookie: homeCookie },

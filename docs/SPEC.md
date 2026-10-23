@@ -455,7 +455,7 @@ Published topics include:
   - `GET /api/agents/:name/transfer` exports an agent bundle: configuration, workspace files, enabled skill files, private secrets, and memory
   - `POST /api/agents/:name/copy` clones the agent. Enabled and always-preloaded skills are copied. Workspace files are copied. Private secrets are copied only when the destination does not already have the same name as a public or package secret. Skill directories are written under the new workspace only when that skill name is not already in the repo skill catalog. Channel and cross-channel memory summaries are copied. Channel memory is attached to the same channel id, or to a destination channel with the same name. Processes are not copied.  Optional `federationInstanceId` copies the bundle onto that peer instead of creating a local agent
   - `POST /api/agents/:name/move` reassigns `assignedRunnerId` on this instance, keeps the workspace path, and stops running or starting processes. Optional `federationInstanceId` sends the same bundle, including memory, to that peer, stops local processes, and then deletes the local agent. `name` sets the destination agent name
-  - peers accept `GET|POST /api/federation/agents/transfer` with the peer bearer token
+  - peers accept allowlisted `GET /api/federation/agents/:name/transfer` and `POST /api/federation/agents/transfer` with the peer bearer token; remote transfers never include secrets and arrive stopped/unassigned
   - humans call these routes from the admin UI; agents call `agents_copy` and `agents_move`
 - debug endpoint:
   - `GET /api/agents/:name/debug/system-prompt`
@@ -570,6 +570,29 @@ Published topics include:
 - scoped runner tokens must register/heartbeat only the runner ID bound into their scope
 
 ### Federation
+
+Federation management requires the bootstrap instance owner or global runner.
+Peer tokens do not grant general instance access. The operator configures exact
+resource names/IDs in peer `metadata`: `allowedChannelIds`, `allowedAgentExports`,
+and `allowedAgentImports` (arrays, denied by default). A join URL grants only its
+`joinChannelId`; projection webhooks must match the link's home instance. Disabled
+peers are rejected. Channel-write idempotency keys include peer and channel IDs.
+
+All outbound federation requests require public HTTPS destinations. DNS answers
+are checked before each request and pinned to the connection; private, loopback,
+link-local and mixed public/private answers are rejected. Redirects are never
+followed. Requests have a 10-second deadline and 16 MiB response limit. Operators
+may explicitly approve exact private or HTTP origins with the comma-separated
+`ORGOPS_FEDERATION_TRUSTED_ORIGINS` environment variable; this is a deliberate
+network-trust exception, not a browser/peer-controlled allowlist.
+
+Agent export grants include workspace files, skills and memory, but never the
+private secret collection. Operators must review what those files contain before
+granting export. Incoming bundles with secrets are rejected. Imported agents get
+a fresh managed workspace, private bootstrap-owner visibility, no outside paths
+or owner-secret delegation, no assigned runner, and STOPPED state. Review imported
+skills/wrapped commands before assigning a runner or starting the agent. Local
+operator copies retain their existing private-secret behavior.
 
 - `GET /api/federation/instances`
 - `POST /api/federation/instances`

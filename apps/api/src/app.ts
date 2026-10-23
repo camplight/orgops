@@ -63,6 +63,7 @@ import {
 import { registerAgentInviteRoutes } from "./routes/agent-invites";
 import { createAccessControl } from "./routes/access";
 import {hashPasswordAsync,verifyPasswordAsync} from './passwords';
+import {federationFetch} from './federation-transport';
 
 export type AppConfig = {
   db?: OrgOpsDb;
@@ -369,7 +370,7 @@ export function createApp(config: AppConfig = {}) {
       }
       try {
         const baseUrl = String(instance.base_url).replace(/\/+$/, "");
-        const response = await fetch(
+        const response = await federationFetch(
           `${baseUrl}/api/federation/projections/${encodeURIComponent(
             subscriber.remote_channel_id,
           )}/events`,
@@ -383,8 +384,7 @@ export function createApp(config: AppConfig = {}) {
           },
         );
         if (!response.ok) {
-          const text = await response.text();
-          throw new Error(`${response.status} ${text}`);
+          throw new Error(`Federation request failed: ${response.status}`);
         }
         orm
           .update(schema.federationChannelSubscribers)
@@ -564,13 +564,13 @@ export function createApp(config: AppConfig = {}) {
     if (!token || !baseUrl) {
       throw new Error(`Federation peer "${instance.name ?? instanceId}" is missing a base URL or outbound token.`);
     }
-    const response = await fetch(`${baseUrl}/api/federation/agents/transfer`, {
+    const response = await federationFetch(`${baseUrl}/api/federation/agents/transfer`, {
       method: "POST",
       headers: {
         authorization: `Bearer ${token}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify(bundle),
+      body: JSON.stringify({...bundle,secrets:[]}),
     });
     const text = await response.text();
     let parsed: any = {};
@@ -580,7 +580,7 @@ export function createApp(config: AppConfig = {}) {
       parsed = { error: text };
     }
     if (!response.ok) {
-      throw new Error(parsed?.error || `Federation request failed: ${response.status}`);
+      throw new Error(`Federation request failed: ${response.status}`);
     }
     return parsed;
   }
@@ -694,6 +694,8 @@ export function createApp(config: AppConfig = {}) {
   });
 
   registerFederationRoutes(app as any, {
+    access,
+    workspaceRoot:resolve(process.env.ORGOPS_WORKSPACE_ROOT||join(PROJECT_ROOT,'.orgops-data/workspaces')),
     orm,
     jsonResponse,
     requireAuth,

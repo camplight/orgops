@@ -99,7 +99,7 @@ export function createAgentTransfer(deps: {
     return new Set(rows.map((row) => row.name));
   }
 
-  function exportAgent(name: string): AgentTransferBundle | null {
+  function exportAgent(name: string,options:{includeSecrets?:boolean}={}): AgentTransferBundle | null {
     const source = orm.select().from(schema.agents).where(eq(schema.agents.name, name)).get() as
       | AgentRow
       | undefined;
@@ -120,14 +120,14 @@ export function createAgentTransfer(deps: {
         additionalSkillRoots,
         workspacePath,
       }),
-      secrets: collectPrivateSecrets(name),
+      secrets: options.includeSecrets===false?[]:collectPrivateSecrets(name),
       memory: collectMemory(name),
     };
   }
 
   function importAgent(
     bundle: AgentTransferBundle,
-    options: { name: string; assignedRunnerId?: string | null; desiredState?: string },
+    options: { name: string; assignedRunnerId?: string | null; desiredState?: string; workspacePath?:string },
   ) {
     const targetName = options.name.trim();
     if (!targetName) throw new Error("name is required");
@@ -145,9 +145,9 @@ export function createAgentTransfer(deps: {
       typeof sourceAgent.workspacePath === "string" && sourceAgent.workspacePath.trim()
         ? sourceAgent.workspacePath
         : `.orgops-data/workspaces/${targetName}`;
-    const workspacePath = workspaceInput.includes(String(sourceAgent.name ?? ""))
+    const workspacePath = options.workspacePath??(workspaceInput.includes(String(sourceAgent.name ?? ""))
       ? resolveWorkspacePath(workspaceInput.replaceAll(String(sourceAgent.name ?? ""), targetName))
-      : resolveWorkspacePath(`.orgops-data/workspaces/${targetName}`);
+      : resolveWorkspacePath(`.orgops-data/workspaces/${targetName}`));
     const installed = installPortableSkills(workspacePath, bundle.skills ?? []);
     const additionalSkillRoots = mergeSkillRoots(
       Array.isArray(sourceAgent.additionalSkillRoots)
