@@ -14,6 +14,18 @@ describe("resolveAgentPath", () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
+  it("resolves safe in-root symlinks to their canonical target", () => {
+    const root = mkdtempSync(join(tmpdir(), "orgops-path-"));
+    try {
+      mkdirSync(join(root, "target"));
+      writeFileSync(join(root, "target", "existing.txt"), "safe");
+      symlinkSync("target", join(root, "link"));
+      const agent = { workspacePath: root, allowOutsideWorkspace: false } as any;
+      expect(resolveAgentPath(agent, "link/existing.txt")).toBe(join(root, "target/existing.txt"));
+      expect(resolveAgentPath(agent, "link/new/deep/file.txt")).toBe(join(root, "target/new/deep/file.txt"));
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it("rejects multi-hop, broken, and cyclic symlink escapes", () => {
     const root = mkdtempSync(join(tmpdir(), "orgops-path-"));
     const outside = mkdtempSync(join(tmpdir(), "orgops-outside-"));

@@ -18,9 +18,6 @@ function canonicalize(pathValue: string) {
       current = parent;
       continue;
     }
-    if (stat.isSymbolicLink()) {
-      throw new Error(`Refusing unresolved symlink path: ${pathValue}`);
-    }
     let canonical: string;
     try {
       canonical = realpathSync(current);
