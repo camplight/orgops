@@ -18,3 +18,4 @@ Chronological by creation time. Each folder holds `transcript.jsonl` (raw sessio
 | 12 | [part-7-identity-context](12-part-7-identity-context/brief.md) | named | `904ba5bb-218c-43d6-9d4d-da00c482f946` | 2026-10-15T08:11:58.051Z | 2026-10-15T08:21:44.057Z | 2 |
 | 13 | [part-7-parallel-assess-turn-executor](13-part-7-parallel-assess-turn-executor/brief.md) | named | `85601d62-1f58-4c5c-ae03-fffa0eee975a` | 2026-10-15T08:13:13.893Z | 2026-10-15T08:20:42.851Z | 3 |
 | 15 | [part-8-conversation-context](15-part-8-conversation-context/brief.md) | named | `cb82e7a6-16ca-4216-923f-a0d4c603d868` | 2026-10-15T08:22:35.050Z | 2026-10-25T16:22:29.336Z | 2 |
+| 16 | [part-8-user-ui-step-7-messaging-context](16-part-8-user-ui-step-7-messaging-context/brief.md) | named | `abc379fa-70d9-43e7-9f5b-55cadafd777c` | 2026-10-25T16:25:36.365Z | 2026-10-25T16:39:21.640Z | 1 |
