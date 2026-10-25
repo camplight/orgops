@@ -150,7 +150,7 @@ Every step ends with the characterisation tests unchanged and green, `npm run li
 
 **6. Conversations context:** reducer and use cases (load workspace, select, start, manage, participants, shares, share link). **(done)**
 
-**7. Messaging context:** timeline load and pagination, a single unread tracker, send, upload, sensitive reveal, and the scroll hook.
+**7. Messaging context:** timeline load and pagination, a single unread tracker, send, upload, sensitive reveal, and the scroll hook. **(in progress)**
 
 **8. `App.tsx` becomes the composition root** (about 100 lines or fewer), wiring adapters through context.
 

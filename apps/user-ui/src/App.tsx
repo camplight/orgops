@@ -38,6 +38,8 @@ import { useConversationsState } from "./ui/conversations/use-conversations-stat
 import { useChannelSelection } from "./ui/conversations/use-channel-selection";
 import { useStartConversation } from "./ui/conversations/use-start-conversation";
 import { useChannelManagement } from "./ui/conversations/use-channel-management";
+import { createRevealSensitive } from "./application/messaging/reveal-sensitive";
+import { useSensitiveReveal } from "./ui/messaging/use-sensitive-reveal";
 import { createHttpSessionGateway } from "./infrastructure/http/http-session-gateway";
 import { createHttpConversationGateway } from "./infrastructure/http/http-conversation-gateway";
 import { createHttpFileGateway } from "./infrastructure/http/http-file-gateway";
@@ -111,6 +113,7 @@ function createLocalAttachmentId() {
 }
 
 const messageGateway = createHttpMessageGateway();
+const revealSensitive = createRevealSensitive({ messageGateway });
 const sessionGateway = createHttpSessionGateway();
 const loadCurrentSession = createLoadSession({ sessionGateway });
 const signIn = createLogin({ sessionGateway });
@@ -258,13 +261,18 @@ export default function App() {
     copyShareLink,
     setError
   });
+  const {
+    sensitiveRevealPasswords,
+    revealedSensitiveByEvent,
+    revealingSensitiveEventId,
+    sensitiveRevealErrors,
+    handleRevealSensitive,
+    handleHideSensitive,
+    handleSensitivePasswordChange
+  } = useSensitiveReveal({ revealSensitive });
   const [expandedTraceEventId, setExpandedTraceEventId] = useState<string | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const [wsConnected, setWsConnected] = useState(false);
-  const [sensitiveRevealPasswords, setSensitiveRevealPasswords] = useState<Record<string, string>>({});
-  const [revealedSensitiveByEvent, setRevealedSensitiveByEvent] = useState<Record<string, string>>({});
-  const [revealingSensitiveEventId, setRevealingSensitiveEventId] = useState<string | null>(null);
-  const [sensitiveRevealErrors, setSensitiveRevealErrors] = useState<Record<string, string>>({});
 
   const activeChannel = useMemo(
     () => channels.find((channel) => channel.id === activeChannelId) ?? null,
@@ -482,40 +490,6 @@ export default function App() {
     setShowArchivedChannels,
     setShowChannelManageDialog
   });
-
-  async function handleRevealSensitive(eventId: string) {
-    const password = sensitiveRevealPasswords[eventId] ?? "";
-    if (!password) {
-      setSensitiveRevealErrors((current) => ({ ...current, [eventId]: "Enter your password to reveal." }));
-      return;
-    }
-    setRevealingSensitiveEventId(eventId);
-    setSensitiveRevealErrors((current) => ({ ...current, [eventId]: "" }));
-    try {
-      const response = await messageGateway.revealSensitive({ eventId, password });
-      const text = typeof response.text === "string" ? response.text : "";
-      if (!text) {
-        setSensitiveRevealErrors((current) => ({ ...current, [eventId]: "No sensitive content was returned." }));
-        return;
-      }
-      setRevealedSensitiveByEvent((current) => ({ ...current, [eventId]: text }));
-      setSensitiveRevealPasswords((current) => ({ ...current, [eventId]: "" }));
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : "Unable to reveal sensitive content";
-      setSensitiveRevealErrors((current) => ({ ...current, [eventId]: detail || "Unable to reveal sensitive content" }));
-    } finally {
-      setRevealingSensitiveEventId((current) => (current === eventId ? null : current));
-    }
-  }
-
-  function handleHideSensitive(eventId: string) {
-    setRevealedSensitiveByEvent((current) => {
-      if (!Object.prototype.hasOwnProperty.call(current, eventId)) return current;
-      const next = { ...current };
-      delete next[eventId];
-      return next;
-    });
-  }
 
   async function loadShell() {
     if (!authenticated) return;
@@ -1285,13 +1259,7 @@ export default function App() {
                       revealError={sensitiveRevealErrors[event.id] ?? ""}
                       revealPassword={sensitiveRevealPasswords[event.id] ?? ""}
                       revealing={revealingSensitiveEventId === event.id}
-                      onPasswordChange={(value) => {
-                        setSensitiveRevealPasswords((current) => ({
-                          ...current,
-                          [event.id]: value
-                        }));
-                        setSensitiveRevealErrors((current) => ({ ...current, [event.id]: "" }));
-                      }}
+                      onPasswordChange={(value) => handleSensitivePasswordChange(event.id, value)}
                       onReveal={() => void handleRevealSensitive(event.id)}
                       onHide={() => handleHideSensitive(event.id)}
                     />
