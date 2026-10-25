@@ -18,6 +18,8 @@ import { useSensitiveReveal } from "./ui/messaging/use-sensitive-reveal";
 import { usePendingAttachments } from "./ui/messaging/use-pending-attachments";
 import { useComposerSend } from "./ui/messaging/use-composer-send";
 import { useUnreadTracker } from "./ui/messaging/use-unread-tracker";
+import { useTimelineView } from "./ui/messaging/use-timeline-view";
+import { useDerivedChannels } from "./ui/conversations/use-derived-channels";
 import { useTimeline } from "./ui/messaging/use-timeline";
 import { useMessagesScroll } from "./ui/messaging/use-messages-scroll";
 import { ChangePasswordScreen } from "./ui/auth/change-password-screen";
@@ -28,24 +30,12 @@ import { ConversationDialog } from "./ui/dialogs/conversation-dialog";
 import { ParticipantsDialog } from "./ui/dialogs/participants-dialog";
 import { ChannelManageDialog } from "./ui/dialogs/channel-manage-dialog";
 import { LoginScreen } from "./ui/auth/login-screen";
-import type { Channel, EventRow, UploadedAttachment } from "./types";
+import type { Channel, UploadedAttachment } from "./types";
 import {
-  CHANNEL_GROUPS,
-  agentVisibleToUserUi,
   canManageUserChannel,
-  channelGroupId,
-  channelHasHumanParticipant,
   channelLabel,
-  channelMatchesQuery,
-  channelVisibleToUserUi,
-  isHumanAgentDirectChannel,
-  isSharedChannelForUser,
-  normalizedSubscriberType,
-  participantAgentStatus,
   type ChannelGroupId
 } from "./domain/conversations/channel-rules";
-import { isHiddenUiActionMessage } from "./domain/messaging/event-interpretation";
-import { isTraceEvent } from "./domain/messaging/trace-rules";
 
 import {
   messageGateway,
@@ -257,139 +247,29 @@ export default function App() {
     userIdRef.current = userId;
   }, [userId]);
 
-  const visibleTimelineEvents = useMemo(
-    () =>
-      events.filter(
-        (event) => (event.type === "message.created" && !isHiddenUiActionMessage(event)) || isTraceEvent(event)
-      ),
-    [events]
-  );
-
-  const timelineItems = useMemo(() => {
-    const items: Array<
-      | { kind: "message"; id: string; event: EventRow }
-      | { kind: "trace-group"; id: string; traceEvents: EventRow[]; tone: "agent" | "system" }
-    > = [];
-    let traceBuffer: EventRow[] = [];
-    let groupCounter = 0;
-
-    const flushTraceBuffer = () => {
-      if (traceBuffer.length === 0) return;
-      const tone: "agent" | "system" = traceBuffer.some(
-        (entry) => entry.type === "tool.failed" || entry.type === "wrapper.turn.failed"
-      )
-        ? "system"
-        : "agent";
-      items.push({
-        kind: "trace-group",
-        id: `trace-group-${traceBuffer[0]?.id ?? groupCounter}`,
-        traceEvents: traceBuffer,
-        tone
-      });
-      traceBuffer = [];
-      groupCounter += 1;
-    };
-
-    for (const event of visibleTimelineEvents) {
-      if (event.type === "message.created" || event.type === "agent.turn.failed") {
-        flushTraceBuffer();
-        items.push({ kind: "message", id: event.id, event });
-      } else {
-        traceBuffer.push(event);
-      }
-    }
-    flushTraceBuffer();
-    return items;
-  }, [visibleTimelineEvents]);
+  const { timelineItems, agentIsThinking } = useTimelineView({ events });
   const isConversationEmpty = !messagesLoading && timelineItems.length === 0;
 
-  const offlineAgentNames = useMemo(
-    () =>
-      (activeChannel?.participants ?? [])
-        .filter((participant) => participantAgentStatus(participant, agents) === "off")
-        .map((participant) => participant.subscriberId),
-    [activeChannel, agents]
-  );
-
-  const agentIsThinking = useMemo(() => {
-    let activeTurns = 0;
-    for (const event of events) {
-      if (event.type === "agent.turn.started") activeTurns += 1;
-      if (event.type === "agent.turn.completed" || event.type === "agent.turn.failed") {
-        activeTurns = Math.max(0, activeTurns - 1);
-      }
-    }
-    return activeTurns > 0;
-  }, [events]);
+  const {
+    offlineAgentNames,
+    visibleChannels,
+    visibleAgents,
+    filteredChannels,
+    filteredArchivedChannels,
+    groupedChannels
+  } = useDerivedChannels({
+    channels,
+    agents,
+    activeChannel,
+    userId,
+    username,
+    viewerTeamIds,
+    channelQuery
+  });
 
   useEffect(() => {
     viewerTeamIdsRef.current = viewerTeamIds;
   }, [viewerTeamIds]);
-  const visibleChannels = useMemo(
-    () =>
-      channels.filter((channel) =>
-        channelVisibleToUserUi(channel, userId, username, viewerTeamIds)
-      ),
-    [channels, userId, username, viewerTeamIds]
-  );
-  const activeChannels = useMemo(
-    () => visibleChannels.filter((channel) => !channel.archivedAt),
-    [visibleChannels]
-  );
-  const archivedChannels = useMemo(
-    () => visibleChannels.filter((channel) => Boolean(channel.archivedAt)),
-    [visibleChannels]
-  );
-  const visibleChannelAgentNames = useMemo(() => {
-    const names = new Set<string>();
-    for (const channel of visibleChannels) {
-      for (const participant of channel.participants ?? []) {
-        if (normalizedSubscriberType(participant) === "AGENT" && participant.subscriberId) {
-          names.add(participant.subscriberId);
-        }
-      }
-    }
-    return names;
-  }, [visibleChannels]);
-  const visibleAgents = useMemo(
-    () => agents.filter((agent) => agentVisibleToUserUi(agent, visibleChannelAgentNames, userId)),
-    [agents, visibleChannelAgentNames, userId]
-  );
-
-  const filteredChannels = useMemo(() => {
-    const query = channelQuery.trim().toLowerCase();
-    if (!query) return activeChannels;
-    return activeChannels.filter((channel) => channelMatchesQuery(channel, query, username));
-  }, [activeChannels, channelQuery, username]);
-
-  const filteredArchivedChannels = useMemo(() => {
-    const query = channelQuery.trim().toLowerCase();
-    if (!query) return archivedChannels;
-    return archivedChannels.filter((channel) => channelMatchesQuery(channel, query, username));
-  }, [archivedChannels, channelQuery, username]);
-
-  const groupedChannels = useMemo(
-    () =>
-      CHANNEL_GROUPS.map((group) => ({
-        ...group,
-        channels: filteredChannels.filter((channel) => {
-          const shared = isSharedChannelForUser(channel, username);
-          if (group.id === "shared") return shared;
-          if (group.id === "direct") {
-            if (shared || !username) return false;
-            return (
-              channelGroupId(channel) === "direct" &&
-              isHumanAgentDirectChannel(channel) &&
-              channelHasHumanParticipant(channel, username)
-            );
-          }
-          if (shared) return false;
-          return channelGroupId(channel) === "channels";
-        })
-      })).filter((group) => group.channels.length > 0),
-    [filteredChannels, username]
-  );
-
   const isSearchingChannels = Boolean(channelQuery.trim());
   const uploadingAttachmentCount = pendingAttachments.filter((item) => item.status === "uploading").length;
   const readyAttachments = pendingAttachments
