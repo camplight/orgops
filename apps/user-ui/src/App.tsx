@@ -38,6 +38,7 @@ import { useConversationsState } from "./ui/conversations/use-conversations-stat
 import { useChannelSelection } from "./ui/conversations/use-channel-selection";
 import { useStartConversation } from "./ui/conversations/use-start-conversation";
 import { useChannelManagement } from "./ui/conversations/use-channel-management";
+import { createUploadAttachment } from "./application/messaging/upload-attachment";
 import { createRevealSensitive } from "./application/messaging/reveal-sensitive";
 import { useSensitiveReveal } from "./ui/messaging/use-sensitive-reveal";
 import { createHttpSessionGateway } from "./infrastructure/http/http-session-gateway";
@@ -123,6 +124,7 @@ const confirmPort = createBrowserConfirm();
 const clipboard = createBrowserClipboard();
 const deepLink = createBrowserDeepLink();
 const fileGateway = createHttpFileGateway();
+const uploadAttachment = createUploadAttachment({ fileGateway });
 const conversationGateway = createHttpConversationGateway();
 const addParticipant = createAddParticipant({ conversationGateway });
 const removeParticipant = createRemoveParticipant({ conversationGateway });
@@ -1012,16 +1014,7 @@ export default function App() {
       }
     ]);
     try {
-      const uploadPayload = await fileGateway.upload(file);
-      const meta = await fileGateway.getMeta(uploadPayload.id);
-      const uploaded: UploadedAttachment = {
-        localId,
-        fileId: uploadPayload.id,
-        name: meta.original_name || file.name || "upload",
-        mime: meta.mime || mime,
-        size: typeof meta.size === "number" ? meta.size : file.size,
-        ...(typeof meta.sha256 === "string" && meta.sha256 ? { sha256: meta.sha256 } : {})
-      };
+      const uploaded = await uploadAttachment({ file, localId });
       setPendingAttachments((current) =>
         current.map((item) =>
           item.localId === localId
