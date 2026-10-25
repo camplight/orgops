@@ -1,5 +1,4 @@
 import {
-  FormEvent,
   type ClipboardEvent,
   useEffect,
   useMemo,
@@ -42,6 +41,7 @@ import { createRevealSensitive } from "./application/messaging/reveal-sensitive"
 import { createSendMessage } from "./application/messaging/send-message";
 import { useSensitiveReveal } from "./ui/messaging/use-sensitive-reveal";
 import { usePendingAttachments } from "./ui/messaging/use-pending-attachments";
+import { useComposerSend } from "./ui/messaging/use-composer-send";
 import { useMessagesScroll } from "./ui/messaging/use-messages-scroll";
 import { createHttpSessionGateway } from "./infrastructure/http/http-session-gateway";
 import { createHttpConversationGateway } from "./infrastructure/http/http-conversation-gateway";
@@ -181,7 +181,6 @@ export default function App() {
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
   const [hasOlderMessages, setHasOlderMessages] = useState(false);
-  const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const {
     username,
@@ -928,40 +927,24 @@ export default function App() {
     lastLoadedTimelineAtByChannelRef.current = {};
   }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!activeChannelId || activeChannel?.archivedAt || !activeChannelCanPost) return;
-    if (uploadingAttachmentCount > 0) return;
-    const trimmedText = draft.trim();
-    if (!trimmedText && readyAttachments.length === 0) return;
-
-    setSending(true);
-    setError(null);
-    try {
-      await sendMessage({
-        trimmedText,
-        attachments: readyAttachments,
-        username,
-        channelId: activeChannelId
-      });
-      setDraft("");
-      setPendingAttachments([]);
-      setHasNewMessagesBelow(false);
-      if (wsConnected) {
-        scrollMessagesToBottom();
-      } else {
-        await loadMessages(activeChannelId, { scrollToBottom: true });
-      }
-      window.requestAnimationFrame(() => {
-        scrollMessagesToBottom("auto");
-        composerTextareaRef.current?.scrollIntoView({ block: "nearest" });
-      });
-    } catch (sendError) {
-      setError(sendError instanceof Error ? sendError.message : "Unable to send message");
-    } finally {
-      setSending(false);
-    }
-  }
+  const { sending, handleSubmit } = useComposerSend({
+    sendMessage,
+    activeChannelId,
+    activeChannel,
+    activeChannelCanPost,
+    uploadingAttachmentCount,
+    readyAttachments,
+    draft,
+    username,
+    wsConnected,
+    composerTextareaRef,
+    setError,
+    setDraft,
+    setPendingAttachments,
+    setHasNewMessagesBelow,
+    scrollMessagesToBottom,
+    loadMessages
+  });
 
   function addConversationAgent(agentName: string) {
     setSelectedConversationAgents((current) =>
