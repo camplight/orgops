@@ -29,7 +29,7 @@ export const answersAfter =
     return responder(request, callIndex);
   };
 
-export const modelEvents = (emitted: Array<{ type: string }>) =>
+export const modelEvents = <T extends { type: string }>(emitted: T[]) =>
   emitted.filter(
     (event) =>
       !event.type.startsWith("agent.turn.") &&
