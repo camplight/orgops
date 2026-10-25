@@ -7,6 +7,7 @@ import {
 } from "react";
 import { wsUrl } from "./infrastructure/http/config";
 import { createWebSocketRealtimeFeed } from "./infrastructure/websocket/websocket-realtime-feed";
+import { createLocalAttachmentId } from "./infrastructure/browser/browser-local-id";
 import type { RealtimeFeed } from "./ports/realtime-feed";
 import { usePollingFallback } from "./ui/realtime/use-polling-fallback";
 import { useSession } from "./ui/identity/use-session";
@@ -83,14 +84,6 @@ import {
   loadWorkspaceUseCase,
   claimPendingShareLinkUseCase
 } from "./composition-root";
-
-function createLocalAttachmentId() {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  return `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
 
 export default function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
