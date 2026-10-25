@@ -21,10 +21,7 @@ import { useUnreadTracker } from "./ui/messaging/use-unread-tracker";
 import { useTimeline } from "./ui/messaging/use-timeline";
 import { useMessagesScroll } from "./ui/messaging/use-messages-scroll";
 import { ChangePasswordScreen } from "./ui/auth/change-password-screen";
-import { MessageItem } from "./ui/timeline/message-item";
-import { TurnFailureItem } from "./ui/timeline/turn-failure-item";
-import { TraceGroup } from "./ui/timeline/trace-group";
-import { Composer } from "./ui/composer/composer";
+import { ChatStack } from "./ui/workspace/chat-stack";
 import { Sidebar } from "./ui/sidebar/sidebar";
 import { ActivityPanel } from "./ui/activity/activity-panel";
 import { ConversationDialog } from "./ui/dialogs/conversation-dialog";
@@ -49,7 +46,6 @@ import {
 } from "./domain/conversations/channel-rules";
 import { isHiddenUiActionMessage } from "./domain/messaging/event-interpretation";
 import { isTraceEvent } from "./domain/messaging/trace-rules";
-import { formatTime } from "./domain/messaging/time-format";
 
 import {
   messageGateway,
@@ -740,110 +736,53 @@ export default function App() {
         {error ? <div className="notice error">{error}</div> : null}
         {loading ? <div className="notice">Loading OrgOps...</div> : null}
 
-        <section className="chat-stack">
-          <section
-            className={`messages-panel${isConversationEmpty ? " messages-panel-empty" : ""}`}
-            ref={messagesPanelRef}
-            onScroll={handleMessagesScroll}
-          >
-            {!messagesLoading && hasOlderMessages ? (
-              <button
-                className="load-older-button"
-                disabled={loadingOlderMessages}
-                onClick={() => void handleLoadOlderMessages()}
-              >
-                {loadingOlderMessages ? "Loading previous messages..." : "Load previous messages"}
-              </button>
-            ) : null}
-            {messagesLoading ? (
-              <div className="empty-state">
-                <strong>Loading messages...</strong>
-                <p>Fetching the latest channel activity.</p>
-              </div>
-            ) : timelineItems.length === 0 ? (
-              <div className="empty-state">
-                <strong>No messages yet</strong>
-                <p>Send a short update or request to start the conversation.</p>
-              </div>
-            ) : (
-              timelineItems.map((item) => {
-                if (item.kind === "message" && item.event.type === "agent.turn.failed") {
-                  return (
-                    <TurnFailureItem
-                      key={item.id}
-                      event={item.event}
-                      createdAtLabel={formatTime(item.event.createdAt)}
-                    />
-                  );
-                }
-                if (item.kind === "message") {
-                  const event = item.event;
-                  return (
-                    <MessageItem
-                      key={item.id}
-                      event={event}
-                      canPost={activeChannelCanPost && !activeChannel?.archivedAt}
-                      channelId={activeChannelId}
-                      username={username}
-                      revealedSensitive={revealedSensitiveByEvent[event.id] ?? ""}
-                      revealError={sensitiveRevealErrors[event.id] ?? ""}
-                      revealPassword={sensitiveRevealPasswords[event.id] ?? ""}
-                      revealing={revealingSensitiveEventId === event.id}
-                      onPasswordChange={(value) => handleSensitivePasswordChange(event.id, value)}
-                      onReveal={() => void handleRevealSensitive(event.id)}
-                      onHide={() => handleHideSensitive(event.id)}
-                    />
-                  );
-                }
-                return (
-                  <TraceGroup
-                    key={item.id}
-                    traceEvents={item.traceEvents}
-                    tone={item.tone}
-                    expandedTraceEventId={expandedTraceEventId}
-                    onToggleTraceEvent={(eventId) =>
-                      setExpandedTraceEventId((current) => (current === eventId ? null : eventId))
-                    }
-                  />
-                );
-              })
-            )}
-          </section>
-
-          {hasNewMessagesBelow ? (
-            <button
-              className="new-messages-button"
-              onClick={() => {
-                setHasNewMessagesBelow(false);
-                scrollMessagesToBottom();
-              }}
-            >
-              New messages below
-            </button>
-          ) : null}
-
-          <Composer
-            textareaRef={composerTextareaRef}
-            fileInputRef={fileInputRef}
-            isConversationEmpty={isConversationEmpty}
-            activeChannelId={activeChannelId}
-            activeChannel={activeChannel}
-            activeChannelCanPost={activeChannelCanPost}
-            username={username}
-            draft={draft}
-            setDraft={setDraft}
-            sending={sending}
-            offlineAgentNames={offlineAgentNames}
-            pendingAttachments={pendingAttachments}
-            setPendingAttachments={setPendingAttachments}
-            readyAttachments={readyAttachments}
-            uploadingAttachmentCount={uploadingAttachmentCount}
-            hasAttachmentErrors={hasAttachmentErrors}
-            uploadFiles={uploadFiles}
-            handlePickFiles={handlePickFiles}
-            handleSubmit={handleSubmit}
-          />
-        </section>
+        <ChatStack
+          messagesPanelRef={messagesPanelRef}
+          handleMessagesScroll={handleMessagesScroll}
+          isConversationEmpty={isConversationEmpty}
+          messagesLoading={messagesLoading}
+          hasOlderMessages={hasOlderMessages}
+          loadingOlderMessages={loadingOlderMessages}
+          handleLoadOlderMessages={handleLoadOlderMessages}
+          timelineItems={timelineItems}
+          activeChannelCanPost={activeChannelCanPost}
+          activeChannel={activeChannel}
+          activeChannelId={activeChannelId}
+          username={username}
+          revealedSensitiveByEvent={revealedSensitiveByEvent}
+          sensitiveRevealErrors={sensitiveRevealErrors}
+          sensitiveRevealPasswords={sensitiveRevealPasswords}
+          revealingSensitiveEventId={revealingSensitiveEventId}
+          handleSensitivePasswordChange={handleSensitivePasswordChange}
+          handleRevealSensitive={handleRevealSensitive}
+          handleHideSensitive={handleHideSensitive}
+          expandedTraceEventId={expandedTraceEventId}
+          setExpandedTraceEventId={setExpandedTraceEventId}
+          hasNewMessagesBelow={hasNewMessagesBelow}
+          setHasNewMessagesBelow={setHasNewMessagesBelow}
+          scrollMessagesToBottom={scrollMessagesToBottom}
+          composer={{
+            textareaRef: composerTextareaRef,
+            fileInputRef,
+            isConversationEmpty,
+            activeChannelId,
+            activeChannel,
+            activeChannelCanPost,
+            username,
+            draft,
+            setDraft,
+            sending,
+            offlineAgentNames,
+            pendingAttachments,
+            setPendingAttachments,
+            readyAttachments,
+            uploadingAttachmentCount,
+            hasAttachmentErrors,
+            uploadFiles,
+            handlePickFiles,
+            handleSubmit
+          }}
+        />
       </section>
 
       <ActivityPanel
