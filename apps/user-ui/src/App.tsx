@@ -28,13 +28,11 @@ import { Sidebar } from "./ui/sidebar/sidebar";
 import { ActivityPanel } from "./ui/activity/activity-panel";
 import { useWorkspaceShell } from "./ui/workspace/use-workspace-shell";
 import { ChannelDialogs } from "./ui/dialogs/channel-dialogs";
+import { useSidebarAndDialogState } from "./ui/workspace/use-sidebar-and-dialog-state";
 import { WorkspaceHeader } from "./ui/workspace/workspace-header";
 import { LoginScreen } from "./ui/auth/login-screen";
 import type { Channel, UploadedAttachment } from "./types";
-import {
-  canManageUserChannel,
-  type ChannelGroupId
-} from "./domain/conversations/channel-rules";
+import { canManageUserChannel } from "./domain/conversations/channel-rules";
 
 import {
   messageGateway,
@@ -93,19 +91,25 @@ export default function App() {
     resetUnreadTracking,
     loadMessageNotifications: loadMessageNotificationsFor
   } = useUnreadTracker();
-  const [collapsedChannelGroups, setCollapsedChannelGroups] = useState<Record<ChannelGroupId, boolean>>({
-    channels: false,
-    direct: false,
-    shared: false
-  });
+  const {
+    collapsedChannelGroups,
+    setCollapsedChannelGroups,
+    channelQuery,
+    setChannelQuery,
+    mobileSidebarOpen,
+    setMobileSidebarOpen,
+    showArchivedChannels,
+    setShowArchivedChannels,
+    showConversationDialog,
+    setShowConversationDialog,
+    showParticipantsDialog,
+    setShowParticipantsDialog,
+    showChannelManageDialog,
+    setShowChannelManageDialog
+  } = useSidebarAndDialogState();
   const [hasNewMessagesBelow, setHasNewMessagesBelow] = useState(false);
   const { messagesPanelRef, scrollMessagesToBottom, isMessagesPanelNearBottom, handleMessagesScroll } =
     useMessagesScroll({ hasNewMessagesBelow, setHasNewMessagesBelow });
-  const [channelQuery, setChannelQuery] = useState("");
-  const [showArchivedChannels, setShowArchivedChannels] = useState(false);
-  const [showConversationDialog, setShowConversationDialog] = useState(false);
-  const [showParticipantsDialog, setShowParticipantsDialog] = useState(false);
-  const [showChannelManageDialog, setShowChannelManageDialog] = useState(false);
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -158,7 +162,6 @@ export default function App() {
     handlePasswordUpdate,
     handleLogout
   } = useSession({ loadCurrentSession, signIn, signOut, changePassword, setError, onSignedOut: handleSignedOut });
-  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const viewerTeamIds = useMemo(() => new Set(teams.map((team) => team.id)), [teams]);
   const { selectChannel, refreshChannels } = useChannelSelection({
     activeChannelId,
