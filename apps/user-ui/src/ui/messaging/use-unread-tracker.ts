@@ -1,7 +1,7 @@
 import { useRef, useState, type MutableRefObject } from "react";
 import { isHiddenUiActionMessage } from "../../domain/messaging/event-interpretation";
 import type { MessageGateway } from "../../ports/message-gateway";
-import type { Channel } from "../../types";
+import type { Channel, EventRow } from "../../types";
 
 type LoadMessageNotificationsOptions = {
   initialize?: boolean;
@@ -24,6 +24,40 @@ export function useUnreadTracker() {
       delete next[channelId];
       return next;
     });
+  }
+
+  function recordActiveChannelEvent(event: EventRow, eventChannelId: string) {
+    if (event.type === "message.created" || event.type === "agent.turn.failed") {
+      const eventCreatedAt = event.createdAt ?? 0;
+      if (eventCreatedAt > 0) {
+        lastSeenByChannelRef.current[eventChannelId] = Math.max(
+          lastSeenByChannelRef.current[eventChannelId] ?? 0,
+          eventCreatedAt
+        );
+        lastLoadedMessageAtByChannelRef.current[eventChannelId] = Math.max(
+          lastLoadedMessageAtByChannelRef.current[eventChannelId] ?? 0,
+          eventCreatedAt
+        );
+      }
+    }
+    const timelineCreatedAt = event.createdAt ?? 0;
+    if (timelineCreatedAt > 0) {
+      lastLoadedTimelineAtByChannelRef.current[eventChannelId] = Math.max(
+        lastLoadedTimelineAtByChannelRef.current[eventChannelId] ?? 0,
+        timelineCreatedAt
+      );
+    }
+    clearUnreadForChannel(eventChannelId);
+  }
+
+  function incrementUnreadForInactiveChannel(event: EventRow, eventChannelId: string) {
+    const eventCreatedAt = event.createdAt ?? 0;
+    if (eventCreatedAt <= (lastSeenByChannelRef.current[eventChannelId] ?? 0)) return;
+
+    setUnreadCounts((current) => ({
+      ...current,
+      [eventChannelId]: (current[eventChannelId] ?? 0) + 1
+    }));
   }
 
   function resetUnreadTracking() {
@@ -68,11 +102,12 @@ export function useUnreadTracker() {
 
   return {
     unreadCounts,
-    setUnreadCounts,
     lastSeenByChannelRef,
     lastLoadedMessageAtByChannelRef,
     lastLoadedTimelineAtByChannelRef,
     clearUnreadForChannel,
+    recordActiveChannelEvent,
+    incrementUnreadForInactiveChannel,
     resetUnreadTracking,
     loadMessageNotifications
   };

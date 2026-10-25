@@ -164,7 +164,8 @@ export default function App() {
   const [events, setEvents] = useState<EventRow[]>([]);
   const {
     unreadCounts,
-    setUnreadCounts,
+    recordActiveChannelEvent,
+    incrementUnreadForInactiveChannel,
     lastSeenByChannelRef,
     lastLoadedMessageAtByChannelRef,
     lastLoadedTimelineAtByChannelRef,
@@ -698,27 +699,7 @@ export default function App() {
       if (!hiddenUiAction) {
         setEvents((current) => mergeEventsChronologically(current, [event]));
       }
-      if (event.type === "message.created" || event.type === "agent.turn.failed") {
-        const eventCreatedAt = event.createdAt ?? 0;
-        if (eventCreatedAt > 0) {
-          lastSeenByChannelRef.current[eventChannelId] = Math.max(
-            lastSeenByChannelRef.current[eventChannelId] ?? 0,
-            eventCreatedAt
-          );
-          lastLoadedMessageAtByChannelRef.current[eventChannelId] = Math.max(
-            lastLoadedMessageAtByChannelRef.current[eventChannelId] ?? 0,
-            eventCreatedAt
-          );
-        }
-      }
-      const timelineCreatedAt = event.createdAt ?? 0;
-      if (timelineCreatedAt > 0) {
-        lastLoadedTimelineAtByChannelRef.current[eventChannelId] = Math.max(
-          lastLoadedTimelineAtByChannelRef.current[eventChannelId] ?? 0,
-          timelineCreatedAt
-        );
-      }
-      clearUnreadForChannel(eventChannelId);
+      recordActiveChannelEvent(event, eventChannelId);
       if (hiddenUiAction) return;
       if (shouldAutoScroll) {
         setHasNewMessagesBelow(false);
@@ -745,13 +726,7 @@ export default function App() {
     ) {
       return;
     }
-    const eventCreatedAt = event.createdAt ?? 0;
-    if (eventCreatedAt <= (lastSeenByChannelRef.current[eventChannelId] ?? 0)) return;
-
-    setUnreadCounts((current) => ({
-      ...current,
-      [eventChannelId]: (current[eventChannelId] ?? 0) + 1
-    }));
+    incrementUnreadForInactiveChannel(event, eventChannelId);
   }
 
   useEffect(() => {
