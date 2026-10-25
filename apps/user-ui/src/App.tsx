@@ -169,7 +169,8 @@ export default function App() {
     lastLoadedMessageAtByChannelRef,
     lastLoadedTimelineAtByChannelRef,
     clearUnreadForChannel,
-    resetUnreadTracking
+    resetUnreadTracking,
+    loadMessageNotifications: loadMessageNotificationsFor
   } = useUnreadTracker();
   const [collapsedChannelGroups, setCollapsedChannelGroups] = useState<Record<ChannelGroupId, boolean>>({
     channels: false,
@@ -675,36 +676,14 @@ export default function App() {
     }
   }
 
-  async function loadMessageNotifications(options?: { initialize?: boolean }) {
-    if (!authenticated) return;
-    try {
-      const nextEvents = await messageGateway.listRecentMessageEvents();
-      if (options?.initialize) {
-        const nextSeen = { ...lastSeenByChannelRef.current };
-        for (const event of nextEvents) {
-          if (!event.channelId) continue;
-          nextSeen[event.channelId] = Math.max(nextSeen[event.channelId] ?? 0, event.createdAt ?? 0);
-        }
-        lastSeenByChannelRef.current = nextSeen;
-        setUnreadCounts({});
-        return;
-      }
-
-      const activeId = activeChannelIdRef.current;
-      const nextCounts: Record<string, number> = {};
-      for (const event of nextEvents) {
-        if (!event.channelId || event.channelId === activeId) continue;
-        if (isHiddenUiActionMessage(event)) continue;
-        const channel = channels.find((candidate) => candidate.id === event.channelId);
-        if (channel?.archivedAt) continue;
-        if ((event.createdAt ?? 0) > (lastSeenByChannelRef.current[event.channelId] ?? 0)) {
-          nextCounts[event.channelId] = (nextCounts[event.channelId] ?? 0) + 1;
-        }
-      }
-      setUnreadCounts(nextCounts);
-    } catch {
-      // Notification polling is best-effort; active channel loading reports visible errors.
-    }
+  function loadMessageNotifications(options?: { initialize?: boolean }) {
+    return loadMessageNotificationsFor({
+      initialize: options?.initialize,
+      authenticated,
+      channels,
+      activeChannelIdRef,
+      messageGateway
+    });
   }
 
   function handleIncomingRealtimeEvent(event: EventRow) {
