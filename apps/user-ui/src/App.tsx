@@ -44,6 +44,7 @@ import { createLoadOlderTimeline } from "./application/messaging/load-older-time
 import { useSensitiveReveal } from "./ui/messaging/use-sensitive-reveal";
 import { usePendingAttachments } from "./ui/messaging/use-pending-attachments";
 import { useComposerSend } from "./ui/messaging/use-composer-send";
+import { useUnreadTracker } from "./ui/messaging/use-unread-tracker";
 import { useMessagesScroll } from "./ui/messaging/use-messages-scroll";
 import { createHttpSessionGateway } from "./infrastructure/http/http-session-gateway";
 import { createHttpConversationGateway } from "./infrastructure/http/http-conversation-gateway";
@@ -140,9 +141,6 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const activeChannelIdRef = useRef<string | null>(null);
-  const lastSeenByChannelRef = useRef<Record<string, number>>({});
-  const lastLoadedMessageAtByChannelRef = useRef<Record<string, number>>({});
-  const lastLoadedTimelineAtByChannelRef = useRef<Record<string, number>>({});
   const channelsRef = useRef<Channel[]>([]);
   const usernameRef = useRef("");
   const userIdRef = useRef<string | null>(null);
@@ -164,7 +162,15 @@ export default function App() {
     resetForSignOut
   } = useConversationsState();
   const [events, setEvents] = useState<EventRow[]>([]);
-  const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
+  const {
+    unreadCounts,
+    setUnreadCounts,
+    lastSeenByChannelRef,
+    lastLoadedMessageAtByChannelRef,
+    lastLoadedTimelineAtByChannelRef,
+    clearUnreadForChannel,
+    resetUnreadTracking
+  } = useUnreadTracker();
   const [collapsedChannelGroups, setCollapsedChannelGroups] = useState<Record<ChannelGroupId, boolean>>({
     channels: false,
     direct: false,
@@ -544,12 +550,7 @@ export default function App() {
         newestMessageAt
       );
     }
-    setUnreadCounts((current) => {
-      if (!current[channelId]) return current;
-      const next = { ...current };
-      delete next[channelId];
-      return next;
-    });
+    clearUnreadForChannel(channelId);
   }
 
   function rememberWsEvent(eventId: string) {
@@ -738,12 +739,7 @@ export default function App() {
           timelineCreatedAt
         );
       }
-      setUnreadCounts((current) => {
-        if (!current[eventChannelId]) return current;
-        const next = { ...current };
-        delete next[eventChannelId];
-        return next;
-      });
+      clearUnreadForChannel(eventChannelId);
       if (hiddenUiAction) return;
       if (shouldAutoScroll) {
         setHasNewMessagesBelow(false);
@@ -907,12 +903,9 @@ export default function App() {
     setAgentSearchQuery("");
     setShowArchivedChannels(false);
     setShowConversationDialog(false);
-    setUnreadCounts({});
     setHasNewMessagesBelow(false);
     setExpandedTraceEventId(null);
-    lastSeenByChannelRef.current = {};
-    lastLoadedMessageAtByChannelRef.current = {};
-    lastLoadedTimelineAtByChannelRef.current = {};
+    resetUnreadTracking();
   }
 
   const { sending, handleSubmit } = useComposerSend({
