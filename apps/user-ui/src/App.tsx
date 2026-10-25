@@ -45,6 +45,7 @@ import { useSensitiveReveal } from "./ui/messaging/use-sensitive-reveal";
 import { usePendingAttachments } from "./ui/messaging/use-pending-attachments";
 import { useComposerSend } from "./ui/messaging/use-composer-send";
 import { useUnreadTracker } from "./ui/messaging/use-unread-tracker";
+import { useTimeline } from "./ui/messaging/use-timeline";
 import { useMessagesScroll } from "./ui/messaging/use-messages-scroll";
 import { createHttpSessionGateway } from "./infrastructure/http/http-session-gateway";
 import { createHttpConversationGateway } from "./infrastructure/http/http-conversation-gateway";
@@ -83,23 +84,6 @@ import { mergeEventsChronologically } from "./domain/messaging/event-ordering";
 import { isHiddenUiActionMessage } from "./domain/messaging/event-interpretation";
 import { isTraceEvent } from "./domain/messaging/trace-rules";
 import { formatTime } from "./domain/messaging/time-format";
-
-function adaptiveMessageBatchSize() {
-  const connection = (
-    navigator as Navigator & {
-      connection?: { downlink?: number; effectiveType?: string; saveData?: boolean };
-    }
-  ).connection;
-  if (connection?.saveData) return 12;
-  const effectiveType = connection?.effectiveType ?? "";
-  if (effectiveType.includes("2g")) return 10;
-  if (effectiveType.includes("3g")) return 20;
-  if (typeof connection?.downlink === "number") {
-    if (connection.downlink >= 10) return 50;
-    if (connection.downlink >= 5) return 40;
-  }
-  return 30;
-}
 
 function createLocalAttachmentId() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -147,9 +131,6 @@ export default function App() {
   const viewerTeamIdsRef = useRef<Set<string>>(new Set());
   const seenWsEventIdsRef = useRef<Set<string>>(new Set());
   const realtimeFeedRef = useRef<RealtimeFeed | null>(null);
-  const messageFetchSeqRef = useRef(0);
-  const loadingChannelIdRef = useRef<string | null>(null);
-  const forceScrollToBottomOnLoadRef = useRef(false);
   const {
     channels,
     agents,
@@ -161,7 +142,6 @@ export default function App() {
     setActiveChannelId,
     resetForSignOut
   } = useConversationsState();
-  const [events, setEvents] = useState<EventRow[]>([]);
   const {
     unreadCounts,
     recordActiveChannelEvent,
@@ -190,10 +170,36 @@ export default function App() {
   const [showChannelManageDialog, setShowChannelManageDialog] = useState(false);
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(true);
-  const [messagesLoading, setMessagesLoading] = useState(false);
-  const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
-  const [hasOlderMessages, setHasOlderMessages] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const {
+    events,
+    setEvents,
+    messagesLoading,
+    setMessagesLoading,
+    loadingOlderMessages,
+    setLoadingOlderMessages,
+    setHasOlderMessages,
+    hasOlderMessages,
+    messageFetchSeqRef,
+    loadingChannelIdRef,
+    forceScrollToBottomOnLoadRef,
+    loadMessages,
+    handleLoadOlderMessages
+  } = useTimeline({
+    activeChannelId,
+    activeChannelIdRef,
+    lastSeenByChannelRef,
+    lastLoadedMessageAtByChannelRef,
+    lastLoadedTimelineAtByChannelRef,
+    clearUnreadForChannel,
+    messagesPanelRef,
+    scrollMessagesToBottom,
+    isMessagesPanelNearBottom,
+    setHasNewMessagesBelow,
+    setError,
+    loadLatestTimeline,
+    loadOlderTimeline
+  });
   const {
     username,
     userId,
@@ -528,33 +534,6 @@ export default function App() {
     }
   }
 
-  function newestMessageTime(channelEvents: EventRow[]) {
-    return channelEvents.reduce((newest, event) => {
-      if (isHiddenUiActionMessage(event)) return newest;
-      if (event.type !== "message.created" && event.type !== "agent.turn.failed") return newest;
-      return Math.max(newest, event.createdAt ?? 0);
-    }, 0);
-  }
-
-  function newestTimelineEventTime(channelEvents: EventRow[]) {
-    return channelEvents.reduce((newest, event) => {
-      if (isHiddenUiActionMessage(event)) return newest;
-      if (event.type !== "message.created" && !isTraceEvent(event)) return newest;
-      return Math.max(newest, event.createdAt ?? 0);
-    }, 0);
-  }
-
-  function markChannelSeen(channelId: string, channelEvents: EventRow[]) {
-    const newestMessageAt = newestMessageTime(channelEvents);
-    if (newestMessageAt > 0) {
-      lastSeenByChannelRef.current[channelId] = Math.max(
-        lastSeenByChannelRef.current[channelId] ?? 0,
-        newestMessageAt
-      );
-    }
-    clearUnreadForChannel(channelId);
-  }
-
   function rememberWsEvent(eventId: string) {
     const seen = seenWsEventIdsRef.current;
     if (seen.has(eventId)) return false;
@@ -564,117 +543,6 @@ export default function App() {
       if (!first.done) seen.delete(first.value);
     }
     return true;
-  }
-
-  async function loadMessages(
-    channelId: string,
-    options?: { scrollToBottom?: boolean; showLoading?: boolean; scrollBehavior?: ScrollBehavior }
-  ) {
-    const fetchSeq = messageFetchSeqRef.current + 1;
-    messageFetchSeqRef.current = fetchSeq;
-    const limit = adaptiveMessageBatchSize();
-    if (options?.showLoading) {
-      loadingChannelIdRef.current = channelId;
-      setMessagesLoading(true);
-    }
-    try {
-      const timeline = await loadLatestTimeline({
-        channelId,
-        limit,
-        isStale: () => fetchSeq !== messageFetchSeqRef.current || channelId !== activeChannelIdRef.current
-      });
-      if (!timeline) {
-        return;
-      }
-      const { nextEvents } = timeline;
-      const chronologicalEvents = [...nextEvents].reverse();
-      const previousNewestMessageAt = lastLoadedMessageAtByChannelRef.current[channelId] ?? 0;
-      const nextNewestMessageAt = newestMessageTime(nextEvents);
-      const previousNewestTimelineAt = lastLoadedTimelineAtByChannelRef.current[channelId] ?? 0;
-      const nextNewestTimelineAt = newestTimelineEventTime(nextEvents);
-      const hasNewTimelineEvents =
-        previousNewestTimelineAt > 0 && nextNewestTimelineAt > previousNewestTimelineAt;
-
-      setEvents((current) =>
-        options?.showLoading ? chronologicalEvents : mergeEventsChronologically(current, chronologicalEvents)
-      );
-      if (options?.showLoading) {
-        setHasOlderMessages(timeline.hasOlderMessages);
-      }
-      markChannelSeen(channelId, nextEvents);
-      lastLoadedMessageAtByChannelRef.current[channelId] = Math.max(
-        previousNewestMessageAt,
-        nextNewestMessageAt
-      );
-      lastLoadedTimelineAtByChannelRef.current[channelId] = Math.max(
-        previousNewestTimelineAt,
-        nextNewestTimelineAt
-      );
-      if (options?.scrollToBottom) {
-        forceScrollToBottomOnLoadRef.current = true;
-        setHasNewMessagesBelow(false);
-        scrollMessagesToBottom(options.scrollBehavior);
-      }
-      if (!options?.scrollToBottom && hasNewTimelineEvents && channelId === activeChannelIdRef.current) {
-        if (isMessagesPanelNearBottom()) {
-          setHasNewMessagesBelow(false);
-          scrollMessagesToBottom();
-        } else {
-          setHasNewMessagesBelow(true);
-        }
-      }
-    } catch (loadError) {
-      if (fetchSeq === messageFetchSeqRef.current) {
-        setError(loadError instanceof Error ? loadError.message : "Unable to load messages");
-      }
-    } finally {
-      if (
-        loadingChannelIdRef.current === channelId &&
-        fetchSeq === messageFetchSeqRef.current
-      ) {
-        loadingChannelIdRef.current = null;
-        setMessagesLoading(false);
-      }
-    }
-  }
-
-  async function handleLoadOlderMessages() {
-    if (!activeChannelId || events.length === 0 || loadingOlderMessages) return;
-    const oldestEventAt = events[0]?.createdAt;
-    if (!oldestEventAt) return;
-    const channelId = activeChannelId;
-    const limit = adaptiveMessageBatchSize();
-    const panel = messagesPanelRef.current;
-    const previousScrollHeight = panel?.scrollHeight ?? 0;
-
-    setLoadingOlderMessages(true);
-    setError(null);
-    try {
-      const { olderEvents, hasOlderMessages: nextHasOlderMessages } = await loadOlderTimeline({
-        channelId,
-        limit,
-        before: oldestEventAt
-      });
-      if (channelId !== activeChannelIdRef.current) return;
-      const chronologicalOlderEvents = [...olderEvents].reverse();
-      setEvents((current) => {
-        const existingIds = new Set(current.map((event) => event.id));
-        return [
-          ...chronologicalOlderEvents.filter((event) => !existingIds.has(event.id)),
-          ...current
-        ];
-      });
-      setHasOlderMessages(nextHasOlderMessages);
-      window.requestAnimationFrame(() => {
-        const currentPanel = messagesPanelRef.current;
-        if (!currentPanel) return;
-        currentPanel.scrollTop += currentPanel.scrollHeight - previousScrollHeight;
-      });
-    } catch (olderError) {
-      setError(olderError instanceof Error ? olderError.message : "Unable to load previous messages");
-    } finally {
-      setLoadingOlderMessages(false);
-    }
   }
 
   function loadMessageNotifications(options?: { initialize?: boolean }) {
