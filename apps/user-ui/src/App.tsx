@@ -42,6 +42,7 @@ import { createRevealSensitive } from "./application/messaging/reveal-sensitive"
 import { createSendMessage } from "./application/messaging/send-message";
 import { useSensitiveReveal } from "./ui/messaging/use-sensitive-reveal";
 import { usePendingAttachments } from "./ui/messaging/use-pending-attachments";
+import { useMessagesScroll } from "./ui/messaging/use-messages-scroll";
 import { createHttpSessionGateway } from "./infrastructure/http/http-session-gateway";
 import { createHttpConversationGateway } from "./infrastructure/http/http-conversation-gateway";
 import { createHttpFileGateway } from "./infrastructure/http/http-file-gateway";
@@ -132,7 +133,6 @@ const loadWorkspaceUseCase = createLoadWorkspace({ conversationGateway, deepLink
 const claimPendingShareLinkUseCase = createClaimPendingShareLink({ conversationGateway, deepLink });
 
 export default function App() {
-  const messagesPanelRef = useRef<HTMLElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const activeChannelIdRef = useRef<string | null>(null);
@@ -167,6 +167,8 @@ export default function App() {
     shared: false
   });
   const [hasNewMessagesBelow, setHasNewMessagesBelow] = useState(false);
+  const { messagesPanelRef, scrollMessagesToBottom, isMessagesPanelNearBottom, handleMessagesScroll } =
+    useMessagesScroll({ hasNewMessagesBelow, setHasNewMessagesBelow });
   const [channelQuery, setChannelQuery] = useState("");
   const [selectedConversationAgents, setSelectedConversationAgents] = useState<string[]>([]);
   const [agentSearchQuery, setAgentSearchQuery] = useState("");
@@ -513,20 +515,6 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }
-
-  function scrollMessagesToBottom(behavior: ScrollBehavior = "smooth") {
-    window.requestAnimationFrame(() => {
-      const panel = messagesPanelRef.current;
-      if (!panel) return;
-      panel.scrollTo({ top: panel.scrollHeight, behavior });
-    });
-  }
-
-  function isMessagesPanelNearBottom() {
-    const panel = messagesPanelRef.current;
-    if (!panel) return true;
-    return panel.scrollHeight - panel.scrollTop - panel.clientHeight < 80;
   }
 
   function newestMessageTime(channelEvents: EventRow[]) {
@@ -984,12 +972,6 @@ export default function App() {
 
   function removeConversationAgent(agentName: string) {
     setSelectedConversationAgents((current) => current.filter((name) => name !== agentName));
-  }
-
-  function handleMessagesScroll() {
-    if (hasNewMessagesBelow && isMessagesPanelNearBottom()) {
-      setHasNewMessagesBelow(false);
-    }
   }
 
   function resizeComposerTextarea(textarea?: HTMLTextAreaElement | null) {
