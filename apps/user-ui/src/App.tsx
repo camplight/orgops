@@ -5,11 +5,8 @@ import {
   useRef,
   useState
 } from "react";
-import { wsUrl } from "./infrastructure/http/config";
-import { createWebSocketRealtimeFeed } from "./infrastructure/websocket/websocket-realtime-feed";
 import { createLocalAttachmentId } from "./infrastructure/browser/browser-local-id";
-import type { RealtimeFeed } from "./ports/realtime-feed";
-import { usePollingFallback } from "./ui/realtime/use-polling-fallback";
+import { useRealtimeFeed } from "./ui/realtime/use-realtime-feed";
 import { useSession } from "./ui/identity/use-session";
 import { useParticipants } from "./ui/conversations/use-participants";
 import { useShares } from "./ui/conversations/use-shares";
@@ -53,7 +50,6 @@ import {
   participantAgentStatus,
   type ChannelGroupId
 } from "./domain/conversations/channel-rules";
-import { mergeEventsChronologically } from "./domain/messaging/event-ordering";
 import { isHiddenUiActionMessage } from "./domain/messaging/event-interpretation";
 import { isTraceEvent } from "./domain/messaging/trace-rules";
 import { formatTime } from "./domain/messaging/time-format";
@@ -93,8 +89,6 @@ export default function App() {
   const usernameRef = useRef("");
   const userIdRef = useRef<string | null>(null);
   const viewerTeamIdsRef = useRef<Set<string>>(new Set());
-  const seenWsEventIdsRef = useRef<Set<string>>(new Set());
-  const realtimeFeedRef = useRef<RealtimeFeed | null>(null);
   const {
     channels,
     agents,
@@ -252,7 +246,6 @@ export default function App() {
     uploadAttachment,
     createLocalAttachmentId
   });
-  const [wsConnected, setWsConnected] = useState(false);
 
   const activeChannel = useMemo(
     () => channels.find((channel) => channel.id === activeChannelId) ?? null,
@@ -498,17 +491,6 @@ export default function App() {
     }
   }
 
-  function rememberWsEvent(eventId: string) {
-    const seen = seenWsEventIdsRef.current;
-    if (seen.has(eventId)) return false;
-    seen.add(eventId);
-    if (seen.size > 3000) {
-      const first = seen.values().next();
-      if (!first.done) seen.delete(first.value);
-    }
-    return true;
-  }
-
   function loadMessageNotifications(options?: { initialize?: boolean }) {
     return loadMessageNotificationsFor({
       initialize: options?.initialize,
@@ -517,48 +499,6 @@ export default function App() {
       activeChannelIdRef,
       messageGateway
     });
-  }
-
-  function handleIncomingRealtimeEvent(event: EventRow) {
-    if (!event.id || !rememberWsEvent(event.id)) return;
-    const eventChannelId = event.channelId;
-    if (!eventChannelId) return;
-
-    const currentActiveId = activeChannelIdRef.current;
-    if (eventChannelId === currentActiveId && (event.type === "message.created" || isTraceEvent(event))) {
-      const hiddenUiAction = isHiddenUiActionMessage(event);
-      const shouldAutoScroll = isMessagesPanelNearBottom();
-      if (!hiddenUiAction) {
-        setEvents((current) => mergeEventsChronologically(current, [event]));
-      }
-      recordActiveChannelEvent(event, eventChannelId);
-      if (hiddenUiAction) return;
-      if (shouldAutoScroll) {
-        setHasNewMessagesBelow(false);
-        scrollMessagesToBottom();
-      } else {
-        setHasNewMessagesBelow(true);
-      }
-      return;
-    }
-
-    if (event.type !== "message.created") return;
-    if (isHiddenUiActionMessage(event)) return;
-    if (eventChannelId === currentActiveId) return;
-
-    const channel = channelsRef.current.find((candidate) => candidate.id === eventChannelId);
-    if (!channel || channel.archivedAt) return;
-    if (
-      !channelVisibleToUserUi(
-        channel,
-        userIdRef.current,
-        usernameRef.current,
-        viewerTeamIdsRef.current
-      )
-    ) {
-      return;
-    }
-    incrementUnreadForInactiveChannel(event, eventChannelId);
   }
 
   useEffect(() => {
@@ -618,48 +558,22 @@ export default function App() {
     void loadMessageNotifications();
   }, [sessionState, channels]);
 
-  useEffect(() => {
-    if (sessionState !== "ready") return;
-    const feed = createWebSocketRealtimeFeed({
-      url: wsUrl(),
-      handlers: {
-        onOpen: () => {
-          setWsConnected(true);
-          const liveChannelId = activeChannelIdRef.current;
-          if (liveChannelId) {
-            void loadMessages(liveChannelId);
-          }
-          void loadMessageNotifications();
-        },
-        onClose: () => setWsConnected(false),
-        onEvent: (event) => handleIncomingRealtimeEvent(event)
-      }
-    });
-    realtimeFeedRef.current = feed;
-    feed.start();
-
-    return () => {
-      feed.stop();
-      realtimeFeedRef.current = null;
-    };
-  }, [sessionState]);
-
-  useEffect(() => {
-    if (sessionState !== "ready") return;
-    const desiredTopics = new Set<string>();
-    for (const channel of visibleChannels) {
-      desiredTopics.add(`channel:${channel.id}`);
-    }
-    realtimeFeedRef.current?.setTopics(desiredTopics);
-  }, [sessionState, visibleChannels]);
-
-  usePollingFallback({
-    enabled: sessionState === "ready" && !wsConnected,
-    poll: () => {
-      const liveChannelId = activeChannelIdRef.current;
-      if (liveChannelId) void loadMessages(liveChannelId);
-      void loadMessageNotifications();
-    }
+  const { wsConnected } = useRealtimeFeed({
+    sessionState,
+    visibleChannels,
+    activeChannelIdRef,
+    channelsRef,
+    usernameRef,
+    userIdRef,
+    viewerTeamIdsRef,
+    loadMessages,
+    loadMessageNotifications,
+    setEvents,
+    setHasNewMessagesBelow,
+    recordActiveChannelEvent,
+    incrementUnreadForInactiveChannel,
+    isMessagesPanelNearBottom,
+    scrollMessagesToBottom
   });
 
   useEffect(() => {
