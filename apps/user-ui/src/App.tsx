@@ -3,7 +3,6 @@ import {
   useRef,
   useState
 } from "react";
-import { createLocalAttachmentId } from "./infrastructure/browser/browser-local-id";
 import { useRealtimeFeed } from "./ui/realtime/use-realtime-feed";
 import { useSession } from "./ui/identity/use-session";
 import { useParticipants } from "./ui/conversations/use-participants";
@@ -14,34 +13,24 @@ import { useChannelSelection } from "./ui/conversations/use-channel-selection";
 import { useStartConversation } from "./ui/conversations/use-start-conversation";
 import { useConversationAgentSelection } from "./ui/conversations/use-conversation-agent-selection";
 import { useChannelManagement } from "./ui/conversations/use-channel-management";
-import { useSensitiveReveal } from "./ui/messaging/use-sensitive-reveal";
-import { usePendingAttachments } from "./ui/messaging/use-pending-attachments";
-import { useComposerSend } from "./ui/messaging/use-composer-send";
-import { useUnreadTracker } from "./ui/messaging/use-unread-tracker";
-import { useTimelineView } from "./ui/messaging/use-timeline-view";
 import { useDerivedChannels } from "./ui/conversations/use-derived-channels";
-import { useTimeline } from "./ui/messaging/use-timeline";
-import { useMessagesScroll } from "./ui/messaging/use-messages-scroll";
 import { AuthGate } from "./ui/auth/auth-gate";
 import { WorkspaceLayout } from "./ui/workspace/workspace-layout";
 import { useWorkspaceShell } from "./ui/workspace/use-workspace-shell";
 import { useSidebarAndDialogState } from "./ui/workspace/use-sidebar-and-dialog-state";
-import type { Channel, UploadedAttachment } from "./types";
+import { useMessagingController } from "./ui/messaging/use-messaging-controller";
+import { useChatStack } from "./ui/messaging/use-chat-stack";
+import type { Channel } from "./types";
 import { canManageUserChannel } from "./domain/conversations/channel-rules";
 
 import {
   messageGateway,
-  revealSensitive,
-  sendMessage,
-  loadLatestTimeline,
-  loadOlderTimeline,
   loadCurrentSession,
   signIn,
   signOut,
   changePassword,
   confirmPort,
   deepLink,
-  uploadAttachment,
   addParticipant,
   removeParticipant,
   addShare,
@@ -57,8 +46,6 @@ import {
 } from "./composition-root";
 
 export default function App() {
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const activeChannelIdRef = useRef<string | null>(null);
   const channelsRef = useRef<Channel[]>([]);
   const usernameRef = useRef("");
@@ -76,17 +63,6 @@ export default function App() {
     resetForSignOut
   } = useConversationsState();
   const {
-    unreadCounts,
-    recordActiveChannelEvent,
-    incrementUnreadForInactiveChannel,
-    lastSeenByChannelRef,
-    lastLoadedMessageAtByChannelRef,
-    lastLoadedTimelineAtByChannelRef,
-    clearUnreadForChannel,
-    resetUnreadTracking,
-    loadMessageNotifications: loadMessageNotificationsFor
-  } = useUnreadTracker();
-  const {
     collapsedChannelGroups,
     setCollapsedChannelGroups,
     channelQuery,
@@ -102,41 +78,33 @@ export default function App() {
     showChannelManageDialog,
     setShowChannelManageDialog
   } = useSidebarAndDialogState();
-  const [hasNewMessagesBelow, setHasNewMessagesBelow] = useState(false);
-  const { messagesPanelRef, scrollMessagesToBottom, isMessagesPanelNearBottom, handleMessagesScroll } =
-    useMessagesScroll({ hasNewMessagesBelow, setHasNewMessagesBelow });
-  const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const messaging = useMessagingController({ activeChannelId, activeChannelIdRef, setError });
   const {
+    unreadCounts,
+    recordActiveChannelEvent,
+    incrementUnreadForInactiveChannel,
+    resetUnreadTracking,
+    loadMessageNotificationsFor,
+    setHasNewMessagesBelow,
+    scrollMessagesToBottom,
+    isMessagesPanelNearBottom,
     events,
     setEvents,
     messagesLoading,
     setMessagesLoading,
-    loadingOlderMessages,
     setLoadingOlderMessages,
     setHasOlderMessages,
-    hasOlderMessages,
     messageFetchSeqRef,
     loadingChannelIdRef,
     forceScrollToBottomOnLoadRef,
     loadMessages,
-    handleLoadOlderMessages
-  } = useTimeline({
-    activeChannelId,
-    activeChannelIdRef,
-    lastSeenByChannelRef,
-    lastLoadedMessageAtByChannelRef,
-    lastLoadedTimelineAtByChannelRef,
-    clearUnreadForChannel,
-    messagesPanelRef,
-    scrollMessagesToBottom,
-    isMessagesPanelNearBottom,
-    setHasNewMessagesBelow,
-    setError,
-    loadLatestTimeline,
-    loadOlderTimeline
-  });
+    setExpandedTraceEventId,
+    setPendingAttachments,
+    timelineItems,
+    agentIsThinking
+  } = messaging;
   const {
     username,
     userId,
@@ -192,28 +160,10 @@ export default function App() {
     copyShareLink,
     setError
   });
-  const {
-    sensitiveRevealPasswords,
-    revealedSensitiveByEvent,
-    revealingSensitiveEventId,
-    sensitiveRevealErrors,
-    handleRevealSensitive,
-    handleHideSensitive,
-    handleSensitivePasswordChange
-  } = useSensitiveReveal({ revealSensitive });
-  const [expandedTraceEventId, setExpandedTraceEventId] = useState<string | null>(null);
-  const { pendingAttachments, setPendingAttachments, uploadFiles, handlePickFiles } = usePendingAttachments({
-    uploadAttachment,
-    createLocalAttachmentId
-  });
-
   const activeChannel = useMemo(
     () => channels.find((channel) => channel.id === activeChannelId) ?? null,
     [activeChannelId, channels]
   );
-
-  const { timelineItems, agentIsThinking } = useTimelineView({ events });
-  const isConversationEmpty = !messagesLoading && timelineItems.length === 0;
 
   const {
     offlineAgentNames,
@@ -236,11 +186,6 @@ export default function App() {
   const { selectedConversationAgents, setSelectedConversationAgents, setAgentSearchQuery } = agentSelection;
 
   const isSearchingChannels = Boolean(channelQuery.trim());
-  const uploadingAttachmentCount = pendingAttachments.filter((item) => item.status === "uploading").length;
-  const readyAttachments = pendingAttachments
-    .filter((item) => item.status === "ready" && item.uploaded)
-    .map((item) => item.uploaded as UploadedAttachment);
-  const hasAttachmentErrors = pendingAttachments.some((item) => item.status === "error");
   const activeChannelManageable = canManageUserChannel(activeChannel, userId);
   const activeChannelCanPost = activeChannel ? activeChannel.canPost !== false : false;
   const conversation = useStartConversation({
@@ -354,23 +299,15 @@ export default function App() {
     resetUnreadTracking();
   }
 
-  const { sending, handleSubmit } = useComposerSend({
-    sendMessage,
+  const chatStack = useChatStack({
+    messaging,
     activeChannelId,
     activeChannel,
     activeChannelCanPost,
-    uploadingAttachmentCount,
-    readyAttachments,
-    draft,
     username,
     wsConnected,
-    composerTextareaRef,
-    setError,
-    setDraft,
-    setPendingAttachments,
-    setHasNewMessagesBelow,
-    scrollMessagesToBottom,
-    loadMessages
+    offlineAgentNames,
+    setError
   });
 
   return (
@@ -429,53 +366,7 @@ export default function App() {
           onOpenMobileSidebar: () => setMobileSidebarOpen(true),
           onManageChannel: () => setShowChannelManageDialog(true)
         }}
-        chatStack={{
-          messagesPanelRef,
-          handleMessagesScroll,
-          isConversationEmpty,
-          messagesLoading,
-          hasOlderMessages,
-          loadingOlderMessages,
-          handleLoadOlderMessages,
-          timelineItems,
-          activeChannelCanPost,
-          activeChannel,
-          activeChannelId,
-          username,
-          revealedSensitiveByEvent,
-          sensitiveRevealErrors,
-          sensitiveRevealPasswords,
-          revealingSensitiveEventId,
-          handleSensitivePasswordChange,
-          handleRevealSensitive,
-          handleHideSensitive,
-          expandedTraceEventId,
-          setExpandedTraceEventId,
-          hasNewMessagesBelow,
-          setHasNewMessagesBelow,
-          scrollMessagesToBottom,
-          composer: {
-            textareaRef: composerTextareaRef,
-            fileInputRef,
-            isConversationEmpty,
-            activeChannelId,
-            activeChannel,
-            activeChannelCanPost,
-            username,
-            draft,
-            setDraft,
-            sending,
-            offlineAgentNames,
-            pendingAttachments,
-            setPendingAttachments,
-            readyAttachments,
-            uploadingAttachmentCount,
-            hasAttachmentErrors,
-            uploadFiles,
-            handlePickFiles,
-            handleSubmit
-          }
-        }}
+        chatStack={chatStack}
         activityPanel={{
           channel: activeChannel,
           agents,
