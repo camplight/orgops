@@ -1,27 +1,13 @@
-import {
-  useMemo,
-  useRef,
-  useState
-} from "react";
+import { useRef, useState } from "react";
 import { useRealtimeFeed } from "./ui/realtime/use-realtime-feed";
 import { useSession } from "./ui/identity/use-session";
-import { useParticipants } from "./ui/conversations/use-participants";
-import { useShares } from "./ui/conversations/use-shares";
-import { useShareLink } from "./ui/conversations/use-share-link";
-import { useConversationsState } from "./ui/conversations/use-conversations-state";
-import { useChannelSelection } from "./ui/conversations/use-channel-selection";
-import { useStartConversation } from "./ui/conversations/use-start-conversation";
-import { useConversationAgentSelection } from "./ui/conversations/use-conversation-agent-selection";
-import { useChannelManagement } from "./ui/conversations/use-channel-management";
-import { useDerivedChannels } from "./ui/conversations/use-derived-channels";
 import { AuthGate } from "./ui/auth/auth-gate";
 import { WorkspaceLayout } from "./ui/workspace/workspace-layout";
 import { useWorkspaceShell } from "./ui/workspace/use-workspace-shell";
-import { useSidebarAndDialogState } from "./ui/workspace/use-sidebar-and-dialog-state";
 import { useMessagingController } from "./ui/messaging/use-messaging-controller";
 import { useChatStack } from "./ui/messaging/use-chat-stack";
 import type { Channel } from "./types";
-import { canManageUserChannel } from "./domain/conversations/channel-rules";
+import { useConversationsController } from "./ui/conversations/use-conversations-controller";
 
 import {
   messageGateway,
@@ -29,20 +15,9 @@ import {
   signIn,
   signOut,
   changePassword,
-  confirmPort,
   deepLink,
-  addParticipant,
-  removeParticipant,
-  addShare,
-  copyShareLink,
-  removeShare,
-  updateChannelSettings,
-  deleteChannel,
-  startConversation,
-  selectChannelUseCase,
-  refreshChannelsUseCase,
-  loadWorkspaceUseCase,
-  claimPendingShareLinkUseCase
+  claimPendingShareLinkUseCase,
+  loadWorkspaceUseCase
 } from "./composition-root";
 
 export default function App() {
@@ -51,35 +26,63 @@ export default function App() {
   const usernameRef = useRef("");
   const userIdRef = useRef<string | null>(null);
   const viewerTeamIdsRef = useRef<Set<string>>(new Set());
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const {
+    username,
+    userId,
+    loginUsername,
+    mustChangePassword,
+    authenticated,
+    authLoading,
+    sessionState,
+    loadSession,
+    loginPassword,
+    setLoginPassword,
+    handleLogin,
+    setLoginUsername,
+    newPassword,
+    confirmPassword,
+    setNewPassword,
+    setConfirmPassword,
+    handlePasswordUpdate,
+    handleLogout
+  } = useSession({ loadCurrentSession, signIn, signOut, changePassword, setError, onSignedOut: handleSignedOut });
+  const conversations = useConversationsController({
+    username,
+    userId,
+    sessionState,
+    setError,
+    setLoading
+  });
   const {
     channels,
     agents,
-    teams,
-    humans,
     activeChannelId,
-    setWorkspace,
-    setChannels,
-    setActiveChannelId,
-    resetForSignOut
-  } = useConversationsState();
-  const {
-    collapsedChannelGroups,
-    setCollapsedChannelGroups,
-    channelQuery,
-    setChannelQuery,
+    activeChannel,
+    activeChannelCanPost,
+    viewerTeamIds,
+    visibleChannels,
+    offlineAgentNames,
     mobileSidebarOpen,
     setMobileSidebarOpen,
-    showArchivedChannels,
+    setWorkspace,
+    selectChannel,
+    resetForSignOut,
+    setChannelQuery,
+    setConversationName,
+    setConversationDescription,
+    setConversationVisibility,
+    setSelectedConversationAgents,
+    setAgentSearchQuery,
     setShowArchivedChannels,
-    showConversationDialog,
     setShowConversationDialog,
-    showParticipantsDialog,
     setShowParticipantsDialog,
-    showChannelManageDialog,
-    setShowChannelManageDialog
-  } = useSidebarAndDialogState();
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+    setShowChannelManageDialog,
+    sidebarProps,
+    headerProps,
+    dialogsProps
+  } = conversations;
   const messaging = useMessagingController({ activeChannelId, activeChannelIdRef, setError });
   const {
     unreadCounts,
@@ -105,122 +108,6 @@ export default function App() {
     timelineItems,
     agentIsThinking
   } = messaging;
-  const {
-    username,
-    userId,
-    loginUsername,
-    mustChangePassword,
-    authenticated,
-    authLoading,
-    sessionState,
-    loadSession,
-    loginPassword,
-    setLoginPassword,
-    handleLogin,
-    setLoginUsername,
-    newPassword,
-    confirmPassword,
-    setNewPassword,
-    setConfirmPassword,
-    handlePasswordUpdate,
-    handleLogout
-  } = useSession({ loadCurrentSession, signIn, signOut, changePassword, setError, onSignedOut: handleSignedOut });
-  const viewerTeamIds = useMemo(() => new Set(teams.map((team) => team.id)), [teams]);
-  const { selectChannel, refreshChannels } = useChannelSelection({
-    activeChannelId,
-    userId,
-    username,
-    viewerTeamIds,
-    sessionState,
-    channels,
-    readLinkedChannelId: deepLink.readLinkedChannelId,
-    selectChannelUseCase,
-    refreshChannelsUseCase,
-    setChannels,
-    setActiveChannelId,
-    setMobileSidebarOpen,
-    setShowArchivedChannels
-  });
-  const participants = useParticipants({
-    activeChannelId,
-    addParticipant,
-    removeParticipant,
-    refreshChannels,
-    setError
-  });
-  const shares = useShares({
-    activeChannelId,
-    addShare,
-    removeShare,
-    refreshChannels,
-    setError
-  });
-  const shareLink = useShareLink({
-    activeChannelId,
-    copyShareLink,
-    setError
-  });
-  const activeChannel = useMemo(
-    () => channels.find((channel) => channel.id === activeChannelId) ?? null,
-    [activeChannelId, channels]
-  );
-
-  const {
-    offlineAgentNames,
-    visibleChannels,
-    visibleAgents,
-    filteredChannels,
-    filteredArchivedChannels,
-    groupedChannels
-  } = useDerivedChannels({
-    channels,
-    agents,
-    activeChannel,
-    userId,
-    username,
-    viewerTeamIds,
-    channelQuery
-  });
-
-  const agentSelection = useConversationAgentSelection({ visibleAgents });
-  const { selectedConversationAgents, setSelectedConversationAgents, setAgentSearchQuery } = agentSelection;
-
-  const isSearchingChannels = Boolean(channelQuery.trim());
-  const activeChannelManageable = canManageUserChannel(activeChannel, userId);
-  const activeChannelCanPost = activeChannel ? activeChannel.canPost !== false : false;
-  const conversation = useStartConversation({
-    username,
-    selectedConversationAgents,
-    startConversation,
-    refreshChannels,
-    expandChannelGroup: (group) =>
-      setCollapsedChannelGroups((current) => ({ ...current, [group]: false })),
-    setError,
-    setLoading,
-    setSelectedConversationAgents,
-    setAgentSearchQuery,
-    setChannelQuery,
-    setShowConversationDialog
-  });
-  const { conversationName, setConversationName, setConversationDescription, setConversationVisibility } =
-    conversation;
-  const canStartConversation =
-    Boolean(conversationName.trim()) || selectedConversationAgents.length === 1;
-
-  const channelManagement = useChannelManagement({
-    activeChannel,
-    activeChannelId,
-    username,
-    updateChannelSettings,
-    deleteChannel,
-    confirm: (message) => confirmPort.confirm(message),
-    refreshChannels,
-    setError,
-    setLoading,
-    setShowArchivedChannels,
-    setShowChannelManageDialog
-  });
-
   const { loadMessageNotifications } = useWorkspaceShell({
     authenticated,
     sessionState,
@@ -334,38 +221,12 @@ export default function App() {
         error={error}
         loading={loading}
         sidebar={{
-          mobileOpen: mobileSidebarOpen,
-          username,
+          ...sidebarProps,
           loading,
-          channelQuery,
-          isSearchingChannels,
-          groupedChannels,
-          collapsedChannelGroups,
-          filteredChannels,
-          filteredArchivedChannels,
-          showArchivedChannels,
-          activeChannelId,
           unreadCounts,
-          onCloseMobile: () => setMobileSidebarOpen(false),
-          onChannelQueryChange: setChannelQuery,
-          onToggleChannelGroup: (groupId) =>
-            setCollapsedChannelGroups((current) => ({
-              ...current,
-              [groupId]: !current[groupId]
-            })),
-          onToggleArchivedChannels: () => setShowArchivedChannels((current) => !current),
-          onSelectChannel: selectChannel,
-          onNewConversation: () => setShowConversationDialog(true),
           onLogout: () => void handleLogout()
         }}
-        header={{
-          activeChannel,
-          username,
-          activeChannelCanPost,
-          activeChannelManageable,
-          onOpenMobileSidebar: () => setMobileSidebarOpen(true),
-          onManageChannel: () => setShowChannelManageDialog(true)
-        }}
+        header={headerProps}
         chatStack={chatStack}
         activityPanel={{
           channel: activeChannel,
@@ -373,26 +234,7 @@ export default function App() {
           events,
           agentIsThinking
         }}
-        dialogs={{
-          showConversationDialog,
-          showParticipantsDialog,
-          showChannelManageDialog,
-          setShowConversationDialog,
-          setShowParticipantsDialog,
-          setShowChannelManageDialog,
-          activeChannel,
-          activeChannelManageable,
-          loading,
-          canStartConversation,
-          visibleAgents,
-          humans,
-          conversation,
-          agentSelection,
-          participants,
-          shares,
-          shareLink,
-          channelManagement
-        }}
+        dialogs={{ ...dialogsProps, loading }}
       />
     </AuthGate>
   );
