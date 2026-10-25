@@ -27,14 +27,12 @@ import { ChangePasswordScreen } from "./ui/auth/change-password-screen";
 import { ChatStack } from "./ui/workspace/chat-stack";
 import { Sidebar } from "./ui/sidebar/sidebar";
 import { ActivityPanel } from "./ui/activity/activity-panel";
-import { ConversationDialog } from "./ui/dialogs/conversation-dialog";
-import { ParticipantsDialog } from "./ui/dialogs/participants-dialog";
-import { ChannelManageDialog } from "./ui/dialogs/channel-manage-dialog";
+import { ChannelDialogs } from "./ui/dialogs/channel-dialogs";
+import { WorkspaceHeader } from "./ui/workspace/workspace-header";
 import { LoginScreen } from "./ui/auth/login-screen";
 import type { Channel, UploadedAttachment } from "./types";
 import {
   canManageUserChannel,
-  channelLabel,
   type ChannelGroupId
 } from "./domain/conversations/channel-rules";
 
@@ -177,39 +175,21 @@ export default function App() {
     setMobileSidebarOpen,
     setShowArchivedChannels
   });
-  const {
-    participantKind,
-    participantValue,
-    participantSubmitting,
-    participantRemovingKey,
-    setParticipantKind,
-    setParticipantValue,
-    handleAddParticipant,
-    handleRemoveParticipant
-  } = useParticipants({
+  const participants = useParticipants({
     activeChannelId,
     addParticipant,
     removeParticipant,
     refreshChannels,
     setError
   });
-  const {
-    shareKind,
-    shareValue,
-    shareSubmitting,
-    shareRemovingKey,
-    setShareKind,
-    setShareValue,
-    handleAddShare,
-    handleRemoveShare
-  } = useShares({
+  const shares = useShares({
     activeChannelId,
     addShare,
     removeShare,
     refreshChannels,
     setError
   });
-  const { shareLinkCopied, handleCopyShareLink } = useShareLink({
+  const shareLink = useShareLink({
     activeChannelId,
     copyShareLink,
     setError
@@ -266,16 +246,8 @@ export default function App() {
     channelQuery
   });
 
-  const {
-    selectedConversationAgents,
-    setSelectedConversationAgents,
-    agentSearchQuery,
-    setAgentSearchQuery,
-    selectedConversationAgentRecords,
-    agentSuggestions,
-    addConversationAgent,
-    removeConversationAgent
-  } = useConversationAgentSelection({ visibleAgents });
+  const agentSelection = useConversationAgentSelection({ visibleAgents });
+  const { selectedConversationAgents, setSelectedConversationAgents, setAgentSearchQuery } = agentSelection;
 
   useEffect(() => {
     viewerTeamIdsRef.current = viewerTeamIds;
@@ -288,15 +260,7 @@ export default function App() {
   const hasAttachmentErrors = pendingAttachments.some((item) => item.status === "error");
   const activeChannelManageable = canManageUserChannel(activeChannel, userId);
   const activeChannelCanPost = activeChannel ? activeChannel.canPost !== false : false;
-  const {
-    conversationName,
-    conversationDescription,
-    conversationVisibility,
-    setConversationName,
-    setConversationDescription,
-    setConversationVisibility,
-    handleStartConversation
-  } = useStartConversation({
+  const conversation = useStartConversation({
     username,
     selectedConversationAgents,
     startConversation,
@@ -310,18 +274,12 @@ export default function App() {
     setChannelQuery,
     setShowConversationDialog
   });
+  const { conversationName, setConversationName, setConversationDescription, setConversationVisibility } =
+    conversation;
   const canStartConversation =
     Boolean(conversationName.trim()) || selectedConversationAgents.length === 1;
 
-  const {
-    channelVisibilityDraft,
-    archiveDraft,
-    updatingChannelVisibility,
-    setChannelVisibilityDraft,
-    setArchiveDraft,
-    handleDeleteChannel,
-    handleSaveChannelSettings
-  } = useChannelManagement({
+  const channelManagement = useChannelManagement({
     activeChannel,
     activeChannelId,
     username,
@@ -570,35 +528,14 @@ export default function App() {
       ) : null}
 
       <section className="workspace">
-        <header className="workspace-header">
-          <button
-            type="button"
-            className="sidebar-mobile-toggle"
-            onClick={() => setMobileSidebarOpen(true)}
-          >
-            Menu
-          </button>
-          <div>
-            <span>Workspace</span>
-            <div className="workspace-title-row">
-              <h1>{channelLabel(activeChannel, username)}</h1>
-            </div>
-            <p>
-              {activeChannel?.archivedAt
-                ? "Archived channel"
-                : activeChannel && !activeChannelCanPost
-                  ? "Read-only shared channel"
-                : activeChannel?.description || "Talk to the team and agents in plain language."}
-            </p>
-          </div>
-          {activeChannel && activeChannelManageable ? (
-            <div className="channel-actions">
-              <button type="button" onClick={() => setShowChannelManageDialog(true)}>
-                Manage channel
-              </button>
-            </div>
-          ) : null}
-        </header>
+        <WorkspaceHeader
+          activeChannel={activeChannel}
+          username={username}
+          activeChannelCanPost={activeChannelCanPost}
+          activeChannelManageable={activeChannelManageable}
+          onOpenMobileSidebar={() => setMobileSidebarOpen(true)}
+          onManageChannel={() => setShowChannelManageDialog(true)}
+        />
 
         {error ? <div className="notice error">{error}</div> : null}
         {loading ? <div className="notice">Loading OrgOps...</div> : null}
@@ -659,72 +596,26 @@ export default function App() {
         agentIsThinking={agentIsThinking}
       />
 
-      {showConversationDialog ? (
-        <ConversationDialog
-          name={conversationName}
-          description={conversationDescription}
-          visibility={conversationVisibility}
-          selectedAgents={selectedConversationAgentRecords}
-          agentSearchQuery={agentSearchQuery}
-          visibleAgents={visibleAgents}
-          agentSuggestions={agentSuggestions}
-          loading={loading}
-          canStart={canStartConversation}
-          onClose={() => setShowConversationDialog(false)}
-          onSubmit={handleStartConversation}
-          onNameChange={setConversationName}
-          onDescriptionChange={setConversationDescription}
-          onVisibilityChange={setConversationVisibility}
-          onRemoveAgent={removeConversationAgent}
-          onAddAgent={addConversationAgent}
-          onAgentSearchQueryChange={setAgentSearchQuery}
-        />
-      ) : null}
-
-      {showParticipantsDialog && activeChannel && activeChannelManageable ? (
-        <ParticipantsDialog
-          channel={activeChannel}
-          visibleAgents={visibleAgents}
-          humans={humans}
-          participantKind={participantKind}
-          participantValue={participantValue}
-          participantSubmitting={participantSubmitting}
-          participantRemovingKey={participantRemovingKey}
-          shareKind={shareKind}
-          shareValue={shareValue}
-          shareSubmitting={shareSubmitting}
-          shareRemovingKey={shareRemovingKey}
-          onClose={() => setShowParticipantsDialog(false)}
-          onParticipantKindChange={setParticipantKind}
-          onParticipantValueChange={setParticipantValue}
-          onAddParticipant={handleAddParticipant}
-          onRemoveParticipant={(participant) => void handleRemoveParticipant(participant)}
-          onShareKindChange={setShareKind}
-          onShareValueChange={setShareValue}
-          onAddShare={handleAddShare}
-          onRemoveShare={(share) => void handleRemoveShare(share)}
-        />
-      ) : null}
-
-      {showChannelManageDialog && activeChannel && activeChannelManageable ? (
-        <ChannelManageDialog
-          channel={activeChannel}
-          underlay={showParticipantsDialog}
-          visibilityDraft={channelVisibilityDraft}
-          archiveDraft={archiveDraft}
-          updating={updatingChannelVisibility}
-          shareLinkCopied={shareLinkCopied}
-          onClose={() => setShowChannelManageDialog(false)}
-          onVisibilityDraftChange={setChannelVisibilityDraft}
-          onArchiveDraftChange={setArchiveDraft}
-          onManageParticipants={() => {
-            setShowParticipantsDialog(true);
-          }}
-          onCopyShareLink={() => void handleCopyShareLink()}
-          onSave={() => void handleSaveChannelSettings()}
-          onDelete={(channel) => void handleDeleteChannel(channel)}
-        />
-      ) : null}
+      <ChannelDialogs
+        showConversationDialog={showConversationDialog}
+        showParticipantsDialog={showParticipantsDialog}
+        showChannelManageDialog={showChannelManageDialog}
+        setShowConversationDialog={setShowConversationDialog}
+        setShowParticipantsDialog={setShowParticipantsDialog}
+        setShowChannelManageDialog={setShowChannelManageDialog}
+        activeChannel={activeChannel}
+        activeChannelManageable={activeChannelManageable}
+        loading={loading}
+        canStartConversation={canStartConversation}
+        visibleAgents={visibleAgents}
+        humans={humans}
+        conversation={conversation}
+        agentSelection={agentSelection}
+        participants={participants}
+        shares={shares}
+        shareLink={shareLink}
+        channelManagement={channelManagement}
+      />
     </main>
   );
 }
