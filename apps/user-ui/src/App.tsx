@@ -13,6 +13,7 @@ import { useShareLink } from "./ui/conversations/use-share-link";
 import { useConversationsState } from "./ui/conversations/use-conversations-state";
 import { useChannelSelection } from "./ui/conversations/use-channel-selection";
 import { useStartConversation } from "./ui/conversations/use-start-conversation";
+import { useConversationAgentSelection } from "./ui/conversations/use-conversation-agent-selection";
 import { useChannelManagement } from "./ui/conversations/use-channel-management";
 import { useSensitiveReveal } from "./ui/messaging/use-sensitive-reveal";
 import { usePendingAttachments } from "./ui/messaging/use-pending-attachments";
@@ -103,8 +104,6 @@ export default function App() {
   const { messagesPanelRef, scrollMessagesToBottom, isMessagesPanelNearBottom, handleMessagesScroll } =
     useMessagesScroll({ hasNewMessagesBelow, setHasNewMessagesBelow });
   const [channelQuery, setChannelQuery] = useState("");
-  const [selectedConversationAgents, setSelectedConversationAgents] = useState<string[]>([]);
-  const [agentSearchQuery, setAgentSearchQuery] = useState("");
   const [showArchivedChannels, setShowArchivedChannels] = useState(false);
   const [showConversationDialog, setShowConversationDialog] = useState(false);
   const [showParticipantsDialog, setShowParticipantsDialog] = useState(false);
@@ -267,6 +266,17 @@ export default function App() {
     channelQuery
   });
 
+  const {
+    selectedConversationAgents,
+    setSelectedConversationAgents,
+    agentSearchQuery,
+    setAgentSearchQuery,
+    selectedConversationAgentRecords,
+    agentSuggestions,
+    addConversationAgent,
+    removeConversationAgent
+  } = useConversationAgentSelection({ visibleAgents });
+
   useEffect(() => {
     viewerTeamIdsRef.current = viewerTeamIds;
   }, [viewerTeamIds]);
@@ -302,18 +312,6 @@ export default function App() {
   });
   const canStartConversation =
     Boolean(conversationName.trim()) || selectedConversationAgents.length === 1;
-  const selectedConversationAgentRecords = useMemo(
-    () =>
-      selectedConversationAgents.map((agentName) => visibleAgents.find((agent) => agent.name === agentName) ?? { name: agentName }),
-    [visibleAgents, selectedConversationAgents]
-  );
-  const agentSuggestions = useMemo(() => {
-    const query = agentSearchQuery.trim().toLowerCase();
-    return visibleAgents
-      .filter((agent) => !selectedConversationAgents.includes(agent.name))
-      .filter((agent) => !query || agent.name.toLowerCase().includes(query))
-      .slice(0, 8);
-  }, [agentSearchQuery, visibleAgents, selectedConversationAgents]);
 
   const {
     channelVisibilityDraft,
@@ -499,17 +497,6 @@ export default function App() {
     scrollMessagesToBottom,
     loadMessages
   });
-
-  function addConversationAgent(agentName: string) {
-    setSelectedConversationAgents((current) =>
-      current.includes(agentName) ? current : [...current, agentName]
-    );
-    setAgentSearchQuery("");
-  }
-
-  function removeConversationAgent(agentName: string) {
-    setSelectedConversationAgents((current) => current.filter((name) => name !== agentName));
-  }
 
   if (sessionState === "loading") {
     return <main className="loading-screen">Loading OrgOps...</main>;
