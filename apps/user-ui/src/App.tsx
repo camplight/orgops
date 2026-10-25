@@ -39,6 +39,8 @@ import { useChannelManagement } from "./ui/conversations/use-channel-management"
 import { createUploadAttachment } from "./application/messaging/upload-attachment";
 import { createRevealSensitive } from "./application/messaging/reveal-sensitive";
 import { createSendMessage } from "./application/messaging/send-message";
+import { createLoadLatestTimeline } from "./application/messaging/load-latest-timeline";
+import { createLoadOlderTimeline } from "./application/messaging/load-older-timeline";
 import { useSensitiveReveal } from "./ui/messaging/use-sensitive-reveal";
 import { usePendingAttachments } from "./ui/messaging/use-pending-attachments";
 import { useComposerSend } from "./ui/messaging/use-composer-send";
@@ -108,6 +110,8 @@ function createLocalAttachmentId() {
 const messageGateway = createHttpMessageGateway();
 const revealSensitive = createRevealSensitive({ messageGateway });
 const sendMessage = createSendMessage({ messageGateway });
+const loadLatestTimeline = createLoadLatestTimeline({ messageGateway });
+const loadOlderTimeline = createLoadOlderTimeline({ messageGateway });
 const sessionGateway = createHttpSessionGateway();
 const loadCurrentSession = createLoadSession({ sessionGateway });
 const signIn = createLogin({ sessionGateway });
@@ -571,21 +575,15 @@ export default function App() {
       setMessagesLoading(true);
     }
     try {
-      const { messageEvents, failureEvents, turnEvents, toolEvents, contextEvents, wrapperEvents, processEvents } =
-        await messageGateway.listLatestChannelEvents({ channelId, limit });
-      if (fetchSeq !== messageFetchSeqRef.current || channelId !== activeChannelIdRef.current) {
+      const timeline = await loadLatestTimeline({
+        channelId,
+        limit,
+        isStale: () => fetchSeq !== messageFetchSeqRef.current || channelId !== activeChannelIdRef.current
+      });
+      if (!timeline) {
         return;
       }
-      const nextEvents = mergeEventsChronologically(
-        mergeEventsChronologically(
-          mergeEventsChronologically(
-            mergeEventsChronologically(mergeEventsChronologically(messageEvents, failureEvents), turnEvents),
-            mergeEventsChronologically(toolEvents, contextEvents)
-          ),
-          wrapperEvents
-        ),
-        processEvents
-      ).reverse();
+      const { nextEvents } = timeline;
       const chronologicalEvents = [...nextEvents].reverse();
       const previousNewestMessageAt = lastLoadedMessageAtByChannelRef.current[channelId] ?? 0;
       const nextNewestMessageAt = newestMessageTime(nextEvents);
@@ -598,7 +596,7 @@ export default function App() {
         options?.showLoading ? chronologicalEvents : mergeEventsChronologically(current, chronologicalEvents)
       );
       if (options?.showLoading) {
-        setHasOlderMessages(messageEvents.length === limit);
+        setHasOlderMessages(timeline.hasOlderMessages);
       }
       markChannelSeen(channelId, nextEvents);
       lastLoadedMessageAtByChannelRef.current[channelId] = Math.max(
@@ -649,15 +647,11 @@ export default function App() {
     setLoadingOlderMessages(true);
     setError(null);
     try {
-      const { olderMessages, olderTurns, olderTools, olderWrappers, olderProcesses } =
-        await messageGateway.listOlderChannelEvents({ channelId, limit, before: oldestEventAt });
-      const olderEvents = mergeEventsChronologically(
-        mergeEventsChronologically(
-          mergeEventsChronologically(olderMessages, olderTurns),
-          mergeEventsChronologically(olderTools, olderWrappers)
-        ),
-        olderProcesses
-      );
+      const { olderEvents, hasOlderMessages: nextHasOlderMessages } = await loadOlderTimeline({
+        channelId,
+        limit,
+        before: oldestEventAt
+      });
       if (channelId !== activeChannelIdRef.current) return;
       const chronologicalOlderEvents = [...olderEvents].reverse();
       setEvents((current) => {
@@ -667,13 +661,7 @@ export default function App() {
           ...current
         ];
       });
-      setHasOlderMessages(
-        olderMessages.length === limit ||
-          olderTurns.length === limit ||
-          olderTools.length === limit ||
-          olderWrappers.length === limit ||
-          olderProcesses.length === limit
-      );
+      setHasOlderMessages(nextHasOlderMessages);
       window.requestAnimationFrame(() => {
         const currentPanel = messagesPanelRef.current;
         if (!currentPanel) return;
