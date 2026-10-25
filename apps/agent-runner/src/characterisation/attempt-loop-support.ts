@@ -14,14 +14,20 @@ type SetUpTurnOptions = {
   agent?: Partial<Agent>;
   events?: Event[];
   skillRoots?: string[];
+  pendingEvents?: () => Event[];
+  llmCallTimeoutMs?: number;
 };
 
 export const setUpTurn = (options: SetUpTurnOptions) => {
-  const orgops = createFakeOrgops({ channels: options.channels ?? [getMockChannelRecord()] });
+  const orgops = createFakeOrgops({
+    channels: options.channels ?? [getMockChannelRecord()],
+    pendingEvents: options.pendingEvents,
+  });
   const provider = createFakeProvider(options.responders);
   server.use(...orgops.handlers, provider.handler);
   const executor = getMockExecutor({
     skillRoots: (options.skillRoots ?? []).map((path) => ({ path })),
+    llmCallTimeoutMs: options.llmCallTimeoutMs,
   });
   const run = () => executor(getMockAgent(options.agent), options.events ?? [getMockEvent()]);
   return { orgops, provider, run };
