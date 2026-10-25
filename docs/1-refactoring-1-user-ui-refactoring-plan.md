@@ -152,7 +152,7 @@ Every step ends with the characterisation tests unchanged and green, `npm run li
 
 **7. Messaging context:** timeline load and pagination, a single unread tracker, send, upload, sensitive reveal, and the scroll hook. **(done)**
 
-**8. `App.tsx` becomes the composition root** (about 100 lines or fewer), wiring adapters through context.
+**8. `App.tsx` becomes the composition root** (about 100 lines or fewer), wiring adapters through context. **(in progress)**
 
 **9. Hardening:**
 

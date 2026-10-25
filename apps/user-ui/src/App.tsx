@@ -6,51 +6,23 @@ import {
   useState
 } from "react";
 import { wsUrl } from "./infrastructure/http/config";
-import { createBrowserConfirm } from "./infrastructure/browser/browser-confirm";
-import { createBrowserClipboard } from "./infrastructure/browser/browser-clipboard";
 import { createWebSocketRealtimeFeed } from "./infrastructure/websocket/websocket-realtime-feed";
 import type { RealtimeFeed } from "./ports/realtime-feed";
 import { usePollingFallback } from "./ui/realtime/use-polling-fallback";
-import { createBrowserDeepLink } from "./infrastructure/browser/browser-deep-link";
-import { createLogin } from "./application/identity/login";
-import { createUpdatePassword } from "./application/identity/update-password";
-import { createLogout } from "./application/identity/logout";
-import { createLoadSession } from "./application/identity/load-session";
 import { useSession } from "./ui/identity/use-session";
-import { createAddParticipant } from "./application/conversations/add-participant";
-import { createRemoveParticipant } from "./application/conversations/remove-participant";
 import { useParticipants } from "./ui/conversations/use-participants";
-import { createAddShare } from "./application/conversations/add-share";
-import { createRemoveShare } from "./application/conversations/remove-share";
 import { useShares } from "./ui/conversations/use-shares";
-import { createCopyShareLink } from "./application/conversations/copy-share-link";
 import { useShareLink } from "./ui/conversations/use-share-link";
-import { createUpdateChannelSettings } from "./application/conversations/update-channel-settings";
-import { createDeleteChannel } from "./application/conversations/delete-channel";
-import { createStartConversation } from "./application/conversations/start-conversation";
-import { createSelectChannel } from "./application/conversations/select-channel";
-import { createClaimPendingShareLink } from "./application/conversations/claim-pending-share-link";
-import { createLoadWorkspace } from "./application/conversations/load-workspace";
-import { createRefreshChannels } from "./application/conversations/refresh-channels";
 import { useConversationsState } from "./ui/conversations/use-conversations-state";
 import { useChannelSelection } from "./ui/conversations/use-channel-selection";
 import { useStartConversation } from "./ui/conversations/use-start-conversation";
 import { useChannelManagement } from "./ui/conversations/use-channel-management";
-import { createUploadAttachment } from "./application/messaging/upload-attachment";
-import { createRevealSensitive } from "./application/messaging/reveal-sensitive";
-import { createSendMessage } from "./application/messaging/send-message";
-import { createLoadLatestTimeline } from "./application/messaging/load-latest-timeline";
-import { createLoadOlderTimeline } from "./application/messaging/load-older-timeline";
 import { useSensitiveReveal } from "./ui/messaging/use-sensitive-reveal";
 import { usePendingAttachments } from "./ui/messaging/use-pending-attachments";
 import { useComposerSend } from "./ui/messaging/use-composer-send";
 import { useUnreadTracker } from "./ui/messaging/use-unread-tracker";
 import { useTimeline } from "./ui/messaging/use-timeline";
 import { useMessagesScroll } from "./ui/messaging/use-messages-scroll";
-import { createHttpSessionGateway } from "./infrastructure/http/http-session-gateway";
-import { createHttpConversationGateway } from "./infrastructure/http/http-conversation-gateway";
-import { createHttpFileGateway } from "./infrastructure/http/http-file-gateway";
-import { createHttpMessageGateway } from "./infrastructure/http/http-message-gateway";
 import { ChangePasswordScreen } from "./ui/auth/change-password-screen";
 import { MessageItem } from "./ui/timeline/message-item";
 import { TurnFailureItem } from "./ui/timeline/turn-failure-item";
@@ -85,6 +57,33 @@ import { isHiddenUiActionMessage } from "./domain/messaging/event-interpretation
 import { isTraceEvent } from "./domain/messaging/trace-rules";
 import { formatTime } from "./domain/messaging/time-format";
 
+import {
+  messageGateway,
+  revealSensitive,
+  sendMessage,
+  loadLatestTimeline,
+  loadOlderTimeline,
+  loadCurrentSession,
+  signIn,
+  signOut,
+  changePassword,
+  confirmPort,
+  deepLink,
+  uploadAttachment,
+  addParticipant,
+  removeParticipant,
+  addShare,
+  copyShareLink,
+  removeShare,
+  updateChannelSettings,
+  deleteChannel,
+  startConversation,
+  selectChannelUseCase,
+  refreshChannelsUseCase,
+  loadWorkspaceUseCase,
+  claimPendingShareLinkUseCase
+} from "./composition-root";
+
 function createLocalAttachmentId() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
@@ -92,34 +91,6 @@ function createLocalAttachmentId() {
   return `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-const messageGateway = createHttpMessageGateway();
-const revealSensitive = createRevealSensitive({ messageGateway });
-const sendMessage = createSendMessage({ messageGateway });
-const loadLatestTimeline = createLoadLatestTimeline({ messageGateway });
-const loadOlderTimeline = createLoadOlderTimeline({ messageGateway });
-const sessionGateway = createHttpSessionGateway();
-const loadCurrentSession = createLoadSession({ sessionGateway });
-const signIn = createLogin({ sessionGateway });
-const signOut = createLogout({ sessionGateway });
-const changePassword = createUpdatePassword({ sessionGateway });
-const confirmPort = createBrowserConfirm();
-const clipboard = createBrowserClipboard();
-const deepLink = createBrowserDeepLink();
-const fileGateway = createHttpFileGateway();
-const uploadAttachment = createUploadAttachment({ fileGateway });
-const conversationGateway = createHttpConversationGateway();
-const addParticipant = createAddParticipant({ conversationGateway });
-const removeParticipant = createRemoveParticipant({ conversationGateway });
-const addShare = createAddShare({ conversationGateway });
-const copyShareLink = createCopyShareLink({ conversationGateway, deepLink, clipboard });
-const removeShare = createRemoveShare({ conversationGateway });
-const updateChannelSettings = createUpdateChannelSettings({ conversationGateway });
-const deleteChannel = createDeleteChannel({ conversationGateway });
-const startConversation = createStartConversation({ conversationGateway });
-const selectChannelUseCase = createSelectChannel({ deepLink });
-const refreshChannelsUseCase = createRefreshChannels({ conversationGateway });
-const loadWorkspaceUseCase = createLoadWorkspace({ conversationGateway, deepLink });
-const claimPendingShareLinkUseCase = createClaimPendingShareLink({ conversationGateway, deepLink });
 
 export default function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
