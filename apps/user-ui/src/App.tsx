@@ -40,6 +40,7 @@ import { useStartConversation } from "./ui/conversations/use-start-conversation"
 import { useChannelManagement } from "./ui/conversations/use-channel-management";
 import { createUploadAttachment } from "./application/messaging/upload-attachment";
 import { createRevealSensitive } from "./application/messaging/reveal-sensitive";
+import { createSendMessage } from "./application/messaging/send-message";
 import { useSensitiveReveal } from "./ui/messaging/use-sensitive-reveal";
 import { createHttpSessionGateway } from "./infrastructure/http/http-session-gateway";
 import { createHttpConversationGateway } from "./infrastructure/http/http-conversation-gateway";
@@ -115,6 +116,7 @@ function createLocalAttachmentId() {
 
 const messageGateway = createHttpMessageGateway();
 const revealSensitive = createRevealSensitive({ messageGateway });
+const sendMessage = createSendMessage({ messageGateway });
 const sessionGateway = createHttpSessionGateway();
 const loadCurrentSession = createLoadSession({ sessionGateway });
 const signIn = createLogin({ sessionGateway });
@@ -955,11 +957,8 @@ export default function App() {
     setSending(true);
     setError(null);
     try {
-      const effectiveText =
-        trimmedText ||
-        `Attached ${readyAttachments.length} file${readyAttachments.length === 1 ? "" : "s"} for reference.`;
-      await messageGateway.sendMessage({
-        text: effectiveText,
+      await sendMessage({
+        trimmedText,
         attachments: readyAttachments,
         username,
         channelId: activeChannelId
