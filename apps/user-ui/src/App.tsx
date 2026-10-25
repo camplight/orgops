@@ -1,5 +1,4 @@
 import {
-  useEffect,
   useMemo,
   useRef,
   useState
@@ -27,6 +26,7 @@ import { ChangePasswordScreen } from "./ui/auth/change-password-screen";
 import { ChatStack } from "./ui/workspace/chat-stack";
 import { Sidebar } from "./ui/sidebar/sidebar";
 import { ActivityPanel } from "./ui/activity/activity-panel";
+import { useWorkspaceShell } from "./ui/workspace/use-workspace-shell";
 import { ChannelDialogs } from "./ui/dialogs/channel-dialogs";
 import { WorkspaceHeader } from "./ui/workspace/workspace-header";
 import { LoginScreen } from "./ui/auth/login-screen";
@@ -214,18 +214,6 @@ export default function App() {
     [activeChannelId, channels]
   );
 
-  useEffect(() => {
-    channelsRef.current = channels;
-  }, [channels]);
-
-  useEffect(() => {
-    usernameRef.current = username;
-  }, [username]);
-
-  useEffect(() => {
-    userIdRef.current = userId;
-  }, [userId]);
-
   const { timelineItems, agentIsThinking } = useTimelineView({ events });
   const isConversationEmpty = !messagesLoading && timelineItems.length === 0;
 
@@ -249,9 +237,6 @@ export default function App() {
   const agentSelection = useConversationAgentSelection({ visibleAgents });
   const { selectedConversationAgents, setSelectedConversationAgents, setAgentSearchQuery } = agentSelection;
 
-  useEffect(() => {
-    viewerTeamIdsRef.current = viewerTeamIds;
-  }, [viewerTeamIds]);
   const isSearchingChannels = Boolean(channelQuery.trim());
   const uploadingAttachmentCount = pendingAttachments.filter((item) => item.status === "uploading").length;
   const readyAttachments = pendingAttachments
@@ -293,99 +278,48 @@ export default function App() {
     setShowChannelManageDialog
   });
 
-  async function loadShell() {
-    if (!authenticated) return;
-    setError(null);
-    setLoading(true);
-    try {
-      const { claimedShareChannelId, errorMessage: claimErrorMessage } = await claimPendingShareLinkUseCase();
-      if (claimErrorMessage) setError(claimErrorMessage);
-      const workspace = await loadWorkspaceUseCase({
-        claimedShareChannelId,
-        activeChannelId,
-        userId,
-        username
-      });
-      setWorkspace(workspace);
-      setSelectedConversationAgents((current) =>
-        current.filter((agentName) => workspace.visibleAgentNames.has(agentName))
-      );
-      if (workspace.expandArchivedChannels) setShowArchivedChannels(true);
-      selectChannel(workspace.nextActiveChannelId, { replace: true });
-      await loadMessageNotifications({ initialize: true });
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Unable to load OrgOps");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function loadMessageNotifications(options?: { initialize?: boolean }) {
-    return loadMessageNotificationsFor({
-      initialize: options?.initialize,
-      authenticated,
-      channels,
-      activeChannelIdRef,
-      messageGateway
-    });
-  }
-
-  useEffect(() => {
-    document.title = "OrgOps User UI";
-    void loadSession();
-  }, []);
-
-  useEffect(() => {
-    if (sessionState !== "ready") return;
-    void loadShell();
-  }, [sessionState]);
-
-  useEffect(() => {
-    messageFetchSeqRef.current += 1;
-    activeChannelIdRef.current = activeChannelId;
-    loadingChannelIdRef.current = activeChannelId;
-    forceScrollToBottomOnLoadRef.current = Boolean(activeChannelId);
-    setEvents([]);
-    setMessagesLoading(Boolean(activeChannelId));
-    setLoadingOlderMessages(false);
-    setHasOlderMessages(false);
-    setHasNewMessagesBelow(false);
-    setExpandedTraceEventId(null);
-    setShowParticipantsDialog(false);
-    setShowChannelManageDialog(false);
-    setPendingAttachments([]);
-  }, [activeChannelId]);
-
-  useEffect(() => {
-    if (sessionState !== "ready") return;
-    if (!activeChannelId) {
-      setEvents([]);
-      return;
-    }
-    void loadMessages(activeChannelId, {
-      scrollBehavior: "auto",
-      scrollToBottom: true,
-      showLoading: true
-    });
-  }, [activeChannelId, sessionState]);
-
-  useEffect(() => {
-    if (!activeChannelId || messagesLoading) return;
-    if (!forceScrollToBottomOnLoadRef.current) return;
-    forceScrollToBottomOnLoadRef.current = false;
-    // Run after paint to handle initial DOM/layout settling on hard reload.
-    window.requestAnimationFrame(() => {
-      scrollMessagesToBottom("auto");
-      window.requestAnimationFrame(() => {
-        scrollMessagesToBottom("auto");
-      });
-    });
-  }, [activeChannelId, messagesLoading, timelineItems.length]);
-
-  useEffect(() => {
-    if (sessionState !== "ready") return;
-    void loadMessageNotifications();
-  }, [sessionState, channels]);
+  const { loadMessageNotifications } = useWorkspaceShell({
+    authenticated,
+    sessionState,
+    activeChannelId,
+    userId,
+    username,
+    channels,
+    viewerTeamIds,
+    timelineItemCount: timelineItems.length,
+    messagesLoading,
+    activeChannelIdRef,
+    channelsRef,
+    usernameRef,
+    userIdRef,
+    viewerTeamIdsRef,
+    messageFetchSeqRef,
+    loadingChannelIdRef,
+    forceScrollToBottomOnLoadRef,
+    claimPendingShareLinkUseCase,
+    loadWorkspaceUseCase,
+    messageGateway,
+    loadSession,
+    loadMessages,
+    loadMessageNotificationsFor,
+    scrollMessagesToBottom,
+    setWorkspace,
+    selectChannel,
+    setError,
+    setLoading,
+    setSelectedConversationAgents,
+    setShowArchivedChannels,
+    setShowConversationDialog,
+    setShowParticipantsDialog,
+    setShowChannelManageDialog,
+    setEvents,
+    setMessagesLoading,
+    setLoadingOlderMessages,
+    setHasOlderMessages,
+    setHasNewMessagesBelow,
+    setExpandedTraceEventId,
+    setPendingAttachments
+  });
 
   const { wsConnected } = useRealtimeFeed({
     sessionState,
@@ -404,21 +338,6 @@ export default function App() {
     isMessagesPanelNearBottom,
     scrollMessagesToBottom
   });
-
-  useEffect(() => {
-    if (sessionState !== "ready") return;
-    function handleShortcut(event: KeyboardEvent) {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        setShowConversationDialog(true);
-      }
-      if (event.key === "Escape") {
-        setShowConversationDialog(false);
-      }
-    }
-    window.addEventListener("keydown", handleShortcut);
-    return () => window.removeEventListener("keydown", handleShortcut);
-  }, [sessionState]);
 
   function handleSignedOut() {
     resetForSignOut();
