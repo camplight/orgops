@@ -1,0 +1,23 @@
+{
+  "testRunner": "command",
+  "commandRunner": {
+    "command": "npx vitest run src/characterisation --bail=1"
+  },
+  "mutate": [
+    "src/turn-executor.ts:86-103",
+    "src/turn-executor.ts:156-285",
+    "src/turn-executor.ts:387-445"
+  ],
+  "coverageAnalysis": "off",
+  "reporters": [
+    "clear-text",
+    "json"
+  ],
+  "jsonReporter": {
+    "fileName": "reports/mutation/pure-and-reconcile.json"
+  },
+  "tempDirName": ".stryker-tmp",
+  "concurrency": 1,
+  "timeoutMS": 120000,
+  "timeoutFactor": 3
+}

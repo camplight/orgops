@@ -183,6 +183,11 @@ Every step ends with the characterisation tests unchanged and green, `npm run li
   - Check the timing budget.
 - **0b:** the suites above, one area per commit, in this order: guards, turn bracket and mode dispatch; prompt composition and skills; memory modes; telemetry and clamping; attempt loop and retries; mid-turn injection and timeouts; fallback.
 - **0c:** Stryker spike on one function range, then a gap-filling pass. Stop when the logic ranges reach about 80%, or when a range costs more than it finds.
+  - **Result (stopped by the user as good enough):**
+    - Stryker was run on the classic attempt loop (`turn-executor.ts` 804-938, config `stryker/attempt-loop.config.json`): 87.5% (84 killed, 12 survived, about 3 minutes). All 12 survivors are dead or equivalent: the unused `pullMessages` callback (5), `result.usage`, `finishReason` and `text` fallbacks that the AI SDK never triggers (3), and validation fallbacks and `channelId` handling that cannot be reached (4). No test was added.
+    - Areas 1 to 3 were run with Stryker earlier (82%, 91%, 96%). Area 4 had a hand-picked mutation pass (about 71%). Areas 5 to 7 were reviewed branch by branch, not mutated.
+    - Never run: `stryker/pure-and-reconcile.config.json` (pure functions 86-103, 156-285, and resolvers and `reconcileLateInjectedMessages` 387-445) and the two area 4 Stryker configs.
+    - Gotcha: with the default settings the command runner marked most mutants as timeouts, which are counted as killed, giving a false 100%. Use `concurrency: 1` and a generous `timeoutMS` (these configs do), and treat many timeouts as a warning sign.
 
 **1. Move pure functions out verbatim** into `turn/agent-config.ts`, `turn/event-draft.ts` and `turn/model-limits.ts`, one commit each. `turn-executor.ts` re-exports the names that `runner.ts` already imports. `MAX_LLM_MESSAGE_CHARS` stays read at import time.
 

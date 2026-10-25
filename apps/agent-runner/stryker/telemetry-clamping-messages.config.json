@@ -1,11 +1,21 @@
 {
   "testRunner": "command",
-  "commandRunner": { "command": "npx vitest run src/characterisation/message-clamping.test.ts" },
+  "commandRunner": {
+    "command": "npx vitest run src/characterisation --bail=1"
+  },
   "mutate": [
     "src/turn-executor.ts:104-154"
   ],
   "coverageAnalysis": "off",
-  "reporters": ["clear-text", "json"],
-  "jsonReporter": { "fileName": "reports/mutation/telemetry-clamping-messages.json" },
-  "tempDirName": ".stryker-tmp"
+  "reporters": [
+    "clear-text",
+    "json"
+  ],
+  "jsonReporter": {
+    "fileName": "reports/mutation/telemetry-clamping-messages.json"
+  },
+  "tempDirName": ".stryker-tmp",
+  "concurrency": 1,
+  "timeoutMS": 120000,
+  "timeoutFactor": 3
 }

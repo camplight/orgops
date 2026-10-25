@@ -1,0 +1,21 @@
+{
+  "testRunner": "command",
+  "commandRunner": {
+    "command": "npx vitest run src/characterisation --bail=1"
+  },
+  "mutate": [
+    "src/turn-executor.ts:804-938"
+  ],
+  "coverageAnalysis": "off",
+  "reporters": [
+    "clear-text",
+    "json"
+  ],
+  "jsonReporter": {
+    "fileName": "reports/mutation/attempt-loop.json"
+  },
+  "tempDirName": ".stryker-tmp",
+  "concurrency": 1,
+  "timeoutMS": 120000,
+  "timeoutFactor": 3
+}
