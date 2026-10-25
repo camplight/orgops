@@ -23,13 +23,9 @@ import { useDerivedChannels } from "./ui/conversations/use-derived-channels";
 import { useTimeline } from "./ui/messaging/use-timeline";
 import { useMessagesScroll } from "./ui/messaging/use-messages-scroll";
 import { AuthGate } from "./ui/auth/auth-gate";
-import { ChatStack } from "./ui/workspace/chat-stack";
-import { Sidebar } from "./ui/sidebar/sidebar";
-import { ActivityPanel } from "./ui/activity/activity-panel";
+import { WorkspaceLayout } from "./ui/workspace/workspace-layout";
 import { useWorkspaceShell } from "./ui/workspace/use-workspace-shell";
-import { ChannelDialogs } from "./ui/dialogs/channel-dialogs";
 import { useSidebarAndDialogState } from "./ui/workspace/use-sidebar-and-dialog-state";
-import { WorkspaceHeader } from "./ui/workspace/workspace-header";
 import type { Channel, UploadedAttachment } from "./types";
 import { canManageUserChannel } from "./domain/conversations/channel-rules";
 
@@ -395,132 +391,118 @@ export default function App() {
       handlePasswordUpdate={handlePasswordUpdate}
       handleLogout={handleLogout}
     >
-      <main className="app-shell">
-        <Sidebar
-          mobileOpen={mobileSidebarOpen}
-          username={username}
-          loading={loading}
-          channelQuery={channelQuery}
-          isSearchingChannels={isSearchingChannels}
-          groupedChannels={groupedChannels}
-          collapsedChannelGroups={collapsedChannelGroups}
-          filteredChannels={filteredChannels}
-          filteredArchivedChannels={filteredArchivedChannels}
-          showArchivedChannels={showArchivedChannels}
-          activeChannelId={activeChannelId}
-          unreadCounts={unreadCounts}
-          onCloseMobile={() => setMobileSidebarOpen(false)}
-          onChannelQueryChange={setChannelQuery}
-          onToggleChannelGroup={(groupId) =>
+      <WorkspaceLayout
+        mobileSidebarOpen={mobileSidebarOpen}
+        onCloseMobileSidebar={() => setMobileSidebarOpen(false)}
+        error={error}
+        loading={loading}
+        sidebar={{
+          mobileOpen: mobileSidebarOpen,
+          username,
+          loading,
+          channelQuery,
+          isSearchingChannels,
+          groupedChannels,
+          collapsedChannelGroups,
+          filteredChannels,
+          filteredArchivedChannels,
+          showArchivedChannels,
+          activeChannelId,
+          unreadCounts,
+          onCloseMobile: () => setMobileSidebarOpen(false),
+          onChannelQueryChange: setChannelQuery,
+          onToggleChannelGroup: (groupId) =>
             setCollapsedChannelGroups((current) => ({
               ...current,
               [groupId]: !current[groupId]
-            }))
+            })),
+          onToggleArchivedChannels: () => setShowArchivedChannels((current) => !current),
+          onSelectChannel: selectChannel,
+          onNewConversation: () => setShowConversationDialog(true),
+          onLogout: () => void handleLogout()
+        }}
+        header={{
+          activeChannel,
+          username,
+          activeChannelCanPost,
+          activeChannelManageable,
+          onOpenMobileSidebar: () => setMobileSidebarOpen(true),
+          onManageChannel: () => setShowChannelManageDialog(true)
+        }}
+        chatStack={{
+          messagesPanelRef,
+          handleMessagesScroll,
+          isConversationEmpty,
+          messagesLoading,
+          hasOlderMessages,
+          loadingOlderMessages,
+          handleLoadOlderMessages,
+          timelineItems,
+          activeChannelCanPost,
+          activeChannel,
+          activeChannelId,
+          username,
+          revealedSensitiveByEvent,
+          sensitiveRevealErrors,
+          sensitiveRevealPasswords,
+          revealingSensitiveEventId,
+          handleSensitivePasswordChange,
+          handleRevealSensitive,
+          handleHideSensitive,
+          expandedTraceEventId,
+          setExpandedTraceEventId,
+          hasNewMessagesBelow,
+          setHasNewMessagesBelow,
+          scrollMessagesToBottom,
+          composer: {
+            textareaRef: composerTextareaRef,
+            fileInputRef,
+            isConversationEmpty,
+            activeChannelId,
+            activeChannel,
+            activeChannelCanPost,
+            username,
+            draft,
+            setDraft,
+            sending,
+            offlineAgentNames,
+            pendingAttachments,
+            setPendingAttachments,
+            readyAttachments,
+            uploadingAttachmentCount,
+            hasAttachmentErrors,
+            uploadFiles,
+            handlePickFiles,
+            handleSubmit
           }
-          onToggleArchivedChannels={() => setShowArchivedChannels((current) => !current)}
-          onSelectChannel={selectChannel}
-          onNewConversation={() => setShowConversationDialog(true)}
-          onLogout={() => void handleLogout()}
-        />
-        {mobileSidebarOpen ? (
-          <button
-            type="button"
-            aria-label="Close navigation"
-            className="sidebar-mobile-backdrop"
-            onClick={() => setMobileSidebarOpen(false)}
-          />
-        ) : null}
-
-        <section className="workspace">
-          <WorkspaceHeader
-            activeChannel={activeChannel}
-            username={username}
-            activeChannelCanPost={activeChannelCanPost}
-            activeChannelManageable={activeChannelManageable}
-            onOpenMobileSidebar={() => setMobileSidebarOpen(true)}
-            onManageChannel={() => setShowChannelManageDialog(true)}
-          />
-
-          {error ? <div className="notice error">{error}</div> : null}
-          {loading ? <div className="notice">Loading OrgOps...</div> : null}
-
-          <ChatStack
-            messagesPanelRef={messagesPanelRef}
-            handleMessagesScroll={handleMessagesScroll}
-            isConversationEmpty={isConversationEmpty}
-            messagesLoading={messagesLoading}
-            hasOlderMessages={hasOlderMessages}
-            loadingOlderMessages={loadingOlderMessages}
-            handleLoadOlderMessages={handleLoadOlderMessages}
-            timelineItems={timelineItems}
-            activeChannelCanPost={activeChannelCanPost}
-            activeChannel={activeChannel}
-            activeChannelId={activeChannelId}
-            username={username}
-            revealedSensitiveByEvent={revealedSensitiveByEvent}
-            sensitiveRevealErrors={sensitiveRevealErrors}
-            sensitiveRevealPasswords={sensitiveRevealPasswords}
-            revealingSensitiveEventId={revealingSensitiveEventId}
-            handleSensitivePasswordChange={handleSensitivePasswordChange}
-            handleRevealSensitive={handleRevealSensitive}
-            handleHideSensitive={handleHideSensitive}
-            expandedTraceEventId={expandedTraceEventId}
-            setExpandedTraceEventId={setExpandedTraceEventId}
-            hasNewMessagesBelow={hasNewMessagesBelow}
-            setHasNewMessagesBelow={setHasNewMessagesBelow}
-            scrollMessagesToBottom={scrollMessagesToBottom}
-            composer={{
-              textareaRef: composerTextareaRef,
-              fileInputRef,
-              isConversationEmpty,
-              activeChannelId,
-              activeChannel,
-              activeChannelCanPost,
-              username,
-              draft,
-              setDraft,
-              sending,
-              offlineAgentNames,
-              pendingAttachments,
-              setPendingAttachments,
-              readyAttachments,
-              uploadingAttachmentCount,
-              hasAttachmentErrors,
-              uploadFiles,
-              handlePickFiles,
-              handleSubmit
-            }}
-          />
-        </section>
-
-        <ActivityPanel
-          channel={activeChannel}
-          agents={agents}
-          events={events}
-          agentIsThinking={agentIsThinking}
-        />
-
-        <ChannelDialogs
-          showConversationDialog={showConversationDialog}
-          showParticipantsDialog={showParticipantsDialog}
-          showChannelManageDialog={showChannelManageDialog}
-          setShowConversationDialog={setShowConversationDialog}
-          setShowParticipantsDialog={setShowParticipantsDialog}
-          setShowChannelManageDialog={setShowChannelManageDialog}
-          activeChannel={activeChannel}
-          activeChannelManageable={activeChannelManageable}
-          loading={loading}
-          canStartConversation={canStartConversation}
-          visibleAgents={visibleAgents}
-          humans={humans}
-          conversation={conversation}
-          agentSelection={agentSelection}
-          participants={participants}
-          shares={shares}
-          shareLink={shareLink}
-          channelManagement={channelManagement}
-        />
-      </main>
+        }}
+        activityPanel={{
+          channel: activeChannel,
+          agents,
+          events,
+          agentIsThinking
+        }}
+        dialogs={{
+          showConversationDialog,
+          showParticipantsDialog,
+          showChannelManageDialog,
+          setShowConversationDialog,
+          setShowParticipantsDialog,
+          setShowChannelManageDialog,
+          activeChannel,
+          activeChannelManageable,
+          loading,
+          canStartConversation,
+          visibleAgents,
+          humans,
+          conversation,
+          agentSelection,
+          participants,
+          shares,
+          shareLink,
+          channelManagement
+        }}
+      />
     </AuthGate>
   );
 }
