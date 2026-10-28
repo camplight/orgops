@@ -601,6 +601,18 @@ Runner loop:
    - `WRAPPED`: skip orgops memory/prompt/skills/model calls and run the configured external runtime recipe.
 9. For native modes, build context from runner guidance + bounded channel history + skills + `soul_contents`, plus a synthetic merged-trigger message when a batch contains multiple events.
 10. For native modes, run model generation in step mode (single-step/attempt calls) and poll pending events for the same `(agent, channel)` between attempts; newly arrived events are merged into subsequent attempt context.
+   CLASSIC `events_emit` calls for unscheduled `message.created` are validated and
+   buffered per attempt. The tool reports `deferred_until_turn_completion` (no
+   event ID; `awaitDeliveryMs` cannot wait on a deferred message). Retried attempts
+   discard their staged messages, including retries caused by late channel input.
+   The accepted attempt, or the last attempt when falling back, flushes its messages
+   with stable per-trigger idempotency keys. Scheduled messages and other tool side
+   effects remain immediate; they are not transactional. A generic format-error
+   fallback is suppressed when that attempt supplies a message in the current channel.
+   Display fallback also unwraps trailing unfenced event envelopes; event dispatch
+   still requires whole-text or fenced JSON.
+   Tool errors are returned to the model and recorded in tool telemetry; they do
+   not increment the triggering event's failure count.
 11. On handler failure, call `/api/events/:id/fail` for each event in the failed channel batch.
 
 Wrapped lifecycle:

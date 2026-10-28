@@ -26,6 +26,16 @@ export type ExecuteContext = {
   apiFetch: (path: string, init?: RequestInit) => Promise<Response>;
   emitEvent: (event: unknown) => Promise<void>;
   emitAudit: (type: string, payload: unknown, source?: string) => Promise<void>;
+  // CLASSIC turns stage chat output until final-response validation completes.
+  deferMessage?: (event: {
+    type: string;
+    payload: unknown;
+    source: string;
+    channelId?: string;
+    parentEventId?: string;
+    deliverAt?: number;
+    idempotencyKey?: string;
+  }) => void;
   validateEvent?: (event: {
     type: string;
     payload: unknown;
@@ -75,15 +85,13 @@ export function redactPersistedToolOutput(toolName: string, output: unknown) {
 }
 
 export function createWrapExecute(deps: RunnerToolDeps): CreateExecuteFn {
-  const { agent, event, channelId, runTool, apiFetch, emitEvent } = deps;
+  const { agent, channelId, runTool, emitEvent } = deps;
   return (toolName: string) => async (args: Record<string, unknown>) => {
     let phase:
       | "emit_started"
       | "run_tool"
-      | "mark_trigger_failed_on_tool_error"
       | "emit_executed"
-      | "emit_failed_audit"
-      | "mark_trigger_failed_in_catch" = "emit_started";
+      | "emit_failed_audit" = "emit_started";
     try {
       await emitEvent({
         type: "tool.started",
@@ -93,16 +101,8 @@ export function createWrapExecute(deps: RunnerToolDeps): CreateExecuteFn {
       });
       phase = "run_tool";
       const output = await runTool(toolName, args);
-      if (output && typeof output === "object" && "error" in output) {
-        phase = "mark_trigger_failed_on_tool_error";
-        await apiFetch(`/api/events/${event.id}/fail`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            error: String((output as { error: unknown }).error),
-          }),
-        });
-      }
+      // Tool errors are feedback for the model, not failures of the human event.
+      // The channel loop owns receipt failures when the entire turn throws.
       phase = "emit_executed";
       const persistedOutput = redactPersistedToolOutput(toolName, output);
       await emitEvent({
@@ -131,14 +131,6 @@ export function createWrapExecute(deps: RunnerToolDeps): CreateExecuteFn {
           },
           source: `agent:${agent.name}`,
           ...(channelId ? { channelId } : {}),
-        });
-      } catch {}
-      phase = "mark_trigger_failed_in_catch";
-      try {
-        await apiFetch(`/api/events/${event.id}/fail`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ error: String(error) }),
         });
       } catch {}
       return { error: String(error) };

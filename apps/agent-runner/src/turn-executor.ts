@@ -197,11 +197,41 @@ function extractJsonObject(rawText: string): unknown {
   }
 }
 
+const RESPONSE_FORMAT_ERROR = "I hit a response-format issue and could not produce a clean chat message. Please try again.";
+
+// Only recover a trailing event envelope for display; dispatch remains strict.
+function extractTrailingEvent(rawText: string): unknown {
+  if (!rawText.endsWith("}")) throw new Error("No trailing object.");
+  let depth = 0;
+  let inString = false;
+  for (let index = rawText.length - 1; index >= 0; index -= 1) {
+    const char = rawText[index];
+    if (char === '"') {
+      let backslashes = 0;
+      for (let previous = index - 1; previous >= 0 && rawText[previous] === "\\"; previous -= 1) backslashes += 1;
+      if (backslashes % 2 === 0) inString = !inString;
+    }
+    if (inString) continue;
+    if (char === "}") depth += 1;
+    if (char === "{" && --depth === 0) {
+      const parsed = JSON.parse(rawText.slice(index));
+      if (parsed && typeof parsed.type === "string" && "payload" in parsed) return parsed;
+      break;
+    }
+  }
+  throw new Error("No trailing event envelope.");
+}
+
 export function normalizeFallbackMessageText(rawText: string): string {
   const trimmed = rawText.trim();
   if (!trimmed) return "Unable to produce structured event output.";
   try {
-    const parsed = extractJsonObject(trimmed);
+    let parsed: unknown;
+    try {
+      parsed = extractJsonObject(trimmed);
+    } catch {
+      parsed = extractTrailingEvent(trimmed);
+    }
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       const payload = (parsed as Record<string, unknown>).payload;
       if (payload && typeof payload === "object" && !Array.isArray(payload)) {
@@ -211,7 +241,7 @@ export function normalizeFallbackMessageText(rawText: string): string {
         }
       }
       // Do not leak raw event JSON into chat when fallback is triggered.
-      return "I hit a response-format issue and could not produce a clean chat message. Please try again.";
+      return RESPONSE_FORMAT_ERROR;
     }
   } catch {
     // Keep plain-text fallbacks as-is.
@@ -732,10 +762,22 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       utilizationPct: Math.round(utilizationPct * 100) / 100,
     });
 
+    let pendingMessages: ModelEventDraft[] = [];
+    const flushMessages = async () => {
+      for (const [index, draft] of pendingMessages.entries()) {
+        await input.api.emitEvent({
+          ...draft,
+          idempotencyKey: draft.idempotencyKey ?? `turn:${agent.name}:${triggerEvent.id}:message:${index}`,
+        });
+      }
+    };
     const executeCtx = {
       agent,
       triggerEvent,
       channelId,
+      ...((agent.mode ?? "CLASSIC") === "CLASSIC" ? {
+        deferMessage: (draft: ModelEventDraft) => { pendingMessages.push(draft); },
+      } : {}),
       extraAllowedRoots: selectedSkills.map((skill: any) => skill.path),
       injectionEnv,
       apiFetch: input.api.apiFetch,
@@ -802,6 +844,8 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
     const classicMaxModelSteps = resolveAgentClassicMaxModelSteps(agent);
     let lastResponseText = "";
     for (let attempt = 1; attempt <= MAX_EVENT_DISPATCH_ATTEMPTS; attempt += 1) {
+      pendingMessages = [];
+      lastResponseText = "";
       let result: GenerateResult;
       try {
         result = await withTimeout(
@@ -941,13 +985,18 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         });
         continue;
       }
+      await flushMessages();
       await input.api.emitEvent(eventDraft);
       await emitTurnEvent("agent.turn.completed", {});
       return;
     }
-    await input.api.emitEvent(
-      buildFallbackMessageEvent(agent.name, channelId, lastResponseText, triggerEvent.id),
-    );
+    await flushMessages();
+    const fallback = buildFallbackMessageEvent(agent.name, channelId, lastResponseText, triggerEvent.id);
+    const hasAnswer = pendingMessages.some((draft) => draft.channelId === channelId);
+    const genericFallback = !lastResponseText.trim() || fallback.payload.text === RESPONSE_FORMAT_ERROR;
+    if (!(hasAnswer && genericFallback)) {
+      await input.api.emitEvent(fallback);
+    }
     await emitTurnEvent("agent.turn.completed", { completedWithFallback: true });
   };
 }

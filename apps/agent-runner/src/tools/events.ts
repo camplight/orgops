@@ -1059,6 +1059,14 @@ export async function execute(
     } catch (error) {
       return { error: String(error) };
     }
+    if (eventDraft.type === "message.created" && deliverAt === undefined && ctx.deferMessage) {
+      ctx.deferMessage(eventDraft);
+      return {
+        channelId: targetChannelId,
+        delivery: { status: "deferred_until_turn_completion" },
+        note: "Message staged for this attempt; a retry discards it. No event exists yet and delivery cannot be awaited until the turn completes.",
+      };
+    }
     const response = await ctx.apiFetch("/api/events", {
       method: "POST",
       headers: { "content-type": "application/json" },
