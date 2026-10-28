@@ -14,16 +14,17 @@ export function registerServiceAction(options: { installDir?: string; components
   const installDir = resolveInstallDir(options?.installDir);
   const messages = registerAutostartServices(installDir, options.components);
   const prior = loadState();
+  const serviceComponents = [...new Set([...(prior.serviceComponents ?? []), ...options.components])];
   saveState({
     ...prior,
     installDir,
-    serviceRegistered: options.components.length > 0,
-    serviceComponents: options.components,
+    serviceRegistered: serviceComponents.length > 0,
+    serviceComponents,
   });
   return {
     installDir,
-    serviceRegistered: options.components.length > 0,
-    serviceComponents: options.components,
+    serviceRegistered: serviceComponents.length > 0,
+    serviceComponents,
     messages,
   };
 }

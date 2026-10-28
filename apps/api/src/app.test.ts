@@ -7461,6 +7461,7 @@ describe("api app", () => {
       channelIds: string[];
       visibility?: string;
       runnerScopeMode?: string;
+      allowChannelExpansion?: boolean;
       createdByType?: string;
       createdById?: string;
     };
@@ -7468,6 +7469,7 @@ describe("api app", () => {
     expect(invite.channelIds).toEqual([]);
     expect(invite.visibility).toBe("PRIVATE");
     expect(invite.runnerScopeMode).toBe("SCOPED");
+    expect(invite.allowChannelExpansion).toBe(true);
     expect(invite.createdByType).toBe("HUMAN");
     expect(invite.createdById).toBe("admin");
     expect(typeof invite.inviteLink).toBe("string");
@@ -7502,6 +7504,19 @@ describe("api app", () => {
       `http://localhost/api/agent-invites/public/${encodeURIComponent(reissuedToken)}`,
     );
     expect(inviteInfoRes.status).toBe(200);
+    const inviteInfo = (await inviteInfoRes.json()) as {
+      bootstrap?: {
+        youAre?: string;
+        identity?: { role?: string; host?: string };
+        access?: { apiHeader?: string };
+        discover?: { repo?: string; spec?: string };
+      };
+    };
+    expect(inviteInfo.bootstrap?.identity?.role).toBe("WRAPPED");
+    expect(inviteInfo.bootstrap?.identity?.host).toBe("orgops-agent-runner");
+    expect(inviteInfo.bootstrap?.access?.apiHeader).toBe("x-orgops-runner-token");
+    expect(inviteInfo.bootstrap?.discover?.repo).toBe("https://github.com/camplight/orgops");
+    expect(inviteInfo.bootstrap?.youAre).toContain("WRAPPED OrgOps agent");
 
     const redeemRes = await app.request(
       `http://localhost/api/agent-invites/public/${encodeURIComponent(reissuedToken)}/redeem`,
@@ -7509,10 +7524,14 @@ describe("api app", () => {
     );
     expect(redeemRes.status).toBe(200);
     const redeemed = (await redeemRes.json()) as {
-      runner: { token: string; runnerId: string };
+      runner: { token: string; runnerId: string; allowChannelExpansion?: boolean };
       agent: { name: string; assignedRunnerId: string; visibility?: string };
+      bootstrap?: { identity?: { role?: string }; access?: { apiHeader?: string } };
     };
+    expect(redeemed.bootstrap?.identity?.role).toBe("WRAPPED");
+    expect(redeemed.bootstrap?.access?.apiHeader).toBe("x-orgops-runner-token");
     expect(redeemed.runner.token.startsWith("org_rt_")).toBe(true);
+    expect(redeemed.runner.allowChannelExpansion).toBe(true);
     expect(redeemed.agent.name).toBe("claude-bridge");
     expect(redeemed.agent.visibility).toBe("PRIVATE");
     expect(redeemed.agent.assignedRunnerId).toBe(redeemed.runner.runnerId);
@@ -7582,6 +7601,267 @@ describe("api app", () => {
     expect(scopedEventsWithoutAgent.status).toBe(200);
     const scopedEventsRows = (await scopedEventsWithoutAgent.json()) as unknown[];
     expect(scopedEventsRows).toEqual([]);
+
+    const deleteInviteRes = await app.request(
+      `http://localhost/api/agent-invites/${encodeURIComponent(invite.id)}`,
+      {
+        method: "DELETE",
+        headers: { cookie },
+      },
+    );
+    expect(deleteInviteRes.status).toBe(200);
+
+    const deletedInviteInfoRes = await app.request(
+      `http://localhost/api/agent-invites/public/${encodeURIComponent(reissuedToken)}`,
+    );
+    expect(deletedInviteInfoRes.status).toBe(404);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("allows scoped invite runners to respond in later subscribed channels when expansion is enabled", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+      runnerApiUrl: "http://localhost:8787",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const initialChannelRes = await app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ name: "initial-expansion-channel" }),
+    });
+    expect(initialChannelRes.status).toBe(201);
+    const initialChannel = (await initialChannelRes.json()) as { id: string };
+
+    const laterChannelRes = await app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ name: "later-expansion-channel" }),
+    });
+    expect(laterChannelRes.status).toBe(201);
+    const laterChannel = (await laterChannelRes.json()) as { id: string };
+
+    const inviteRes = await app.request("http://localhost/api/agent-invites", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        agentName: "expandable-bridge",
+        visibility: "PRIVATE",
+        runnerScopeMode: "SCOPED",
+        channelIds: [initialChannel.id],
+        allowChannelExpansion: true,
+      }),
+    });
+    expect(inviteRes.status).toBe(201);
+    const invite = (await inviteRes.json()) as {
+      inviteLink?: string;
+      allowChannelExpansion?: boolean;
+    };
+    expect(invite.allowChannelExpansion).toBe(true);
+    const inviteToken = decodeURIComponent((invite.inviteLink ?? "").split("/public/")[1] ?? "");
+
+    const redeemRes = await app.request(
+      `http://localhost/api/agent-invites/public/${encodeURIComponent(inviteToken)}/redeem`,
+      { method: "POST" },
+    );
+    expect(redeemRes.status).toBe(200);
+    const redeemed = (await redeemRes.json()) as {
+      runner: { token: string; allowChannelExpansion?: boolean };
+    };
+    expect(redeemed.runner.allowChannelExpansion).toBe(true);
+
+    const subscribeLaterRes = await app.request(
+      `http://localhost/api/channels/${encodeURIComponent(laterChannel.id)}/subscribe`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({
+          subscriberType: "AGENT",
+          subscriberId: "expandable-bridge",
+        }),
+      },
+    );
+    expect(subscribeLaterRes.status).toBe(200);
+
+    const humanMessageRes = await app.request("http://localhost/api/events", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        type: "message.created",
+        source: "human:admin",
+        channelId: laterChannel.id,
+        payload: { text: "hello later channel" },
+      }),
+    });
+    expect(humanMessageRes.status).toBe(201);
+
+    const scopedChannelsRes = await app.request("http://localhost/api/channels", {
+      headers: { "x-orgops-runner-token": redeemed.runner.token },
+    });
+    expect(scopedChannelsRes.status).toBe(200);
+    const scopedChannels = (await scopedChannelsRes.json()) as Array<{ id: string }>;
+    expect(scopedChannels.some((channel) => channel.id === laterChannel.id)).toBe(true);
+
+    const pendingRes = await app.request(
+      `http://localhost/api/events?agentName=expandable-bridge&status=PENDING&channelId=${encodeURIComponent(laterChannel.id)}&limit=10`,
+      { headers: { "x-orgops-runner-token": redeemed.runner.token } },
+    );
+    expect(pendingRes.status).toBe(200);
+    const pending = (await pendingRes.json()) as Array<{ channelId?: string; payload?: { text?: string } }>;
+    expect(pending).toHaveLength(1);
+    expect(pending[0].channelId).toBe(laterChannel.id);
+    expect(pending[0].payload?.text).toBe("hello later channel");
+
+    const agentReplyRes = await app.request("http://localhost/api/events", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orgops-runner-token": redeemed.runner.token,
+      },
+      body: JSON.stringify({
+        type: "message.created",
+        source: "agent:expandable-bridge",
+        channelId: laterChannel.id,
+        payload: { text: "reply from later channel" },
+      }),
+    });
+    expect(agentReplyRes.status).toBe(201);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("enables channel expansion for already redeemed scoped invite runners", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+      runnerApiUrl: "http://localhost:8787",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const initialChannelRes = await app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ name: "existing-invite-initial-channel" }),
+    });
+    expect(initialChannelRes.status).toBe(201);
+    const initialChannel = (await initialChannelRes.json()) as { id: string };
+    const laterChannelRes = await app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ name: "existing-invite-later-channel" }),
+    });
+    expect(laterChannelRes.status).toBe(201);
+    const laterChannel = (await laterChannelRes.json()) as { id: string };
+
+    const inviteRes = await app.request("http://localhost/api/agent-invites", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        agentName: "existing-expandable-bridge",
+        runnerScopeMode: "SCOPED",
+        channelIds: [initialChannel.id],
+      }),
+    });
+    expect(inviteRes.status).toBe(201);
+    const invite = (await inviteRes.json()) as {
+      id: string;
+      inviteLink?: string;
+      allowChannelExpansion?: boolean;
+    };
+    expect(invite.allowChannelExpansion).toBe(false);
+    const inviteToken = decodeURIComponent((invite.inviteLink ?? "").split("/public/")[1] ?? "");
+
+    const redeemRes = await app.request(
+      `http://localhost/api/agent-invites/public/${encodeURIComponent(inviteToken)}/redeem`,
+      { method: "POST" },
+    );
+    expect(redeemRes.status).toBe(200);
+    const redeemed = (await redeemRes.json()) as {
+      runner: { token: string; allowChannelExpansion?: boolean };
+    };
+    expect(redeemed.runner.allowChannelExpansion).toBe(false);
+
+    const subscribeLaterRes = await app.request(
+      `http://localhost/api/channels/${encodeURIComponent(laterChannel.id)}/subscribe`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({
+          subscriberType: "AGENT",
+          subscriberId: "existing-expandable-bridge",
+        }),
+      },
+    );
+    expect(subscribeLaterRes.status).toBe(200);
+
+    const humanMessageRes = await app.request("http://localhost/api/events", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        type: "message.created",
+        source: "human:admin",
+        channelId: laterChannel.id,
+        payload: { text: "message before expansion enabled" },
+      }),
+    });
+    expect(humanMessageRes.status).toBe(201);
+
+    const blockedPendingRes = await app.request(
+      `http://localhost/api/events?agentName=existing-expandable-bridge&status=PENDING&channelId=${encodeURIComponent(laterChannel.id)}&limit=10`,
+      { headers: { "x-orgops-runner-token": redeemed.runner.token } },
+    );
+    expect(blockedPendingRes.status).toBe(200);
+    expect(await blockedPendingRes.json()).toEqual([]);
+
+    const enableRes = await app.request(
+      `http://localhost/api/agent-invites/${encodeURIComponent(invite.id)}/enable-channel-expansion`,
+      {
+        method: "POST",
+        headers: { cookie },
+      },
+    );
+    expect(enableRes.status).toBe(200);
+    const enabled = (await enableRes.json()) as {
+      invite?: { allowChannelExpansion?: boolean };
+      updatedScopedRunnerTokenCount?: number;
+    };
+    expect(enabled.invite?.allowChannelExpansion).toBe(true);
+    expect(enabled.updatedScopedRunnerTokenCount).toBe(1);
+
+    const pendingRes = await app.request(
+      `http://localhost/api/events?agentName=existing-expandable-bridge&status=PENDING&channelId=${encodeURIComponent(laterChannel.id)}&limit=10`,
+      { headers: { "x-orgops-runner-token": redeemed.runner.token } },
+    );
+    expect(pendingRes.status).toBe(200);
+    const pending = (await pendingRes.json()) as Array<{ payload?: { text?: string } }>;
+    expect(pending).toHaveLength(1);
+    expect(pending[0].payload?.text).toBe("message before expansion enabled");
 
     rmSync(dataDir, { recursive: true, force: true });
   });

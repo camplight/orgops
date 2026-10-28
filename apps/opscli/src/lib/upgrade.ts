@@ -13,6 +13,7 @@ export type UpgradeOptions = {
   repoRef?: string;
   components?: string;
   restart?: boolean;
+  noGit?: boolean;
 } & RunnerBootstrapOptions;
 
 function resolveInstallDir(inputDir?: string) {
@@ -40,11 +41,17 @@ async function createSafetyBackup(installDir: string) {
 
 export async function runUpgrade(rawOptions: UpgradeOptions) {
   const installDir = resolveInstallDir(rawOptions.installDir);
-  if (!existsSync(resolve(installDir, ".git"))) {
-    throw new Error(`No git repository found at ${installDir}. Run install first.`);
+  const hasPackage = existsSync(resolve(installDir, "package.json"));
+  const hasGit = existsSync(resolve(installDir, ".git"));
+  if (!hasPackage && !hasGit) {
+    throw new Error(`No OrgOps install found at ${installDir}. Run install first.`);
   }
 
   const state = loadState();
+  const noGit = Boolean(rawOptions.noGit) || state.sourceMode === "archive" || !hasGit;
+  if (!noGit && !hasGit) {
+    throw new Error(`No git repository found at ${installDir}. Re-run with --no-git or install first.`);
+  }
   const components = parseComponentsArg(
     rawOptions.components ??
       (Array.isArray(state.installedComponents) && state.installedComponents.length > 0
@@ -72,6 +79,9 @@ export async function runUpgrade(rawOptions: UpgradeOptions) {
     runnerInviteUrl: rawOptions.runnerInviteUrl,
     registerService: Boolean(state.serviceRegistered),
     createShortcut: false,
+    noGit,
+    yes: true,
+    openBrowser: false,
   });
 
   const shouldRestart = rawOptions.restart !== false;

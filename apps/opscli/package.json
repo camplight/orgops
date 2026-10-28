@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node --watch --import tsx src/index.ts",
     "start": "node --import tsx src/index.ts",
-    "test": "node --test test/*.test.mjs",
+    "test": "node scripts/run-tests.mjs",
     "lint": "tsc -p tsconfig.json --noEmit",
     "build:release": "node --import tsx scripts/build-release.ts"
   },

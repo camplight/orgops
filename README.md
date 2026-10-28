@@ -140,7 +140,8 @@ npm run --workspace @orgops/opscli start
 
 Command examples:
 
-- `opscli install --register-service --create-shortcut`
+- `opscli install --register-service --create-shortcut` (writes a generated working `.env` on first install)
+- `opscli install --components runner --runner-invite-url <url> --register-service --yes`
 - `opscli upgrade`
 - `opscli start` / `opscli stop` / `opscli status`
 - `opscli admin open` / `opscli admin stop` / `opscli admin status`

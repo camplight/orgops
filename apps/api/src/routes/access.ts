@@ -21,6 +21,7 @@ export type RunnerScope = {
   allowedAgentName?: string;
   allowedRunnerId?: string;
   allowedChannelIds?: string[];
+  allowChannelExpansion?: boolean;
   inviteId?: string;
 };
 
@@ -139,6 +140,32 @@ export function createAccessControl(deps: AccessDeps) {
     return Boolean(teamMember);
   }
 
+  function hasAgentChannelSubscription(channelId: string, agentName: string): boolean {
+    const member = orm
+      .select({ channelId: schema.channelSubscriptions.channel_id })
+      .from(schema.channelSubscriptions)
+      .where(
+        and(
+          eq(schema.channelSubscriptions.channel_id, channelId),
+          eq(schema.channelSubscriptions.subscriber_type, "AGENT"),
+          eq(schema.channelSubscriptions.subscriber_id, agentName),
+        ),
+      )
+      .get();
+    return Boolean(member);
+  }
+
+  function scopedRunnerCanUseSubscribedChannel(
+    scopedRunner: RunnerScope,
+    channelId: string,
+  ): boolean {
+    return Boolean(
+      scopedRunner.allowChannelExpansion &&
+        scopedRunner.allowedAgentName &&
+        hasAgentChannelSubscription(channelId, scopedRunner.allowedAgentName),
+    );
+  }
+
   function hasHumanChannelViewerShare(channelId: string, username: string): boolean {
     const sharedViewer = orm
       .select({ channelId: schema.channelViewers.channel_id })
@@ -176,6 +203,7 @@ export function createAccessControl(deps: AccessDeps) {
       if (!channel) return false;
       const allowedChannelIds = new Set(scopedRunner.allowedChannelIds ?? []);
       if (allowedChannelIds.has(channelId)) return true;
+      if (scopedRunnerCanUseSubscribedChannel(scopedRunner, channelId)) return true;
       const lifecycleName = scopedRunner.allowedAgentName
         ? `agent.lifecycle.${scopedRunner.allowedAgentName}`
         : "";
@@ -226,7 +254,8 @@ export function createAccessControl(deps: AccessDeps) {
     if (!channel) return true;
     const scopedRunner = getScopedRunner(user);
     if (scopedRunner) {
-      return canManageChannel(user, channelId);
+      if (canManageChannel(user, channelId)) return true;
+      return scopedRunnerCanUseSubscribedChannel(scopedRunner, channelId);
     }
     if (isRunnerUser(user)) return true;
     const visibility = normalizeChannelVisibility(channel.visibility);
@@ -267,6 +296,21 @@ export function createAccessControl(deps: AccessDeps) {
           .all();
         for (const row of sharedRows) {
           allowed.add(row.channelId);
+        }
+        if (scopedRunner.allowChannelExpansion) {
+          const subscribedRows = orm
+            .select({ channelId: schema.channelSubscriptions.channel_id })
+            .from(schema.channelSubscriptions)
+            .where(
+              and(
+                eq(schema.channelSubscriptions.subscriber_type, "AGENT"),
+                eq(schema.channelSubscriptions.subscriber_id, scopedRunner.allowedAgentName),
+              ),
+            )
+            .all();
+          for (const row of subscribedRows) {
+            allowed.add(row.channelId);
+          }
         }
       }
       return [...allowed];

@@ -242,6 +242,10 @@ export function createApp(config: AppConfig = {}) {
           mode === "SCOPED"
             ? parseRunnerScopeChannels(scoped.allowed_channel_ids_json)
             : undefined,
+        allowChannelExpansion:
+          mode === "SCOPED"
+            ? Boolean(scoped.allow_channel_expansion)
+            : undefined,
         inviteId: scoped.invite_id ?? undefined,
       },
     };

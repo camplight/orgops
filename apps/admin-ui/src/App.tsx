@@ -1518,9 +1518,31 @@ export default function App() {
             await data.refreshAgentInvites();
             return body;
           }}
+          onEnableChannelExpansion={async (id) => {
+            const res = await data.apiFetch(
+              `/api/agent-invites/${encodeURIComponent(id)}/enable-channel-expansion`,
+              {
+                method: "POST",
+                headers: data.getApiHeaders(),
+              },
+            );
+            const body = (await res.json()) as {
+              invite: AgentInvite;
+              updatedScopedRunnerTokenCount: number;
+            };
+            await data.refreshAgentInvites();
+            return body;
+          }}
           onRevokeInvite={async (id) => {
             await data.apiFetch(`/api/agent-invites/${encodeURIComponent(id)}/revoke`, {
               method: "POST",
+              headers: data.getApiHeaders(),
+            });
+            await data.refreshAgentInvites();
+          }}
+          onDeleteInvite={async (id) => {
+            await data.apiFetch(`/api/agent-invites/${encodeURIComponent(id)}`, {
+              method: "DELETE",
               headers: data.getApiHeaders(),
             });
             await data.refreshAgentInvites();

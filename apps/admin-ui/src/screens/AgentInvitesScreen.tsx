@@ -10,14 +10,19 @@ type AgentInvitesScreenProps = {
     agentName: string;
     visibility: "PUBLIC" | "PRIVATE";
     runnerScopeMode: "SCOPED" | "GLOBAL";
+    allowChannelExpansion: boolean;
     channelIds: string[];
     expiresAt?: number;
   }) => Promise<AgentInvite>;
   onRevokeInvite: (id: string) => Promise<void>;
+  onDeleteInvite: (id: string) => Promise<void>;
   onReissueInvite: (id: string) => Promise<AgentInvite>;
   onPromoteInviteGlobal: (
     id: string,
   ) => Promise<{ invite: AgentInvite; promotedScopedRunnerTokenCount: number }>;
+  onEnableChannelExpansion: (
+    id: string,
+  ) => Promise<{ invite: AgentInvite; updatedScopedRunnerTokenCount: number }>;
   onRefresh: () => Promise<void> | void;
 };
 
@@ -31,20 +36,27 @@ export function AgentInvitesScreen({
   channels,
   onCreateInvite,
   onRevokeInvite,
+  onDeleteInvite,
   onReissueInvite,
   onPromoteInviteGlobal,
+  onEnableChannelExpansion,
   onRefresh,
 }: AgentInvitesScreenProps) {
   const [agentName, setAgentName] = useState("");
   const [visibility, setVisibility] = useState<"PUBLIC" | "PRIVATE">("PUBLIC");
   const [selectedChannelIds, setSelectedChannelIds] = useState<string[]>([]);
   const [runnerScopeMode, setRunnerScopeMode] = useState<"SCOPED" | "GLOBAL">("SCOPED");
+  const [allowChannelExpansion, setAllowChannelExpansion] = useState(false);
   const [channelQuery, setChannelQuery] = useState("");
   const [channelsOpen, setChannelsOpen] = useState(false);
   const [expiresAtIso, setExpiresAtIso] = useState("");
   const [createDrawerOpen, setCreateDrawerOpen] = useState(false);
+  const [selectedInviteId, setSelectedInviteId] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
-  const [latestInviteLink, setLatestInviteLink] = useState<string | null>(null);
+  const [latestInviteLink, setLatestInviteLink] = useState<{
+    inviteName: string;
+    link: string;
+  } | null>(null);
   const [busy, setBusy] = useState(false);
 
   const sortedInvites = useMemo(
@@ -69,12 +81,33 @@ export function AgentInvitesScreen({
     return selectedChannelIds.map((id) => byId.get(id) ?? id);
   }, [selectedChannelIds, sortedChannels]);
   const selectedCount = selectedChannelIds.length;
+  const channelExpansionRequired =
+    runnerScopeMode === "SCOPED" && selectedChannelIds.length === 0;
+  const selectedInvite = useMemo(
+    () => sortedInvites.find((invite) => invite.id === selectedInviteId) ?? null,
+    [selectedInviteId, sortedInvites],
+  );
+  const drawerOpen = createDrawerOpen || Boolean(selectedInvite);
 
-  useEscapeKey(createDrawerOpen, () => {
-    if (createDrawerOpen) {
-      setCreateDrawerOpen(false);
-      setChannelsOpen(false);
-    }
+  const closeDrawers = () => {
+    setCreateDrawerOpen(false);
+    setChannelsOpen(false);
+    setSelectedInviteId(null);
+  };
+
+  const openCreateDrawer = () => {
+    setSelectedInviteId(null);
+    setCreateDrawerOpen(true);
+  };
+
+  const openInviteDrawer = (inviteId: string) => {
+    setCreateDrawerOpen(false);
+    setChannelsOpen(false);
+    setSelectedInviteId(inviteId);
+  };
+
+  useEscapeKey(drawerOpen, () => {
+    if (drawerOpen) closeDrawers();
   });
 
   const toggleChannel = (channelId: string) => {
@@ -104,19 +137,24 @@ export function AgentInvitesScreen({
         agentName: trimmedAgentName,
         visibility,
         runnerScopeMode,
+        allowChannelExpansion:
+          runnerScopeMode === "SCOPED" && (channelExpansionRequired || allowChannelExpansion),
         channelIds: selectedChannelIds,
         ...(expiresAt ? { expiresAt } : {}),
       });
       setStatus(`Created invite "${created.name}" for ${created.agentName}.`);
-      setLatestInviteLink(created.inviteLink ?? null);
+      setLatestInviteLink(
+        created.inviteLink ? { inviteName: created.name, link: created.inviteLink } : null,
+      );
       setAgentName("");
       setVisibility("PUBLIC");
       setRunnerScopeMode("SCOPED");
+      setAllowChannelExpansion(false);
       setSelectedChannelIds([]);
       setChannelQuery("");
       setChannelsOpen(false);
       setExpiresAtIso("");
-      setCreateDrawerOpen(false);
+      closeDrawers();
       await onRefresh();
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Failed to create invite.");
@@ -139,12 +177,34 @@ export function AgentInvitesScreen({
     }
   };
 
+  const handleDelete = async (id: string, inviteName: string) => {
+    const confirmed = window.confirm(
+      `Delete invite "${inviteName}"?\n\nThis removes the invite record and invalidates its invite link. Already redeemed runner tokens are not changed.`,
+    );
+    if (!confirmed) return;
+    setBusy(true);
+    setStatus(null);
+    try {
+      await onDeleteInvite(id);
+      setStatus(`Invite "${inviteName}" deleted.`);
+      if (latestInviteLink?.inviteName === inviteName) setLatestInviteLink(null);
+      closeDrawers();
+      await onRefresh();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Failed to delete invite.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleReissue = async (id: string) => {
     setBusy(true);
     setStatus(null);
     try {
       const updated = await onReissueInvite(id);
-      setLatestInviteLink(updated.inviteLink ?? null);
+      setLatestInviteLink(
+        updated.inviteLink ? { inviteName: updated.name, link: updated.inviteLink } : null,
+      );
       setStatus(`Invite reissued for "${updated.agentName}". Old link is invalidated.`);
       await onRefresh();
     } catch (error) {
@@ -177,6 +237,29 @@ export function AgentInvitesScreen({
     }
   };
 
+  const handleEnableChannelExpansion = async (id: string, inviteName: string) => {
+    const confirmed = window.confirm(
+      `Enable channel expansion for invite "${inviteName}"?\n\nRedeemed scoped runner tokens from this invite will be able to respond in channels where the agent is added as a participant.`,
+    );
+    if (!confirmed) return;
+    setBusy(true);
+    setStatus(null);
+    try {
+      const result = await onEnableChannelExpansion(id);
+      const updatedCount = result.updatedScopedRunnerTokenCount;
+      setStatus(
+        updatedCount > 0
+          ? `Channel expansion enabled for "${result.invite.name}". Updated ${updatedCount} scoped runner token${updatedCount === 1 ? "" : "s"}.`
+          : `Channel expansion enabled for "${result.invite.name}".`,
+      );
+      await onRefresh();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Failed to enable channel expansion.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleCopyInvite = async (inviteLink: string | undefined) => {
     if (!inviteLink) return;
     try {
@@ -198,9 +281,28 @@ export function AgentInvitesScreen({
             <Button variant="secondary" onClick={() => void onRefresh()}>
               Refresh
             </Button>
-            <Button onClick={() => setCreateDrawerOpen(true)}>Create invite</Button>
+            <Button onClick={openCreateDrawer}>Create invite</Button>
           </div>
         </div>
+        {latestInviteLink ? (
+          <div className="mb-3 rounded border border-amber-700/40 bg-amber-900/20 p-3 text-sm">
+            <div className="text-slate-300">
+              Latest invite link generated for{" "}
+              <span className="font-medium text-slate-100">{latestInviteLink.inviteName}</span>
+            </div>
+            <div className="mt-1 break-all font-mono text-amber-300">
+              {latestInviteLink.link}
+            </div>
+            <div className="mt-2">
+              <Button
+                variant="secondary"
+                onClick={() => void handleCopyInvite(latestInviteLink.link)}
+              >
+                Copy invite link
+              </Button>
+            </div>
+          </div>
+        ) : null}
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead>
@@ -239,6 +341,11 @@ export function AgentInvitesScreen({
                       <div className="mt-1 text-xs text-slate-500">
                         Runner scope: {(invite.runnerScopeMode ?? "SCOPED").toLowerCase()}
                       </div>
+                      {(invite.runnerScopeMode ?? "SCOPED") === "SCOPED" ? (
+                        <div className="mt-1 text-xs text-slate-500">
+                          Channel expansion: {invite.allowChannelExpansion ? "enabled" : "disabled"}
+                        </div>
+                      ) : null}
                     </td>
                     <td className="px-2 py-2 text-slate-300">
                       {(invite.createdByType ?? "HUMAN").toLowerCase()}:
@@ -259,34 +366,10 @@ export function AgentInvitesScreen({
                       <div className="flex flex-wrap gap-2">
                         <Button
                           variant="secondary"
-                          onClick={() => void handleCopyInvite(invite.inviteLink)}
-                          disabled={!invite.inviteLink}
+                          onClick={() => openInviteDrawer(invite.id)}
                         >
-                          Copy link
+                          Manage
                         </Button>
-                        <Button
-                          variant="secondary"
-                          onClick={() => void handleRevoke(invite.id)}
-                          disabled={busy || revoked}
-                        >
-                          Revoke
-                        </Button>
-                        <Button
-                          variant="secondary"
-                          onClick={() => void handleReissue(invite.id)}
-                          disabled={busy}
-                        >
-                          Reissue link
-                        </Button>
-                        {(invite.runnerScopeMode ?? "SCOPED") === "SCOPED" ? (
-                          <Button
-                            variant="secondary"
-                            onClick={() => void handlePromoteGlobal(invite.id, invite.name)}
-                            disabled={busy}
-                          >
-                            Promote to global
-                          </Button>
-                        ) : null}
                       </div>
                     </td>
                   </tr>
@@ -301,27 +384,13 @@ export function AgentInvitesScreen({
           ) : null}
         </div>
         {status ? <div className="mt-3 text-sm text-slate-300">{status}</div> : null}
-        {latestInviteLink ? (
-          <div className="mt-3 rounded border border-slate-800 bg-slate-900/40 p-2 text-sm">
-            <div className="text-slate-300">Latest invite link</div>
-            <div className="break-all font-mono text-amber-300">{latestInviteLink}</div>
-            <div className="mt-2">
-              <Button variant="secondary" onClick={() => void handleCopyInvite(latestInviteLink)}>
-                Copy invite link
-              </Button>
-            </div>
-          </div>
-        ) : null}
       </Card>
 
       <div
         className={`fixed inset-0 z-40 bg-black/50 transition-opacity lg:left-56 ${
-          createDrawerOpen ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"
+          drawerOpen ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"
         }`}
-        onClick={() => {
-          setCreateDrawerOpen(false);
-          setChannelsOpen(false);
-        }}
+        onClick={closeDrawers}
       />
       <aside
         className={`fixed bottom-0 right-0 top-0 z-50 w-full max-w-md border-l border-slate-800 bg-slate-950 shadow-2xl transition-transform duration-300 ${
@@ -336,10 +405,7 @@ export function AgentInvitesScreen({
               type="button"
               variant="secondary"
               className="px-2 py-1 text-xs"
-              onClick={() => {
-                setCreateDrawerOpen(false);
-                setChannelsOpen(false);
-              }}
+              onClick={closeDrawers}
             >
               Close
             </Button>
@@ -452,7 +518,22 @@ export function AgentInvitesScreen({
                 Global scope removes invite channel/agent/runner restrictions for this redeemed token.
                 Use only for trusted environments.
               </div>
-            ) : null}
+            ) : (
+              <label className="flex items-start gap-2 rounded border border-slate-800 bg-slate-900/40 p-2 text-xs text-slate-300">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={channelExpansionRequired || allowChannelExpansion}
+                  disabled={channelExpansionRequired}
+                  onChange={(event) => setAllowChannelExpansion(event.target.checked)}
+                />
+                <span>
+                  Allow channel expansion after redeem. The scoped runner can respond in later
+                  channels where this agent is added as a participant.
+                  {channelExpansionRequired ? " Required when no initial channels are selected." : ""}
+                </span>
+              </label>
+            )}
           </div>
           <div className="mt-auto border-t border-slate-800 px-4 py-3">
             <Button onClick={() => void handleCreate()} disabled={busy || !agentName.trim()}>
@@ -460,6 +541,191 @@ export function AgentInvitesScreen({
             </Button>
           </div>
         </div>
+      </aside>
+
+      <aside
+        className={`fixed bottom-0 right-0 top-0 z-50 w-full max-w-lg border-l border-slate-800 bg-slate-950 shadow-2xl transition-transform duration-300 ${
+          selectedInvite ? "translate-x-0" : "translate-x-full"
+        }`}
+        aria-hidden={!selectedInvite}
+      >
+        {selectedInvite ? (
+          <div className="flex h-full flex-col">
+            <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-100">Invite Details</h3>
+                <div className="text-xs text-slate-500">{selectedInvite.id}</div>
+              </div>
+              <Button
+                type="button"
+                variant="secondary"
+                className="px-2 py-1 text-xs"
+                onClick={closeDrawers}
+              >
+                Close
+              </Button>
+            </div>
+
+            <div className="flex-1 space-y-4 overflow-auto px-4 py-4">
+              <section className="rounded border border-slate-800 bg-slate-900/40 p-3">
+                <div className="text-xs uppercase tracking-wide text-slate-500">Invite</div>
+                <div className="mt-2 space-y-2 text-sm">
+                  <div>
+                    <div className="text-xs text-slate-500">Name</div>
+                    <div className="text-slate-100">{selectedInvite.name}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-slate-500">Agent</div>
+                    <div className="text-slate-100">
+                      {selectedInvite.agentName}{" "}
+                      <span className="text-xs text-slate-500">
+                        ({selectedInvite.visibility === "PRIVATE" ? "private" : "public"})
+                      </span>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-slate-500">Created by</div>
+                    <div className="text-slate-100">
+                      {(selectedInvite.createdByType ?? "HUMAN").toLowerCase()}:{" "}
+                      {selectedInvite.createdById ??
+                        selectedInvite.createdByHumanId ??
+                        "unknown"}
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section className="rounded border border-slate-800 bg-slate-900/40 p-3">
+                <div className="text-xs uppercase tracking-wide text-slate-500">Scope</div>
+                <div className="mt-2 space-y-2 text-sm">
+                  <div>
+                    <div className="text-xs text-slate-500">Runner scope</div>
+                    <div className="text-slate-100">
+                      {(selectedInvite.runnerScopeMode ?? "SCOPED").toLowerCase()}
+                    </div>
+                  </div>
+                  {(selectedInvite.runnerScopeMode ?? "SCOPED") === "SCOPED" ? (
+                    <div>
+                      <div className="text-xs text-slate-500">Channel expansion</div>
+                      <div className="text-slate-100">
+                        {selectedInvite.allowChannelExpansion ? "enabled" : "disabled"}
+                      </div>
+                    </div>
+                  ) : null}
+                  <div>
+                    <div className="text-xs text-slate-500">Initial channels</div>
+                    <div className="break-words text-slate-100">
+                      {selectedInvite.channelIds.length > 0
+                        ? selectedInvite.channelIds.join(", ")
+                        : "none"}
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section className="rounded border border-slate-800 bg-slate-900/40 p-3">
+                <div className="text-xs uppercase tracking-wide text-slate-500">Lifecycle</div>
+                <div className="mt-2 grid grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <div className="text-xs text-slate-500">Uses</div>
+                    <div className="text-slate-100">
+                      {selectedInvite.useCount}/{selectedInvite.maxUses}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-slate-500">Status</div>
+                    <div className="text-slate-100">
+                      {selectedInvite.revokedAt
+                        ? "revoked"
+                        : selectedInvite.useCount >= selectedInvite.maxUses
+                          ? "exhausted"
+                          : "active"}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-slate-500">Created</div>
+                    <div className="text-slate-100">{formatDate(selectedInvite.createdAt)}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-slate-500">Expires</div>
+                    <div className="text-slate-100">{formatDate(selectedInvite.expiresAt)}</div>
+                  </div>
+                  <div className="col-span-2">
+                    <div className="text-xs text-slate-500">Last redeemed</div>
+                    <div className="text-slate-100">
+                      {formatDate(selectedInvite.lastRedeemedAt)}
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              {selectedInvite.inviteLink ? (
+                <section className="rounded border border-slate-800 bg-slate-900/40 p-3">
+                  <div className="text-xs uppercase tracking-wide text-slate-500">Invite link</div>
+                  <div className="mt-2 break-all font-mono text-xs text-amber-300">
+                    {selectedInvite.inviteLink}
+                  </div>
+                </section>
+              ) : null}
+
+              {status ? <div className="text-sm text-slate-300">{status}</div> : null}
+            </div>
+
+            <div className="space-y-2 border-t border-slate-800 px-4 py-3">
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="secondary"
+                  onClick={() => void handleCopyInvite(selectedInvite.inviteLink)}
+                  disabled={!selectedInvite.inviteLink}
+                >
+                  Copy link
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={() => void handleReissue(selectedInvite.id)}
+                  disabled={busy}
+                >
+                  Reissue link
+                </Button>
+                {(selectedInvite.runnerScopeMode ?? "SCOPED") === "SCOPED" &&
+                !selectedInvite.allowChannelExpansion ? (
+                  <Button
+                    variant="secondary"
+                    onClick={() =>
+                      void handleEnableChannelExpansion(selectedInvite.id, selectedInvite.name)
+                    }
+                    disabled={busy}
+                  >
+                    Enable channel expansion
+                  </Button>
+                ) : null}
+                {(selectedInvite.runnerScopeMode ?? "SCOPED") === "SCOPED" ? (
+                  <Button
+                    variant="secondary"
+                    onClick={() => void handlePromoteGlobal(selectedInvite.id, selectedInvite.name)}
+                    disabled={busy}
+                  >
+                    Promote to global
+                  </Button>
+                ) : null}
+                <Button
+                  variant="secondary"
+                  onClick={() => void handleRevoke(selectedInvite.id)}
+                  disabled={busy || Boolean(selectedInvite.revokedAt)}
+                >
+                  Revoke
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={() => void handleDelete(selectedInvite.id, selectedInvite.name)}
+                  disabled={busy}
+                >
+                  Delete
+                </Button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </aside>
     </div>
   );

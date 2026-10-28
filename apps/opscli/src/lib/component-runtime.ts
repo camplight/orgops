@@ -12,10 +12,11 @@ import { request as httpsRequest } from "node:https";
 import { spawn, spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { npmCommandForHost } from "./exec";
 import { openUrlInBrowser } from "./browser";
 import type { InstallComponent } from "./components";
 import { loadState } from "./runtime-state";
+import { controlAutostartServices, getAutostartServicesStatus } from "./service";
+import { envWithToolchain, npmCommandForInstall } from "./toolchain";
 
 type ComponentStatus = {
   component: InstallComponent;
@@ -23,6 +24,9 @@ type ComponentStatus = {
   pid: number | null;
   url?: string;
   reachable?: boolean;
+  serviceRegistered?: boolean;
+  serviceRunning?: boolean;
+  serviceDetail?: string;
 };
 
 const COMPONENT_START_COMMAND: Record<InstallComponent, string> = {
@@ -64,6 +68,17 @@ function loadPid(installDir: string, component: InstallComponent): number | null
   }
 }
 
+function loadStoredPid(installDir: string, component: InstallComponent): number | null {
+  const file = runtimeStatePath(installDir, component);
+  if (!existsSync(file)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf-8")) as { pid?: number };
+    return typeof parsed.pid === "number" ? parsed.pid : null;
+  } catch {
+    return null;
+  }
+}
+
 function savePid(installDir: string, component: InstallComponent, pid: number) {
   const runtimeDir = resolve(installDir, ".orgops-runtime");
   mkdirSync(runtimeDir, { recursive: true });
@@ -80,6 +95,11 @@ function clearPid(installDir: string, component: InstallComponent) {
 
 function resolveInstallDir(inputDir?: string) {
   return resolve(inputDir ?? loadState().installDir ?? "orgops");
+}
+
+function registeredServiceComponents(components: InstallComponent[]) {
+  const serviceComponents = loadState().serviceComponents ?? [];
+  return components.filter((component) => serviceComponents.includes(component));
 }
 
 function checkHttpUp(url: string): Promise<boolean> {
@@ -135,7 +155,16 @@ export async function startComponents(options: {
 }) {
   const installDir = resolveInstallDir(options.installDir);
   const started: Array<{ component: InstallComponent; alreadyRunning: boolean; pid: number | null }> = [];
+  const serviceComponents = registeredServiceComponents(options.components);
+  if (serviceComponents.length > 0) {
+    controlAutostartServices(installDir, serviceComponents, "start");
+    for (const component of serviceComponents) {
+      await waitForComponentReady(component, 30_000);
+      started.push({ component, alreadyRunning: false, pid: null });
+    }
+  }
   for (const component of options.components) {
+    if (serviceComponents.includes(component)) continue;
     const existingPid = loadPid(installDir, component);
     if (!existingPid) {
       const runtimeDir = resolve(installDir, ".orgops-runtime");
@@ -143,13 +172,20 @@ export async function startComponents(options: {
       const logPath = resolve(runtimeDir, `${component}.log`);
       const outFd = openSync(logPath, "a");
       const errFd = openSync(logPath, "a");
-      const child = spawn(npmCommandForHost(), ["run", COMPONENT_START_COMMAND[component]], {
+      const npmCommand = npmCommandForInstall(installDir);
+      if ((npmCommand.includes("/") || npmCommand.includes("\\")) && !existsSync(npmCommand)) {
+        throw new Error(`npm command for ${component} is missing: ${npmCommand}`);
+      }
+      const child = spawn(npmCommand, ["run", COMPONENT_START_COMMAND[component]], {
         cwd: installDir,
         detached: true,
         stdio: ["ignore", outFd, errFd],
-        env: process.env,
+        env: envWithToolchain(installDir),
         shell: process.platform === "win32",
         windowsHide: true,
+      });
+      child.on("error", (error) => {
+        throw new Error(`Failed to start ${component} with ${npmCommand}: ${error.message}`);
       });
       closeSync(outFd);
       closeSync(errFd);
@@ -175,8 +211,17 @@ export async function startComponents(options: {
 export function stopComponents(options: { installDir?: string; components: InstallComponent[] }) {
   const installDir = resolveInstallDir(options.installDir);
   const stopped: Array<{ component: InstallComponent; stopped: boolean; pid: number | null }> = [];
+  const serviceComponents = registeredServiceComponents(options.components);
+  if (serviceComponents.length > 0) {
+    controlAutostartServices(installDir, serviceComponents, "stop");
+    for (const component of serviceComponents) {
+      clearPid(installDir, component);
+      stopped.push({ component, stopped: true, pid: null });
+    }
+  }
   for (const component of options.components) {
-    const pid = loadPid(installDir, component);
+    if (serviceComponents.includes(component)) continue;
+    const pid = loadStoredPid(installDir, component);
     if (!pid) {
       stopped.push({ component, stopped: false, pid: null });
       continue;
@@ -189,9 +234,13 @@ export function stopComponents(options: { installDir?: string; components: Insta
       });
     } else {
       try {
-        process.kill(pid, "SIGTERM");
+        process.kill(-pid, "SIGTERM");
       } catch {
-        // Ignore already-dead process.
+        try {
+          process.kill(pid, "SIGTERM");
+        } catch {
+          // Ignore already-dead process.
+        }
       }
     }
     clearPid(installDir, component);
@@ -206,16 +255,23 @@ export async function getComponentsStatus(options: {
 }) {
   const installDir = resolveInstallDir(options.installDir);
   const statuses: ComponentStatus[] = [];
+  const serviceStatus = new Map(
+    getAutostartServicesStatus(options.components, installDir).map((status) => [status.component, status])
+  );
   for (const component of options.components) {
     const pid = loadPid(installDir, component);
     const url = COMPONENT_URL[component];
     const reachable = url ? await checkHttpUp(url) : undefined;
+    const service = serviceStatus.get(component);
     statuses.push({
       component,
-      running: Boolean(pid) || Boolean(reachable),
+      running: Boolean(pid) || Boolean(reachable) || Boolean(service?.running),
       pid,
       url,
       reachable,
+      serviceRegistered: service?.registered,
+      serviceRunning: service?.running,
+      serviceDetail: service?.detail,
     });
   }
   return { installDir, statuses };

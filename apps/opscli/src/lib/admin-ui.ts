@@ -108,9 +108,13 @@ export function stopAdminUi(installDirFromArg?: string) {
     });
   } else {
     try {
-      process.kill(existing.pid, "SIGTERM");
+      process.kill(-existing.pid, "SIGTERM");
     } catch {
-      // Ignore already-dead process.
+      try {
+        process.kill(existing.pid, "SIGTERM");
+      } catch {
+        // Ignore already-dead process.
+      }
     }
   }
   rmSync(stateFile(installDir), { force: true });

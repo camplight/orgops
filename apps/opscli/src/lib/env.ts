@@ -1,13 +1,27 @@
+import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   DEFAULT_ANTHROPIC_MODEL_ID,
+  DEFAULT_API_URL,
   DEFAULT_OPENAI_MODEL_ID,
   DEFAULT_OPENROUTER_MODEL_ID,
   ROOT_ENV_FILE,
 } from "./config";
 import type { ModelProvider } from "./types";
 import { writeRoleMessage } from "./ui";
+
+export function generateMasterKey() {
+  return randomBytes(32).toString("base64");
+}
+
+export function generateRunnerToken() {
+  return `org_rt_${randomBytes(24).toString("hex")}`;
+}
+
+export function generateAdminPassword() {
+  return randomBytes(18).toString("base64url");
+}
 
 export function parseSimpleEnv(raw: string): Record<string, string> {
   const result: Record<string, string> = {};
@@ -17,13 +31,17 @@ export function parseSimpleEnv(raw: string): Record<string, string> {
     const equalsIdx = trimmed.indexOf("=");
     if (equalsIdx <= 0) continue;
     const key = trimmed.slice(0, equalsIdx).trim();
-    const value = trimmed.slice(equalsIdx + 1).trim();
-    const unquoted =
+    let value = trimmed.slice(equalsIdx + 1).trim();
+    const quoted =
       (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-        ? value.slice(1, -1)
-        : value;
-    result[key] = unquoted;
+      (value.startsWith("'") && value.endsWith("'"));
+    if (quoted) {
+      value = value.slice(1, -1);
+    } else {
+      const commentIdx = value.indexOf(" #");
+      if (commentIdx >= 0) value = value.slice(0, commentIdx).trim();
+    }
+    result[key] = value;
   }
   return result;
 }
@@ -46,6 +64,53 @@ export function writeMergedEnvFile(envPath: string, patch: Record<string, string
     ...Object.entries(next).map(([key, value]) => `${key}=${value}`),
   ];
   writeFileSync(envPath, `${lines.join("\n")}\n`, "utf-8");
+}
+
+export type GeneratedInstallEnv = {
+  envPath: string;
+  generatedKeys: string[];
+  adminUser: string;
+  adminPassword?: string;
+};
+
+function missingEnvValue(existing: Record<string, string>, key: string) {
+  return !existing[key]?.trim();
+}
+
+export function ensureGeneratedInstallEnv(installDir: string): GeneratedInstallEnv {
+  const envPath = join(installDir, ROOT_ENV_FILE);
+  const existing = existsSync(envPath) ? parseSimpleEnv(readFileSync(envPath, "utf-8")) : {};
+  const patch: Record<string, string> = {};
+  const generatedKeys: string[] = [];
+  let adminPassword: string | undefined;
+
+  if (missingEnvValue(existing, "PORT")) patch.PORT = "8787";
+  if (missingEnvValue(existing, "ORGOPS_API_URL")) patch.ORGOPS_API_URL = DEFAULT_API_URL;
+  if (missingEnvValue(existing, "ORGOPS_ADMIN_USER")) patch.ORGOPS_ADMIN_USER = "admin";
+  if (missingEnvValue(existing, "ORGOPS_ADMIN_PASS")) {
+    adminPassword = generateAdminPassword();
+    patch.ORGOPS_ADMIN_PASS = adminPassword;
+    generatedKeys.push("ORGOPS_ADMIN_PASS");
+  }
+  if (missingEnvValue(existing, "ORGOPS_MASTER_KEY")) {
+    patch.ORGOPS_MASTER_KEY = generateMasterKey();
+    generatedKeys.push("ORGOPS_MASTER_KEY");
+  }
+  if (missingEnvValue(existing, "ORGOPS_RUNNER_TOKEN")) {
+    patch.ORGOPS_RUNNER_TOKEN = generateRunnerToken();
+    generatedKeys.push("ORGOPS_RUNNER_TOKEN");
+  }
+  if (missingEnvValue(existing, "ORGOPS_COOKIE_SECURE")) patch.ORGOPS_COOKIE_SECURE = "auto";
+  if (missingEnvValue(existing, "ORGOPS_EVENT_MAX_FAILURES")) patch.ORGOPS_EVENT_MAX_FAILURES = "25";
+
+  if (Object.keys(patch).length > 0) writeMergedEnvFile(envPath, patch);
+  const next = { ...existing, ...patch };
+  return {
+    envPath,
+    generatedKeys,
+    adminUser: next.ORGOPS_ADMIN_USER || "admin",
+    adminPassword,
+  };
 }
 
 export function getOpsCliEnvPath() {

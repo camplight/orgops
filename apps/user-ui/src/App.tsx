@@ -2,6 +2,8 @@ import {
   FormEvent,
   type ChangeEvent,
   type ClipboardEvent,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
   useEffect,
   useMemo,
   useRef,
@@ -10,6 +12,7 @@ import {
 import { apiFetch, apiJson, getApiHeaders } from "./api";
 import { wsUrl } from "./config";
 import type { Agent, AuthMe, Channel, ChannelParticipant, ChannelShare, EventRow, Team } from "./types";
+import { CommandPalette, type PaletteChannel } from "./CommandPalette";
 import { JsonRenderBlock } from "./JsonRenderBlock";
 import { OrgopsSecretInput } from "./OrgopsSecretInput";
 import { hasJsonRenderBlock, splitJsonRenderMarkdown } from "./jsonRenderMarkdown";
@@ -116,6 +119,13 @@ const CHANNEL_GROUPS = [
   { id: "shared", label: "Shared channels" }
 ] as const;
 const PINNED_CHANNELS_STORAGE_KEY = "orgops.user-ui.pinnedChannels";
+const RECENT_CHANNELS_STORAGE_KEY = "orgops.user-ui.recentChannels";
+const RECENT_CHANNELS_LIMIT = 20;
+const LAYOUT_STORAGE_KEY = "orgops.user-ui.layout";
+const SIDEBAR_DEFAULT_WIDTH = 280;
+const SIDEBAR_MIN_WIDTH = 220;
+const SIDEBAR_MAX_WIDTH = 520;
+const SIDEBAR_RAIL_WIDTH = 72;
 
 type ChannelGroupId = (typeof CHANNEL_GROUPS)[number]["id"];
 
@@ -451,11 +461,6 @@ function participantAgentStatus(participant: ChannelParticipant, agents: Agent[]
   return agent?.runtimeState === "RUNNING" ? "running" : "off";
 }
 
-function channelMatchesQuery(channel: Channel, query: string, currentUsername: string) {
-  const displayName = channelDisplayName(channel, currentUsername).toLowerCase();
-  return channel.name.toLowerCase().includes(query) || displayName.includes(query);
-}
-
 function canManageUserChannel(channel: Channel | null, userId: string | null) {
   if (!channel || isLifecycleChannel(channel)) return false;
   if (typeof channel.canManage === "boolean") return channel.canManage;
@@ -565,6 +570,94 @@ function writePinnedChannelIds(channelIds: string[]) {
   }
 }
 
+function readRecentChannelIds() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(RECENT_CHANNELS_STORAGE_KEY) ?? "[]") as unknown;
+    return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeRecentChannelIds(channelIds: string[]) {
+  try {
+    localStorage.setItem(RECENT_CHANNELS_STORAGE_KEY, JSON.stringify(channelIds));
+  } catch {
+    // Recents only improve palette ranking; ignore storage failures.
+  }
+}
+
+type LayoutPrefs = {
+  sidebarWidth: number;
+  sidebarCollapsed: boolean;
+  activityPanelOpen: boolean;
+};
+
+function clampSidebarWidth(width: number) {
+  return Math.round(Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, width)));
+}
+
+function readLayoutPrefs(): LayoutPrefs {
+  const defaults: LayoutPrefs = {
+    sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
+    sidebarCollapsed: false,
+    activityPanelOpen: true
+  };
+  try {
+    const parsed = JSON.parse(localStorage.getItem(LAYOUT_STORAGE_KEY) ?? "{}") as Partial<LayoutPrefs>;
+    return {
+      sidebarWidth:
+        typeof parsed.sidebarWidth === "number" ? clampSidebarWidth(parsed.sidebarWidth) : defaults.sidebarWidth,
+      sidebarCollapsed:
+        typeof parsed.sidebarCollapsed === "boolean" ? parsed.sidebarCollapsed : defaults.sidebarCollapsed,
+      activityPanelOpen:
+        typeof parsed.activityPanelOpen === "boolean" ? parsed.activityPanelOpen : defaults.activityPanelOpen
+    };
+  } catch {
+    return defaults;
+  }
+}
+
+function writeLayoutPrefs(prefs: LayoutPrefs) {
+  try {
+    localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(prefs));
+  } catch {
+    // Layout prefs are cosmetic; ignore storage failures.
+  }
+}
+
+function channelInitials(label: string) {
+  const words = label
+    .replace(/^#\s*/, "")
+    .replace(/^Direct:\s*/, "")
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean);
+  if (words.length === 0) return "?";
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return `${words[0][0]}${words[1][0]}`.toUpperCase();
+}
+
+function ChannelGlyph({ channel, pinned }: { channel: Channel; pinned: boolean }) {
+  if (pinned) {
+    return (
+      <svg className="channel-glyph channel-glyph-pinned" viewBox="0 0 16 16" aria-hidden="true">
+        <path
+          d="M10.2 1.8a1 1 0 0 1 1.4 0l2.6 2.6a1 1 0 0 1 0 1.4l-1.6 1.6-.9 3.3a1 1 0 0 1-1.7.4L8.2 9.3l-3.9 3.9a.7.7 0 0 1-1-1l3.9-3.9-1.8-1.8a1 1 0 0 1 .4-1.7l3.3-.9z"
+          fill="currentColor"
+        />
+      </svg>
+    );
+  }
+  if (isDirectChannel(channel) || isLifecycleChannel(channel)) {
+    return <i className="channel-glyph channel-glyph-direct" aria-hidden="true" />;
+  }
+  return (
+    <i className="channel-glyph" aria-hidden="true">
+      #
+    </i>
+  );
+}
+
 function adaptiveMessageBatchSize() {
   const connection = (
     navigator as Navigator & {
@@ -633,7 +726,6 @@ function formatAttachmentSize(size?: number) {
 
 export default function App() {
   const messagesPanelRef = useRef<HTMLElement | null>(null);
-  const channelSearchInputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const draftRef = useRef("");
@@ -672,7 +764,8 @@ export default function App() {
     shared: false
   });
   const [hasNewMessagesBelow, setHasNewMessagesBelow] = useState(false);
-  const [channelQuery, setChannelQuery] = useState("");
+  const [showCommandPalette, setShowCommandPalette] = useState(false);
+  const [recentChannelIds, setRecentChannelIds] = useState<string[]>(() => readRecentChannelIds());
   const [conversationName, setConversationName] = useState("");
   const [conversationDescription, setConversationDescription] = useState("");
   const [conversationVisibility, setConversationVisibility] = useState<"PUBLIC" | "PRIVATE">("PRIVATE");
@@ -681,6 +774,9 @@ export default function App() {
   const [selectedConversationTeams, setSelectedConversationTeams] = useState<string[]>([]);
   const [teamSearchQuery, setTeamSearchQuery] = useState("");
   const [pinnedChannelIds, setPinnedChannelIds] = useState<string[]>(() => readPinnedChannelIds());
+  const [layoutPrefs, setLayoutPrefs] = useState<LayoutPrefs>(() => readLayoutPrefs());
+  const [resizingSidebar, setResizingSidebar] = useState(false);
+  const appShellRef = useRef<HTMLElement | null>(null);
   const [showArchivedChannels, setShowArchivedChannels] = useState(false);
   const [showConversationDialog, setShowConversationDialog] = useState(false);
   const [showParticipantsDialog, setShowParticipantsDialog] = useState(false);
@@ -839,18 +935,6 @@ export default function App() {
     [agents, visibleChannelAgentNames, userId]
   );
 
-  const filteredChannels = useMemo(() => {
-    const query = channelQuery.trim().toLowerCase();
-    if (!query) return activeChannels;
-    return activeChannels.filter((channel) => channelMatchesQuery(channel, query, username));
-  }, [activeChannels, channelQuery, username]);
-
-  const filteredArchivedChannels = useMemo(() => {
-    const query = channelQuery.trim().toLowerCase();
-    if (!query) return archivedChannels;
-    return archivedChannels.filter((channel) => channelMatchesQuery(channel, query, username));
-  }, [archivedChannels, channelQuery, username]);
-
   const pinnedChannelIdSet = useMemo(() => new Set(pinnedChannelIds), [pinnedChannelIds]);
   const sortChannelsForDisplay = (items: Channel[]) =>
     [...items].sort((left, right) => {
@@ -864,22 +948,11 @@ export default function App() {
       const rightName = channelDisplayName(right, username).toLowerCase();
       return leftName.localeCompare(rightName);
     });
-  const isSearchingChannels = Boolean(channelQuery.trim());
-
   const groupedChannels = useMemo(
     () => {
-      if (isSearchingChannels) {
-        return [
-          {
-            id: "channels" as const,
-            label: "Search results",
-            channels: sortChannelsForDisplay(filteredChannels)
-          }
-        ].filter((group) => group.channels.length > 0);
-      }
       return CHANNEL_GROUPS.map((group) => ({
         ...group,
-        channels: sortChannelsForDisplay(filteredChannels.filter((channel) => {
+        channels: sortChannelsForDisplay(activeChannels.filter((channel) => {
           const shared = isSharedChannelForUser(channel, username);
           if (group.id === "shared") return shared;
           if (group.id === "direct") {
@@ -895,7 +968,24 @@ export default function App() {
         }))
       })).filter((group) => group.channels.length > 0);
     },
-    [filteredChannels, isSearchingChannels, pinnedChannelIdSet, unreadCounts, username]
+    [activeChannels, pinnedChannelIdSet, unreadCounts, username]
+  );
+
+  const paletteChannels = useMemo<PaletteChannel[]>(
+    () =>
+      [...groupedChannels.flatMap((group) => group.channels), ...archivedChannels].map((channel) => {
+        const direct = isDirectChannel(channel) || isLifecycleChannel(channel);
+        return {
+          id: channel.id,
+          name: channelDisplayName(channel, username),
+          kind: direct ? "direct" : "channel",
+          description: direct ? null : channel.description,
+          archived: Boolean(channel.archivedAt),
+          pinned: pinnedChannelIdSet.has(channel.id),
+          unread: unreadCounts[channel.id] ?? 0
+        };
+      }),
+    [archivedChannels, groupedChannels, pinnedChannelIdSet, unreadCounts, username]
   );
 
   const uploadingAttachmentCount = pendingAttachments.filter((item) => item.status === "uploading").length;
@@ -984,6 +1074,14 @@ export default function App() {
     setActiveChannelId(channelId);
     setMobileSidebarOpen(false);
     updateChannelDeepLink(channelId, options?.replace, channel, usernameRef.current);
+    if (channelId) {
+      setRecentChannelIds((current) => {
+        if (current[0] === channelId) return current;
+        const next = [channelId, ...current.filter((id) => id !== channelId)].slice(0, RECENT_CHANNELS_LIMIT);
+        writeRecentChannelIds(next);
+        return next;
+      });
+    }
   }
 
   async function loadSession() {
@@ -1623,16 +1721,20 @@ export default function App() {
   useEffect(() => {
     if (!authenticated || mustChangePassword) return;
     function handleShortcut(event: KeyboardEvent) {
-      if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "k") {
+      if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLowerCase() === "b") {
         event.preventDefault();
-        setMobileSidebarOpen(true);
-        channelSearchInputRef.current?.focus();
-        channelSearchInputRef.current?.select();
+        setLayoutPrefs((current) => {
+          const next = { ...current, sidebarCollapsed: !current.sidebarCollapsed };
+          writeLayoutPrefs(next);
+          return next;
+        });
         return;
       }
       if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        setShowConversationDialog(true);
+        setShowConversationDialog(false);
+        setShowCommandPalette((current) => !current);
+        return;
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "j") {
         event.preventDefault();
@@ -1640,6 +1742,7 @@ export default function App() {
       }
       if (event.key === "Escape") {
         setShowConversationDialog(false);
+        setShowCommandPalette(false);
       }
     }
     window.addEventListener("keydown", handleShortcut);
@@ -1703,7 +1806,7 @@ export default function App() {
     setEvents([]);
     setActiveChannelId(null);
     updateChannelDeepLink(null, true);
-    setChannelQuery("");
+    setShowCommandPalette(false);
     setConversationName("");
     setConversationDescription("");
     setConversationVisibility("PRIVATE");
@@ -1827,6 +1930,45 @@ export default function App() {
     setSelectedConversationTeams((current) => current.filter((id) => id !== teamId));
   }
 
+  function updateLayoutPrefs(patch: Partial<LayoutPrefs>) {
+    setLayoutPrefs((current) => {
+      const next = { ...current, ...patch };
+      writeLayoutPrefs(next);
+      return next;
+    });
+  }
+
+  function handleSidebarResizeStart(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const handle = event.currentTarget;
+    const shell = appShellRef.current;
+    handle.setPointerCapture(event.pointerId);
+    setResizingSidebar(true);
+    let width = layoutPrefs.sidebarCollapsed ? SIDEBAR_RAIL_WIDTH : layoutPrefs.sidebarWidth;
+
+    const handleMove = (moveEvent: PointerEvent) => {
+      width = moveEvent.clientX;
+      const visibleWidth = width < SIDEBAR_MIN_WIDTH * 0.6 ? SIDEBAR_RAIL_WIDTH : clampSidebarWidth(width);
+      shell?.style.setProperty("--sidebar-width", `${visibleWidth}px`);
+    };
+    const handleUp = () => {
+      handle.removeEventListener("pointermove", handleMove);
+      handle.removeEventListener("pointerup", handleUp);
+      handle.removeEventListener("pointercancel", handleUp);
+      shell?.style.removeProperty("--sidebar-width");
+      setResizingSidebar(false);
+      if (width < SIDEBAR_MIN_WIDTH * 0.6) {
+        updateLayoutPrefs({ sidebarCollapsed: true });
+      } else {
+        updateLayoutPrefs({ sidebarCollapsed: false, sidebarWidth: clampSidebarWidth(width) });
+      }
+    };
+    handle.addEventListener("pointermove", handleMove);
+    handle.addEventListener("pointerup", handleUp);
+    handle.addEventListener("pointercancel", handleUp);
+  }
+
   function togglePinnedChannel(channelId: string) {
     setPinnedChannelIds((current) => {
       const next = current.includes(channelId)
@@ -1924,7 +2066,6 @@ export default function App() {
       setConversationVisibility("PRIVATE");
       setAgentSearchQuery("");
       setTeamSearchQuery("");
-      setChannelQuery("");
       setShowConversationDialog(false);
     } catch (conversationError) {
       setError(
@@ -2317,7 +2458,22 @@ export default function App() {
   }
 
   return (
-    <main className="app-shell">
+    <main
+      ref={appShellRef}
+      className={[
+        "app-shell",
+        layoutPrefs.sidebarCollapsed ? "sidebar-collapsed" : "",
+        layoutPrefs.activityPanelOpen ? "" : "activity-hidden",
+        resizingSidebar ? "sidebar-resizing" : ""
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      style={
+        {
+          "--sidebar-width": `${layoutPrefs.sidebarCollapsed ? SIDEBAR_RAIL_WIDTH : layoutPrefs.sidebarWidth}px`
+        } as CSSProperties
+      }
+    >
       <aside className={`sidebar ${mobileSidebarOpen ? "sidebar-mobile-open" : ""}`}>
         <button
           type="button"
@@ -2332,23 +2488,41 @@ export default function App() {
             <strong>OrgOps</strong>
             <span>User workspace</span>
           </div>
+          <button
+            type="button"
+            className="sidebar-collapse-button"
+            aria-label={layoutPrefs.sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            title={`${layoutPrefs.sidebarCollapsed ? "Expand" : "Collapse"} sidebar (Cmd+B)`}
+            onClick={() => updateLayoutPrefs({ sidebarCollapsed: !layoutPrefs.sidebarCollapsed })}
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+              <path d="M6 3v10" stroke="currentColor" strokeWidth="1.5" />
+            </svg>
+          </button>
         </div>
 
         <section className="sidebar-section">
-          <label className="channel-search">
-            <span>
-              Search channels
-            </span>
-            <input
-              ref={channelSearchInputRef}
-              value={channelQuery}
-              onChange={(event) => setChannelQuery(event.target.value)}
-              placeholder="Cmd+Shift+K"
-            />
-          </label>
+          <button
+            type="button"
+            className="palette-trigger"
+            aria-label="Jump to channel or start a conversation"
+            title="Jump to… (Cmd+K)"
+            onClick={() => {
+              setMobileSidebarOpen(false);
+              setShowCommandPalette(true);
+            }}
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+              <path d="m10.5 10.5 3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+            <span>Jump to…</span>
+            <kbd>⌘K</kbd>
+          </button>
           <div className="channel-list">
             {groupedChannels.map((group) => {
-              const isCollapsed = !isSearchingChannels && collapsedChannelGroups[group.id];
+              const isCollapsed = collapsedChannelGroups[group.id];
               return (
                 <section className="channel-group" key={group.id}>
                   <button
@@ -2371,27 +2545,48 @@ export default function App() {
                     <div className="channel-group-items">
                       {group.channels.map((channel) => {
                         const pinned = pinnedChannelIdSet.has(channel.id);
+                        const label = channelLabel(channel, username);
+                        const name = channelDisplayName(channel, username);
+                        const unread = unreadCounts[channel.id];
                         return (
                           <div
-                            className={`channel-list-row${channel.id === activeChannelId ? " active" : ""}`}
+                            className={[
+                              "channel-list-row",
+                              channel.id === activeChannelId ? "active" : "",
+                              pinned ? "pinned" : "",
+                              unread ? "unread" : ""
+                            ]
+                              .filter(Boolean)
+                              .join(" ")}
                             key={channel.id}
                           >
                             <button
                               className="channel-select-button"
                               onClick={() => selectChannel(channel.id)}
+                              title={label}
                               type="button"
                             >
-                              <span>{channelLabel(channel, username)}</span>
-                              {unreadCounts[channel.id] ? <em>{unreadCounts[channel.id]}</em> : null}
+                              <span className="channel-rail-avatar" aria-hidden="true">
+                                {channelInitials(name)}
+                              </span>
+                              <ChannelGlyph channel={channel} pinned={pinned} />
+                              <span className="channel-name">{name}</span>
+                              {unread ? <em>{unread}</em> : null}
                             </button>
                             <button
                               aria-label={pinned ? "Unpin channel" : "Pin channel"}
-                              className={`channel-pin-button${pinned ? " pinned" : ""}`}
+                              className="channel-pin-button"
                               onClick={() => togglePinnedChannel(channel.id)}
                               title={pinned ? "Unpin channel" : "Pin channel"}
                               type="button"
                             >
-                              {pinned ? "Pinned" : "Pin"}
+                              <svg viewBox="0 0 16 16" aria-hidden="true">
+                                {pinned ? (
+                                  <path d="M3 3l10 10M10.2 1.8l4 4-1.6 1.6-.9 3.3-5.4-5.4 3.3-.9zM6.3 9.7l-3 3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                                ) : (
+                                  <path d="M10.2 1.8l4 4-1.6 1.6-.9 3.3-5.4-5.4 3.3-.9zM6.3 9.7l-3 3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                                )}
+                              </svg>
                             </button>
                           </div>
                         );
@@ -2401,7 +2596,7 @@ export default function App() {
                 </section>
               );
             })}
-            {filteredArchivedChannels.length > 0 ? (
+            {archivedChannels.length > 0 ? (
               <section className="channel-group">
                 <button
                   type="button"
@@ -2410,13 +2605,13 @@ export default function App() {
                   onClick={() => setShowArchivedChannels((current) => !current)}
                 >
                   <span>Archived</span>
-                  <em>{filteredArchivedChannels.length}</em>
+                  <em>{archivedChannels.length}</em>
                   <strong>{showArchivedChannels ? "-" : "+"}</strong>
                 </button>
 
                 {showArchivedChannels ? (
                   <div className="channel-group-items archived-channel-items">
-                    {filteredArchivedChannels.map((channel) => (
+                    {archivedChannels.map((channel) => (
                       <div
                         className={`channel-list-row archived-channel-row${channel.id === activeChannelId ? " active" : ""}`}
                         key={channel.id}
@@ -2424,9 +2619,14 @@ export default function App() {
                         <button
                           className="channel-select-button"
                           onClick={() => selectChannel(channel.id)}
+                          title={channelLabel(channel, username)}
                           type="button"
                         >
-                          <span>{channelLabel(channel, username)}</span>
+                          <span className="channel-rail-avatar" aria-hidden="true">
+                            {channelInitials(channelDisplayName(channel, username))}
+                          </span>
+                          <ChannelGlyph channel={channel} pinned={false} />
+                          <span className="channel-name">{channelDisplayName(channel, username)}</span>
                         </button>
                       </div>
                     ))}
@@ -2434,27 +2634,43 @@ export default function App() {
                 ) : null}
               </section>
             ) : null}
-            {!loading &&
-            channelQuery.trim() &&
-            filteredChannels.length === 0 &&
-            filteredArchivedChannels.length === 0 ? (
-              <p className="channel-empty">No channels match "{channelQuery.trim()}".</p>
-            ) : null}
           </div>
         </section>
 
         <section className="sidebar-section start-conversation">
-          <button className="new-conversation-button" onClick={() => setShowConversationDialog(true)}>
+          <button
+            className="new-conversation-button"
+            onClick={() => setShowConversationDialog(true)}
+            title="New conversation"
+          >
+            <i className="sidebar-rail-icon" aria-hidden="true">+</i>
             <span>New conversation</span>
-            <kbd>Cmd+K</kbd>
           </button>
         </section>
 
         <section className="sidebar-section account-actions">
-          <button className="logout-button" onClick={() => void handleLogout()}>
-            Sign out {username ? `(${username})` : ""}
+          <button
+            className="logout-button"
+            onClick={() => void handleLogout()}
+            title={`Sign out${username ? ` (${username})` : ""}`}
+          >
+            <i className="sidebar-rail-icon" aria-hidden="true">
+              {channelInitials(username || "?")}
+            </i>
+            <span>Sign out {username ? `(${username})` : ""}</span>
           </button>
         </section>
+        <div
+          className="sidebar-resize-handle"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize sidebar"
+          title="Drag to resize, double-click to reset"
+          onPointerDown={handleSidebarResizeStart}
+          onDoubleClick={() =>
+            updateLayoutPrefs({ sidebarCollapsed: false, sidebarWidth: SIDEBAR_DEFAULT_WIDTH })
+          }
+        />
       </aside>
       {mobileSidebarOpen ? (
         <button
@@ -2487,13 +2703,26 @@ export default function App() {
                 : activeChannel?.description || "Talk to the team and agents in plain language."}
             </p>
           </div>
-          {activeChannel && activeChannelManageable ? (
-            <div className="channel-actions">
+          <div className="channel-actions">
+            {activeChannel && activeChannelManageable ? (
               <button type="button" onClick={() => setShowChannelManageDialog(true)}>
                 Manage channel
               </button>
-            </div>
-          ) : null}
+            ) : null}
+            <button
+              type="button"
+              className={`activity-panel-toggle${layoutPrefs.activityPanelOpen ? " active" : ""}`}
+              aria-label={layoutPrefs.activityPanelOpen ? "Hide details panel" : "Show details panel"}
+              aria-pressed={layoutPrefs.activityPanelOpen}
+              title={layoutPrefs.activityPanelOpen ? "Hide details" : "Show details"}
+              onClick={() => updateLayoutPrefs({ activityPanelOpen: !layoutPrefs.activityPanelOpen })}
+            >
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                <path d="M10 3v10" stroke="currentColor" strokeWidth="1.5" />
+              </svg>
+            </button>
+          </div>
         </header>
 
         {error ? <div className="notice error">{error}</div> : null}
@@ -2874,6 +3103,7 @@ export default function App() {
         </section>
       </section>
 
+      {layoutPrefs.activityPanelOpen ? (
       <aside className="activity-panel">
         <section className="participants-card">
           <div className="participants-header-row">
@@ -2933,6 +3163,25 @@ export default function App() {
           </div>
         </section>
       </aside>
+      ) : null}
+
+      {showCommandPalette ? (
+        <CommandPalette
+          channels={paletteChannels}
+          recentChannelIds={recentChannelIds}
+          activeChannelId={activeChannelId}
+          onClose={() => setShowCommandPalette(false)}
+          onSelectChannel={(channelId) => {
+            setShowCommandPalette(false);
+            selectChannel(channelId);
+          }}
+          onNewConversation={(name) => {
+            setShowCommandPalette(false);
+            if (name) setConversationName(name);
+            setShowConversationDialog(true);
+          }}
+        />
+      ) : null}
 
       {showConversationDialog ? (
         <div className="dialog-backdrop" role="presentation" onMouseDown={() => setShowConversationDialog(false)}>

@@ -39,10 +39,7 @@ jobs:
         run: npm ci
 
       - name: OpsCLI tests
-        shell: bash
-        run: |
-          cd apps/opscli
-          node --test test/*.test.mjs
+        run: npm run --workspace @orgops/opscli test
 
       - name: Build self-contained OpsCLI executable
         run: npm run --workspace @orgops/opscli build:release

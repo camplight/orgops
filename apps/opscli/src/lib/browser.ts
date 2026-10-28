@@ -1,15 +1,10 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { isTruthyEnv } from "./env-flag";
 import { runChecked } from "./exec";
 
 export type ShortcutTarget = "user-ui" | "admin-ui";
-
-function isTruthyEnv(value: string | undefined) {
-  if (!value) return false;
-  const normalized = value.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
-}
 
 function desktopDir() {
   if (process.platform === "win32") {

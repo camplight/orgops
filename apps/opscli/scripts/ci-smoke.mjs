@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -121,6 +121,17 @@ function writeFixtureRuntimePackage(installDir) {
   writeFileSync(resolve(installDir, ".opscli-smoke-admin-ui-server.mjs"), adminUiServer, "utf-8");
 }
 
+function expectedServiceArtifact(component) {
+  const slug = component.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+  if (process.platform === "darwin") {
+    return resolve(tempHome, "Library", "LaunchAgents", `com.orgops.${slug}.plist`);
+  }
+  if (process.platform === "win32") {
+    return resolve(installDir, `.orgops-start-${slug}.ps1`);
+  }
+  return resolve(tempHome, ".config", "systemd", "user", `orgops-${slug}.service`);
+}
+
 const binaryPath = findBinaryPath();
 const tempHome = mkdtempSync(join(tmpdir(), "orgops-home-smoke-"));
 const installDir = mkdtempSync(join(tmpdir(), "orgops-install-smoke-"));
@@ -128,6 +139,8 @@ const smokeEnv = {
   ORGOPS_OPSCLI_INSTALL_SMOKE_MOCK: "1",
   ORGOPS_OPSCLI_NO_BROWSER: "1",
   ORGOPS_OPSCLI_SKIP_SERVICE_RUN: "1",
+  ORGOPS_OPSCLI_SERVICE_DRY_RUN: "1",
+  ORGOPS_OPSCLI_USE_SYSTEM_TOOLCHAIN: "1",
   ORGOPS_LLM_STUB: "1",
   OPENAI_API_KEY: "stub-key",
   ORGOPS_OPSCLI_MODEL: "openai:gpt-5.2",
@@ -139,13 +152,20 @@ const smokeEnv = {
 try {
   run(binaryPath, ["--help"]);
   run(binaryPath, ["chat", "--help"], smokeEnv);
-  run(binaryPath, ["doctor"], smokeEnv);
+  run(binaryPath, ["--json", "doctor"], smokeEnv);
 
   run(
     binaryPath,
-    ["install", "--dir", installDir, "--create-shortcut"],
+    ["--yes", "--json", "install", "--dir", installDir, "--create-shortcut", "--no-git"],
     smokeEnv
   );
+
+  const generatedEnvPath = resolve(installDir, ".env");
+  assertPath(generatedEnvPath, "generated install env");
+  const generatedEnv = readFileSync(generatedEnvPath, "utf-8");
+  if (!/ORGOPS_MASTER_KEY=/.test(generatedEnv)) fail("generated .env is missing ORGOPS_MASTER_KEY");
+  if (!/ORGOPS_RUNNER_TOKEN=org_rt_/.test(generatedEnv)) fail("generated .env is missing a runner token");
+  if (/ORGOPS_GOOGLE_REDIRECT_URI=/.test(generatedEnv)) fail("generated .env should not copy .env.example placeholders");
 
   assertPath(resolve(installDir, ".opscli-install-smoke.json"), "mock install metadata file");
   assertPath(resolve(installDir, ".opscli-install-smoke-build.txt"), "mock build marker file");
@@ -167,7 +187,7 @@ try {
   writeFileSync(resolve(installDir, ".orgops-data", "seed.txt"), "seed\n", "utf-8");
   writeFileSync(resolve(installDir, "files", "seed.txt"), "seed\n", "utf-8");
 
-  run(binaryPath, ["upgrade", "--dir", installDir, "--no-restart"], smokeEnv);
+  run(binaryPath, ["upgrade", "--dir", installDir, "--no-restart", "--no-git"], smokeEnv);
 
   const backupsDir = resolve(installDir, ".opscli-backups");
   assertPath(backupsDir, "upgrade backups directory");
@@ -175,6 +195,48 @@ try {
   if (backupArtifacts.length === 0) {
     fail("Missing expected upgrade backup artifact under .opscli-backups");
   }
+
+  run(binaryPath, ["component", "remove", "--dir", installDir, "--components", "admin-ui"], smokeEnv);
+  run(binaryPath, ["component", "add", "--dir", installDir, "--components", "admin-ui", "--no-git"], smokeEnv);
+
+  writeFileSync(
+    resolve(installDir, ".opscli-toolchain.json"),
+    `${JSON.stringify({
+      mode: "managed",
+      nodeVersion: "22.20.0",
+      rootDir: resolve(tempHome, "toolchains", "node-v22.20.0"),
+      nodePath: resolve(tempHome, "toolchains", "node-v22.20.0", "bin", "node"),
+      npmPath: resolve(tempHome, "toolchains", "node-v22.20.0", "bin", "npm"),
+    }, null, 2)}\n`,
+    "utf-8"
+  );
+  run(
+    binaryPath,
+    ["--json", "service", "register", "--dir", installDir, "--components", "api,runner,admin-ui,user-ui"],
+    smokeEnv
+  );
+  for (const component of ["api", "runner", "admin-ui", "user-ui"]) {
+    const artifact = expectedServiceArtifact(component);
+    assertPath(artifact, `service artifact for ${component}`);
+    const body = await readFile(artifact, "utf-8");
+    if (!body.includes("node-v22.20.0") && !body.includes("PATH")) {
+      fail(`Expected managed PATH in ${artifact}`);
+    }
+    if (process.platform === "darwin" && !body.includes("ProcessType")) {
+      fail(`Expected ProcessType Background in ${artifact}`);
+    }
+    if (process.platform === "win32" && !body.includes("WindowStyle Hidden")) {
+      fail(`Expected hidden-window start in ${artifact}`);
+    }
+  }
+  run(binaryPath, ["service", "status", "--dir", installDir, "--components", "api,runner,admin-ui,user-ui"], smokeEnv);
+  run(binaryPath, ["service", "restart", "--dir", installDir, "--components", "runner"], smokeEnv);
+  run(
+    binaryPath,
+    ["service", "unregister", "--dir", installDir, "--components", "api,runner,admin-ui,user-ui"],
+    smokeEnv
+  );
+  rmSync(resolve(installDir, ".opscli-toolchain.json"), { force: true });
 
   writeFixtureRuntimePackage(installDir);
 
@@ -184,40 +246,9 @@ try {
     assertPath(resolve(installDir, ".orgops-runtime", `${component}.json`), `runtime pid state for ${component}`);
   }
   run(binaryPath, ["status", "--dir", installDir], smokeEnv);
+  run(binaryPath, ["restart", "--dir", installDir, "--no-open"], smokeEnv);
   run(binaryPath, ["stop", "--dir", installDir], smokeEnv);
   run(binaryPath, ["status", "--dir", installDir], smokeEnv);
-
-  if (process.platform === "win32") {
-    run(
-      binaryPath,
-      ["service", "register", "--dir", installDir, "--components", "api,runner,admin-ui,user-ui"],
-      smokeEnv
-    );
-    for (const slug of ["api", "runner", "admin-ui", "user-ui"]) {
-      const scriptPath = resolve(installDir, `.orgops-start-${slug}.ps1`);
-      assertPath(scriptPath, `windows launcher script for ${slug}`);
-      const scriptBody = await readFile(scriptPath, "utf-8");
-      if (!scriptBody.includes("WindowStyle Hidden")) {
-        fail(`Expected hidden-window start in ${scriptPath}`);
-      }
-      const expectedCommand =
-        slug === "admin-ui"
-          ? "start:admin-ui:preview:env"
-          : slug === "user-ui"
-            ? "start:user-ui:preview:env"
-            : slug === "runner"
-              ? "start:runner:env"
-              : "start:api:env";
-      if (!scriptBody.includes(expectedCommand)) {
-        fail(`Expected ${expectedCommand} command in ${scriptPath}`);
-      }
-    }
-    run(
-      binaryPath,
-      ["service", "unregister", "--dir", installDir, "--components", "api,runner,admin-ui,user-ui"],
-      smokeEnv
-    );
-  }
 
   // Smoke the admin command surface (browser launch disabled by env).
   run(binaryPath, ["admin", "open", "--dir", installDir], smokeEnv);
@@ -227,6 +258,8 @@ try {
 
   // Smoke chat one-shot path without external model dependency.
   run(binaryPath, ["chat", "--goal", "Acknowledge smoke test success in one sentence."], smokeEnv);
+  run(binaryPath, ["uninstall", "--dir", installDir], smokeEnv);
+  assertPath(resolve(installDir, ".env"), "preserved .env after uninstall");
 
   console.log("[opscli-smoke] Completed successfully.");
 } finally {

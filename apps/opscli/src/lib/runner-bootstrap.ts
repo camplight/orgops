@@ -47,8 +47,9 @@ async function fetchInviteConfig(inviteUrl: string): Promise<RunnerBootstrapConf
 }
 
 export async function resolveRunnerBootstrap(
-  options: RunnerBootstrapOptions
+  options: RunnerBootstrapOptions & { installDir?: string }
 ): Promise<RunnerBootstrapConfig> {
+  const existing = options.installDir ? readRunnerEnvConfig(options.installDir) : null;
   if (options.runnerInviteUrl?.trim()) {
     const fromInvite = await fetchInviteConfig(options.runnerInviteUrl);
     return {
@@ -58,9 +59,9 @@ export async function resolveRunnerBootstrap(
     };
   }
   return {
-    apiUrl: normalizeUrl(options.runnerApiUrl) || DEFAULT_API_URL,
-    runnerToken: (options.runnerToken ?? "").trim() || DEFAULT_RUNNER_TOKEN,
-    runnerName: (options.runnerName ?? "").trim() || undefined,
+    apiUrl: normalizeUrl(options.runnerApiUrl) || existing?.apiUrl || DEFAULT_API_URL,
+    runnerToken: (options.runnerToken ?? "").trim() || existing?.runnerToken || DEFAULT_RUNNER_TOKEN,
+    runnerName: (options.runnerName ?? "").trim() || existing?.runnerName || undefined,
   };
 }
 

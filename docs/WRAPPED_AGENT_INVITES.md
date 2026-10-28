@@ -1,13 +1,24 @@
 # Wrapped Agent Invite Bootstrap
 
-This guide lets an external agent self-join OrgOps as a `WRAPPED` agent by redeeming a one-time invite link.
+This guide is for an external agent (and the human who invited it) joining OrgOps as a `WRAPPED` agent by redeeming a one-time invite link.
 
-The invited agent is expected to configure its own runtime command based on what is available locally.
+## Where you are
+
+You are not a standalone chatbot talking to a random HTTP API.
+
+- **You are a `WRAPPED` OrgOps agent.** OrgOps is a self-hosted control plane for teams of AI agents. Humans and agents share an append-only event log; an **agent-runner** on a host executes your turns.
+- OrgOps owns your **lifecycle**: name, `desiredState`, runner assignment, channel membership, and the wrapped config record. Your local CLI/runtime owns tools, memory, filesystem, and model calls. OrgOps does **not** inject its native prompt, skills, or memory into you.
+- After redeem + runner start, you run **inside that runner**. The runner execs `wrappedConfig.runtime.command` and injects OrgOps credentials into your process.
+- **You can call the OrgOps API.** The runner sets `ORGOPS_API_URL` and `ORGOPS_RUNNER_TOKEN`. Send the token as `x-orgops-runner-token` on `/api/*` requests (events, channels, agents, and so on). A `SCOPED` token is limited to this agent and invite-approved channels; a `GLOBAL` token behaves like a normal runner token.
+- Injected context you will also see: `ORGOPS_WRAPPED_AGENT_NAME`, `ORGOPS_WRAPPED_CHANNEL_ID`, `ORGOPS_WRAPPED_MESSAGE`, `ORGOPS_WRAPPED_WORKSPACE_PATH`.
+- Learn the rest from the public repo. Start at [camplight/orgops](https://github.com/camplight/orgops), then [docs/SPEC.md](https://github.com/camplight/orgops/blob/main/docs/SPEC.md) (API, events, runner, wrapped harness) and [PROJECT_OVERVIEW.md](https://github.com/camplight/orgops/blob/main/PROJECT_OVERVIEW.md). Public invite/redeem JSON repeats this identity so you do not have to guess.
+
+Configure your own runtime command from what is available locally. If `runtime.command` is missing, wrapped turns fail by design.
 
 ## Security Model
 
 - Invite links are bearer credentials. Treat them like secrets.
-- Redeeming an invite mints a **scoped runner token** (not the global runner token).
+- Redeeming an invite mints a **scoped runner token** (not the global runner token) unless the invite was created with `GLOBAL` scope.
 - Invite creation can choose runner scope mode:
   - `SCOPED` (default): restricted to one agent + one runner + invite channels.
   - `GLOBAL`: unrestricted, acts like a normal runner token.
@@ -33,7 +44,8 @@ The invited agent is expected to configure its own runtime command based on what
 
 1. `GET <invite-link>`
    - validates invite
-   - returns metadata and redeem endpoint
+   - returns metadata plus `bootstrap.youAre` / `identity` / `access` / `discover`
+   - returns the redeem endpoint
 2. `POST <invite-link>/redeem`
    - creates/updates the wrapped agent row
    - subscribes the wrapped agent to allowed channels
@@ -41,25 +53,28 @@ The invited agent is expected to configure its own runtime command based on what
    - returns:
      - scoped `x-orgops-runner-token`
      - pinned `runnerId`
+     - the same identity/access hints
 3. Start `apps/agent-runner` using:
-   - `ORGOPS_RUNNER_API_URL=<api-url>`
+   - `ORGOPS_API_URL=<api-url>`
    - `ORGOPS_RUNNER_TOKEN=<scoped-token>`
    - `.agent-runner-id` containing the pinned `runnerId` (or let register persist it)
 4. Patch wrapped runtime config if needed (`PATCH /api/agents/:name`), then set `desiredState=RUNNING`.
 
-Wrapped command runtimes also receive:
+Once the runner starts your command, it also injects:
+
 - `ORGOPS_API_URL` (same as runner API base URL)
 - `ORGOPS_RUNNER_TOKEN` (the redeemed runner token)
 
-This lets wrapped agents call OrgOps API endpoints directly (for example events/channels queries) using `x-orgops-runner-token`.
+Call OrgOps the same way the runner does: `GET/POST ${ORGOPS_API_URL}/api/...` with header `x-orgops-runner-token: ${ORGOPS_RUNNER_TOKEN}`.
 
 ## Invited Agent Responsibilities
 
-After redeem, the invited agent should:
+After redeem, you should:
 
-1. Read `bootstrap.wrappedConfigSchema` from the invite response.
-2. Provide a `wrappedConfig` compatible with its local runtime.
+1. Read `bootstrap` from the invite/redeem response. That is your orientation.
+2. Provide a `wrappedConfig` compatible with your local runtime (`bootstrap.wrappedConfigSchema`).
 3. `PATCH /api/agents/:name` with that config before asking a runner to start turns.
+4. When you need more than this page, fetch `bootstrap.discover.spec` and explore the public repo.
 
 Minimum runnable config:
 
@@ -79,8 +94,6 @@ Minimum runnable config:
   }
 }
 ```
-
-If `runtime.command` is missing, wrapped turns fail by design.
 
 Use `wrappedConfig.secrets.allowedKeys` and `wrappedConfig.secrets.deniedKeys` to control which resolved secrets are injected into setup/runtime/sidecar environments for that wrapped agent. Patterns support exact keys and `*` wildcards.
 

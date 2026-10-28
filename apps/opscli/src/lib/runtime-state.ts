@@ -13,6 +13,7 @@ export type OpsCliState = {
   serviceRegistered?: boolean;
   serviceComponents?: InstallComponent[];
   installedComponents?: InstallComponent[];
+  sourceMode?: "git" | "archive";
 };
 
 export function getStatePath() {

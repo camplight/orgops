@@ -25,6 +25,60 @@ type AgentInvitesDeps = {
 
 type RunnerScopeMode = "SCOPED" | "GLOBAL";
 
+const PUBLIC_REPO_URL = "https://github.com/camplight/orgops";
+
+function wrappedInviteBootstrap(agentName: string) {
+  return {
+    youAre:
+      "You are a WRAPPED OrgOps agent. OrgOps is a self-hosted control plane; an agent-runner on a host owns your lifecycle and will exec your local runtime. You are not a native CLASSIC/RLM agent. You can call the OrgOps HTTP API with the injected runner token.",
+    identity: {
+      role: "WRAPPED" as const,
+      agentName,
+      host: "orgops-agent-runner",
+    },
+    access: {
+      apiHeader: "x-orgops-runner-token",
+      env: [
+        "ORGOPS_API_URL",
+        "ORGOPS_RUNNER_TOKEN",
+        "ORGOPS_WRAPPED_AGENT_NAME",
+        "ORGOPS_WRAPPED_CHANNEL_ID",
+        "ORGOPS_WRAPPED_MESSAGE",
+        "ORGOPS_WRAPPED_WORKSPACE_PATH",
+      ],
+      note: "After the runner starts you, ORGOPS_API_URL and ORGOPS_RUNNER_TOKEN are in your process env. Send the token as x-orgops-runner-token. A SCOPED token is limited to this agent and invite-approved channels.",
+    },
+    discover: {
+      repo: PUBLIC_REPO_URL,
+      spec: `${PUBLIC_REPO_URL}/blob/main/docs/SPEC.md`,
+      inviteGuide: `${PUBLIC_REPO_URL}/blob/main/docs/WRAPPED_AGENT_INVITES.md`,
+      overview: `${PUBLIC_REPO_URL}/blob/main/PROJECT_OVERVIEW.md`,
+    },
+    wrappedConfigRequiredBeforeRunning: true,
+    wrappedConfigPatchEndpoint: `/api/agents/${encodeURIComponent(agentName)}`,
+    wrappedConfigSchema: {
+      required: ["runtime.command"],
+      optional: [
+        "kind",
+        "harness",
+        "runtime.parse",
+        "runtime.timeoutMs",
+        "setup.*",
+        "source.*",
+        "sidecars[]",
+        "secrets.allowedKeys",
+        "secrets.deniedKeys",
+        "session.scope",
+      ],
+    },
+    memoryHint:
+      "For CLIs that support sessions, keep a per-channel session map keyed by ORGOPS_WRAPPED_CHANNEL_ID.",
+    docs: {
+      wrappedInviteGuide: `${PUBLIC_REPO_URL}/blob/main/docs/WRAPPED_AGENT_INVITES.md`,
+    },
+  };
+}
+
 function isHumanUser(user: RequestUser | undefined): user is RequestUser & {
   id: string;
   username: string;
@@ -185,6 +239,7 @@ function toInviteApi(
 ) {
   const base = inviteBaseUrl.replace(/\/+$/, "");
   const channelIds = parseStringArraySafe(row.channel_ids_json);
+  const allowChannelExpansion = inviteAllowsChannelExpansion(row);
   return {
     id: row.id,
     name: row.name,
@@ -193,6 +248,7 @@ function toInviteApi(
     runnerScopeMode: normalizeRunnerScopeMode(row.runner_scope_mode),
     tokenPrefix: row.token_prefix,
     channelIds,
+    allowChannelExpansion,
     maxUses: row.max_uses,
     useCount: row.use_count,
     createdByType: row.created_by_type === "AGENT" ? "AGENT" : "HUMAN",
@@ -206,6 +262,11 @@ function toInviteApi(
       ? `${base}/api/agent-invites/public/${encodeURIComponent(fullToken)}`
       : undefined,
   };
+}
+
+function inviteAllowsChannelExpansion(row: AgentInviteRow): boolean {
+  if (normalizeRunnerScopeMode(row.runner_scope_mode) !== "SCOPED") return false;
+  return Boolean(row.allow_channel_expansion) || parseStringArraySafe(row.channel_ids_json).length === 0;
 }
 
 export function registerAgentInviteRoutes(app: Hono<any>, deps: AgentInvitesDeps) {
@@ -242,6 +303,9 @@ export function registerAgentInviteRoutes(app: Hono<any>, deps: AgentInvitesDeps
     const visibility = normalizeAgentVisibility(body.visibility);
     const runnerScopeMode = normalizeRunnerScopeMode(body.runnerScopeMode);
     const channelIds = [...new Set(parseChannelIds(body.channelIds))];
+    const allowChannelExpansion =
+      runnerScopeMode === "SCOPED" &&
+      (channelIds.length === 0 || Boolean(body.allowChannelExpansion));
     const maxUsesRaw = Number(body.maxUses ?? 1);
     const maxUses =
       Number.isFinite(maxUsesRaw) && maxUsesRaw > 0 ? Math.floor(maxUsesRaw) : 1;
@@ -335,7 +399,7 @@ export function registerAgentInviteRoutes(app: Hono<any>, deps: AgentInvitesDeps
         token_hash: generated.hash,
         token_prefix: generated.prefix,
         channel_ids_json: JSON.stringify(channelIds),
-        allow_channel_expansion: 0,
+        allow_channel_expansion: allowChannelExpansion ? 1 : 0,
         runner_scope_mode: runnerScopeMode,
         wrapped_config_json: JSON.stringify(wrappedConfigParsed.value),
         max_uses: maxUses,
@@ -385,6 +449,25 @@ export function registerAgentInviteRoutes(app: Hono<any>, deps: AgentInvitesDeps
       .where(eq(schema.agentInvites.id, id))
       .get() as AgentInviteRow | undefined;
     return jsonResponse(c, toInviteApi(updated ?? row, inviteBaseUrl));
+  });
+
+  app.delete("/api/agent-invites/:id", (c) => {
+    const user = c.get("user") as RequestUser | undefined;
+    if (!isHumanUser(user) && !isRunnerUser(user)) {
+      return jsonResponse(c, { error: "Authentication required" }, 403);
+    }
+    const id = c.req.param("id");
+    const row = orm
+      .select()
+      .from(schema.agentInvites)
+      .where(eq(schema.agentInvites.id, id))
+      .get() as AgentInviteRow | undefined;
+    if (!row) return jsonResponse(c, { error: "Invite not found" }, 404);
+    if (!canManageInvite(user, row, access)) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
+    orm.delete(schema.agentInvites).where(eq(schema.agentInvites.id, id)).run();
+    return jsonResponse(c, { ok: true, deletedId: id });
   });
 
   app.post("/api/agent-invites/:id/reissue", (c) => {
@@ -490,6 +573,65 @@ export function registerAgentInviteRoutes(app: Hono<any>, deps: AgentInvitesDeps
     });
   });
 
+  app.post("/api/agent-invites/:id/enable-channel-expansion", (c) => {
+    const user = c.get("user") as RequestUser | undefined;
+    if (!isHumanUser(user) && !isRunnerUser(user)) {
+      return jsonResponse(c, { error: "Authentication required" }, 403);
+    }
+    const inviteBaseUrl = resolveInviteBaseUrl(c, inviteBaseUrlFallback);
+    const id = c.req.param("id");
+    const row = orm
+      .select()
+      .from(schema.agentInvites)
+      .where(eq(schema.agentInvites.id, id))
+      .get() as AgentInviteRow | undefined;
+    if (!row) return jsonResponse(c, { error: "Invite not found" }, 404);
+    if (!canManageInvite(user, row, access)) {
+      return jsonResponse(c, { error: "Forbidden" }, 403);
+    }
+    if (normalizeRunnerScopeMode(row.runner_scope_mode) !== "SCOPED") {
+      return jsonResponse(c, { error: "Channel expansion applies only to scoped invites" }, 400);
+    }
+    const scopedRunnerTokens = orm
+      .select({ id: schema.runnerTokens.id })
+      .from(schema.runnerTokens)
+      .where(
+        and(
+          eq(schema.runnerTokens.invite_id, id),
+          eq(schema.runnerTokens.runner_scope_mode, "SCOPED"),
+          isNull(schema.runnerTokens.revoked_at),
+        ),
+      )
+      .all() as Array<{ id: string }>;
+    orm
+      .update(schema.agentInvites)
+      .set({ allow_channel_expansion: 1 })
+      .where(eq(schema.agentInvites.id, id))
+      .run();
+    orm
+      .update(schema.runnerTokens)
+      .set({ allow_channel_expansion: 1 })
+      .where(
+        and(
+          eq(schema.runnerTokens.invite_id, id),
+          eq(schema.runnerTokens.runner_scope_mode, "SCOPED"),
+          isNull(schema.runnerTokens.revoked_at),
+        ),
+      )
+      .run();
+    const updated = orm
+      .select()
+      .from(schema.agentInvites)
+      .where(eq(schema.agentInvites.id, id))
+      .get() as AgentInviteRow | undefined;
+    if (!updated) return jsonResponse(c, { error: "Failed to enable channel expansion" }, 500);
+    return jsonResponse(c, {
+      ok: true,
+      invite: toInviteApi(updated, inviteBaseUrl),
+      updatedScopedRunnerTokenCount: scopedRunnerTokens.length,
+    });
+  });
+
   app.get("/api/agent-invites/public/:token", (c) => {
     const token = c.req.param("token");
     const invite = findActiveInviteByToken(orm, token);
@@ -502,33 +644,10 @@ export function registerAgentInviteRoutes(app: Hono<any>, deps: AgentInvitesDeps
         visibility: normalizeAgentVisibility(invite.agent_visibility),
         runnerScopeMode: normalizeRunnerScopeMode(invite.runner_scope_mode),
         channelIds: parseStringArraySafe(invite.channel_ids_json),
+        allowChannelExpansion: inviteAllowsChannelExpansion(invite),
         expiresAt: invite.expires_at,
       },
-      bootstrap: {
-        wrappedConfigRequiredBeforeRunning: true,
-        wrappedConfigPatchEndpoint: `/api/agents/${encodeURIComponent(invite.agent_name)}`,
-        wrappedConfigSchema: {
-          required: ["runtime.command"],
-          optional: [
-            "kind",
-            "harness",
-            "runtime.parse",
-            "runtime.timeoutMs",
-            "setup.*",
-            "source.*",
-            "sidecars[]",
-            "secrets.allowedKeys",
-            "secrets.deniedKeys",
-            "session.scope",
-          ],
-        },
-        memoryHint:
-          "For CLIs that support sessions, keep a per-channel session map keyed by ORGOPS_WRAPPED_CHANNEL_ID.",
-        docs: {
-          wrappedInviteGuide:
-            "https://github.com/camplight/orgops/blob/main/docs/WRAPPED_AGENT_INVITES.md",
-        },
-      },
+      bootstrap: wrappedInviteBootstrap(invite.agent_name),
       redeemEndpoint: `/api/agent-invites/public/${encodeURIComponent(token)}/redeem`,
     });
   });
@@ -542,6 +661,7 @@ export function registerAgentInviteRoutes(app: Hono<any>, deps: AgentInvitesDeps
     const now = Date.now();
     const channelIds = parseStringArraySafe(invite.channel_ids_json);
     const runnerScopeMode = normalizeRunnerScopeMode(invite.runner_scope_mode);
+    const allowChannelExpansion = inviteAllowsChannelExpansion(invite);
     const lifecycleName = `agent.lifecycle.${invite.agent_name}`;
     let lifecycleChannelId = "";
     const existingLifecycle = orm
@@ -585,7 +705,8 @@ export function registerAgentInviteRoutes(app: Hono<any>, deps: AgentInvitesDeps
         allowed_runner_id: runnerScopeMode === "SCOPED" ? runnerId : null,
         allowed_channel_ids_json:
           runnerScopeMode === "SCOPED" ? JSON.stringify(allowedChannelIds) : "[]",
-        allow_channel_expansion: 0,
+        allow_channel_expansion:
+          runnerScopeMode === "SCOPED" && allowChannelExpansion ? 1 : 0,
         runner_scope_mode: runnerScopeMode,
         invite_id: invite.id,
         created_by_human_id: invite.created_by_human_id,
@@ -710,11 +831,14 @@ export function registerAgentInviteRoutes(app: Hono<any>, deps: AgentInvitesDeps
         agentName: invite.agent_name,
         visibility: normalizeAgentVisibility(invite.agent_visibility),
         runnerScopeMode,
+        allowChannelExpansion,
       },
       runner: {
         token: generatedRunnerToken.token,
         runnerId,
         scopeMode: runnerScopeMode,
+        allowChannelExpansion:
+          runnerScopeMode === "SCOPED" && allowChannelExpansion,
       },
       channels,
       agent: {
@@ -729,30 +853,11 @@ export function registerAgentInviteRoutes(app: Hono<any>, deps: AgentInvitesDeps
         heartbeat: `/api/runners/${encodeURIComponent(runnerId)}/heartbeat`,
         patchAgent: `/api/agents/${encodeURIComponent(invite.agent_name)}`,
       },
-      bootstrap: {
-        wrappedConfigRequiredBeforeRunning: true,
-        wrappedConfigPatchEndpoint: `/api/agents/${encodeURIComponent(invite.agent_name)}`,
-        wrappedConfigSchema: {
-          required: ["runtime.command"],
-          optional: [
-            "kind",
-            "harness",
-            "runtime.parse",
-            "runtime.timeoutMs",
-            "setup.*",
-            "source.*",
-            "sidecars[]",
-            "secrets.allowedKeys",
-            "secrets.deniedKeys",
-            "session.scope",
-          ],
-        },
-        memoryHint:
-          "For CLIs that support sessions, keep a per-channel session map keyed by ORGOPS_WRAPPED_CHANNEL_ID.",
-      },
+      bootstrap: wrappedInviteBootstrap(invite.agent_name),
       docs: {
-        setupGuideUrl:
-          "https://github.com/camplight/orgops/blob/main/docs/WRAPPED_AGENT_INVITES.md",
+        setupGuideUrl: `${PUBLIC_REPO_URL}/blob/main/docs/WRAPPED_AGENT_INVITES.md`,
+        specUrl: `${PUBLIC_REPO_URL}/blob/main/docs/SPEC.md`,
+        repoUrl: PUBLIC_REPO_URL,
       },
     });
   });
