@@ -12,6 +12,7 @@ it('reads oversized retained history within a 256 MiB heap without dropping rece
    timeout:45_000,maxBuffer:128*1024,env:{...process.env,ORGOPS_FEDERATION_SYNC_INTERVAL_MS:'0'},
   });
   expect(stdout).toContain('PASS: 280 MiB history');
+  console.log(stdout.trim());
  } finally {rmSync(root,{recursive:true,force:true});}
 },60_000);
 

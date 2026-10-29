@@ -7,6 +7,8 @@ function getPayloadTargetAgentName(payload: unknown): string {
 }
 
 export function shouldHandleEventForAgent(agent: Agent, event: Event): boolean {
+  // Missing payload may omit targeting or constraints; never act on partial input.
+  if (event.payloadTruncated) return false;
   if (event.type?.startsWith("agent.control.")) return false;
   // Turn lifecycle events are runner bookkeeping, not actionable input.
   if (event.type?.startsWith("agent.turn.")) return false;

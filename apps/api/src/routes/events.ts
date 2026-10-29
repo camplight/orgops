@@ -39,7 +39,7 @@ const MAX_EVENT_PAGE_PAYLOAD_BYTES = 1024 * 1024;
 const eventListColumns = {
   ...getTableColumns(schema.events),
   payload_json: sql<string>`''`,
-  payload_bytes: sql<number>`length(CAST(${schema.events.payload_json} AS BLOB))`,
+  payload_bytes: sql<number>`octet_length(${schema.events.payload_json})`,
   last_error: sql<string | null>`substr(${schema.events.last_error}, 1, 2048)`,
 };
 
@@ -257,11 +257,11 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     return null;
   }
 
-  function hydrateEventRows(rows: any[]): any[] {
+  function hydrateEventRows(rows: any[], payloadLimit = MAX_EVENT_PAYLOAD_BYTES): any[] {
     let remaining = MAX_EVENT_PAGE_PAYLOAD_BYTES;
     const ids: string[] = [];
     for (const row of rows) {
-      if (row.payload_bytes <= MAX_EVENT_PAYLOAD_BYTES && row.payload_bytes <= remaining) {
+      if (row.payload_bytes <= payloadLimit && row.payload_bytes <= remaining) {
         ids.push(row.id);
         remaining -= row.payload_bytes;
       }
@@ -269,7 +269,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     const payloads = new Map<string, string>(ids.length ? orm
       .select({ id: schema.events.id, payload: schema.events.payload_json })
       .from(schema.events)
-      .where(and(inArray(schema.events.id, ids), sql`length(CAST(${schema.events.payload_json} AS BLOB)) <= ${MAX_EVENT_PAYLOAD_BYTES}`))
+      .where(and(inArray(schema.events.id, ids), sql`octet_length(${schema.events.payload_json}) <= ${payloadLimit}`))
       .all().map((row) => [row.id, row.payload] as const) : []);
     remaining = MAX_EVENT_PAGE_PAYLOAD_BYTES;
     return rows.map((row) => {
@@ -482,12 +482,28 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
               ? desc(schema.events.created_at)
               : asc(schema.events.created_at),
           );
-        const joinedRows = (
+        let joinedRows = (
           rowCap === null ? joinedQuery : joinedQuery.limit(rowCap)
         ).all() as Array<{
           event: any;
           receiptStatus: string;
         }>;
+
+        if (!options.includeAll) {
+          // Only acknowledge the prefix whose complete inputs fit this page.
+          // Oversized individual records remain explicit stubs and cannot trigger work.
+          let remaining = MAX_EVENT_PAGE_PAYLOAD_BYTES;
+          let count = 0;
+          for (const row of joinedRows) {
+            const bytes = row.event.payload_bytes;
+            if (bytes <= MAX_EVENT_PAGE_PAYLOAD_BYTES) {
+              if (bytes > remaining) break;
+              remaining -= bytes;
+            }
+            count += 1;
+          }
+          joinedRows = joinedRows.slice(0, count);
+        }
 
         if (options.markRunnerDelivered && !scheduledOnly) {
           const pendingDeliveredIds = joinedRows
@@ -1238,7 +1254,8 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       includeAll: false,
       markRunnerDelivered: true,
     });
-    return jsonResponse(c, hydrateEventRows(rows).map(eventRowToApi));
+    const pollingRunner = user?.username === "runner" && Boolean(query.agentName);
+    return jsonResponse(c, hydrateEventRows(rows, pollingRunner ? MAX_EVENT_PAGE_PAYLOAD_BYTES : MAX_EVENT_PAYLOAD_BYTES).map(eventRowToApi));
   });
 
   app.delete("/api/events", (c) => {
