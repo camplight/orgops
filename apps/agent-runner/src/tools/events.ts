@@ -1,6 +1,19 @@
 import { z } from "zod";
 import { getReservedEventTypeError } from "../event-type-guard";
+import { compactListedEvent } from "../prompt-event-compact";
 import type { ExecuteContext, ToolDef } from "./types";
+
+const EVENT_SEARCH_DEFAULT_LIMIT = 50;
+const EVENT_SEARCH_BOOKKEEPING_PREFIXES = [
+  "tool.",
+  "telemetry.",
+  "audit.",
+  "process.",
+  "wrapper.",
+  "agent.turn.",
+  "agent.control.",
+  "voice.",
+];
 
 const scheduleOptionsSchema = z.object({
   deliverAt: z.number().int().optional(),
@@ -32,6 +45,7 @@ const searchSchema = z.object({
   sourcePrefix: z.string().min(1).optional(),
   status: z.string().min(1).optional(),
   after: z.number().int().min(0).optional(),
+  before: z.number().int().min(0).optional(),
   limit: z.number().int().min(1).max(500).optional(),
   order: z.enum(["asc", "desc"]).optional(),
   scheduled: z.boolean().optional(),
@@ -247,7 +261,7 @@ export const eventsToolDefs: ToolDef[] = [
   ],
   [
     "events_search",
-    "Search events across all visible channels with optional filters (type/source/status/time/order).",
+    "Search events across visible channels with optional filters (type/source/status/after/before/order). Defaults to 50 events, excludes bookkeeping types (tool/telemetry/audit/process/wrapper/turn), and returns compacted payloads. Pass type or typePrefix to include a bookkeeping family. `all` no longer uncaps the result set; page with after/before/limit instead.",
     searchSchema,
   ],
   [
@@ -576,6 +590,19 @@ async function waitForEventDeliveryState(
   }
 }
 
+function requestsBookkeepingEvents(parsed: { type?: string; typePrefix?: string }) {
+  const requested = [parsed.type, parsed.typePrefix]
+    .map((value) => value?.trim())
+    .filter((value): value is string => Boolean(value));
+  if (requested.length === 0) return false;
+  return requested.some((value) =>
+    EVENT_SEARCH_BOOKKEEPING_PREFIXES.some((prefix) => {
+      const family = prefix.slice(0, -1);
+      return value === prefix || value === family || value.startsWith(prefix);
+    }),
+  );
+}
+
 export async function execute(
   ctx: ExecuteContext,
   tool: string,
@@ -622,13 +649,19 @@ export async function execute(
     if (parsed.sourcePrefix) query.set("sourcePrefix", parsed.sourcePrefix);
     if (parsed.status) query.set("status", parsed.status);
     if (parsed.after !== undefined) query.set("after", String(parsed.after));
-    if (parsed.limit !== undefined) query.set("limit", String(parsed.limit));
+    if (parsed.before !== undefined) query.set("before", String(parsed.before));
+    query.set("limit", String(parsed.limit ?? EVENT_SEARCH_DEFAULT_LIMIT));
     if (parsed.order) query.set("order", parsed.order);
     if (parsed.scheduled !== undefined) query.set("scheduled", parsed.scheduled ? "1" : "0");
-    if (parsed.all !== undefined) query.set("all", parsed.all ? "1" : "0");
+    if (!requestsBookkeepingEvents(parsed)) {
+      for (const prefix of EVENT_SEARCH_BOOKKEEPING_PREFIXES) {
+        query.append("excludeTypePrefix", prefix);
+      }
+    }
     const response = await ctx.apiFetch(`/api/events?${query.toString()}`);
     const events = (await response.json()) as unknown[];
-    return { filters: parsed, events };
+    const compacted = Array.isArray(events) ? events.map(compactListedEvent) : [];
+    return { filters: parsed, events: compacted };
   }
 
   if (tool === "events_scheduled_list") {

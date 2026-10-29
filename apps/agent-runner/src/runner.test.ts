@@ -45,6 +45,38 @@ describe("agent runner", () => {
     expect(Object.keys(tools)).toContain("agents_update");
   });
 
+  it("caps persisted tool output so search results cannot recurse unbounded", async () => {
+    const emitted: Event[] = [];
+    const tools = createRunnerTools({
+      agent: {
+        name: "tester",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      event: {
+        id: "evt-1",
+        type: "message.created",
+        payload: {},
+        source: "human:alice",
+      },
+      channelId: "chan-1",
+      runTool: async () => ({ blob: "n".repeat(80_000) }),
+      apiFetch: async () => new Response(),
+      emitEvent: async (event) => {
+        emitted.push(event as Event);
+      },
+    });
+
+    const output = (await tools.shell_run?.execute?.({ cmd: "true" })) as { blob?: string };
+    expect(output.blob?.length).toBe(80_000);
+    const executed = emitted.find((event) => event.type === "tool.executed");
+    const persisted = executed?.payload as { output?: { truncated?: boolean; omittedChars?: number } };
+    expect(persisted.output?.truncated).toBe(true);
+    expect(JSON.stringify(executed?.payload).length).toBeLessThan(80_000);
+  });
+
   it("builds model messages from all channel events", async () => {
     const agent: Agent = {
       name: "tester",
@@ -1648,7 +1680,64 @@ describe("agent runner", () => {
     expect(requests[0]?.path).toContain("typePrefix=slack.");
     expect(requests[0]?.path).toContain("order=desc");
     expect(requests[0]?.path).toContain("limit=20");
+    expect(requests[0]?.path).toContain("excludeTypePrefix=tool.");
     expect(result.events).toHaveLength(2);
+  });
+
+  it("does not exclude bookkeeping events when events_search asks for that family", async () => {
+    const requests: string[] = [];
+    const ctx = {
+      agent: {
+        name: "tester",
+        soulContents: "role prompt",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async (path: string) => {
+        requests.push(path);
+        return new Response(
+          JSON.stringify([
+            {
+              id: "tool-1",
+              type: "tool.executed",
+              payload: {
+                tool: "events_search",
+                output: { events: [{ id: "nested", payload: { text: "x".repeat(400) } }] },
+              },
+            },
+          ]),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      },
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+      listEventTypes: () => [
+        { type: "tool.executed", description: "tool audit", source: "core" },
+      ],
+    };
+
+    const result = (await executeTool(ctx, "events_search", {
+      type: "tool.executed",
+      all: true,
+    })) as { events: Array<{ type?: string; payload?: { output?: unknown } }> };
+
+    expect(requests[0]).toContain("type=tool.executed");
+    expect(requests[0]).toContain("limit=50");
+    expect(requests[0]).not.toContain("excludeTypePrefix=");
+    expect(requests[0]).not.toContain("all=1");
+    expect(result.events[0]?.type).toBe("tool.executed");
+    expect(JSON.stringify(result.events[0]?.payload ?? {})).not.toContain("x".repeat(280));
   });
 
   it("lists future scheduled events via events_scheduled_list", async () => {

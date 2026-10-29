@@ -13,6 +13,7 @@ import {
   desc,
   eq,
   gt,
+  getTableColumns,
   inArray,
   isNull,
   like,
@@ -31,6 +32,16 @@ import type { AccessControl, RequestUser } from "./access";
 // AND the coder's own event posts. Dashboards wanting totals should call
 // GET /api/events/stats; complete dumps go through /api/events/export.sqlite.
 const MAX_EVENT_ROWS = 10_000;
+const MAX_EVENT_PAYLOAD_BYTES = 64 * 1024;
+const MAX_EVENT_PAGE_PAYLOAD_BYTES = 1024 * 1024;
+
+// Project lengths, not historical blobs, into JS before applying the page budget.
+const eventListColumns = {
+  ...getTableColumns(schema.events),
+  payload_json: sql<string>`''`,
+  payload_bytes: sql<number>`length(CAST(${schema.events.payload_json} AS BLOB))`,
+  last_error: sql<string | null>`substr(${schema.events.last_error}, 1, 2048)`,
+};
 
 type EventsDeps = {
   orm: OrgOpsDrizzleDb;
@@ -246,10 +257,41 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     return null;
   }
 
+  function hydrateEventRows(rows: any[]): any[] {
+    let remaining = MAX_EVENT_PAGE_PAYLOAD_BYTES;
+    const ids: string[] = [];
+    for (const row of rows) {
+      if (row.payload_bytes <= MAX_EVENT_PAYLOAD_BYTES && row.payload_bytes <= remaining) {
+        ids.push(row.id);
+        remaining -= row.payload_bytes;
+      }
+    }
+    const payloads = new Map<string, string>(ids.length ? orm
+      .select({ id: schema.events.id, payload: schema.events.payload_json })
+      .from(schema.events)
+      .where(and(inArray(schema.events.id, ids), sql`length(CAST(${schema.events.payload_json} AS BLOB)) <= ${MAX_EVENT_PAYLOAD_BYTES}`))
+      .all().map((row) => [row.id, row.payload] as const) : []);
+    remaining = MAX_EVENT_PAGE_PAYLOAD_BYTES;
+    return rows.map((row) => {
+      const payload = payloads.get(row.id);
+      const bytes = payload === undefined ? 0 : Buffer.byteLength(payload, "utf8");
+      if (payload !== undefined && bytes <= remaining) {
+        remaining -= bytes;
+        return { ...row, payload_json: payload };
+      }
+      return {
+        ...row,
+        payload_json: JSON.stringify({ truncated: true, originalBytes: row.payload_bytes }),
+        payload_truncated: true,
+      };
+    });
+  }
+
   function readEventQuery(url: string) {
     const params = new URL(url).searchParams;
     const scheduled = params.get("scheduled");
     const includeConsumed = params.get("includeConsumed");
+    const requestedLimit = Number(params.get("limit") ?? 100);
     return {
       params,
       channelId: params.get("channelId"),
@@ -262,7 +304,8 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       status: params.get("status"),
       after: params.get("after"),
       before: params.get("before"),
-      limit: Math.min(Number(params.get("limit") ?? 100), MAX_EVENT_ROWS),
+      hasExplicitLimit: params.has("limit"),
+      limit: Number.isFinite(requestedLimit) && requestedLimit >= 1 ? Math.min(Math.floor(requestedLimit), MAX_EVENT_ROWS) : 100,
       order: params.get("order"),
       descending: params.get("order") === "desc",
       all: params.get("all") === "1",
@@ -309,6 +352,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       status,
       after,
       before,
+      hasExplicitLimit,
       limit,
       descending,
       all,
@@ -327,8 +371,13 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     }
     const now = Date.now();
     // includeAll (the sqlite export) stays uncapped — it is a deliberate,
-    // rare dump; the client-facing all=1 is capped at MAX_EVENT_ROWS.
-    const rowCap = options.includeAll ? null : all ? MAX_EVENT_ROWS : limit;
+    // rare dump; the client-facing all=1 is capped at MAX_EVENT_ROWS unless
+    // the caller also passed limit, in which case limit wins.
+    const rowCap = options.includeAll
+      ? null
+      : all && !hasExplicitLimit
+        ? MAX_EVENT_ROWS
+        : limit;
 
     const whereClauses: any[] = [];
 
@@ -419,7 +468,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
         }
         const joinedQuery = orm
           .select({
-            event: schema.events,
+            event: options.includeAll ? getTableColumns(schema.events) : eventListColumns,
             receiptStatus: schema.eventReceipts.status,
           })
           .from(schema.events)
@@ -478,12 +527,12 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
                   .where(eq(schema.events.id, eventId))
                   .run();
                 const updated = orm
-                  .select()
+                  .select(eventListColumns)
                   .from(schema.events)
                   .where(eq(schema.events.id, eventId))
                   .get() as any | undefined;
                 if (updated) {
-                  publishEventRow(updated);
+                  publishEventRow(hydrateEventRows([updated])[0]);
                 }
               }
             }
@@ -536,7 +585,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
         ? and(...(whereClauses as [any, ...any[]]))
         : undefined;
     const dbQuery = orm
-      .select()
+      .select(options.includeAll ? getTableColumns(schema.events) : eventListColumns)
       .from(schema.events)
       .where(whereExpr)
       .orderBy(
@@ -1189,7 +1238,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       includeAll: false,
       markRunnerDelivered: true,
     });
-    return jsonResponse(c, rows.map(eventRowToApi));
+    return jsonResponse(c, hydrateEventRows(rows).map(eventRowToApi));
   });
 
   app.delete("/api/events", (c) => {

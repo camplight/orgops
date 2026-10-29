@@ -238,6 +238,7 @@ to require their singular target.
 - secret text may be sent as `payload.sensitive.plaintext` (or pre-encrypted `ciphertextB64`)
 - API encrypts plaintext into `payload.sensitive.ciphertextB64` using `ORGOPS_MASTER_KEY` before persistence
 - reveal requires `POST /api/events/:id/reveal-sensitive` with the caller's current password
+- Persisted `tool.executed` output for token-creating tools is redacted before insertion into the append-only event log, and all persisted tool output is capped so recursive `events_search` / `tool.executed` payloads cannot grow without bound. Event listings first select metadata and payload lengths, then load at most 64 KiB per payload and 1 MiB of payloads per page, measured as UTF-8 bytes. Omitted payloads return a stub with `payloadTruncated: true` and `originalBytes`; IDs, ordering and receipt delivery remain available. This does not rewrite stored history. The explicit SQLite export retains its full-dump semantics. `events_search` defaults to 50 compacted events and excludes bookkeeping types (`tool.`, `telemetry.`, `audit.`, `process.`, `wrapper.`, `agent.turn.`, `agent.control.`, `voice.`) unless the caller asks for that family.
 
 Validation is dynamic and composed from:
 

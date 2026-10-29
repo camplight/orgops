@@ -58,3 +58,17 @@ export function buildPromptEventRecord(event: Event) {
     payload: compactUnknown(event.payload ?? {}),
   };
 }
+
+export function compactListedEvent(event: unknown) {
+  if (!event || typeof event !== "object" || Array.isArray(event)) return event;
+  const record = event as Record<string, unknown>;
+  return {
+    id: record.id,
+    type: record.type,
+    source: record.source,
+    channelId: record.channelId,
+    status: record.status,
+    createdAt: record.createdAt,
+    payload: compactUnknown(record.payload ?? {}),
+  };
+}

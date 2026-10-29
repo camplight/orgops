@@ -4923,6 +4923,89 @@ describe("api app", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("honors explicit limit even when all=1", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    const insert = db.prepare(
+      "INSERT INTO events (id, type, payload_json, source, channel_id, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    );
+    for (let index = 0; index < 20; index += 1) {
+      insert.run(`limit-${index}`, "message.created", "{}", "human:admin", null, index, "DELIVERED");
+    }
+
+    const listRes = await app.request(
+      "http://localhost/api/events?all=1&limit=5&order=asc",
+      { headers: { cookie } },
+    );
+    expect(listRes.status).toBe(200);
+    expect(((await listRes.json()) as unknown[]).length).toBe(5);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("does not JSON-parse oversized event payloads in listings", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+
+    db.prepare(
+      "INSERT INTO events (id, type, payload_json, source, channel_id, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    ).run(
+      "huge-1",
+      "tool.executed",
+      JSON.stringify({ blob: "n".repeat(300_000) }),
+      "agent:tester",
+      "chan-1",
+      1,
+      "DELIVERED",
+    );
+
+    const listRes = await app.request("http://localhost/api/events?order=asc", {
+      headers: { cookie },
+    });
+    expect(listRes.status).toBe(200);
+    const list = (await listRes.json()) as Array<{
+      id: string;
+      payloadTruncated?: boolean;
+      payload?: { truncated?: boolean };
+    }>;
+    expect(list[0]?.id).toBe("huge-1");
+    expect(list[0]?.payloadTruncated).toBe(true);
+    expect(list[0]?.payload?.truncated).toBe(true);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("pages older events with before", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");
