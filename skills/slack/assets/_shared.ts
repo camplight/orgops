@@ -65,6 +65,8 @@ export async function emitOrgOpsEvent(input: {
   source: string;
   channelId: string;
   payload: Record<string, unknown>;
+  /** Redelivered Slack envelopes map to the same key and are stored once. */
+  idempotencyKey?: string;
 }) {
   const apiUrl = process.env.ORGOPS_API_URL ?? "http://localhost:8787";
   const token = process.env.ORGOPS_RUNNER_TOKEN;

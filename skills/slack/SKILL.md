@@ -155,3 +155,7 @@ Notes:
 - Listener behavior:
   - Slack inbound -> OrgOps `channel.event.created` (`source: channel:slack:<agent>`)
   - OrgOps outbound `message.created` and `channel.command.requested` (agent source in slack bridge channels) -> Slack Web API
+
+## Delivery guarantees
+
+`socket-listen.ts` persists an inbound event before acknowledging its envelope. If persistence fails, the envelope stays unacknowledged and Slack redelivers it; an idempotency key (`slack:<agent>:<team>:<channel>:<ts>:<action>`) stores redeliveries once.

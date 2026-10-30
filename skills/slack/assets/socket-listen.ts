@@ -490,6 +490,9 @@ async function emitSlackEventToOrgOps(
     type: "channel.event.created",
     source: `channel:slack:${agent}`,
     channelId: canonicalOrgOpsChannelId,
+    ...(slackTs
+      ? { idempotencyKey: `slack:${agent}:${input.teamId}:${input.slackChannelId}:${slackTs}:${inboundAction}` }
+      : {}),
     payload: {
       channel: {
         provider: "slack",
@@ -687,15 +690,16 @@ Behavior:
           const env = JSON.parse(data) as SocketEnvelope;
           if (!env?.envelope_id) return;
 
-          // Always ack quickly
-          await ackEnvelope(ws, env.envelope_id);
-
+          // Persist first, then ack. If persistence fails the envelope stays
+          // unacknowledged and Slack redelivers it; the idempotency key keeps
+          // a redelivered event from being stored twice.
           if (env.type === "events_api") {
             await handleSlackEventWithIdentity(agent, identity, env.payload);
           }
+          await ackEnvelope(ws, env.envelope_id);
         } catch (err) {
           console.error(
-            "socket message handling error",
+            "socket message handling error; envelope not acknowledged",
             describeUnknownError(err),
           );
         }
