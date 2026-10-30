@@ -50,6 +50,7 @@ import type { RunnerApi } from "./runner/api";
 const DEFAULT_LLM_CALL_TIMEOUT_MS = 10_800_000;
 const DEFAULT_CLASSIC_MAX_MODEL_STEPS = 100;
 const MAX_EVENT_DISPATCH_ATTEMPTS = 3;
+const MAX_LATE_EVENT_CONTINUATIONS = 3;
 const DEFAULT_MEMORY_CONTEXT_MODE = "PER_CHANNEL_CROSS_CHANNEL" as const;
 const FALLBACK_MODEL_CONTEXT_WINDOW_TOKENS = 128_000;
 const DEFAULT_MAX_LLM_MESSAGE_CHARS = 200_000;
@@ -311,6 +312,42 @@ function generateUsedTools(result: GenerateResult): boolean {
   return result.finishReason === "tool-calls";
 }
 
+function isProcessLifecycleEvent(event: Event): boolean {
+  return (
+    event.type === "process.started" ||
+    event.type === "process.output" ||
+    event.type === "process.exited"
+  );
+}
+
+function getPayloadRecord(payload: unknown): Record<string, unknown> | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  return payload as Record<string, unknown>;
+}
+
+function createSyncProcessInjectionSuppressor() {
+  const syncProcessIds = new Set<string>();
+  return (agent: Agent, event: Event): boolean => {
+    if (!isProcessLifecycleEvent(event)) return false;
+    if (event.source !== "system:process-runner") return false;
+    const payload = getPayloadRecord(event.payload);
+    if (!payload) return false;
+    const processId = typeof payload.processId === "string" ? payload.processId.trim() : "";
+    if (!processId) return false;
+    const targetAgentName =
+      typeof payload.targetAgentName === "string" ? payload.targetAgentName.trim() : "";
+    const ownerAgentName =
+      typeof payload.ownerAgentName === "string" ? payload.ownerAgentName.trim() : "";
+    if (targetAgentName && targetAgentName !== agent.name) return false;
+    if (ownerAgentName && ownerAgentName !== agent.name) return false;
+    if (event.type === "process.started" && payload.executionMode === "SYNC") {
+      syncProcessIds.add(processId);
+      return true;
+    }
+    return syncProcessIds.has(processId);
+  };
+}
+
 function shouldEmitAuditEvents(agent: Agent): boolean {
   return agent.emitAuditEvents !== false;
 }
@@ -460,6 +497,7 @@ export async function reconcileLateInjectedMessages(input: {
   retryMessages: Array<{ role: "system" | "user"; content: string }>;
   attempt: number;
   maxAttempts: number;
+  shouldSuppress?: (agent: Agent, event: Event) => boolean;
 }) {
   const injected = await pullInjectedEventMessages({
     apiFetch: input.apiFetch,
@@ -467,6 +505,7 @@ export async function reconcileLateInjectedMessages(input: {
     channelId: input.channelId,
     seenEventIds: input.seenEventIds,
     shouldInclude: shouldHandleEventForAgent,
+    shouldSuppress: input.shouldSuppress,
   });
   if (!injected || injected.messages.length === 0) return false;
   input.retryMessages.push(...injected.messages);
@@ -769,13 +808,20 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
     });
 
     let pendingMessages: ModelEventDraft[] = [];
+    let stagedMessageSequence = 0;
     const flushMessages = async () => {
+      const flushed = [...pendingMessages];
       for (const [index, draft] of pendingMessages.entries()) {
         await input.api.emitEvent({
           ...draft,
-          idempotencyKey: draft.idempotencyKey ?? `turn:${agent.name}:${triggerEvent.id}:message:${index}`,
+          idempotencyKey:
+            draft.idempotencyKey ??
+            `turn:${agent.name}:${triggerEvent.id}:message:${stagedMessageSequence + index}`,
         });
       }
+      stagedMessageSequence += pendingMessages.length;
+      pendingMessages = [];
+      return flushed;
     };
 
     const executeCtx = {
@@ -868,6 +914,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
     }
     const seenEventIds = new Set(events.map((event) => event.id));
     const retryMessages: Array<{ role: "system" | "user"; content: string }> = [];
+    const shouldSuppressInjectedEvent = createSyncProcessInjectionSuppressor();
     const channelPostingValidationCache = new Map<string, string | null>();
     const llmCallTimeoutMs =
       typeof agent.llmCallTimeoutMs === "number" &&
@@ -877,7 +924,54 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         : input.llmCallTimeoutMs;
     const classicMaxModelSteps = resolveAgentClassicMaxModelSteps(agent);
     let lastResponseText = "";
-    for (let attempt = 1; attempt <= MAX_EVENT_DISPATCH_ATTEMPTS; attempt += 1) {
+    let correctionAttempts = 0;
+    let lateEventContinuations = 0;
+    const maxModelAttempts = MAX_EVENT_DISPATCH_ATTEMPTS + MAX_LATE_EVENT_CONTINUATIONS;
+    const appendPostedEventsForContinuation = (
+      postedEvents: ModelEventDraft[],
+    ) => {
+      if (postedEvents.length === 0) return;
+      retryMessages.push({
+        role: "system",
+        content: JSON.stringify(
+          {
+            type: "system.turn.events_posted",
+            note: "These events were already posted during this turn before later channel events arrived.",
+            events: postedEvents,
+          },
+          null,
+          2,
+        ),
+      });
+    };
+    const continueForLateEvents = async (
+      postedEvents: ModelEventDraft[],
+      attempt: number,
+    ): Promise<boolean> => {
+      if (lateEventContinuations >= MAX_LATE_EVENT_CONTINUATIONS) return false;
+      const injected = await pullInjectedEventMessages({
+        apiFetch: input.api.apiFetch,
+        agent,
+        channelId,
+        seenEventIds,
+        shouldInclude: shouldHandleEventForAgent,
+        shouldSuppress: shouldSuppressInjectedEvent,
+      });
+      if (!injected || injected.messages.length === 0) return false;
+      lateEventContinuations += 1;
+      appendPostedEventsForContinuation(postedEvents);
+      retryMessages.push(...injected.messages);
+      retryMessages.push({
+        role: "system",
+        content: [
+          `New channel events arrived after your previous response was already posted on model attempt ${attempt}.`,
+          "Continue the same turn using those events. If no follow-up is needed, return a noop event.",
+          "Return exactly one final JSON event object.",
+        ].join("\n"),
+      });
+      return true;
+    };
+    for (let attempt = 1; attempt <= maxModelAttempts; attempt += 1) {
       pendingMessages = [];
       postedMessageToChannel = false;
       lastResponseText = "";
@@ -898,6 +992,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
                 channelId,
                 seenEventIds,
                 shouldInclude: shouldHandleEventForAgent,
+                shouldSuppress: shouldSuppressInjectedEvent,
               });
               return injected?.messages ?? [];
             },
@@ -908,10 +1003,12 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         );
       } catch (error) {
         if (!isRetryableToolArgumentValidationError(error)) throw error;
+        correctionAttempts += 1;
+        if (correctionAttempts >= MAX_EVENT_DISPATCH_ATTEMPTS) break;
         retryMessages.push({
           role: "system",
           content: [
-            `Your tool call arguments were invalid on attempt ${attempt}/${MAX_EVENT_DISPATCH_ATTEMPTS}.`,
+            `Your tool call arguments were invalid on correction attempt ${correctionAttempts}/${MAX_EVENT_DISPATCH_ATTEMPTS}.`,
             `Error: ${String(error)}`,
             "Retry with corrected tool arguments. For optional string filters, omit the field instead of sending an empty string.",
             "Return only a corrected JSON event object.",
@@ -945,19 +1042,10 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       }
       const responseText = result.text ?? "";
       lastResponseText = responseText;
-      const hasLateInjectedEvents = await reconcileLateInjectedMessages({
-        apiFetch: input.api.apiFetch,
-        agent,
-        channelId,
-        seenEventIds,
-        retryMessages,
-        attempt,
-        maxAttempts: MAX_EVENT_DISPATCH_ATTEMPTS,
-      });
-      if (hasLateInjectedEvents) continue;
       if (!responseText.trim()) {
         if (postedMessageToChannel) {
-          await flushMessages();
+          const postedEvents = await flushMessages();
+          if (await continueForLateEvents(postedEvents, attempt)) continue;
           await emitTurnEvent("agent.turn.completed", {});
           return;
         }
@@ -965,10 +1053,12 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
           await emitTurnEvent("agent.turn.completed", { noReply: true });
           return;
         }
+        correctionAttempts += 1;
+        if (correctionAttempts >= MAX_EVENT_DISPATCH_ATTEMPTS) break;
         retryMessages.push({
           role: "system",
           content: [
-            `Your previous response was empty on attempt ${attempt}/${MAX_EVENT_DISPATCH_ATTEMPTS}.`,
+            `Your previous response was empty on correction attempt ${correctionAttempts}/${MAX_EVENT_DISPATCH_ATTEMPTS}.`,
             "Return only a JSON event object.",
           ].join("\n"),
         });
@@ -985,18 +1075,21 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         }
         // The model already replied here via events_emit; posting its final text too would duplicate it.
         if (postedMessageToChannel) {
-          await flushMessages();
+          const postedEvents = await flushMessages();
+          if (await continueForLateEvents(postedEvents, attempt)) continue;
           await emitTurnEvent("agent.turn.completed", {});
           return;
         }
         if (!/^(\{|```)/.test(reply)) {
-          await input.api.emitEvent({
+          const postedEvent = {
             type: "message.created",
             source: `agent:${agent.name}`,
             channelId,
             payload: { text: reply },
             parentEventId: triggerEvent.id,
-          });
+          };
+          await input.api.emitEvent(postedEvent);
+          if (await continueForLateEvents([postedEvent], attempt)) continue;
           await emitTurnEvent("agent.turn.completed", {});
           return;
         }
@@ -1005,10 +1098,12 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       try {
         parsed = extractJsonObject(responseText);
       } catch (error) {
+        correctionAttempts += 1;
+        if (correctionAttempts >= MAX_EVENT_DISPATCH_ATTEMPTS) break;
         retryMessages.push({
           role: "system",
           content: [
-            `Your previous response was not valid JSON on attempt ${attempt}/${MAX_EVENT_DISPATCH_ATTEMPTS}.`,
+            `Your previous response was not valid JSON on correction attempt ${correctionAttempts}/${MAX_EVENT_DISPATCH_ATTEMPTS}.`,
             `Error: ${String(error)}`,
             "Return only a corrected JSON event object.",
           ].join("\n"),
@@ -1019,10 +1114,12 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       try {
         eventDraft = normalizeEventDraft(parsed, agent.name, channelId);
       } catch (error) {
+        correctionAttempts += 1;
+        if (correctionAttempts >= MAX_EVENT_DISPATCH_ATTEMPTS) break;
         retryMessages.push({
           role: "system",
           content: [
-            `Your previous JSON output was invalid on attempt ${attempt}/${MAX_EVENT_DISPATCH_ATTEMPTS}.`,
+            `Your previous JSON output was invalid on correction attempt ${correctionAttempts}/${MAX_EVENT_DISPATCH_ATTEMPTS}.`,
             `Error: ${String(error)}`,
             "Return only a corrected JSON event object.",
           ].join("\n"),
@@ -1032,10 +1129,12 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       const validation = validateEventAgainstShapes(eventDraft, eventShapes);
       if (!validation.ok) {
         const details = formatValidationErrors(validation);
+        correctionAttempts += 1;
+        if (correctionAttempts >= MAX_EVENT_DISPATCH_ATTEMPTS) break;
         retryMessages.push({
           role: "system",
           content: [
-            `Event validation failed on attempt ${attempt}/${MAX_EVENT_DISPATCH_ATTEMPTS}.`,
+            `Event validation failed on correction attempt ${correctionAttempts}/${MAX_EVENT_DISPATCH_ATTEMPTS}.`,
             `Type: ${eventDraft.type}`,
             details || "- Unknown validation error.",
             "Return only a corrected JSON event object that validates.",
@@ -1055,10 +1154,12 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         participationError = channelPostingValidationCache.get(targetChannelId) ?? null;
       }
       if (participationError) {
+        correctionAttempts += 1;
+        if (correctionAttempts >= MAX_EVENT_DISPATCH_ATTEMPTS) break;
         retryMessages.push({
           role: "system",
           content: [
-            `Event validation failed on attempt ${attempt}/${MAX_EVENT_DISPATCH_ATTEMPTS}.`,
+            `Event validation failed on correction attempt ${correctionAttempts}/${MAX_EVENT_DISPATCH_ATTEMPTS}.`,
             `Type: ${eventDraft.type}`,
             `- [runner] ${participationError}`,
             "Return only a corrected JSON event object that validates.",
@@ -1066,13 +1167,14 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         });
         continue;
       }
-      await flushMessages();
+      const postedEvents = await flushMessages();
       await input.api.emitEvent(eventDraft);
+      if (await continueForLateEvents([...postedEvents, eventDraft], attempt)) continue;
       await emitTurnEvent("agent.turn.completed", {});
       return;
     }
-    await flushMessages();
-    const hasAnswer = pendingMessages.some((draft) => draft.channelId === channelId);
+    const flushedAtEnd = await flushMessages();
+    const hasAnswer = flushedAtEnd.some((draft) => draft.channelId === channelId);
     if (hasAnswer) {
       await emitTurnEvent("agent.turn.completed", { completedWithFallback: true });
       return;

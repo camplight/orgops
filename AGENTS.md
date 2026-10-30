@@ -72,7 +72,7 @@ Runners consume via per-agent receipts (at-least-once). `deliverAt` schedules fu
 
 ### Turn execution
 
-Pending events are grouped by channel and processed as **one batch per `(agent, channel)`** — a burst becomes a single turn, not N turns. `channel-loop.ts` serializes work per key and marks the pair busy so polling skips it. During a CLASSIC turn, `turn-executor.ts` runs the model step-by-step and polls for newly arrived same-channel events *between* steps, merging them into the next attempt (`reconcileLateInjectedMessages`). This mid-turn injection is the subtlest behavior in the codebase.
+Pending events are grouped by channel and processed as **one batch per `(agent, channel)`** — a burst becomes a single turn, not N turns. `channel-loop.ts` serializes work per key and marks the pair busy so polling skips it. During a CLASSIC turn, `turn-executor.ts` runs the model step-by-step and polls for newly arrived same-channel events between model steps. Valid final events are posted before checking for more late events; meaningful late events extend the same turn as follow-up context rather than invalidating already-posted output. Current-turn `SYNC` `process.*` events from the agent's own `shell_run` are suppressed from mid-turn injection because the tool result already reached the model. This mid-turn injection is the subtlest behavior in the codebase.
 
 `prompt-composer.ts` builds context from system prompt + bounded channel history + enabled skill markdown + soul file + memory summaries, with char/token budgeting.
 
