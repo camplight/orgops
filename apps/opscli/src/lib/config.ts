@@ -3,6 +3,8 @@ import { resolve } from "node:path";
 export const DEFAULT_OPENAI_MODEL_ID = "openai:gpt-5.2";
 export const DEFAULT_ANTHROPIC_MODEL_ID = "anthropic:claude-3-5-sonnet-latest";
 export const DEFAULT_OPENROUTER_MODEL_ID = "openrouter:openai/gpt-4o-mini";
+export const DEFAULT_MISTRAL_MODEL_ID = "mistral:mistral-small-latest";
+export const DEFAULT_LIQUID_MODEL_ID = "liquid:lfm3";
 
 export const COMMAND_TIMEOUT_MS = Number(
   process.env.ORGOPS_OPSCLI_COMMAND_TIMEOUT_MS ?? 120_000,

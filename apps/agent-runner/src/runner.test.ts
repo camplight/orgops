@@ -7,9 +7,9 @@ import {
   resolveAgentClassicMaxModelSteps,
   resolveAgentMemoryContextMode,
   resolveAgentLlmCallTimeoutMs,
-  selectRecentDeltaEventsForPrompt,
   shouldHandleEvent,
 } from "./runner";
+import { computeHistoryBudgetChars } from "./prompt-composer";
 import { stopAllRunningProcesses } from "./tools/shell";
 import type { Agent, Event } from "./types";
 
@@ -94,6 +94,68 @@ describe("agent runner", () => {
     });
   });
 
+  it("does not fail the triggering event when a tool returns an error", async () => {
+    const requests: string[] = [];
+    const tools = createRunnerTools({
+      agent: {
+        name: "tester",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      event: {
+        id: "human-msg",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+      },
+      channelId: "chan-1",
+      runTool: async () => ({ error: "Invalid arguments for tool" }),
+      apiFetch: async (path: string) => {
+        requests.push(path);
+        return new Response("{}", { status: 200 });
+      },
+      emitEvent: async () => {},
+    });
+
+    const output = await tools.shell_run?.execute?.({ cmd: "true" });
+    expect(output).toEqual({ error: "Invalid arguments for tool" });
+    expect(requests.some((path) => path.endsWith("/fail"))).toBe(false);
+  });
+
+  it("caps persisted tool output so search results cannot recurse unbounded", async () => {
+    const emitted: Event[] = [];
+    const tools = createRunnerTools({
+      agent: {
+        name: "tester",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      event: {
+        id: "evt-1",
+        type: "message.created",
+        payload: {},
+        source: "human:alice",
+      },
+      channelId: "chan-1",
+      runTool: async () => ({ blob: "n".repeat(80_000) }),
+      apiFetch: async () => new Response(),
+      emitEvent: async (event) => {
+        emitted.push(event as Event);
+      },
+    });
+
+    const output = (await tools.shell_run?.execute?.({ cmd: "true" })) as { blob?: string };
+    expect(output.blob?.length).toBe(80_000);
+    const executed = emitted.find((event) => event.type === "tool.executed");
+    const persisted = executed?.payload as { output?: { truncated?: boolean; omittedChars?: number } };
+    expect(persisted.output?.truncated).toBe(true);
+    expect(JSON.stringify(executed?.payload).length).toBeLessThan(80_000);
+  });
+
   it("builds model messages from all channel events", async () => {
     const agent: Agent = {
       name: "tester",
@@ -124,19 +186,47 @@ describe("agent runner", () => {
         source: "agent:other",
         channelId: "chan-1",
       },
+      {
+        id: "evt-4",
+        type: "message.created",
+        payload: { text: "done" },
+        source: "agent:tester",
+        channelId: "chan-1",
+      },
     ];
 
     const messages = await buildModelMessages(agent, "system prompt", events);
-    expect(messages).toHaveLength(4);
+    expect(messages).toHaveLength(5);
     expect(messages[0]).toEqual({ role: "system", content: "system prompt" });
-    expect(messages[1]?.role).toBe("user");
-    expect(messages[2]?.role).toBe("system");
-    expect(messages[3]?.role).toBe("system");
+    expect(messages.slice(1).map((message) => message.role)).toEqual([
+      "user",
+      "system",
+      "user",
+      "assistant",
+    ]);
 
     const eventIds = messages
       .slice(1)
       .map((message) => JSON.parse(message.content as string).eventId);
-    expect(eventIds).toEqual(["evt-1", "evt-2", "evt-3"]);
+    expect(eventIds).toEqual(["evt-1", "evt-2", "evt-3", "evt-4"]);
+  });
+
+  it("shows plain-text agents their own replies as plain assistant text", async () => {
+    const agent: Agent = {
+      name: "voice-agent",
+      workspacePath: "/tmp",
+      modelId: "openai:gpt-realtime",
+      desiredState: "RUNNING",
+      runtimeState: "RUNNING",
+    };
+    const events: Event[] = [
+      { id: "e1", type: "message.created", source: "agent:voice-agent", channelId: "c", payload: { text: "Hello!" } },
+      { id: "e2", type: "message.created", source: "agent:voice-agent-2", channelId: "c", payload: { text: "Hi" } },
+    ];
+    const messages = await buildModelMessages(agent, "system prompt", events);
+    expect(messages[1]).toEqual({ role: "assistant", content: "Hello!" });
+    expect(messages[2]?.role).toBe("user");
+    expect(JSON.parse(String(messages[2]?.content)).source).toBe("agent:voice-agent-2");
   });
 
   it("includes image attachment parts when message payload references files", async () => {
@@ -292,42 +382,46 @@ describe("agent runner", () => {
       .map((message) => JSON.parse(message.content as string).eventId);
     expect(eventIds[0]).toBe("evt-11");
     expect(eventIds[eventIds.length - 1]).toBe("evt-130");
+    expect(truncationMeta.omittedBefore).toBe(11);
+    expect(truncationMeta.howToReadOmitted).toContain('channelId: "chan-1", before: 11');
   });
 
-  it("omits latest user-like event from recent delta system context", () => {
+  it("sizes the history budget from the model context window", () => {
+    const small = computeHistoryBudgetChars({ contextWindowTokens: 32_000, system: "x".repeat(8_000) });
+    expect(small).toBe((16_000 - 2_000) * 4);
+    const large = computeHistoryBudgetChars({ contextWindowTokens: 1_000_000, system: "sys" });
+    expect(large).toBe(120_000);
+    const tiny = computeHistoryBudgetChars({ contextWindowTokens: 4_000, system: "x".repeat(40_000) });
+    expect(tiny).toBe(8_000);
+  });
+
+  it("trims history to a caller-provided char budget", async () => {
     const agent: Agent = {
       name: "tester",
       workspacePath: "/tmp",
-      modelId: "openai:gpt-4o-mini",
+      modelId: "openai:gpt-realtime",
       desiredState: "RUNNING",
       runtimeState: "RUNNING",
     };
-    const events: Event[] = [
-      {
-        id: "evt-1",
-        type: "message.created",
-        payload: { text: "first user" },
-        source: "human:alice",
-        channelId: "chan-1",
-      },
-      {
-        id: "evt-2",
-        type: "message.created",
-        payload: { text: "self response" },
-        source: "agent:tester",
-        channelId: "chan-1",
-      },
-      {
-        id: "evt-3",
-        type: "process.output",
-        payload: { text: "latest user-like external update" },
-        source: "system:process-runner",
-        channelId: "chan-1",
-      },
-    ];
-
-    const filtered = selectRecentDeltaEventsForPrompt(agent, events);
-    expect(filtered.map((event) => event.id)).toEqual(["evt-1", "evt-2"]);
+    const events: Event[] = Array.from({ length: 50 }, (_, index) => ({
+      id: `evt-${index + 1}`,
+      type: "message.created",
+      payload: { text: "y".repeat(1_000) },
+      source: "human:alice",
+      channelId: "chan-1",
+      createdAt: index + 1,
+    }));
+    const messages = await buildModelMessages(agent, "system prompt", events, {
+      historyMaxChars: 10_000,
+    });
+    const truncationMeta = JSON.parse(String(messages[1]?.content));
+    expect(truncationMeta.limits.maxChars).toBe(10_000);
+    expect(truncationMeta.includedCount).toBeLessThan(events.length);
+    expect(messages.length - 2).toBe(truncationMeta.includedCount);
+    const keptChars = messages
+      .slice(2)
+      .reduce((sum, message) => sum + String(message.content).length, 0);
+    expect(keptChars).toBeLessThanOrEqual(10_000);
   });
 
   it("injects memory summaries as system messages", async () => {
@@ -1697,7 +1791,64 @@ describe("agent runner", () => {
     expect(requests[0]?.path).toContain("typePrefix=slack.");
     expect(requests[0]?.path).toContain("order=desc");
     expect(requests[0]?.path).toContain("limit=20");
+    expect(requests[0]?.path).toContain("excludeTypePrefix=tool.");
     expect(result.events).toHaveLength(2);
+  });
+
+  it("does not exclude bookkeeping events when events_search asks for that family", async () => {
+    const requests: string[] = [];
+    const ctx = {
+      agent: {
+        name: "tester",
+        soulContents: "role prompt",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async (path: string) => {
+        requests.push(path);
+        return new Response(
+          JSON.stringify([
+            {
+              id: "tool-1",
+              type: "tool.executed",
+              payload: {
+                tool: "events_search",
+                output: { events: [{ id: "nested", payload: { text: "x".repeat(400) } }] },
+              },
+            },
+          ]),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      },
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+      listEventTypes: () => [
+        { type: "tool.executed", description: "tool audit", source: "core" },
+      ],
+    };
+
+    const result = (await executeTool(ctx, "events_search", {
+      type: "tool.executed",
+      all: true,
+    })) as { events: Array<{ type?: string; payload?: { output?: unknown } }> };
+
+    expect(requests[0]).toContain("type=tool.executed");
+    expect(requests[0]).toContain("limit=50");
+    expect(requests[0]).not.toContain("excludeTypePrefix=");
+    expect(requests[0]).not.toContain("all=1");
+    expect(result.events[0]?.type).toBe("tool.executed");
+    expect(JSON.stringify(result.events[0]?.payload ?? {})).not.toContain("x".repeat(280));
   });
 
   it("lists future scheduled events via events_scheduled_list", async () => {
@@ -2922,10 +3073,14 @@ describe("agent runner", () => {
     const started = (await executeTool(ctx, "shell_start", {
       cmd: "sleep 0.1",
     })) as { processId: string };
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    const status = (await executeTool(ctx, "shell_status", {
-      processId: started.processId,
-    })) as { running: boolean };
+    let status = { running: true };
+    const deadline = Date.now() + 3000;
+    while (status.running && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      status = (await executeTool(ctx, "shell_status", {
+        processId: started.processId,
+      })) as { running: boolean };
+    }
     expect(status.running).toBe(false);
   });
 });

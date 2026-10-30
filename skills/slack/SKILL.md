@@ -14,18 +14,16 @@ It provides:
 
 ## Secrets
 
-Store secrets under the `slack` package using the `secrets` skill.
+Store Slack tokens as private secrets for this agent. The scripts read the agent-suffixed names:
 
-Per-agent keys (recommended):
-
-- `SLACK_BOT_TOKEN__<AGENT_NAME>` (xoxb-...)
-- `SLACK_APP_TOKEN__<AGENT_NAME>` (xapp-...; required for Socket Mode)
+- `SLACK_BOT_TOKEN__<agentName>` (xoxb-...)
+- `SLACK_APP_TOKEN__<agentName>` (xapp-...; required for Socket Mode)
 
 Example:
 
 ```bash
-node --import tsx skills/secrets/assets/set.ts -- slack SLACK_BOT_TOKEN__worker1 xoxb-...
-node --import tsx skills/secrets/assets/set.ts -- slack SLACK_APP_TOKEN__worker1 xapp-...
+node --import tsx skills/secrets/assets/set.ts -- SLACK_BOT_TOKEN__worker1 xoxb-...
+node --import tsx skills/secrets/assets/set.ts -- SLACK_APP_TOKEN__worker1 xapp-...
 ```
 
 ## Slack app setup (minimum)

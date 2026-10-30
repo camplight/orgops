@@ -1,11 +1,17 @@
+import { parseSecretCommand, secretKeyAndValue } from "./_args.ts";
+
 const apiUrl = process.env.ORGOPS_API_URL ?? "http://localhost:8787";
 const token = process.env.ORGOPS_RUNNER_TOKEN;
 
-const args = process.argv.slice(2);
-if (args[0] === "--") args.shift();
-const [pkg, key, value] = args;
-if (!pkg || !key || value === undefined) {
-  console.error("Usage: node --import tsx set.ts -- <package> <key> <value>");
+const parsed = parseSecretCommand(process.argv);
+if ("error" in parsed) {
+  console.error(parsed.error);
+  console.error("Usage: node --import tsx set.ts -- [--public | --team <teamId>] <key> <value>");
+  process.exit(1);
+}
+const keyAndValue = secretKeyAndValue(parsed.positional);
+if ("error" in keyAndValue) {
+  console.error("Usage: node --import tsx set.ts -- [--public | --team <teamId>] <key> <value>");
   process.exit(1);
 }
 
@@ -21,7 +27,12 @@ async function main() {
       "content-type": "application/json",
       "x-orgops-runner-token": token,
     },
-    body: JSON.stringify({ package: pkg, key, value }),
+    body: JSON.stringify({
+      key: keyAndValue.key,
+      value: keyAndValue.value,
+      scopeType: parsed.scope.scopeType,
+      ...(parsed.scope.scopeId ? { scopeId: parsed.scope.scopeId } : {}),
+    }),
   });
 
   if (!res.ok) {

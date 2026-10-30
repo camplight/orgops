@@ -40,7 +40,7 @@ export function printUsage(text: string) {
 export function getEnvForAgent(agent: string, base: string): string {
   const key = `${base}__${agent}`;
   const v = process.env[key];
-  if (!v) throw new Error(`Missing env var ${key} (set via secrets package 'slack')`);
+  if (!v) throw new Error(`Missing env var ${key} (store it as a private secret for this agent)`);
   return v;
 }
 

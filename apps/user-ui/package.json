@@ -9,6 +9,7 @@
     "lint": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "livekit-client": "^2.23.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0",
@@ -20,7 +21,7 @@
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^6.0.1",
     "typescript": "^5.5.4",
-    "vite": "^8.0.10"
+    "vite": "8.2.4"
   },
   "optionalDependencies": {
     "@rolldown/binding-darwin-arm64": "1.2.4",

@@ -3,15 +3,16 @@ import {
   type HumanSession,
 } from "./routes/google-auth";
 import { Hono } from "hono";
+import {registerHttpBoundaries} from "./http-boundaries";
 import { createNodeWebSocket } from "@hono/node-ws";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  createHash,
   randomBytes,
   randomUUID,
   scryptSync,
-  timingSafeEqual,
 } from "node:crypto";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 
@@ -30,6 +31,7 @@ import {
   EventSchema,
   type EventShapeDefinition,
   getCoreEventShapes,
+  resolveModelCapabilities,
   serializeEventShapes,
   validateEventAgainstShapes,
 } from "@orgops/schemas";
@@ -54,8 +56,14 @@ import { registerRunnersRoutes } from "./routes/runners";
 import { registerIntegrationKeysRoutes } from "./routes/integration-keys";
 import { registerEmbedRoutes } from "./routes/embed";
 import { registerBillingRoutes } from "./routes/billing";
+import { registerVoiceRoutes } from "./routes/voice";
+import { createVoiceTranscriber } from "./voice-transcriber";
+import { createRealtimeVoice } from "./voice-realtime";
+import { createVoiceBroker } from "./voice-broker";
+import type { transcribe as TranscribeFn } from "@orgops/llm";
 import { registerFederationRoutes } from "./routes/federation";
 import { registerWorkspacePublicationRoutes } from "./routes/workspace-publications";
+import { createRunnerSocketHub } from "./runner-socket";
 import {
   findActiveRunnerTokenByToken,
   parseStringArraySafe as parseRunnerScopeChannels,
@@ -63,6 +71,8 @@ import {
 } from "./agent-invite-auth";
 import { registerAgentInviteRoutes } from "./routes/agent-invites";
 import { createAccessControl } from "./routes/access";
+import {hashPasswordAsync,verifyPasswordAsync} from './passwords';
+import {federationFetch} from './federation-transport';
 
 export type AppConfig = {
   db?: OrgOpsDb;
@@ -75,6 +85,11 @@ export type AppConfig = {
   runnerToken?: string;
   runnerApiUrl?: string;
   projectRoot?: string;
+  /** Overrides speech-to-text for the channel transcriber (tests). */
+  voiceTranscribe?: typeof TranscribeFn;
+  voiceTranscriberEnv?: () => Record<string, string | undefined>;
+  /** Overrides the HTTP client used to create OpenAI realtime calls (tests). */
+  realtimeFetch?: typeof fetch;
 };
 
 type AppEnv = {
@@ -85,6 +100,7 @@ type AppEnv = {
 
 export function createApp(config: AppConfig = {}) {
   const app = new Hono<AppEnv>();
+  registerHttpBoundaries(app);
   const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
   const PROJECT_ROOT = resolve(
     config.projectRoot ??
@@ -123,10 +139,12 @@ export function createApp(config: AppConfig = {}) {
     `http://localhost:${process.env.PORT ?? "8787"}`;
 
   const FILES_DIR = join(PROJECT_ROOT, "files");
+  const EVENT_PAYLOAD_BLOBS_DIR = join(DATA_DIR, "event-payloads");
   const SKILL_ROOTS = resolveSkillRoots(PROJECT_ROOT);
   let lastEventCreatedAt = 0;
 
   mkdirSync(FILES_DIR, { recursive: true });
+  mkdirSync(EVENT_PAYLOAD_BLOBS_DIR, { recursive: true });
 
   function hashPassword(password: string) {
     const salt = randomBytes(16).toString("hex");
@@ -134,15 +152,6 @@ export function createApp(config: AppConfig = {}) {
     return `scrypt$${salt}$${derived}`;
   }
 
-  function verifyPassword(password: string, hashed: string) {
-    const [algo, salt, storedHash] = hashed.split("$");
-    if (algo !== "scrypt" || !salt || !storedHash) return false;
-    const computedHash = scryptSync(password, salt, 64).toString("hex");
-    const storedBytes = Buffer.from(storedHash, "hex");
-    const computedBytes = Buffer.from(computedHash, "hex");
-    if (storedBytes.length !== computedBytes.length) return false;
-    return timingSafeEqual(storedBytes, computedBytes);
-  }
 
   const existingHuman = orm
     .select({ id: schema.humans.id })
@@ -288,6 +297,47 @@ export function createApp(config: AppConfig = {}) {
     }
   }
 
+  const MAX_EVENT_PAYLOAD_JSON_CHARS = 262_144;
+
+  function eventPayloadBlobRef(row: any) {
+    const storagePath = typeof row.payload_blob_storage_path === "string"
+      ? row.payload_blob_storage_path
+      : "";
+    if (!storagePath) return undefined;
+    return {
+      storage: "file",
+      eventId: row.id,
+      totalChars: row.payload_json_chars,
+      byteLength: row.payload_blob_byte_length,
+      sha256: row.payload_blob_sha256,
+    };
+  }
+
+  function parseEventPayload(payloadJson: unknown, payloadJsonChars?: unknown, maxChars = MAX_EVENT_PAYLOAD_JSON_CHARS): {
+    payload: unknown;
+    payloadTruncated: boolean;
+  } {
+    const originalLength =
+      typeof payloadJsonChars === "number" && Number.isFinite(payloadJsonChars)
+        ? payloadJsonChars
+        : typeof payloadJson === "string"
+          ? payloadJson.length
+          : null;
+    if (originalLength !== null && originalLength > maxChars) {
+      return {
+        payload: {
+          truncated: true,
+          omittedChars: originalLength - maxChars,
+        },
+        payloadTruncated: true,
+      };
+    }
+    if (typeof payloadJson !== "string") {
+      return { payload: {}, payloadTruncated: false };
+    }
+    return { payload: parseJson(payloadJson, {}), payloadTruncated: false };
+  }
+
   function parseStringArraySafe(input: string | null | undefined): string[] {
     if (!input) return [];
     try {
@@ -307,10 +357,17 @@ export function createApp(config: AppConfig = {}) {
   }
 
   function eventRowToApi(row: any) {
+    const { payload, payloadTruncated } = parseEventPayload(
+      row.payload_json,
+      row.payload_json_chars,
+      row.payload_max_chars,
+    );
+    const omitted = payloadTruncated || Boolean(row.payload_truncated);
+    const payloadRef = omitted ? eventPayloadBlobRef(row) : undefined;
     return {
       id: row.id,
       type: row.type,
-      payload: parseJson(row.payload_json, {}),
+      payload,
       source: row.source,
       channelId: row.channel_id ?? undefined,
       parentEventId: row.parent_event_id ?? undefined,
@@ -320,6 +377,8 @@ export function createApp(config: AppConfig = {}) {
       lastError: row.last_error ?? undefined,
       idempotencyKey: row.idempotency_key ?? undefined,
       createdAt: row.created_at,
+      ...(omitted ? { payloadTruncated: true } : {}),
+      ...(payloadRef ? { payloadRef } : {}),
     };
   }
 
@@ -378,7 +437,7 @@ export function createApp(config: AppConfig = {}) {
       }
       try {
         const baseUrl = String(instance.base_url).replace(/\/+$/, "");
-        const response = await fetch(
+        const response = await federationFetch(
           `${baseUrl}/api/federation/projections/${encodeURIComponent(
             subscriber.remote_channel_id,
           )}/events`,
@@ -392,8 +451,7 @@ export function createApp(config: AppConfig = {}) {
           },
         );
         if (!response.ok) {
-          const text = await response.text();
-          throw new Error(`${response.status} ${text}`);
+          throw new Error(`Federation request failed: ${response.status}`);
         }
         orm
           .update(schema.federationChannelSubscribers)
@@ -427,6 +485,23 @@ export function createApp(config: AppConfig = {}) {
     });
   }
 
+  const runnerSocketHub = createRunnerSocketHub({
+    orm,
+    upgradeWebSocket,
+    resolveRequestUser: (c: any) => {
+      const runnerHeader = c.req.header("x-orgops-runner-token");
+      const runnerUser = resolveRunnerUserFromToken(runnerHeader);
+      if (runnerUser) return runnerUser;
+      const cookie = c.req.header("cookie") ?? "";
+      const token = cookie
+        .split(";")
+        .map((part: string) => part.trim())
+        .find((part: string) => part.startsWith("orgops_session="))
+        ?.slice("orgops_session=".length);
+      return token ? sessions.get(token) ?? null : null;
+    },
+  });
+
   function insertEvent(input: any) {
     const resolveRecipientAgents = (): string[] => {
       const recipients = new Set<string>();
@@ -454,7 +529,31 @@ export function createApp(config: AppConfig = {}) {
     const createdAt = Math.max(now, lastEventCreatedAt + 1);
     lastEventCreatedAt = createdAt;
     const id = input.id ?? randomUUID();
-    const payloadJson = JSON.stringify(input.payload ?? {});
+    const rawPayloadJson = JSON.stringify(input.payload ?? {});
+    const payloadBytes = Buffer.from(rawPayloadJson, "utf8");
+    const shouldSpillPayload = rawPayloadJson.length > MAX_EVENT_PAYLOAD_JSON_CHARS;
+    const payloadSha256 = createHash("sha256").update(payloadBytes).digest("hex");
+    const blobFileName = `${createHash("sha256").update(id).digest("hex")}.json`;
+    const blobStoragePath = join("event-payloads", blobFileName);
+    const blobAbsolutePath = join(DATA_DIR, blobStoragePath);
+    const blobTempPath = `${blobAbsolutePath}.${process.pid}.${Date.now()}.tmp`;
+    if (shouldSpillPayload) {
+      writeFileSync(blobTempPath, payloadBytes);
+      renameSync(blobTempPath, blobAbsolutePath);
+    }
+    const payloadJson = shouldSpillPayload
+      ? JSON.stringify({
+          truncated: true,
+          omittedChars: rawPayloadJson.length - MAX_EVENT_PAYLOAD_JSON_CHARS,
+          payloadRef: {
+            storage: "file",
+            eventId: id,
+            totalChars: rawPayloadJson.length,
+            byteLength: payloadBytes.length,
+            sha256: payloadSha256,
+          },
+        })
+      : rawPayloadJson;
     const row = {
       id,
       type: input.type,
@@ -468,43 +567,69 @@ export function createApp(config: AppConfig = {}) {
       last_error: null,
       idempotency_key: input.idempotencyKey ?? null,
       created_at: createdAt,
+      payload_json_chars: rawPayloadJson.length,
+      payload_blob_storage_path: shouldSpillPayload ? blobStoragePath : null,
+      payload_blob_byte_length: shouldSpillPayload ? payloadBytes.length : null,
+      payload_blob_sha256: shouldSpillPayload ? payloadSha256 : null,
     };
     const recipientAgents = resolveRecipientAgents();
     if (recipientAgents.length > 0 && input.status === undefined) {
       row.status = "PENDING";
     }
-    orm
-      .insert(schema.events)
-      .values({
-        id: row.id,
-        type: row.type,
-        payload_json: row.payload_json,
-        source: row.source,
-        channel_id: row.channel_id,
-        parent_event_id: row.parent_event_id,
-        deliver_at: row.deliver_at,
-        status: row.status,
-        fail_count: row.fail_count,
-        last_error: row.last_error,
-        idempotency_key: row.idempotency_key,
-        created_at: row.created_at,
-      })
-      .run();
-    if (recipientAgents.length > 0) {
-      orm
-        .insert(schema.eventReceipts)
-        .values(
-          recipientAgents.map((agentName) => ({
-            event_id: row.id,
-            agent_name: agentName,
-            status: row.status === "DELIVERED" ? "DELIVERED" : "PENDING",
-            delivered_at: row.status === "DELIVERED" ? row.created_at : null,
-          })),
-        )
-        .onConflictDoNothing()
-        .run();
+    try {
+      const writeRows = db.transaction(() => {
+        orm
+          .insert(schema.events)
+          .values({
+            id: row.id,
+            type: row.type,
+            payload_json: row.payload_json,
+            source: row.source,
+            channel_id: row.channel_id,
+            parent_event_id: row.parent_event_id,
+            deliver_at: row.deliver_at,
+            status: row.status,
+            fail_count: row.fail_count,
+            last_error: row.last_error,
+            idempotency_key: row.idempotency_key,
+            created_at: row.created_at,
+          })
+          .run();
+        if (shouldSpillPayload) {
+          orm
+            .insert(schema.eventPayloadBlobs)
+            .values({
+              event_id: row.id,
+              storage_path: blobStoragePath,
+              char_length: rawPayloadJson.length,
+              byte_length: payloadBytes.length,
+              sha256: payloadSha256,
+              created_at: row.created_at,
+            })
+            .run();
+        }
+        if (recipientAgents.length > 0) {
+          orm
+            .insert(schema.eventReceipts)
+            .values(
+              recipientAgents.map((agentName) => ({
+                event_id: row.id,
+                agent_name: agentName,
+                status: row.status === "DELIVERED" ? "DELIVERED" : "PENDING",
+                delivered_at: row.status === "DELIVERED" ? row.created_at : null,
+              })),
+            )
+            .onConflictDoNothing()
+            .run();
+        }
+      });
+      writeRows();
+    } catch (error) {
+      if (shouldSpillPayload) rmSync(blobAbsolutePath, { force: true });
+      throw error;
     }
     publishEvent(row);
+    runnerSocketHub.notifyEvent(row, recipientAgents);
     void pushFederatedEvent(row);
     return row;
   }
@@ -530,11 +655,14 @@ export function createApp(config: AppConfig = {}) {
     AuthLoginSchema,
     jsonResponse,
     requireAuth,
-    hashPassword,
-    verifyPassword,
+    hashPassword:hashPasswordAsync,
+    verifyPassword:verifyPasswordAsync,
   });
 
   registerHumansRoutes(app as any, {
+    revokeSessions: (humanId) => {
+      for (const [id, session] of sessions) if (session.id === humanId) sessions.delete(id);
+    },
     orm,
     jsonResponse,
     humanSchema: schema.humans,
@@ -570,13 +698,13 @@ export function createApp(config: AppConfig = {}) {
     if (!token || !baseUrl) {
       throw new Error(`Federation peer "${instance.name ?? instanceId}" is missing a base URL or outbound token.`);
     }
-    const response = await fetch(`${baseUrl}/api/federation/agents/transfer`, {
+    const response = await federationFetch(`${baseUrl}/api/federation/agents/transfer`, {
       method: "POST",
       headers: {
         authorization: `Bearer ${token}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify(bundle),
+      body: JSON.stringify({...bundle,secrets:[]}),
     });
     const text = await response.text();
     let parsed: any = {};
@@ -586,7 +714,7 @@ export function createApp(config: AppConfig = {}) {
       parsed = { error: text };
     }
     if (!response.ok) {
-      throw new Error(parsed?.error || `Federation request failed: ${response.status}`);
+      throw new Error(`Federation request failed: ${response.status}`);
     }
     return parsed;
   }
@@ -600,7 +728,7 @@ export function createApp(config: AppConfig = {}) {
     resolveWorkspacePath,
     access,
     hashPassword,
-    verifyPassword,
+    verifyPassword:verifyPasswordAsync,
     insertEvent,
   });
 
@@ -639,7 +767,8 @@ export function createApp(config: AppConfig = {}) {
     validateEventAgainstShapes,
     serializeEventShapes,
     access,
-    verifyPassword,
+    verifyPassword:verifyPasswordAsync,
+    dataDir: DATA_DIR,
   });
 
   registerMemoryRoutes(app as any, { orm, jsonResponse, access });
@@ -665,6 +794,10 @@ export function createApp(config: AppConfig = {}) {
   });
 
   registerWsRoutes(app as any, {
+    canViewProcess: (user,id) => {
+      const row=orm.select().from(schema.processes).where(eq(schema.processes.id,id)).get();
+      return Boolean(row&&access.canViewAgent(user,row.agent_name)&&(!row.channel_id||access.canViewChannel(user,row.channel_id)));
+    },
     bus,
     upgradeWebSocket,
     resolveRequestUser: (c: any) => {
@@ -684,7 +817,10 @@ export function createApp(config: AppConfig = {}) {
     access,
   });
 
+  runnerSocketHub.registerRoutes(app as any);
+
   registerRunnersRoutes(app as any, {
+    access,
     orm,
     bus,
     jsonResponse,
@@ -695,6 +831,8 @@ export function createApp(config: AppConfig = {}) {
   });
 
   registerFederationRoutes(app as any, {
+    access,
+    workspaceRoot:resolve(process.env.ORGOPS_WORKSPACE_ROOT||join(PROJECT_ROOT,'.orgops-data/workspaces')),
     orm,
     jsonResponse,
     requireAuth,
@@ -705,6 +843,30 @@ export function createApp(config: AppConfig = {}) {
 
   registerIntegrationKeysRoutes(app as any, { orm, jsonResponse, access });
   registerEmbedRoutes(app as any, { orm, jsonResponse, insertEvent });
+  const voiceTranscriber = createVoiceTranscriber({
+    orm,
+    insertEvent,
+    transcribe: config.voiceTranscribe,
+    env: config.voiceTranscriberEnv,
+  });
+  bus.subscribe("org:events", (message: any) => {
+    if (message?.data) voiceTranscriber.handleEvent(message.data);
+  });
+  const realtimeVoice = createRealtimeVoice({
+    orm,
+    insertEvent,
+    access,
+    fetch: config.realtimeFetch,
+  });
+  const voiceBroker = createVoiceBroker({ orm, access });
+  registerVoiceRoutes(app as any, {
+    jsonResponse,
+    requireAuth,
+    requireRunnerAuth,
+    voiceTranscriber,
+    realtimeVoice,
+    voiceBroker,
+  });
   registerBillingRoutes(app as any, {
     orm,
     jsonResponse,
@@ -713,7 +875,7 @@ export function createApp(config: AppConfig = {}) {
     requireRunnerAuth,
   });
 
-  return { app, db, bus, injectWebSocket };
+  return { app, db, bus, injectWebSocket, voiceTranscriber };
 }
 
 const SYSTEM_AGENT_NAME = "system";
@@ -722,12 +884,16 @@ const DEFAULT_MODEL_NAME_BY_PROVIDER = {
   openai: "gpt-5.2",
   anthropic: "claude-3-5-sonnet-latest",
   openrouter: "openai/gpt-4o-mini",
+  mistral: "mistral-small-latest",
+  liquid: "lfm3",
 } as const;
 
 const PROVIDER_API_KEY_ENV = {
   openai: "OPENAI_API_KEY",
   anthropic: "ANTHROPIC_API_KEY",
   openrouter: "OPENROUTER_API_KEY",
+  mistral: "MISTRAL_API_KEY",
+  liquid: "LIQUID_API_KEY",
 } as const;
 
 type SystemAgentProvider = keyof typeof DEFAULT_MODEL_NAME_BY_PROVIDER;
@@ -737,6 +903,8 @@ function normalizeSystemAgentProvider(raw: string): SystemAgentProvider | null {
   if (normalized === "openai") return "openai";
   if (normalized === "anthropic" || normalized === "claude") return "anthropic";
   if (normalized === "openrouter" || normalized === "or") return "openrouter";
+  if (normalized === "mistral" || normalized === "mistralai") return "mistral";
+  if (normalized === "liquid" || normalized === "liquidai") return "liquid";
   return null;
 }
 
@@ -841,7 +1009,9 @@ function seedDefaultSystemAgent(
           provider: resolved.provider,
           model_name: resolved.modelName,
           enabled: 1,
-          defaults_json: "{}",
+          defaults_json: JSON.stringify({
+            capabilities: resolveModelCapabilities(resolved.provider, resolved.modelName, {}),
+          }),
           created_at: now,
         })
         .run();

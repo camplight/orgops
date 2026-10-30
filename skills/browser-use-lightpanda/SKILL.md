@@ -67,7 +67,7 @@ lightpanda serve --host 127.0.0.1 --port 9222
 Set local endpoint secret:
 
 ```bash
-node --import tsx skills/secrets/assets/set.ts -- browser-use LIGHTPANDA_WS_ENDPOINT__worker1 ws://127.0.0.1:9222
+node --import tsx skills/secrets/assets/set.ts -- LIGHTPANDA_WS_ENDPOINT ws://127.0.0.1:9222
 ```
 
 ### 2) Playwright package check and install

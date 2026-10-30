@@ -561,24 +561,34 @@ function parseMessageSegments(messageText: string): MessageSegment[] {
   return segments.length > 0 ? segments : [{ kind: "markdown", text: messageText }];
 }
 
-function SecretInputCard({ spec }: { spec: SecretInputSpec }) {
-  const [packageValue, setPackageValue] = useState(spec.packageValue);
+function readableApiError(error: unknown, fallback: string) {
+  const detail = error instanceof Error ? error.message : fallback;
+  try {
+    const parsed = JSON.parse(detail) as { error?: unknown };
+    if (typeof parsed.error === "string" && parsed.error.trim()) return parsed.error;
+  } catch {
+    // Response body is already plain text.
+  }
+  return detail || fallback;
+}
+
+function SecretInputCard({ spec, agentName }: { spec: SecretInputSpec; agentName: string }) {
   const [keyValue, setKeyValue] = useState(spec.keyValue);
   const [secretValue, setSecretValue] = useState("");
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [errorMessage, setErrorMessage] = useState("");
 
   const submit = async () => {
-    const packageName = packageValue.trim();
     const keyName = keyValue.trim();
-    if (!packageName || !keyName || !secretValue) {
+    const agent = agentName.trim();
+    if (!keyName || !secretValue || !agent) {
       setStatus("error");
-      setErrorMessage("Package, key, and secret value are required.");
+      setErrorMessage(agent ? "Key and secret value are required." : "This secret form is not attached to an agent.");
       return;
     }
-    if (!isSecretIdentifier(packageName) || !isSecretIdentifier(keyName)) {
+    if (!isSecretIdentifier(keyName)) {
       setStatus("error");
-      setErrorMessage("Package and key may only contain letters, numbers, dot, underscore, and hyphen.");
+      setErrorMessage("Key may only contain letters, numbers, dot, underscore, and hyphen.");
       return;
     }
 
@@ -589,16 +599,17 @@ function SecretInputCard({ spec }: { spec: SecretInputSpec }) {
         method: "POST",
         headers: getApiHeaders(),
         body: JSON.stringify({
-          package: packageName,
           key: keyName,
-          value: secretValue
+          value: secretValue,
+          scopeType: "private",
+          scopeId: agent,
         })
       });
       setSecretValue("");
       setStatus("saved");
-    } catch {
+    } catch (error) {
       setStatus("error");
-      setErrorMessage("Unable to save secret right now.");
+      setErrorMessage(readableApiError(error, "Unable to save secret right now."));
     }
   };
 
@@ -607,17 +618,10 @@ function SecretInputCard({ spec }: { spec: SecretInputSpec }) {
       <div className="text-xs uppercase tracking-wide text-fuchsia-300">Secure secret input</div>
       <div className="text-sm font-medium text-fuchsia-100">{spec.label}</div>
       {spec.description ? <div className="text-xs text-fuchsia-200/90">{spec.description}</div> : null}
-      <div className="grid gap-2 md:grid-cols-2">
-        <label className="space-y-1 text-xs text-slate-300">
-          <div className="text-slate-400">Package</div>
-          <input
-            className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-100 focus:border-sky-500 focus:outline-none"
-            value={packageValue}
-            onChange={(event) => setPackageValue(event.target.value)}
-            autoComplete="off"
-            spellCheck={false}
-          />
-        </label>
+      <div className="text-xs text-fuchsia-200/80">
+        Only {agentName.trim() || "this agent"} · {keyValue.trim() || "key"}
+      </div>
+      <div className="grid gap-2">
         <label className="space-y-1 text-xs text-slate-300">
           <div className="text-slate-400">Key</div>
           <input
@@ -1115,6 +1119,7 @@ export function ChatScreen({
                             {messageSegments.map((segment, index) =>
                               segment.kind === "secret-input" ? (
                                 <SecretInputCard
+                                  agentName={getAgentNameFromSource(event.source) ?? ""}
                                   key={`${event.id}-secret-input-${index}`}
                                   spec={segment.spec}
                                 />

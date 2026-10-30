@@ -24,7 +24,7 @@ type WorkspacePublicationDeps = {
   resolveWorkspacePath: (workspacePath: string) => string;
   access: AccessControl;
   hashPassword: (password: string) => string;
-  verifyPassword: (password: string, hashed: string) => boolean;
+  verifyPassword: (password: string, hashed: string) => Promise<boolean>;
   insertEvent: (input: any) => any;
 };
 
@@ -422,7 +422,7 @@ export function registerWorkspacePublicationRoutes(
     if (publication.auth_type === "PASSWORD") {
       const password = timingSafePasswordFromBasicAuth(c.req.header("authorization"));
       const basicAuthOk =
-        Boolean(password && publication.password_hash && verifyPassword(password, publication.password_hash));
+        Boolean(password && publication.password_hash && await verifyPassword(password, publication.password_hash));
       if (!basicAuthOk && !hasPublicationAuthCookie(c, publication)) {
         return passwordPage(publication);
       }
@@ -530,7 +530,7 @@ export function registerWorkspacePublicationRoutes(
     }
     const bodyText = await c.req.text();
     const password = new URLSearchParams(bodyText).get("password") ?? "";
-    if (!verifyPassword(password, publication.password_hash)) {
+    if (!await verifyPassword(password, publication.password_hash)) {
       return passwordPage(publication, true);
     }
     const cookieName = publicationAuthCookieName(publication.id);

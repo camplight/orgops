@@ -1,3 +1,5 @@
+import type { ModelCapabilities } from "@orgops/schemas";
+
 export type Agent = {
   id?: string;
   name: string;
@@ -18,6 +20,7 @@ export type Agent = {
   mode?: "CLASSIC" | "RLM_REPL" | "WRAPPED";
   wrappedConfig?: Record<string, unknown>;
   modelId: string;
+  modelCapabilities?: ModelCapabilities;
   desiredState: string;
   runtimeState: string;
   assignedRunnerId?: string | null;
@@ -25,6 +28,7 @@ export type Agent = {
 };
 
 export type Event = {
+  payloadTruncated?: boolean;
   id: string;
   type: string;
   payload: unknown;

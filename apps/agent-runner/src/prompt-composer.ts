@@ -4,12 +4,21 @@ import type {
   LlmMessageContent,
   LlmTextPart,
 } from "@orgops/llm";
+import { resolveReplyContract } from "@orgops/schemas";
+import {
+  isWorkspaceAttachment,
+  readMessageAttachments,
+  saveAttachmentToWorkspace,
+} from "./attachments";
 import { buildPromptEventRecord } from "./prompt-event-compact";
 import type { Agent, Event } from "./types";
 
 const DEFAULT_MAX_HISTORY_EVENTS = 120;
 const DEFAULT_MAX_HISTORY_CHARS = 120_000;
 const MAX_HISTORY_IMAGES_PER_EVENT = 3;
+const HISTORY_WINDOW_SHARE = 0.5;
+const CHARS_PER_TOKEN = 4;
+const MIN_HISTORY_CHARS = 8_000;
 const MAX_HISTORY_IMAGE_BYTES = 5 * 1024 * 1024;
 
 function readPositiveIntEnv(value: string | undefined, fallback: number): number {
@@ -38,10 +47,23 @@ type AttachmentImageData = {
 
 type ApiFetchFn = (path: string, init?: RequestInit) => Promise<Response>;
 
-function isUserMessageEvent(event: Event): boolean {
+/** Chat messages from anyone else (humans or other agents) are conversation turns, not instructions. */
+function isUserMessageEvent(agent: Agent, event: Event): boolean {
   if (event.type !== "message.created") return false;
   const source = String(event.source ?? "").toLowerCase();
-  return !source.startsWith("agent:") && !source.startsWith("system:");
+  return !source.startsWith("system:") && source !== `agent:${agent.name}`.toLowerCase();
+}
+
+function isOwnMessageEvent(agent: Agent, event: Event): boolean {
+  return event.type === "message.created" && event.source === `agent:${agent.name}`;
+}
+
+function ownMessageContent(agent: Agent, event: Event): string {
+  const text = (event.payload as { text?: unknown } | undefined)?.text;
+  if (resolveReplyContract(agent.modelId, agent.modelCapabilities) === "plain-text" && typeof text === "string") {
+    return text;
+  }
+  return JSON.stringify(buildPromptEventRecord(event), null, 2);
 }
 
 function extractImageAttachments(event: Event): EventAttachment[] {
@@ -84,6 +106,36 @@ async function fetchAttachmentImageData(
   return {
     bytes,
     mimeType: resolvedMime,
+  };
+}
+
+async function withWorkspaceAttachmentPaths(
+  agent: Agent,
+  event: Event,
+  apiFetchFn: ApiFetchFn,
+): Promise<Event> {
+  const payload = event.payload as { attachments?: unknown } | undefined;
+  if (!payload || !Array.isArray(payload.attachments)) return event;
+  const attachments = readMessageAttachments(payload).filter(isWorkspaceAttachment);
+  if (attachments.length === 0) return event;
+  const localPaths = new Map<string, string>();
+  await Promise.all(
+    attachments.map(async (attachment) => {
+      const saved = await saveAttachmentToWorkspace(apiFetchFn, agent, attachment).catch(() => null);
+      if (saved) localPaths.set(attachment.fileId, saved.localPath);
+    }),
+  );
+  if (localPaths.size === 0) return event;
+  return {
+    ...event,
+    payload: {
+      ...payload,
+      attachments: payload.attachments.map((entry) => {
+        const fileId = (entry as { fileId?: unknown } | null)?.fileId;
+        const localPath = typeof fileId === "string" ? localPaths.get(fileId.trim()) : undefined;
+        return localPath ? { ...(entry as object), localPath } : entry;
+      }),
+    },
   };
 }
 
@@ -157,19 +209,23 @@ export function estimateContextUsage(messages: LlmMessage[]) {
 }
 
 export async function toHistoryMessage(
-  _agent: Agent,
+  agent: Agent,
   event: Event,
   options?: {
     apiFetch?: ApiFetchFn;
     attachmentCache?: Map<string, Promise<AttachmentImageData | null>>;
   },
 ): Promise<LlmMessage> {
-  const role = isUserMessageEvent(event) ? ("user" as const) : ("system" as const);
-  const baseRecord = buildPromptEventRecord(event);
-  const textContent = JSON.stringify(baseRecord, null, 2);
+  if (isOwnMessageEvent(agent, event)) return { role: "assistant", content: ownMessageContent(agent, event) };
+  const role = isUserMessageEvent(agent, event) ? ("user" as const) : ("system" as const);
   if (role !== "user" || !options?.apiFetch) {
-    return { role, content: textContent };
+    return { role, content: JSON.stringify(buildPromptEventRecord(event), null, 2) };
   }
+  const textContent = JSON.stringify(
+    buildPromptEventRecord(await withWorkspaceAttachmentPaths(agent, event, options.apiFetch)),
+    null,
+    2,
+  );
   const attachments = extractImageAttachments(event).slice(0, MAX_HISTORY_IMAGES_PER_EVENT);
   if (attachments.length === 0) return { role, content: textContent };
   const cache = options.attachmentCache;
@@ -196,21 +252,29 @@ export async function toHistoryMessage(
   return { role, content: parts };
 }
 
-function buildHistoryTruncationMessage(
-  omittedCount: number,
-  includedCount: number,
-  maxEvents: number,
-  maxChars: number,
-) {
+function buildHistoryTruncationMessage(input: {
+  omittedCount: number;
+  includedCount: number;
+  maxEvents: number;
+  maxChars: number;
+  channelId?: string;
+  oldestIncludedCreatedAt?: number;
+}) {
+  const before = input.oldestIncludedCreatedAt;
   return {
     role: "system" as const,
     content: JSON.stringify(
       {
         type: "system.history.truncated",
-        omittedCount,
-        includedCount,
+        omittedCount: input.omittedCount,
+        includedCount: input.includedCount,
         reason: "history_budget_exceeded",
-        limits: { maxEvents, maxChars },
+        limits: { maxEvents: input.maxEvents, maxChars: input.maxChars },
+        ...(before !== undefined ? { omittedBefore: before } : {}),
+        howToReadOmitted:
+          before !== undefined && input.channelId
+            ? `Older channel events were left out to fit your context window. If you need them, call events_channel_messages with { channelId: "${input.channelId}", before: ${before}, order: "desc" } (or events_search with the same before/order filters) and page further back using the oldest createdAt you receive.`
+            : "Older channel events were left out to fit your context window; read them with events_channel_messages or events_search if you need them.",
       },
       null,
       2,
@@ -249,12 +313,33 @@ function buildToolResultToStartIndexMap(channelEvents: Event[]) {
   return resultToStartIndex;
 }
 
+/**
+ * History gets what the model's window leaves after the system prompt and
+ * memory, keeping half the window free for tool definitions, the tool loop,
+ * and output. ORGOPS_HISTORY_MAX_CHARS stays the ceiling for large windows.
+ */
+export function computeHistoryBudgetChars(input: {
+  contextWindowTokens: number;
+  system: string;
+  systemContextMessages?: string[];
+}): number {
+  const fixedTokens =
+    estimateTokensForText(input.system) +
+    (input.systemContextMessages ?? []).reduce(
+      (sum, message) => sum + estimateTokensForText(message),
+      0,
+    );
+  const historyTokens = Math.floor(input.contextWindowTokens * HISTORY_WINDOW_SHARE) - fixedTokens;
+  return Math.max(MIN_HISTORY_CHARS, Math.min(HISTORY_MAX_CHARS, historyTokens * CHARS_PER_TOKEN));
+}
+
 export async function buildModelMessages(
   agent: Agent,
   system: string,
   channelEvents: Event[],
-  options?: { systemContextMessages?: string[]; apiFetch?: ApiFetchFn },
+  options?: { systemContextMessages?: string[]; apiFetch?: ApiFetchFn; historyMaxChars?: number },
 ): Promise<LlmMessage[]> {
+  const historyMaxChars = options?.historyMaxChars ?? HISTORY_MAX_CHARS;
   const orderedChannelEvents = channelEvents
     .slice()
     .sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0));
@@ -275,7 +360,7 @@ export async function buildModelMessages(
     const messageChars = contentCharLength(historyMessages[index]?.content ?? "");
     const exceedsMaxEvents = keptMessageCount + 1 > HISTORY_MAX_EVENTS;
     const exceedsMaxChars =
-      keptMessageCount > 0 && totalHistoryChars + messageChars > HISTORY_MAX_CHARS;
+      keptMessageCount > 0 && totalHistoryChars + messageChars > historyMaxChars;
     if ((keptStartIndex < historyMessages.length && exceedsMaxChars) || exceedsMaxEvents) {
       break;
     }
@@ -304,28 +389,16 @@ export async function buildModelMessages(
       .map((content) => ({ role: "system" as const, content }))),
     ...(omittedCount > 0
       ? [
-          buildHistoryTruncationMessage(
+          buildHistoryTruncationMessage({
             omittedCount,
-            keptFromEnd.length,
-            HISTORY_MAX_EVENTS,
-            HISTORY_MAX_CHARS,
-          ),
+            includedCount: keptFromEnd.length,
+            maxEvents: HISTORY_MAX_EVENTS,
+            maxChars: historyMaxChars,
+            channelId: orderedChannelEvents[0]?.channelId,
+            oldestIncludedCreatedAt: orderedChannelEvents[keptStartIndex]?.createdAt,
+          }),
         ]
       : []),
     ...keptFromEnd,
   ];
-}
-
-export function selectRecentDeltaEventsForPrompt(agent: Agent, events: Event[]): Event[] {
-  const ownSource = `agent:${agent.name}`;
-  let latestUserLikeEventId: string | undefined;
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index];
-    if (event?.source !== ownSource) {
-      latestUserLikeEventId = event?.id;
-      break;
-    }
-  }
-  if (!latestUserLikeEventId) return events;
-  return events.filter((event) => event.id !== latestUserLikeEventId);
 }

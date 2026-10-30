@@ -9,13 +9,13 @@ This skill provides a **portable** way to ensure the Tavily CLI (`tvly`) is inst
 
 ## Secrets / auth
 
-- Store the API key in OrgOps secrets under package `tavily` with key `TAVILY_API_KEY`.
-- The runner injects secrets as environment variables for tool execution.
+- Store `TAVILY_API_KEY` as a private secret for this agent.
+- The runner injects that agent's secrets as environment variables for tool execution.
 
 Recommended:
 
 ```bash
-node --import tsx skills/secrets/assets/set.ts -- tavily TAVILY_API_KEY <value>
+node --import tsx skills/secrets/assets/set.ts -- TAVILY_API_KEY <value>
 ```
 
 The scripts in this skill will:

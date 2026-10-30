@@ -3,6 +3,7 @@ import { asc, eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { schema, type OrgOpsDrizzleDb } from "@orgops/db";
 import type { EventBus } from "@orgops/event-bus";
+import type { AccessControl } from './access';
 import {
   findActiveRunnerTokenByToken,
   generateRunnerScopedToken,
@@ -22,6 +23,7 @@ type RunnerRecord = {
 };
 
 type RunnersDeps = {
+  access: AccessControl;
   orm: OrgOpsDrizzleDb;
   bus: EventBus<any>;
   jsonResponse: (c: any, data: unknown, status?: number) => Response;
@@ -102,10 +104,13 @@ export function registerRunnersRoutes(app: Hono<any>, deps: RunnersDeps) {
     if (!user) {
       return jsonResponse(c, { error: "Authenticated human user required" }, 401);
     }
+    if (!deps.access.canManageInstance(user)) return jsonResponse(c, {error:'Instance owner required'}, 403);
+    c.header('Cache-Control', 'no-store');
     return jsonResponse(c, { runnerToken, runnerApiUrl });
   });
 
   app.post("/api/runners/invites", requireAuth, async (c) => {
+    if (!deps.access.canManageInstance((c as any).get('user'))) return jsonResponse(c, {error:'Instance owner required'}, 403);
     const user = (c as any).get("user") as { id?: string; username?: string } | undefined;
     if (!user?.id || !user?.username || user.username === "runner") {
       return jsonResponse(c, { error: "Authenticated human user required" }, 401);

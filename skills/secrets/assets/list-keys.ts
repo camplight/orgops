@@ -1,9 +1,14 @@
+import { parseSecretCommand } from "./_args.ts";
+
 const apiUrl = process.env.ORGOPS_API_URL ?? "http://localhost:8787";
 const token = process.env.ORGOPS_RUNNER_TOKEN;
 
-const args = process.argv.slice(2);
-if (args[0] === "--") args.shift();
-const [pkg] = args;
+const parsed = parseSecretCommand(process.argv);
+if ("error" in parsed) {
+  console.error(parsed.error);
+  console.error("Usage: node --import tsx list-keys.ts -- [--public | --team <teamId>]");
+  process.exit(1);
+}
 
 if (!token) {
   console.error("ORGOPS_RUNNER_TOKEN is required");
@@ -11,8 +16,7 @@ if (!token) {
 }
 
 async function main() {
-  const url = pkg ? `${apiUrl}/api/secrets/keys?package=${encodeURIComponent(pkg)}` : `${apiUrl}/api/secrets/keys`;
-  const res = await fetch(url, {
+  const res = await fetch(`${apiUrl}/api/secrets`, {
     headers: { "x-orgops-runner-token": token },
   });
 
@@ -21,8 +25,16 @@ async function main() {
     process.exit(1);
   }
 
-  const data = (await res.json()) as { keys: { package: string; key: string }[] };
-  console.log(JSON.stringify(data.keys, null, 2));
+  const rows = (await res.json()) as Array<{ name?: string; scope_type?: string; scope_id?: string | null }>;
+  const keys = rows
+    .filter((row) => {
+      if (!row.name || row.scope_type !== parsed.scope.scopeType) return false;
+      if (parsed.scope.scopeType === "public") return true;
+      return row.scope_id === parsed.scope.scopeId;
+    })
+    .map((row) => row.name)
+    .sort();
+  console.log(JSON.stringify(keys, null, 2));
 }
 
 main().catch((error: unknown) => {

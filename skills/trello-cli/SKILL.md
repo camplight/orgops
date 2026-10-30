@@ -15,7 +15,7 @@ Use this skill as a lightweight wrapper around the local Trello CLI.
 
 ## Secrets / auth
 
-Store Trello API credentials under the `trello` package using the `secrets` skill:
+Store Trello API credentials as private secrets for this agent:
 
 - `TRELLO_API_KEY`
 - `TRELLO_TOKEN`
@@ -23,8 +23,8 @@ Store Trello API credentials under the `trello` package using the `secrets` skil
 Example:
 
 ```bash
-node --import tsx skills/secrets/assets/set.ts -- trello TRELLO_API_KEY <value>
-node --import tsx skills/secrets/assets/set.ts -- trello TRELLO_TOKEN <value>
+node --import tsx skills/secrets/assets/set.ts -- TRELLO_API_KEY <value>
+node --import tsx skills/secrets/assets/set.ts -- TRELLO_TOKEN <value>
 ```
 
 The runner injects secrets as environment variables, and this skill's scripts use those env vars automatically.

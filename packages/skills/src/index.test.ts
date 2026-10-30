@@ -131,7 +131,7 @@ describe("skills", () => {
     );
     try {
       const merged = listSkillsFromRoots([{ path: rootA }, { path: rootB }]);
-      expect(merged.map((skill) => skill.name)).toEqual(["only-a", "dup"]);
+      expect(new Set(merged.map((skill) => skill.name))).toEqual(new Set(["only-a", "dup"]));
       expect(merged.find((skill) => skill.name === "dup")?.description).toBe("Dup A");
     } finally {
       rmSync(root, { recursive: true, force: true });

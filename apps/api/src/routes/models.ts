@@ -2,6 +2,7 @@ import type { Hono } from "hono";
 import { randomUUID } from "node:crypto";
 
 import { schema, type OrgOpsDrizzleDb } from "@orgops/db";
+import { resolveModelCapabilities } from "@orgops/schemas";
 import { eq } from "drizzle-orm";
 
 type ModelsDeps = {
@@ -15,14 +16,18 @@ export function registerModelsRoutes(app: Hono<any>, deps: ModelsDeps) {
 
   app.get("/api/models", (c) => {
     const rows = orm.select().from(schema.models).all() as any[];
-    const data = rows.map((row) => ({
-      id: row.id,
-      provider: row.provider,
-      modelName: row.model_name,
-      enabled: Boolean(row.enabled),
-      defaults: parseJson(row.defaults_json, {}),
-      createdAt: row.created_at
-    }));
+    const data = rows.map((row) => {
+      const defaults = parseJson<Record<string, unknown>>(row.defaults_json, {});
+      return {
+        id: row.id,
+        provider: row.provider,
+        modelName: row.model_name,
+        enabled: Boolean(row.enabled),
+        defaults,
+        capabilities: resolveModelCapabilities(row.provider, row.model_name, defaults),
+        createdAt: row.created_at
+      };
+    });
     return jsonResponse(c, data);
   });
 

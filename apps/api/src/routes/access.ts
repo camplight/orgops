@@ -6,7 +6,7 @@ import {
   type ChannelVisibility,
   type OrgOpsDrizzleDb,
 } from "@orgops/db";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 
 export type RequestUser = {
   id?: string;
@@ -69,6 +69,21 @@ function normalizeAgentVisibility(value: unknown): AgentVisibility {
 
 export function createAccessControl(deps: AccessDeps) {
   const { orm } = deps;
+
+  // Same bootstrap-owner policy used by Google sign-in configuration.
+  function canManageInstance(user: RequestUser | undefined): boolean {
+    if (isRunnerUser(user)) return user?.runnerScope?.mode !== 'SCOPED';
+    if (!isHumanUser(user) || !user.id || user.mustChangePassword) return false;
+    const owner = orm.select({id: schema.humans.id}).from(schema.humans)
+      .orderBy(asc(schema.humans.created_at), asc(schema.humans.id)).limit(1).get();
+    return owner?.id === user.id;
+  }
+
+  function canConfigureHostRuntime(user:RequestUser|undefined,runnerId:unknown):boolean{
+    if(canManageInstance(user))return true;
+    const scoped=getScopedRunner(user);
+    return Boolean(scoped?.allowedRunnerId&&scoped.allowedRunnerId===runnerId);
+  }
 
   function listViewerTeamIds(user: RequestUser | undefined): string[] {
     if (!isHumanUser(user)) return [];
@@ -472,12 +487,14 @@ export function createAccessControl(deps: AccessDeps) {
     const agent = getAgent(agentName);
     if (!agent) return false;
     const visibility = normalizeAgentVisibility(agent.visibility);
-    // Public existing agents do not have owners because this rollout has no backfill.
-    if (visibility === AGENT_VISIBILITY.PUBLIC) return true;
+    // Legacy unowned public agents remain configurable by instance operators.
+    if (visibility === AGENT_VISIBILITY.PUBLIC) return canManageInstance(user)||Boolean(agent.ownerHumanId&&agent.ownerHumanId===user.id);
     return Boolean(agent.ownerHumanId && user.id && agent.ownerHumanId === user.id);
   }
 
   return {
+    canManageInstance,
+    canConfigureHostRuntime,
     canViewChannel,
     canManageChannel,
     canPostToChannel,

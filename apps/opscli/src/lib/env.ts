@@ -4,6 +4,8 @@ import { join } from "node:path";
 import {
   DEFAULT_ANTHROPIC_MODEL_ID,
   DEFAULT_API_URL,
+  DEFAULT_LIQUID_MODEL_ID,
+  DEFAULT_MISTRAL_MODEL_ID,
   DEFAULT_OPENAI_MODEL_ID,
   DEFAULT_OPENROUTER_MODEL_ID,
   ROOT_ENV_FILE,
@@ -127,6 +129,8 @@ export function normalizeProvider(provider: string): ModelProvider | null {
   if (normalized === "openai") return "openai";
   if (normalized === "anthropic" || normalized === "claude") return "anthropic";
   if (normalized === "openrouter" || normalized === "or") return "openrouter";
+  if (normalized === "mistral" || normalized === "mistralai") return "mistral";
+  if (normalized === "liquid" || normalized === "liquidai") return "liquid";
   return null;
 }
 
@@ -138,30 +142,36 @@ export function getModelProvider(modelId: string): ModelProvider {
 function getProviderLabel(provider: ModelProvider) {
   if (provider === "openai") return "OpenAI";
   if (provider === "anthropic") return "Claude (Anthropic)";
+  if (provider === "mistral") return "Mistral";
+  if (provider === "liquid") return "Liquid AI";
   return "OpenRouter";
 }
 
 function getProviderApiKeyEnvKey(provider: ModelProvider) {
   if (provider === "openai") return "OPENAI_API_KEY";
   if (provider === "anthropic") return "ANTHROPIC_API_KEY";
+  if (provider === "mistral") return "MISTRAL_API_KEY";
+  if (provider === "liquid") return "LIQUID_API_KEY";
   return "OPENROUTER_API_KEY";
 }
 
 function getDefaultModelIdForProvider(provider: ModelProvider) {
   if (provider === "openai") return DEFAULT_OPENAI_MODEL_ID;
   if (provider === "anthropic") return DEFAULT_ANTHROPIC_MODEL_ID;
+  if (provider === "mistral") return DEFAULT_MISTRAL_MODEL_ID;
+  if (provider === "liquid") return DEFAULT_LIQUID_MODEL_ID;
   return DEFAULT_OPENROUTER_MODEL_ID;
 }
 
 function getAlternateProviders(provider: ModelProvider): ModelProvider[] {
-  return (["openai", "anthropic", "openrouter"] as const).filter((x) => x !== provider);
+  return (["openai", "anthropic", "openrouter", "mistral", "liquid"] as const).filter((x) => x !== provider);
 }
 
 async function askProviderChoice(ask: (prompt: string) => Promise<string>): Promise<ModelProvider> {
   while (true) {
     const answer = (
       await ask(
-        "No model API key found. Choose provider: [1] OpenAI, [2] Claude (Anthropic), [3] OpenRouter: "
+        "No model API key found. Choose provider: [1] OpenAI, [2] Claude (Anthropic), [3] OpenRouter, [4] Mistral, [5] Liquid AI: "
       )
     )
       .trim()
@@ -169,7 +179,9 @@ async function askProviderChoice(ask: (prompt: string) => Promise<string>): Prom
     if (answer === "1" || answer === "openai") return "openai";
     if (answer === "2" || answer === "claude" || answer === "anthropic") return "anthropic";
     if (answer === "3" || answer === "openrouter" || answer === "or") return "openrouter";
-    writeRoleMessage("opscli", "Please choose 1, 2, or 3.");
+    if (answer === "4" || answer === "mistral" || answer === "mistralai") return "mistral";
+    if (answer === "5" || answer === "liquid" || answer === "liquidai") return "liquid";
+    writeRoleMessage("opscli", "Please choose 1, 2, 3, 4, or 5.");
   }
 }
 
@@ -183,7 +195,9 @@ export async function ensureModelCredentials(input: {
   const hasOpenAiKey = Boolean(process.env.OPENAI_API_KEY?.trim());
   const hasAnthropicKey = Boolean(process.env.ANTHROPIC_API_KEY?.trim());
   const hasOpenRouterKey = Boolean(process.env.OPENROUTER_API_KEY?.trim());
-  const hasAnyKey = hasOpenAiKey || hasAnthropicKey || hasOpenRouterKey;
+  const hasMistralKey = Boolean(process.env.MISTRAL_API_KEY?.trim());
+  const hasLiquidKey = Boolean(process.env.LIQUID_API_KEY?.trim());
+  const hasAnyKey = hasOpenAiKey || hasAnthropicKey || hasOpenRouterKey || hasMistralKey || hasLiquidKey;
 
   if (!hasAnyKey) {
     provider = await askProviderChoice(ask);

@@ -53,7 +53,7 @@ export function requireApiKey(env: NodeJS.ProcessEnv = process.env): string {
   const key = env.TAVILY_API_KEY;
   if (!key) {
     throw new Error(
-      "Missing TAVILY_API_KEY env var. Set OrgOps secret package 'tavily' key 'TAVILY_API_KEY' so it is injected as env."
+      "Missing TAVILY_API_KEY env var. Store it as a private secret for this agent so it is injected as env."
     );
   }
   return key;

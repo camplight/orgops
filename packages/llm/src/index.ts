@@ -1,7 +1,15 @@
-import { generateText, stepCountIs } from "ai";
+import { asSchema, experimental_transcribe, generateText, stepCountIs } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createAnthropic } from "@ai-sdk/anthropic";
+import { createMistral } from "@ai-sdk/mistral";
 import type { ImagePart, ModelMessage, TextPart } from "ai";
+import {
+  generateWithOpenAIRealtime,
+  isOpenAIRealtimeModel,
+  splitRealtimeInstructions,
+} from "./openai-realtime";
+
+export { isOpenAIRealtimeModel } from "./openai-realtime";
 
 export type LlmMessage = ModelMessage;
 
@@ -31,7 +39,7 @@ export type GenerateOptions = {
   maxSteps?: number;
   tools?: Record<string, LlmTool>;
   abortSignal?: AbortSignal;
-  /** Env vars for API keys etc.; overrides process.env when set. Used by runner to inject package secrets. */
+  /** Env vars for API keys etc.; overrides process.env when set. Used by the runner to inject scoped secrets. */
   env?: Record<string, string | undefined>;
   /** Optional hook called between model steps to append fresh messages. */
   pullMessages?: () => Promise<LlmMessage[] | undefined>;
@@ -66,6 +74,13 @@ const PROVIDER_SECRET_ENV_KEYS = [
   "OPENAI_API_KEY",
   "ANTHROPIC_API_KEY",
   "OPENROUTER_API_KEY",
+  "MISTRAL_API_KEY",
+  "LIQUID_API_KEY",
+  "LIQUID_BASE_URL",
+  "OPENAI_COMPATIBLE_API_KEY",
+  "OPENAI_COMPATIBLE_BASE_URL",
+  "GOOGLE_API_KEY",
+  "GEMINI_API_KEY",
 ] as const;
 
 function normalizeToolsForSdk(tools?: Record<string, LlmTool>) {
@@ -81,6 +96,15 @@ function normalizeToolsForSdk(tools?: Record<string, LlmTool>) {
       },
     ])
   ) as Record<string, any>;
+}
+
+/** JSON Schema for a tool's parameters (zod or JSON schema), for wire protocols outside the AI SDK. */
+export async function toolParametersJsonSchema(tool: LlmTool): Promise<Record<string, unknown>> {
+  const parameters = tool.inputSchema ?? tool.parameters;
+  if (!parameters) return { type: "object", properties: {} };
+  const schema = await asSchema(parameters as any).jsonSchema;
+  const { $schema: _ignored, ...rest } = schema as Record<string, unknown>;
+  return rest;
 }
 
 export function isOpenAICompletionModel(modelName: string) {
@@ -102,6 +126,10 @@ function normalizeProvider(provider: string) {
   const normalized = provider.trim().toLowerCase();
   if (normalized === "claude") return "anthropic";
   if (normalized === "or") return "openrouter";
+  if (normalized === "mistralai") return "mistral";
+  if (normalized === "liquidai") return "liquid";
+  if (normalized === "gemini") return "google";
+  if (normalized === "openai_compatible" || normalized === "openai-compatible") return "openai-compatible";
   return normalized;
 }
 
@@ -181,20 +209,97 @@ function normalizeUsage(value: unknown): LlmUsage | undefined {
   return usage;
 }
 
+function resolveProviderEnv(overrides?: Record<string, string | undefined>) {
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    ...(overrides ?? {}),
+  };
+  if (overrides) {
+    for (const key of PROVIDER_SECRET_ENV_KEYS) {
+      if (!(key in overrides)) delete env[key];
+    }
+  }
+  return env;
+}
+
+export const STUB_TRANSCRIPTION_MODEL_ID = "stub:transcriber";
+
+export type TranscribeOptions = {
+  env?: Record<string, string | undefined>;
+  abortSignal?: AbortSignal;
+  language?: string;
+};
+
+export type TranscribeResult = {
+  text: string;
+  language?: string;
+  durationInSeconds?: number;
+};
+
+/**
+ * Picks the speech-to-text model used by the channel transcriber.
+ * ORGOPS_TRANSCRIPTION_MODEL wins ("off" disables); otherwise the first provider with a key.
+ */
+export function resolveTranscriptionModelId(
+  envInput?: Record<string, string | undefined>,
+): string | null {
+  const env = envInput ?? process.env;
+  const explicit = String(env.ORGOPS_TRANSCRIPTION_MODEL ?? "").trim();
+  if (explicit.toLowerCase() === "off") return null;
+  if (explicit) return explicit;
+  if (env.ORGOPS_LLM_STUB === "1") return STUB_TRANSCRIPTION_MODEL_ID;
+  if (env.MISTRAL_API_KEY) return "mistral:voxtral-mini-latest";
+  if (env.OPENAI_API_KEY) return "openai:gpt-4o-mini-transcribe";
+  return null;
+}
+
+export async function transcribe(
+  modelId: string,
+  audio: { data: Uint8Array },
+  options: TranscribeOptions = {},
+): Promise<TranscribeResult> {
+  const env = resolveProviderEnv(options.env);
+  if (modelId === STUB_TRANSCRIPTION_MODEL_ID || env.ORGOPS_LLM_STUB === "1") {
+    const seconds = Math.max(1, Math.round(audio.data.byteLength / 16000));
+    return { text: `Stub transcript of ${seconds}s voice input.` };
+  }
+  const separator = modelId.indexOf(":");
+  const rawProvider = separator > 0 ? modelId.slice(0, separator) : "";
+  const modelName = separator > 0 ? modelId.slice(separator + 1) : "";
+  if (!rawProvider || !modelName) {
+    throw new Error(`Invalid transcription modelId: ${modelId}. Expected "provider:model".`);
+  }
+  const provider = normalizeProvider(rawProvider);
+  let model: any;
+  if (provider === "openai") {
+    model = createOpenAI({ apiKey: env.OPENAI_API_KEY }).transcription(modelName);
+  } else if (provider === "mistral") {
+    model = createMistral({ apiKey: env.MISTRAL_API_KEY }).transcription(modelName);
+  } else {
+    throw new Error(`Provider ${rawProvider} does not support transcription in OrgOps.`);
+  }
+  const language = options.language?.trim();
+  const result = await experimental_transcribe({
+    model,
+    audio: audio.data,
+    abortSignal: options.abortSignal,
+    ...(language ? { providerOptions: { [provider]: { language } } } : {}),
+  });
+  return {
+    text: result.text.trim(),
+    ...(result.language ? { language: result.language } : {}),
+    ...(typeof result.durationInSeconds === "number"
+      ? { durationInSeconds: result.durationInSeconds }
+      : {}),
+  };
+}
+
 export async function generate(
   modelId: string,
   messages: LlmMessage[],
   options: GenerateOptions = {},
-) {
-  const env: Record<string, string | undefined> = {
-    ...process.env,
-    ...(options.env ?? {}),
-  };
-  if (options.env) {
-    for (const key of PROVIDER_SECRET_ENV_KEYS) {
-      if (!(key in options.env)) delete env[key];
-    }
-  }
+): Promise<GenerateResult> {
+  const env = resolveProviderEnv(options.env);
   if (env.ORGOPS_LLM_STUB === "1") {
     return { text: "LLM stub response.", toolCalls: [], toolResults: [] };
   }
@@ -204,6 +309,18 @@ export async function generate(
     throw new Error(`Invalid modelId format: ${modelId}. Expected "provider:model".`);
   }
   const provider = normalizeProvider(rawProvider);
+
+  if (provider === "openai" && isOpenAIRealtimeModel(modelName)) {
+    const splitRealtime = splitRealtimeInstructions(messages);
+    const result = await generateWithOpenAIRealtime(
+      modelName,
+      splitRealtime.instructions,
+      splitRealtime.messages,
+      { ...options, apiKey: env.OPENAI_API_KEY ?? "" },
+      { toolJsonSchema: toolParametersJsonSchema },
+    );
+    return { ...result, usage: normalizeUsage(result.usage) };
+  }
 
   let model: any;
   if (provider === "openai") {
@@ -232,6 +349,25 @@ export async function generate(
   } else if (provider === "anthropic") {
     const anthropic = createAnthropic({ apiKey: env.ANTHROPIC_API_KEY });
     model = anthropic(modelName);
+  } else if (provider === "mistral") {
+    const mistral = createMistral({ apiKey: env.MISTRAL_API_KEY });
+    model = mistral(modelName);
+  } else if (provider === "liquid") {
+    const liquid = createOpenAI({
+      apiKey: env.LIQUID_API_KEY,
+      baseURL: env.LIQUID_BASE_URL || "https://labs.liquid.ai/api/v1",
+    });
+    model = liquid.chat(modelName);
+  } else if (provider === "openai-compatible") {
+    const baseURL = env.OPENAI_COMPATIBLE_BASE_URL?.trim();
+    if (!baseURL) {
+      throw new Error("OPENAI_COMPATIBLE_BASE_URL is required for openai-compatible models.");
+    }
+    const compatible = createOpenAI({
+      apiKey: env.OPENAI_COMPATIBLE_API_KEY,
+      baseURL,
+    });
+    model = compatible.chat(modelName);
   } else {
     throw new Error(`Unsupported provider: ${rawProvider}`);
   }

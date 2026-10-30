@@ -86,6 +86,8 @@ const auditToolPayloadSchema = z
   })
   .passthrough();
 
+const targetAgentNamesSchema = z.array(z.string().trim().min(1)).min(1).max(30).optional();
+
 const coreEventShapes: EventShapeDefinition[] = [
   {
     type: "noop",
@@ -114,7 +116,7 @@ const coreEventShapes: EventShapeDefinition[] = [
         .object({
           text: z.string().min(1),
           eventType: z.string().min(1).optional(),
-          targetAgentNames: z.array(z.string().trim().min(1)).min(1).max(30).optional(),
+          targetAgentNames: targetAgentNamesSchema,
           sensitive: z
             .object({
               ciphertextB64: z.string().min(1).optional(),
@@ -151,6 +153,190 @@ const coreEventShapes: EventShapeDefinition[] = [
                 .passthrough(),
             ])
             .optional(),
+        })
+        .passthrough(),
+    }),
+  },
+  {
+    type: "voice.room.started",
+    description:
+      "A channel voice room started. Bookkeeping/signaling only; media is carried by the configured voice broker, not the event log.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1),
+      source: sourceSchema,
+      payload: z
+        .object({
+          roomId: z.string().min(1),
+          sessionId: z.string().min(1),
+          broker: z.string().min(1),
+          agentNames: z.array(z.string().min(1)).optional(),
+          startedAt: z.number().int().nonnegative(),
+          text: z.string().optional(),
+        })
+        .passthrough(),
+    }),
+  },
+  {
+    type: "voice.room.ended",
+    description: "A channel voice room ended. Bookkeeping/signaling only.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1),
+      source: sourceSchema,
+      payload: z
+        .object({
+          roomId: z.string().min(1),
+          sessionId: z.string().min(1).optional(),
+          endedAt: z.number().int().nonnegative(),
+          reason: z.string().min(1).optional(),
+          text: z.string().optional(),
+        })
+        .passthrough(),
+    }),
+  },
+  {
+    type: "voice.session.started",
+    description:
+      "A participant joined live voice in a channel. Presence bookkeeping only; never wakes agents.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1),
+      source: sourceSchema,
+      payload: z
+        .object({
+          sessionId: z.string().min(1),
+          startedAt: z.number().int().nonnegative(),
+          text: z.string().optional(),
+        })
+        .passthrough(),
+    }),
+  },
+  {
+    type: "voice.session.ended",
+    description: "A participant left live voice in a channel. Presence bookkeeping only.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1),
+      source: sourceSchema,
+      payload: z
+        .object({
+          sessionId: z.string().min(1),
+          endedAt: z.number().int().nonnegative(),
+          reason: z.string().min(1).optional(),
+          text: z.string().optional(),
+        })
+        .passthrough(),
+    }),
+  },
+  {
+    type: "voice.participant.muted",
+    description: "A live voice participant changed their own mute state. Presence bookkeeping only.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1),
+      source: sourceSchema,
+      payload: z
+        .object({
+          sessionId: z.string().min(1),
+          participantId: z.string().min(1),
+          participantKind: z.enum(["HUMAN", "AGENT"]).optional(),
+          muted: z.boolean(),
+          text: z.string().optional(),
+        })
+        .passthrough(),
+    }),
+  },
+  {
+    type: "voice.active_speaker.changed",
+    description:
+      "Live voice active-speaker hint, emitted when a participant starts an utterance. Lets single-stream consumers follow the current speaker.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1),
+      source: sourceSchema,
+      payload: z
+        .object({
+          sessionId: z.string().min(1),
+          streamId: z.string().min(1),
+          speakerId: z.string().min(1),
+          text: z.string().optional(),
+        })
+        .passthrough(),
+    }),
+  },
+  {
+    type: "voice.realtime.call.started",
+    description:
+      "A provider realtime media leg (WebRTC) started for a realtime-capable agent in a channel voice room. The agent's runner attaches to the call, supplies instructions and tools, and records both sides' transcripts as message.created with payload.voice.mode=realtime. Never starts a text turn.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1),
+      source: sourceSchema,
+      payload: z
+        .object({
+          targetAgentName: z.string().min(1),
+          callId: z.string().min(1),
+          sessionId: z.string().min(1),
+          roomId: z.string().min(1).optional(),
+          provider: z.string().min(1),
+          model: z.string().min(1),
+          transport: z.enum(["webrtc", "livekit"]).optional(),
+          speakerId: z.string().min(1),
+          startedAt: z.number().int().nonnegative(),
+          text: z.string().optional(),
+        })
+        .passthrough(),
+    }),
+  },
+  {
+    type: "voice.realtime.call.ended",
+    description:
+      "A realtime voice room media leg ended (human hung up, page closed, or the runner's connection to the call closed).",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1),
+      source: sourceSchema,
+      payload: z
+        .object({
+          targetAgentName: z.string().min(1),
+          callId: z.string().min(1),
+          sessionId: z.string().min(1).optional(),
+          roomId: z.string().min(1).optional(),
+          endedAt: z.number().int().nonnegative(),
+          reason: z.string().min(1).optional(),
+          text: z.string().optional(),
+        })
+        .passthrough(),
+    }),
+  },
+  {
+    type: "voice.input.chunk",
+    description:
+      "One self-contained spoken utterance (hold-to-talk voice message or a live voice segment). The API channel transcriber turns it into a message.created from the speaker with payload.voice; agents read that message, not the raw chunk.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1),
+      source: sourceSchema,
+      payload: z
+        .object({
+          mode: z.enum(["message", "live"]),
+          speakerId: z.string().min(1),
+          sessionId: z.string().min(1).optional(),
+          streamId: z.string().min(1).optional(),
+          chunkIndex: z.number().int().nonnegative().optional(),
+          startedAt: z.number().int().nonnegative(),
+          endedAt: z.number().int().nonnegative(),
+          durationMs: z.number().int().nonnegative().optional(),
+          attachment: z
+            .object({
+              fileId: z.string().min(1),
+              name: z.string().min(1).optional(),
+              mime: z.string().min(1).optional(),
+              size: z.number().int().nonnegative().optional(),
+            })
+            .passthrough(),
+          text: z.string().optional(),
         })
         .passthrough(),
     }),
@@ -250,6 +436,7 @@ const coreEventShapes: EventShapeDefinition[] = [
           triggerEventId: z.string().min(1),
           eventCount: z.number().int().positive().optional(),
           completedWithFallback: z.boolean().optional(),
+          noReply: z.boolean().optional(),
         })
         .passthrough(),
     }),
@@ -538,12 +725,6 @@ const coreEventShapes: EventShapeDefinition[] = [
   {
     type: "audit.secret.set",
     description: "Audit record for secret updates.",
-    source: "core",
-    payloadSchema: z.record(z.string(), z.unknown()),
-  },
-  {
-    type: "audit.secret.accessed",
-    description: "Audit record for secret access.",
     source: "core",
     payloadSchema: z.record(z.string(), z.unknown()),
   },

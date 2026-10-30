@@ -160,7 +160,7 @@ export const agentsToolDefs: ToolDef[] = [
   ],
   [
     "agents_copy",
-    "Copy an agent, including enabled skills, agent-local skills, private secrets that are not already public or package secrets, workspace files, and channel plus cross-channel memory. Pass federationInstanceId to copy onto a federated peer.",
+    "Copy an agent, including enabled skills, agent-local skills, private secrets that are not already public secrets, workspace files, and channel plus cross-channel memory. Pass federationInstanceId to copy onto a federated peer.",
     agentsCopySchema,
   ],
   [

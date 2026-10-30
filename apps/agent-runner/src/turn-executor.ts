@@ -9,11 +9,14 @@ import {
   type LlmUsage,
 } from "@orgops/llm";
 import { getModel } from "models-dev-db";
+import { z } from "zod";
 import { listSkillsFromRoots, loadSkillEventShapes } from "@orgops/skills";
 import {
   type EventValidationResult,
   type EventTypeSummary,
   getCoreEventShapes,
+  inferModelCapabilities,
+  resolveReplyContract,
   serializeEventShapes,
   validateEventAgainstShapes,
 } from "@orgops/schemas";
@@ -21,11 +24,10 @@ import { createRunnerTools, executeTool } from "./tools";
 import { pullInjectedEventMessages } from "./channel-injection";
 import { shouldHandleEventForAgent } from "./event-routing";
 import { getReservedEventTypeError } from "./event-type-guard";
-import { buildRunnerGuidance } from "./prompt";
+import { buildRunnerGuidance, NOOP_TOOL_NAME } from "./prompt";
 import { runRlmEventInChild } from "./rlm-process";
 import { runWrappedAgentTurn } from "./wrapped-runtime";
 import {
-  buildChannelRecentDeltaSystemMessage,
   buildSystemMemoryMessage,
   getChannelFullMemoryRecord,
   getChannelRecentMemoryRecord,
@@ -36,10 +38,10 @@ import {
 } from "./context-maintenance";
 import {
   buildModelMessages,
+  computeHistoryBudgetChars,
   contentCharLength,
   contentForTelemetry,
   estimateContextUsage,
-  selectRecentDeltaEventsForPrompt,
 } from "./prompt-composer";
 import { recordLlmUsage } from "./billing";
 import type { Agent, Event } from "./types";
@@ -51,6 +53,8 @@ const MAX_EVENT_DISPATCH_ATTEMPTS = 3;
 const DEFAULT_MEMORY_CONTEXT_MODE = "PER_CHANNEL_CROSS_CHANNEL" as const;
 const FALLBACK_MODEL_CONTEXT_WINDOW_TOKENS = 128_000;
 const DEFAULT_MAX_LLM_MESSAGE_CHARS = 200_000;
+const RESPONSE_FORMAT_ERROR =
+  "I hit a response-format issue and could not produce a clean chat message. Please try again.";
 
 type MemoryContextMode = "PER_CHANNEL_CROSS_CHANNEL" | "FULL_CHANNEL_EVENTS" | "OFF";
 
@@ -197,11 +201,43 @@ function extractJsonObject(rawText: string): unknown {
   }
 }
 
+// Display fallback can recover a trailing event envelope; strict dispatch still requires clean JSON.
+function extractTrailingEvent(rawText: string): unknown {
+  if (!rawText.endsWith("}")) throw new Error("No trailing object.");
+  let depth = 0;
+  let inString = false;
+  for (let index = rawText.length - 1; index >= 0; index -= 1) {
+    const char = rawText[index];
+    if (char === "\"") {
+      let backslashes = 0;
+      for (let previous = index - 1; previous >= 0 && rawText[previous] === "\\"; previous -= 1) {
+        backslashes += 1;
+      }
+      if (backslashes % 2 === 0) inString = !inString;
+    }
+    if (inString) continue;
+    if (char === "}") depth += 1;
+    if (char === "{" && --depth === 0) {
+      const parsed = JSON.parse(rawText.slice(index));
+      if (parsed && typeof parsed === "object" && "type" in parsed && "payload" in parsed) {
+        return parsed;
+      }
+      break;
+    }
+  }
+  throw new Error("No trailing event envelope.");
+}
+
 export function normalizeFallbackMessageText(rawText: string): string {
   const trimmed = rawText.trim();
   if (!trimmed) return "Unable to produce structured event output.";
   try {
-    const parsed = extractJsonObject(trimmed);
+    let parsed: unknown;
+    try {
+      parsed = extractJsonObject(trimmed);
+    } catch {
+      parsed = extractTrailingEvent(trimmed);
+    }
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       const payload = (parsed as Record<string, unknown>).payload;
       if (payload && typeof payload === "object" && !Array.isArray(payload)) {
@@ -211,7 +247,7 @@ export function normalizeFallbackMessageText(rawText: string): string {
         }
       }
       // Do not leak raw event JSON into chat when fallback is triggered.
-      return "I hit a response-format issue and could not produce a clean chat message. Please try again.";
+      return RESPONSE_FORMAT_ERROR;
     }
   } catch {
     // Keep plain-text fallbacks as-is.
@@ -269,21 +305,10 @@ function formatValidationErrors(validation: EventValidationResult): string {
     .join("\n");
 }
 
-function buildFallbackMessageEvent(
-  agentName: string,
-  channelId: string,
-  text: string,
-  parentEventId?: string,
-) {
-  return {
-    type: "message.created",
-    source: `agent:${agentName}`,
-    channelId,
-    payload: {
-      text: normalizeFallbackMessageText(text),
-    },
-    ...(parentEventId ? { parentEventId } : {}),
-  };
+function generateUsedTools(result: GenerateResult): boolean {
+  if ((result.toolCalls?.length ?? 0) > 0) return true;
+  if ((result.toolResults?.length ?? 0) > 0) return true;
+  return result.finishReason === "tool-calls";
 }
 
 function shouldEmitAuditEvents(agent: Agent): boolean {
@@ -299,6 +324,12 @@ function normalizeModelMetadataProvider(provider: string) {
   return normalized;
 }
 
+function inferModelCapabilitiesForId(modelId: string) {
+  const separator = modelId.indexOf(":");
+  if (separator <= 0) return {};
+  return inferModelCapabilities(modelId.slice(0, separator), modelId.slice(separator + 1));
+}
+
 function resolveFallbackModelContextWindowTokens(modelId: string): number {
   const normalized = modelId.toLowerCase();
   if (normalized.includes("gpt-4o-mini")) return 128_000;
@@ -310,7 +341,12 @@ function resolveFallbackModelContextWindowTokens(modelId: string): number {
   return FALLBACK_MODEL_CONTEXT_WINDOW_TOKENS;
 }
 
-async function resolveModelContextWindowTokens(modelId: string): Promise<number> {
+async function resolveModelContextWindowTokens(agent: Agent): Promise<number> {
+  const declared = agent.modelCapabilities?.contextWindowTokens;
+  if (typeof declared === "number" && declared > 0) return Math.floor(declared);
+  const inferred = inferModelCapabilitiesForId(agent.modelId).contextWindowTokens;
+  if (inferred) return inferred;
+  const modelId = agent.modelId;
   const cached = modelContextWindowCache.get(modelId);
   if (cached) return cached;
   const pending = (async () => {
@@ -541,6 +577,8 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       .join("\n\n");
     const nowMs = Date.now();
     const nowIso = new Date(nowMs).toISOString();
+    const plainTextReplies =
+      resolveReplyContract(agent.modelId, agent.modelCapabilities) === "plain-text";
     const runnerGuidance = buildRunnerGuidance(
       nowMs,
       nowIso,
@@ -554,6 +592,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         shell: process.env.SHELL ?? process.env.ComSpec ?? "unknown",
         nodeVersion: process.version,
       },
+      { replyContract: plainTextReplies ? "plain-text" : "json", agentName: agent.name },
     );
     const memoryContextMode = resolveAgentMemoryContextMode(agent);
     let eventHistory: Event[] = [];
@@ -575,22 +614,12 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
           : undefined,
       );
       eventHistory = getMeaningfulEvents(rawDeltaEvents);
-      const recentDeltaForSystemContext = selectRecentDeltaEventsForPrompt(
-        agent,
-        eventHistory,
-      );
       systemContextMessages = [
         channelRecentMemory?.summaryText
           ? buildSystemMemoryMessage(
               `Channel Recent Summary (last 10 minutes, ${channelId})`,
               channelRecentMemory.summaryText,
             )
-          : "",
-        recentDeltaForSystemContext.length > 0
-          ? buildChannelRecentDeltaSystemMessage({
-              channelId,
-              events: recentDeltaForSystemContext,
-            })
           : "",
         channelFullMemory?.summaryText
           ? buildSystemMemoryMessage(
@@ -632,9 +661,16 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
     ]
       .filter(Boolean)
       .join("\n\n");
+    const contextWindowTokens = await resolveModelContextWindowTokens(agent);
+    const historyMaxChars = computeHistoryBudgetChars({
+      contextWindowTokens,
+      system,
+      systemContextMessages,
+    });
     const baseMessages = await buildModelMessages(agent, system, eventHistory, {
       systemContextMessages,
       apiFetch: input.api.apiFetch,
+      historyMaxChars,
     });
     const mergedTriggerMessage =
       events.length > 1
@@ -696,7 +732,6 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       0,
     );
     const estimatedUsedTokens = estimateContextUsage(invokeMessages);
-    const contextWindowTokens = await resolveModelContextWindowTokens(agent.modelId);
     const estimatedAvailableTokens = Math.max(0, contextWindowTokens - estimatedUsedTokens);
     const utilizationPct =
       contextWindowTokens > 0
@@ -719,6 +754,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
             systemChars,
             systemContextChars,
             historyChars: Math.max(0, totalPromptChars - systemChars - systemContextChars),
+            historyMaxChars,
             triggerEventId: triggerEvent.id,
             ...payload,
           },
@@ -732,10 +768,27 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       utilizationPct: Math.round(utilizationPct * 100) / 100,
     });
 
+    let pendingMessages: ModelEventDraft[] = [];
+    const flushMessages = async () => {
+      for (const [index, draft] of pendingMessages.entries()) {
+        await input.api.emitEvent({
+          ...draft,
+          idempotencyKey: draft.idempotencyKey ?? `turn:${agent.name}:${triggerEvent.id}:message:${index}`,
+        });
+      }
+    };
+
     const executeCtx = {
       agent,
       triggerEvent,
       channelId,
+      ...((agent.mode ?? "CLASSIC") === "CLASSIC"
+        ? {
+            deferMessage: (draft: ModelEventDraft) => {
+              pendingMessages.push(draft);
+            },
+          }
+        : {}),
       extraAllowedRoots: selectedSkills.map((skill: any) => skill.path),
       injectionEnv,
       apiFetch: input.api.apiFetch,
@@ -768,14 +821,37 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
     if (loadedSkillEventShapes.errors.length > 0) {
       console.warn("skill event shape load errors", loadedSkillEventShapes.errors);
     }
-    const tools = createRunnerTools({
+    let postedMessageToChannel = false;
+    const runnerTools = createRunnerTools({
       agent,
       event: triggerEvent,
       channelId,
-      runTool: (tool, args) => executeTool(executeCtx, tool, args),
+      runTool: async (tool, args) => {
+        const output = await executeTool(executeCtx, tool, args);
+        const emitted = output as { channelId?: unknown; event?: { type?: unknown; deliverAt?: unknown } };
+        if (
+          tool === "events_emit" &&
+          emitted?.channelId === channelId &&
+          emitted.event?.type === "message.created" &&
+          !emitted.event.deliverAt
+        ) {
+          postedMessageToChannel = true;
+        }
+        return output;
+      },
       apiFetch: input.api.apiFetch,
       emitEvent: input.api.emitEvent,
     });
+    const tools = plainTextReplies
+      ? {
+          ...runnerTools,
+          // No execute: the model loop stops on this call and the runner ends the turn silently.
+          [NOOP_TOOL_NAME]: {
+            description: "Finish your turn without posting a reply.",
+            inputSchema: z.object({ reason: z.string().optional() }),
+          },
+        }
+      : runnerTools;
     if ((agent.mode ?? "CLASSIC") === "RLM_REPL") {
       await runRlmEventInChild({
         agent,
@@ -802,6 +878,9 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
     const classicMaxModelSteps = resolveAgentClassicMaxModelSteps(agent);
     let lastResponseText = "";
     for (let attempt = 1; attempt <= MAX_EVENT_DISPATCH_ATTEMPTS; attempt += 1) {
+      pendingMessages = [];
+      postedMessageToChannel = false;
+      lastResponseText = "";
       let result: GenerateResult;
       try {
         result = await withTimeout(
@@ -876,6 +955,52 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         maxAttempts: MAX_EVENT_DISPATCH_ATTEMPTS,
       });
       if (hasLateInjectedEvents) continue;
+      if (!responseText.trim()) {
+        if (postedMessageToChannel) {
+          await flushMessages();
+          await emitTurnEvent("agent.turn.completed", {});
+          return;
+        }
+        if (plainTextReplies || generateUsedTools(result)) {
+          await emitTurnEvent("agent.turn.completed", { noReply: true });
+          return;
+        }
+        retryMessages.push({
+          role: "system",
+          content: [
+            `Your previous response was empty on attempt ${attempt}/${MAX_EVENT_DISPATCH_ATTEMPTS}.`,
+            "Return only a JSON event object.",
+          ].join("\n"),
+        });
+        continue;
+      }
+      if (plainTextReplies) {
+        const reply = responseText.trim();
+        const calledNoop = (result.toolCalls ?? []).some(
+          (call) => (call as { toolName?: unknown }).toolName === NOOP_TOOL_NAME,
+        );
+        if (calledNoop || !reply) {
+          await emitTurnEvent("agent.turn.completed", { noReply: true });
+          return;
+        }
+        // The model already replied here via events_emit; posting its final text too would duplicate it.
+        if (postedMessageToChannel) {
+          await flushMessages();
+          await emitTurnEvent("agent.turn.completed", {});
+          return;
+        }
+        if (!/^(\{|```)/.test(reply)) {
+          await input.api.emitEvent({
+            type: "message.created",
+            source: `agent:${agent.name}`,
+            channelId,
+            payload: { text: reply },
+            parentEventId: triggerEvent.id,
+          });
+          await emitTurnEvent("agent.turn.completed", {});
+          return;
+        }
+      }
       let parsed: unknown;
       try {
         parsed = extractJsonObject(responseText);
@@ -941,13 +1066,31 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         });
         continue;
       }
+      await flushMessages();
       await input.api.emitEvent(eventDraft);
       await emitTurnEvent("agent.turn.completed", {});
       return;
     }
-    await input.api.emitEvent(
-      buildFallbackMessageEvent(agent.name, channelId, lastResponseText, triggerEvent.id),
-    );
-    await emitTurnEvent("agent.turn.completed", { completedWithFallback: true });
+    await flushMessages();
+    const hasAnswer = pendingMessages.some((draft) => draft.channelId === channelId);
+    if (hasAnswer) {
+      await emitTurnEvent("agent.turn.completed", { completedWithFallback: true });
+      return;
+    }
+    if (!lastResponseText.trim()) {
+      await emitTurnEvent("agent.turn.completed", { noReply: true });
+      return;
+    }
+    await emitTurnEvent("agent.turn.phase", {
+      phase: "response.format_error",
+      detail: RESPONSE_FORMAT_ERROR,
+      attempts: MAX_EVENT_DISPATCH_ATTEMPTS,
+      responsePreview: truncateOversizedText(lastResponseText.trim(), 500),
+    });
+    await emitTurnEvent("agent.turn.completed", {
+      completedWithFallback: true,
+      noReply: true,
+      responseFormatError: true,
+    });
   };
 }

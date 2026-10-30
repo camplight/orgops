@@ -13,7 +13,7 @@ function repoAlreadyPresent(installDir: string) {
 
 function hasDirtyGitTree(installDir: string) {
   const result = capture("git", ["status", "--porcelain"], { cwd: installDir });
-  return result.status === 0 && Boolean(result.stdout?.trim());
+  return result.status === 0 && Boolean(String(result.stdout ?? "").trim());
 }
 
 export function checkpointDirtyGitTree(installDir: string) {

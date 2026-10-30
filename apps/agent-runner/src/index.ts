@@ -6,5 +6,5 @@ const entryHref = process.argv[1]
   : "";
 
 if (import.meta.url === entryHref) {
-  void loop();
+  void loop().finally(() => process.exit(0));
 }

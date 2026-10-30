@@ -1,12 +1,14 @@
 import type { Hono } from "hono";
+import {federationFetch} from '../federation-transport';
 import { openDb, schema, type OrgOpsDrizzleDb } from "@orgops/db";
 import type { SkillMeta, SkillRoot } from "@orgops/skills";
 import type { EventShapeDefinition } from "@orgops/schemas";
 import { decryptSecret, encryptSecret, parseMasterKey } from "@orgops/crypto";
 import { z } from "zod";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, openSync, closeSync, fstatSync, readSync } from "node:fs";
+import { open } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative, resolve } from "node:path";
 import {
   and,
   asc,
@@ -31,6 +33,9 @@ import type { AccessControl, RequestUser } from "./access";
 // AND the coder's own event posts. Dashboards wanting totals should call
 // GET /api/events/stats; complete dumps go through /api/events/export.sqlite.
 const MAX_EVENT_ROWS = 10_000;
+const MAX_EVENT_PAYLOAD_BYTES = 64 * 1024;
+const MAX_EVENT_PAGE_PAYLOAD_BYTES = 1024 * 1024;
+const MAX_EVENT_PAYLOAD_JSON_CHARS = 262_144;
 
 type EventsDeps = {
   orm: OrgOpsDrizzleDb;
@@ -65,7 +70,8 @@ type EventsDeps = {
     shapes: EventShapeDefinition[],
   ) => Array<{ type: string; description: string; source: string; payloadExample?: unknown }>;
   access: AccessControl;
-  verifyPassword: (password: string, hashed: string) => boolean;
+  verifyPassword: (password: string, hashed: string) => Promise<boolean>;
+  dataDir: string;
 };
 
 export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
@@ -83,6 +89,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     serializeEventShapes,
     access,
     verifyPassword,
+    dataDir,
   } = deps;
   const EventSchema = deps.EventSchema;
   const EVENT_SHAPES_CACHE_TTL_MS = Number(process.env.ORGOPS_EVENT_SHAPES_CACHE_TTL_MS ?? 3000);
@@ -250,6 +257,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     const params = new URL(url).searchParams;
     const scheduled = params.get("scheduled");
     const includeConsumed = params.get("includeConsumed");
+    const requestedLimit = Number(params.get("limit") ?? 100);
     return {
       params,
       channelId: params.get("channelId"),
@@ -262,7 +270,8 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       status: params.get("status"),
       after: params.get("after"),
       before: params.get("before"),
-      limit: Math.min(Number(params.get("limit") ?? 100), MAX_EVENT_ROWS),
+      hasExplicitLimit: params.has("limit"),
+      limit: Number.isFinite(requestedLimit) && requestedLimit >= 1 ? Math.min(Math.floor(requestedLimit), MAX_EVENT_ROWS) : 100,
       order: params.get("order"),
       descending: params.get("order") === "desc",
       all: params.get("all") === "1",
@@ -293,6 +302,82 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     };
   }
 
+  function eventRowSelectFields(options: { truncatePayload: boolean; metadataOnly?: boolean }) {
+    const blobCharLength = sql<number | null>`(SELECT ${schema.eventPayloadBlobs.char_length} FROM ${schema.eventPayloadBlobs} WHERE ${schema.eventPayloadBlobs.event_id} = ${schema.events.id})`;
+    const blobByteLength = sql<number | null>`(SELECT ${schema.eventPayloadBlobs.byte_length} FROM ${schema.eventPayloadBlobs} WHERE ${schema.eventPayloadBlobs.event_id} = ${schema.events.id})`;
+    const blobSha256 = sql<string | null>`(SELECT ${schema.eventPayloadBlobs.sha256} FROM ${schema.eventPayloadBlobs} WHERE ${schema.eventPayloadBlobs.event_id} = ${schema.events.id})`;
+    const blobStoragePath = sql<string | null>`(SELECT ${schema.eventPayloadBlobs.storage_path} FROM ${schema.eventPayloadBlobs} WHERE ${schema.eventPayloadBlobs.event_id} = ${schema.events.id})`;
+    return {
+      id: schema.events.id,
+      type: schema.events.type,
+      payload_json: options.metadataOnly ? sql<string>`''` : options.truncatePayload
+        ? sql<string | null>`CASE WHEN length(${schema.events.payload_json}) > ${MAX_EVENT_PAYLOAD_JSON_CHARS} THEN NULL ELSE ${schema.events.payload_json} END`
+        : schema.events.payload_json,
+      payload_bytes: sql<number>`COALESCE(${blobByteLength}, octet_length(${schema.events.payload_json}))`,
+      payload_json_chars: sql<number>`COALESCE(${blobCharLength}, length(${schema.events.payload_json}))`,
+      payload_blob_storage_path: blobStoragePath,
+      payload_blob_byte_length: blobByteLength,
+      payload_blob_sha256: blobSha256,
+      source: schema.events.source,
+      channel_id: schema.events.channel_id,
+      parent_event_id: schema.events.parent_event_id,
+      deliver_at: schema.events.deliver_at,
+      status: schema.events.status,
+      fail_count: schema.events.fail_count,
+      last_error: sql<string | null>`substr(${schema.events.last_error}, 1, 2048)`,
+      idempotency_key: schema.events.idempotency_key,
+      created_at: schema.events.created_at,
+    };
+  }
+
+  function hydrateEventRows(rows: any[], payloadLimit = MAX_EVENT_PAYLOAD_BYTES): any[] {
+    let remaining = MAX_EVENT_PAGE_PAYLOAD_BYTES;
+    return rows.map(row => {
+      const bytes = Number(row.payload_bytes);
+      if (!Number.isFinite(bytes) || bytes > payloadLimit || bytes > remaining) return {...row, payload_truncated: true, payload_max_chars: payloadLimit};
+      let payload: string;
+      if (row.payload_blob_storage_path) {
+        // Read only the declared bounded file, never an unbounded historical blob.
+        const fd = openSync(resolveBlobPath(row.payload_blob_storage_path), 'r');
+        try {
+          if (fstatSync(fd).size !== bytes) throw new Error('Event payload blob size changed');
+          const buffer = Buffer.alloc(bytes);
+          let offset = 0;
+          while (offset < bytes) {
+            const count = readSync(fd, buffer, offset, bytes - offset, offset);
+            if (!count) throw new Error('Event payload blob is incomplete');
+            offset += count;
+          }
+          payload = buffer.toString('utf8');
+        } finally {closeSync(fd);}
+      } else {
+        payload = orm.select({json:schema.events.payload_json}).from(schema.events).where(eq(schema.events.id,row.id)).get()!.json;
+      }
+      remaining -= bytes;
+      return {...row, payload_json:payload, payload_max_chars:payloadLimit};
+    });
+  }
+
+  function parseChunkQuery(url: string) {
+    const params = new URL(url).searchParams;
+    const offsetRaw = Number(params.get("offset") ?? 0);
+    const limitRaw = Number(params.get("limit") ?? 65_536);
+    const offset = Number.isFinite(offsetRaw) ? Math.max(0, Math.floor(offsetRaw)) : 0;
+    const limit = Number.isFinite(limitRaw)
+      ? Math.min(Math.max(1, Math.floor(limitRaw)), MAX_EVENT_PAYLOAD_JSON_CHARS)
+      : 65_536;
+    return { offset, limit };
+  }
+
+  function resolveBlobPath(storagePath: string) {
+    const absolute = resolve(dataDir, storagePath);
+    const rel = relative(resolve(dataDir), absolute);
+    if (rel === "" || rel.startsWith("..") || rel.startsWith("/")) {
+      throw new Error("Invalid event payload blob path");
+    }
+    return absolute;
+  }
+
   function selectEventRows(
     query: ReturnType<typeof readEventQuery>,
     user: RequestUser | undefined,
@@ -309,6 +394,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       status,
       after,
       before,
+      hasExplicitLimit,
       limit,
       descending,
       all,
@@ -327,8 +413,14 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     }
     const now = Date.now();
     // includeAll (the sqlite export) stays uncapped — it is a deliberate,
-    // rare dump; the client-facing all=1 is capped at MAX_EVENT_ROWS.
-    const rowCap = options.includeAll ? null : all ? MAX_EVENT_ROWS : limit;
+    // rare dump; the client-facing all=1 is capped at MAX_EVENT_ROWS unless
+    // the caller also passed limit, in which case limit wins.
+    const rowCap = options.includeAll
+      ? null
+      : all && !hasExplicitLimit
+        ? MAX_EVENT_ROWS
+        : limit;
+    const selectFields = eventRowSelectFields({ truncatePayload: !options.includeAll, metadataOnly: !options.includeAll });
 
     const whereClauses: any[] = [];
 
@@ -419,7 +511,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
         }
         const joinedQuery = orm
           .select({
-            event: schema.events,
+            event: selectFields,
             receiptStatus: schema.eventReceipts.status,
           })
           .from(schema.events)
@@ -433,12 +525,26 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
               ? desc(schema.events.created_at)
               : asc(schema.events.created_at),
           );
-        const joinedRows = (
+        let joinedRows = (
           rowCap === null ? joinedQuery : joinedQuery.limit(rowCap)
         ).all() as Array<{
           event: any;
           receiptStatus: string;
         }>;
+
+        if (!options.includeAll) {
+          let remaining = MAX_EVENT_PAGE_PAYLOAD_BYTES;
+          let count = 0;
+          for (const row of joinedRows) {
+            const bytes = row.event.payload_bytes;
+            if (bytes <= MAX_EVENT_PAGE_PAYLOAD_BYTES) {
+              if (bytes > remaining) break;
+              remaining -= bytes;
+            }
+            count += 1;
+          }
+          joinedRows = joinedRows.slice(0,count);
+        }
 
         if (options.markRunnerDelivered && !scheduledOnly) {
           const pendingDeliveredIds = joinedRows
@@ -478,12 +584,12 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
                   .where(eq(schema.events.id, eventId))
                   .run();
                 const updated = orm
-                  .select()
+                  .select(selectFields)
                   .from(schema.events)
                   .where(eq(schema.events.id, eventId))
                   .get() as any | undefined;
                 if (updated) {
-                  publishEventRow(updated);
+                  publishEventRow(hydrateEventRows([updated])[0]);
                 }
               }
             }
@@ -536,7 +642,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
         ? and(...(whereClauses as [any, ...any[]]))
         : undefined;
     const dbQuery = orm
-      .select()
+      .select(selectFields)
       .from(schema.events)
       .where(whereExpr)
       .orderBy(
@@ -766,7 +872,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     const token = typeof instance.outbound_token === "string" ? instance.outbound_token.trim() : "";
     if (!token) throw new Error(`Federation peer "${instance.name}" has no outbound token.`);
     const baseUrl = String(instance.base_url ?? "").replace(/\/+$/, "");
-    const response = await fetch(
+    const response = await federationFetch(
       `${baseUrl}/api/federation/channels/${encodeURIComponent(link.remote_channel_id)}/events`,
       {
         method: "POST",
@@ -912,7 +1018,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
 
     if (parsed.data.idempotencyKey) {
       const existing = orm
-        .select()
+        .select(eventRowSelectFields({ truncatePayload: true }))
         .from(schema.events)
         .where(eq(schema.events.idempotency_key, parsed.data.idempotencyKey))
         .get() as any;
@@ -976,11 +1082,81 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     return jsonResponse(c, { total, byStatus });
   });
 
+  app.get("/api/events/:id/payload", async (c) => {
+    const id = c.req.param("id");
+    const user = c.get("user") as RequestUser | undefined;
+    const { offset, limit } = parseChunkQuery(c.req.url);
+    const row = orm
+      .select(eventRowSelectFields({ truncatePayload: true }))
+      .from(schema.events)
+      .where(eq(schema.events.id, id))
+      .get() as any | undefined;
+    if (!row) {
+      return jsonResponse(c, { error: "Not found" }, 404);
+    }
+    if (row.channel_id && !access.canViewChannel(user, row.channel_id)) {
+      return jsonResponse(c, { error: "Not found" }, 404);
+    }
+
+    const blobPath =
+      typeof row.payload_blob_storage_path === "string"
+        ? row.payload_blob_storage_path
+        : "";
+    if (blobPath) {
+      const byteLength = Number(row.payload_blob_byte_length ?? 0);
+      const totalChars = Number(row.payload_json_chars ?? 0);
+      const handle = await open(resolveBlobPath(blobPath), "r");
+      try {
+        const readLength = Math.max(0, Math.min(limit, Math.max(0, byteLength - offset)));
+        const buffer = Buffer.alloc(readLength);
+        const { bytesRead } = await handle.read(buffer, 0, readLength, offset);
+        const nextOffset = offset + bytesRead;
+        return jsonResponse(c, {
+          eventId: id,
+          storage: "file",
+          totalChars,
+          byteLength,
+          offset,
+          limit,
+          chunk: buffer.subarray(0, bytesRead).toString("utf8"),
+          nextOffset,
+          done: nextOffset >= byteLength,
+          sha256: row.payload_blob_sha256 ?? undefined,
+        });
+      } finally {
+        await handle.close();
+      }
+    }
+
+    const chunkRow = orm
+      .select({
+        totalChars: sql<number>`length(${schema.events.payload_json})`,
+        chunk: sql<string>`substr(${schema.events.payload_json}, ${offset + 1}, ${limit})`,
+      })
+      .from(schema.events)
+      .where(eq(schema.events.id, id))
+      .get() as { totalChars: number; chunk: string } | undefined;
+    if (!chunkRow) return jsonResponse(c, { error: "Not found" }, 404);
+    const totalChars = Number(chunkRow.totalChars ?? 0);
+    const chunk = chunkRow.chunk ?? "";
+    const nextOffset = offset + chunk.length;
+    return jsonResponse(c, {
+      eventId: id,
+      storage: "db",
+      totalChars,
+      offset,
+      limit,
+      chunk,
+      nextOffset,
+      done: nextOffset >= totalChars,
+    });
+  });
+
   app.get("/api/events/:id", (c) => {
     const id = c.req.param("id");
     const user = c.get("user") as RequestUser | undefined;
     const row = orm
-      .select()
+      .select(eventRowSelectFields({ truncatePayload: true }))
       .from(schema.events)
       .where(eq(schema.events.id, id))
       .get() as any | undefined;
@@ -1105,7 +1281,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       .run();
 
     const updated = orm
-      .select()
+      .select(eventRowSelectFields({ truncatePayload: true }))
       .from(schema.events)
       .where(eq(schema.events.id, id))
       .get() as any | undefined;
@@ -1138,7 +1314,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       .from(schema.humans)
       .where(eq(schema.humans.username, user.username))
       .get() as { id: string; username: string; passwordHash: string } | undefined;
-    if (!human || !verifyPassword(password, human.passwordHash)) {
+    if (!human || !await verifyPassword(password, human.passwordHash)) {
       return jsonResponse(c, { error: "Invalid credentials" }, 401);
     }
 
@@ -1189,10 +1365,12 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       includeAll: false,
       markRunnerDelivered: true,
     });
-    return jsonResponse(c, rows.map(eventRowToApi));
+    const pollingRunner = user?.username === "runner" && Boolean(query.agentName);
+    return jsonResponse(c, hydrateEventRows(rows, pollingRunner ? MAX_EVENT_PAGE_PAYLOAD_BYTES : MAX_EVENT_PAYLOAD_BYTES).map(eventRowToApi));
   });
 
   app.delete("/api/events", (c) => {
+    if (!access.canManageInstance(c.get('user'))) return jsonResponse(c, {error:'Instance owner required'}, 403);
     const url = new URL(c.req.url);
     const params = url.searchParams;
     const channelId = params.get("channelId");
@@ -1302,7 +1480,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
   app.delete("/api/channels/:channelId/messages", (c) => {
     const channelId = c.req.param("channelId");
     const user = c.get("user") as RequestUser | undefined;
-    if (!access.canPostToChannel(user, channelId)) {
+    if (!access.canManageChannel(user, channelId)) {
       return jsonResponse(c, { error: "Forbidden" }, 403);
     }
     const whereExpr = and(

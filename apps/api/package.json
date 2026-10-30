@@ -14,11 +14,15 @@
     "@orgops/crypto": "file:../../packages/crypto",
     "@orgops/db": "file:../../packages/db",
     "@orgops/event-bus": "file:../../packages/event-bus",
+    "@orgops/llm": "file:../../packages/llm",
     "@orgops/schemas": "file:../../packages/schemas",
     "@orgops/skills": "file:../../packages/skills",
     "drizzle-orm": "^0.45.2",
     "google-auth-library": "11.2.0",
     "hono": "^4.13.8",
     "tsx": "^4.20.5"
+  },
+  "devDependencies": {
+    "@types/ws": "8.18.2"
   }
 }

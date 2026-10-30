@@ -32,7 +32,6 @@ type JsonRenderAction = {
 };
 
 type SecretSetRequest = {
-  package: string;
   key: string;
   value: string;
   scopeType?: string;
@@ -49,6 +48,7 @@ type JsonRenderBlockProps = {
   channelId: string | null;
   username: string;
   canPost: boolean;
+  agentName?: string;
 };
 
 function parseSpec(specText: string): JsonRenderSpec {
@@ -131,14 +131,50 @@ function isSecretSetAction(name: string) {
   );
 }
 
+function secretDestination(
+  scopeType: string,
+  scopeId: string,
+  agentName: string,
+): Pick<SecretSetRequest, "scopeType" | "scopeId"> | { error: string } {
+  if (scopeType && scopeType !== "package") {
+    return {
+      scopeType,
+      ...(scopeId ? { scopeId } : scopeType === "private" && agentName ? { scopeId: agentName } : {}),
+    };
+  }
+  if (!agentName) return { error: "This secret form is not attached to an agent." };
+  return { scopeType: "private", scopeId: agentName };
+}
+
+function readableApiError(error: unknown, fallback: string) {
+  const detail = error instanceof Error ? error.message : fallback;
+  try {
+    const parsed = JSON.parse(detail) as { error?: unknown };
+    if (typeof parsed.error === "string" && parsed.error.trim()) return parsed.error;
+  } catch {
+    // Response body is already plain text.
+  }
+  return detail || fallback;
+}
+
+function savedSecretLabel(request: SecretSetRequest) {
+  if (request.scopeId) return `${request.scopeId}/${request.key}`;
+  return request.key;
+}
+
 function resolveSecretSetRequest(
   params: Record<string, unknown>,
-  values: Record<string, string | string[]>
+  values: Record<string, string | string[]>,
+  agentName: string,
 ): SecretSetRequest | { error: string } {
-  const packageId = nonEmptyString(params.package ?? params.packageId);
   const key = nonEmptyString(params.key ?? params.name);
-  if (!packageId) return { error: "Missing secret package in action params." };
   if (!key) return { error: "Missing secret key in action params." };
+  const destination = secretDestination(
+    nonEmptyString(params.scopeType),
+    nonEmptyString(params.scopeId),
+    agentName,
+  );
+  if ("error" in destination) return destination;
 
   const valueField = nonEmptyString(params.valueField ?? params.valueFrom ?? params.secretField);
   const directValue = nonEmptyString(params.value);
@@ -166,26 +202,27 @@ function resolveSecretSetRequest(
     };
   }
 
-  const scopeType = nonEmptyString(params.scopeType);
-  const scopeId = nonEmptyString(params.scopeId);
   return {
-    package: packageId,
     key,
     value,
-    ...(scopeType ? { scopeType } : {}),
-    ...(scopeId ? { scopeId } : {})
+    ...destination,
   };
 }
 
 function resolveSecretInputRequest(
   elementId: string,
   props: Record<string, unknown>,
-  values: Record<string, string | string[]>
+  values: Record<string, string | string[]>,
+  agentName: string,
 ): SecretSetRequest | { error: string } {
-  const packageId = nonEmptyString(props.package ?? props.packageId);
   const key = nonEmptyString(props.key ?? props.name);
-  if (!packageId) return { error: "Missing secret package in SecretInput props." };
   if (!key) return { error: "Missing secret key in SecretInput props." };
+  const destination = secretDestination(
+    nonEmptyString(props.scopeType),
+    nonEmptyString(props.scopeId),
+    agentName,
+  );
+  if ("error" in destination) return destination;
 
   const valueField = nonEmptyString(props.valueField ?? props.valueFrom ?? props.secretField);
   let value = "";
@@ -198,14 +235,10 @@ function resolveSecretInputRequest(
   }
   if (!value) return { error: "Enter a secret value before saving." };
 
-  const scopeType = nonEmptyString(props.scopeType);
-  const scopeId = nonEmptyString(props.scopeId);
   return {
-    package: packageId,
     key,
     value,
-    ...(scopeType ? { scopeType } : {}),
-    ...(scopeId ? { scopeId } : {})
+    ...destination,
   };
 }
 
@@ -277,7 +310,7 @@ function chartPoints(props: Record<string, unknown>) {
     .filter((entry): entry is ChartPoint => Boolean(entry));
 }
 
-export function JsonRenderBlock({ specText, channelId, username, canPost }: JsonRenderBlockProps) {
+export function JsonRenderBlock({ specText, channelId, username, canPost, agentName = "" }: JsonRenderBlockProps) {
   const [values, setValues] = useState<Record<string, string | string[]>>({});
   const [submittingAction, setSubmittingAction] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
@@ -315,7 +348,7 @@ export function JsonRenderBlock({ specText, channelId, username, canPost }: Json
     setStatus(null);
     try {
       if (secretAction) {
-        const secretRequest = resolveSecretSetRequest(params, values);
+        const secretRequest = resolveSecretSetRequest(params, values, agentName.trim());
         if ("error" in secretRequest) {
           setStatus(secretRequest.error);
           return;
@@ -325,7 +358,7 @@ export function JsonRenderBlock({ specText, channelId, username, canPost }: Json
           headers: getApiHeaders(),
           body: JSON.stringify(secretRequest)
         });
-        setStatus(`Saved secret: ${secretRequest.package}/${secretRequest.key}`);
+        setStatus(`Saved secret: ${savedSecretLabel(secretRequest)}`);
         return;
       }
 
@@ -349,14 +382,14 @@ export function JsonRenderBlock({ specText, channelId, username, canPost }: Json
       });
       setStatus(`Sent action: ${name}`);
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Unable to send action");
+      setStatus(readableApiError(error, "Unable to send action"));
     } finally {
       setSubmittingAction(null);
     }
   }
 
   async function submitSecretInput(elementId: string, props: Record<string, unknown>) {
-    const request = resolveSecretInputRequest(elementId, props, values);
+    const request = resolveSecretInputRequest(elementId, props, values, agentName.trim());
     if ("error" in request) {
       setStatus(request.error);
       return;
@@ -370,9 +403,9 @@ export function JsonRenderBlock({ specText, channelId, username, canPost }: Json
         body: JSON.stringify(request)
       });
       setValues((current) => ({ ...current, [elementId]: "" }));
-      setStatus(`Saved secret: ${request.package}/${request.key}`);
+      setStatus(`Saved secret: ${savedSecretLabel(request)}`);
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Unable to save secret");
+      setStatus(readableApiError(error, "Unable to save secret"));
     } finally {
       setSubmittingAction(null);
     }
@@ -574,7 +607,6 @@ export function JsonRenderBlock({ specText, channelId, username, canPost }: Json
     }
 
     if (type === "SecretInput") {
-      const packageId = textProp(props, "package", "packageId");
       const key = textProp(props, "key", "name");
       const submitLabel = textProp(props, "submitLabel", "submit-label") || "Save secret";
       const placeholder = textProp(props, "placeholder") || "Enter secret value";
@@ -594,7 +626,7 @@ export function JsonRenderBlock({ specText, channelId, username, canPost }: Json
           </label>
           <div className="json-render-secret-meta">
             <code>
-              {packageId || "package"}/{key || "key"}
+              only {agentName.trim() || "this agent"} · {key || "key"}
             </code>
           </div>
           <button

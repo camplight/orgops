@@ -147,6 +147,14 @@ function normalizeAgentVisibility(value: unknown): AgentVisibility {
     : AGENT_VISIBILITY.PUBLIC;
 }
 
+function normalizeOwnerHumanId(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
 function compactTimestampForName(at = Date.now()): string {
   const iso = new Date(at).toISOString();
   return iso.replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
@@ -254,6 +262,7 @@ function toInviteApi(
     createdByType: row.created_by_type === "AGENT" ? "AGENT" : "HUMAN",
     createdById: row.created_by_id ?? row.created_by_human_id ?? undefined,
     createdByHumanId: row.created_by_human_id,
+    ownerHumanId: row.owner_human_id,
     createdAt: row.created_at,
     expiresAt: row.expires_at,
     revokedAt: row.revoked_at,
@@ -271,6 +280,15 @@ function inviteAllowsChannelExpansion(row: AgentInviteRow): boolean {
 
 export function registerAgentInviteRoutes(app: Hono<any>, deps: AgentInvitesDeps) {
   const { orm, jsonResponse, access, inviteBaseUrlFallback } = deps;
+
+  function humanExists(humanId: string): boolean {
+    const row = orm
+      .select({ id: schema.humans.id })
+      .from(schema.humans)
+      .where(eq(schema.humans.id, humanId))
+      .get();
+    return Boolean(row);
+  }
 
   app.get("/api/agent-invites", (c) => {
     const user = c.get("user") as RequestUser | undefined;
@@ -332,6 +350,31 @@ export function registerAgentInviteRoutes(app: Hono<any>, deps: AgentInvitesDeps
     const creator = resolveInviteCreator(user, body, access, agentName);
     if (!creator.ok) {
       return jsonResponse(c, { error: creator.error }, creator.status);
+    }
+    const requestedOwnerHumanId = normalizeOwnerHumanId(body.ownerHumanId);
+    const ownerHumanId =
+      visibility === AGENT_VISIBILITY.PRIVATE
+        ? requestedOwnerHumanId !== undefined
+          ? requestedOwnerHumanId
+          : creator.humanId
+        : null;
+    if (visibility === AGENT_VISIBILITY.PRIVATE && !ownerHumanId) {
+      return jsonResponse(
+        c,
+        { error: "ownerHumanId is required for private agent invites" },
+        400,
+      );
+    }
+    if (
+      ownerHumanId &&
+      creator.humanId &&
+      ownerHumanId !== creator.humanId &&
+      !access.canManageInstance(user)
+    ) {
+      return jsonResponse(c, { error: "Cannot assign another human as owner" }, 403);
+    }
+    if (ownerHumanId && !humanExists(ownerHumanId)) {
+      return jsonResponse(c, { error: "ownerHumanId does not reference an existing human" }, 400);
     }
     const existingAgent = orm
       .select({
@@ -407,6 +450,7 @@ export function registerAgentInviteRoutes(app: Hono<any>, deps: AgentInvitesDeps
         created_by_type: creator.type,
         created_by_id: creator.id,
         created_by_human_id: creator.humanId,
+        owner_human_id: ownerHumanId,
         created_at: now,
         expires_at: expiresAt,
         revoked_at: null,
@@ -731,6 +775,11 @@ export function registerAgentInviteRoutes(app: Hono<any>, deps: AgentInvitesDeps
         }
       })(),
     );
+    const inviteVisibility = normalizeAgentVisibility(invite.agent_visibility);
+    const inviteOwnerHumanId =
+      inviteVisibility === AGENT_VISIBILITY.PRIVATE
+        ? invite.owner_human_id ?? invite.created_by_human_id
+        : null;
 
     if (!existingAgent) {
       orm
@@ -750,8 +799,8 @@ export function registerAgentInviteRoutes(app: Hono<any>, deps: AgentInvitesDeps
           emit_audit_events: 1,
           memory_context_mode: "OFF",
           mode: "WRAPPED",
-          visibility: normalizeAgentVisibility(invite.agent_visibility),
-          owner_human_id: null,
+          visibility: inviteVisibility,
+          owner_human_id: inviteOwnerHumanId,
           desired_state: "STOPPED",
           runtime_state: "STOPPED",
           assigned_runner_id: runnerId,
@@ -770,7 +819,8 @@ export function registerAgentInviteRoutes(app: Hono<any>, deps: AgentInvitesDeps
           mode: "WRAPPED",
           model_id: "wrapped:none",
           memory_context_mode: "OFF",
-          visibility: normalizeAgentVisibility(invite.agent_visibility),
+          visibility: inviteVisibility,
+          owner_human_id: inviteOwnerHumanId,
           wrapped_config_json: JSON.stringify(wrappedConfig),
           assigned_runner_id: runnerId,
           desired_state: existingAgent.desired_state ?? "STOPPED",

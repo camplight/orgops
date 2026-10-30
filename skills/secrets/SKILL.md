@@ -1,6 +1,6 @@
 ---
 name: secrets
-description: Manage secrets (write, list keys, delete). Secrets are stored encrypted; agents can set values and list or delete keys but cannot read secret values. Use for API keys and tokens (e.g. OPENAI_API_KEY). Values are injected as env when running skills and LLM.
+description: Manage secrets (write, list keys, delete). Secrets are stored encrypted; agents can set values and list or delete keys but cannot read secret values. Chat collection stores a private secret for the current agent. Values are injected as env when running skills and LLM.
 ---
 # Scoped secrets
 
@@ -10,16 +10,17 @@ Manage OrgOps scoped secrets. Agents can **write** key-value pairs, **list** sec
 
 When you need a user to provide a secret, **do not ask them to paste the secret value in plain chat text**.
 
-Instead, return a single HTML component that the UI can render as a secure input form:
+Return a single HTML component. Omit `package`. The UI stores the value as a **private secret for you**, the agent that posted the form. Other agents do not receive it.
 
 ```html
-<orgops-secret-input package="llm" key="OPENAI_API_KEY" label="Set OpenAI API key" submit-label="Save secret" description="This value is sent directly to the secrets API and is not posted as a chat message."></orgops-secret-input>
+<orgops-secret-input key="ATLE_OPENAI_API_KEY" label="Set OpenAI API key for ATLE" submit-label="Save secret" description="Stored only for this agent. The value is sent to the secrets API and is not posted in chat."></orgops-secret-input>
 ```
 
 Rules:
 
 - Return only the component as the full message body (no surrounding markdown/code fences/text).
-- Use `package` and `key` when known; users can still edit values in the form before submit.
+- Set `key` to the name you were asked to store.
+- Do not set `package`. New package secrets are rejected. The form stores a private secret for this agent.
 - Never echo back secret values.
 - If this component is available, prefer it over requesting plain-text secrets.
 
@@ -27,57 +28,55 @@ Rules:
 
 All commands require `ORGOPS_RUNNER_TOKEN` and use `ORGOPS_API_URL` (default `http://localhost:8787`).
 
-### Set a secret (legacy package helper)
+### Set a secret
+
+By default this stores a private secret for `ORGOPS_AGENT_NAME`. Other agents do not receive it. A legacy `<package> <key> <value>` call does the same: the package name is ignored and the key is stored for this agent.
 
 ```bash
-node --import tsx {baseDir}/assets/set.ts -- <package> <key> <value>
+node --import tsx {baseDir}/assets/set.ts -- <key> <value>
+node --import tsx {baseDir}/assets/set.ts -- --public <key> <value>
+node --import tsx {baseDir}/assets/set.ts -- --team <teamId> <key> <value>
 ```
 
-Example: store OpenAI key for the legacy `llm` package scope:
-
-```bash
-ORGOPS_RUNNER_TOKEN=... node --import tsx {baseDir}/assets/set.ts -- llm OPENAI_API_KEY sk-...
-```
-
-### List secret keys
-
-Returns key names only (and package), never values.
-
-```bash
-node --import tsx {baseDir}/assets/list-keys.ts -- [package]
-```
-
-Examples:
-
-```bash
-node --import tsx {baseDir}/assets/list-keys.ts --           # all packages
-node --import tsx {baseDir}/assets/list-keys.ts -- llm       # only keys for package "llm"
-```
-
-### Delete a secret
-
-```bash
-node --import tsx {baseDir}/assets/delete.ts -- <package> <key>
-```
+`--public` stores a secret every agent receives. `--team` stores it for agents in that team on a channel the team belongs to.
 
 Example:
 
 ```bash
-node --import tsx {baseDir}/assets/delete.ts -- llm OPENAI_API_KEY
+node --import tsx {baseDir}/assets/set.ts -- OPENAI_API_KEY sk-...
 ```
 
-## Package names
+### List secret keys
 
-Use a logical package name that matches how the secret is used, e.g. `llm` for `OPENAI_API_KEY`. Package scope is legacy compatibility.
+Returns key names only, never values. Default is this agent's private keys.
+
+```bash
+node --import tsx {baseDir}/assets/list-keys.ts
+node --import tsx {baseDir}/assets/list-keys.ts -- --public
+node --import tsx {baseDir}/assets/list-keys.ts -- --team <teamId>
+```
+
+### Delete a secret
+
+Default deletes this agent's private secret. A legacy `<package> <key>` call deletes that key for this agent.
+
+```bash
+node --import tsx {baseDir}/assets/delete.ts -- <key>
+node --import tsx {baseDir}/assets/delete.ts -- --public <key>
+node --import tsx {baseDir}/assets/delete.ts -- --team <teamId> <key>
+```
 
 ## Runtime scopes
 
 Runtime env injection resolves matching keys in this order:
 
 1. `private` (agent-specific; `scopeId=<agentName>`)
-2. `team` (`scopeId=<teamId>` from the active channel context)
-3. `public`
-4. `package` (legacy)
+2. `human` (the agent's owner, when owner-secret delegation is enabled)
+3. `team` (`scopeId=<teamId>` from the active channel context)
+4. `public`
+5. `package` (legacy rows already stored; new writes are rejected)
+
+A private, human, team, or public secret with the same name overrides a legacy package row. Operators rotate by saving the key in one of those scopes, or by deleting the package row.
 
 For provider credentials (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`), runtime execution uses the resolved scoped secret and does not fall back to host process env.
 

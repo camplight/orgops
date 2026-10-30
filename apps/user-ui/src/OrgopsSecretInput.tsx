@@ -4,16 +4,30 @@ import type { SecretInputSpec } from "./secretInputMarkdown";
 
 type OrgopsSecretInputProps = {
   spec: SecretInputSpec;
+  agentName?: string;
 };
+
+function errorText(error: unknown) {
+  const detail = error instanceof Error ? error.message : "Unable to save secret";
+  try {
+    const parsed = JSON.parse(detail) as { error?: unknown };
+    if (typeof parsed.error === "string" && parsed.error.trim()) return parsed.error;
+  } catch {
+    // Response body is already plain text.
+  }
+  return detail || "Unable to save secret";
+}
 
 type SubmitTone = "success" | "error";
 
-export function OrgopsSecretInput({ spec }: OrgopsSecretInputProps) {
+export function OrgopsSecretInput({ spec, agentName = "" }: OrgopsSecretInputProps) {
   const [value, setValue] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [status, setStatus] = useState<{ tone: SubmitTone; text: string } | null>(null);
 
-  const canSubmit = spec.packageId.trim().length > 0 && spec.key.trim().length > 0;
+  const agent = agentName.trim();
+  const explicitScope = spec.scopeType.trim().length > 0 && spec.scopeType !== "package";
+  const canSubmit = spec.key.trim().length > 0 && (explicitScope || agent.length > 0);
   const label = spec.label || `Set secret ${spec.key}`;
   const submitLabel = spec.submitLabel || "Save secret";
 
@@ -28,12 +42,17 @@ export function OrgopsSecretInput({ spec }: OrgopsSecretInputProps) {
     setStatus(null);
     try {
       const body: Record<string, string> = {
-        package: spec.packageId,
         key: spec.key,
         value,
       };
-      if (spec.scopeType) body.scopeType = spec.scopeType;
-      if (spec.scopeId) body.scopeId = spec.scopeId;
+      if (explicitScope) {
+        body.scopeType = spec.scopeType;
+        if (spec.scopeId) body.scopeId = spec.scopeId;
+        else if (spec.scopeType === "private" && agent) body.scopeId = agent;
+      } else {
+        body.scopeType = "private";
+        body.scopeId = agent;
+      }
       await apiFetch("/api/secrets", {
         method: "POST",
         headers: getApiHeaders(),
@@ -42,8 +61,7 @@ export function OrgopsSecretInput({ spec }: OrgopsSecretInputProps) {
       setValue("");
       setStatus({ tone: "success", text: `Saved ${spec.key}.` });
     } catch (error) {
-      const detail = error instanceof Error ? error.message : "Unable to save secret";
-      setStatus({ tone: "error", text: detail || "Unable to save secret" });
+      setStatus({ tone: "error", text: errorText(error) });
     } finally {
       setSubmitting(false);
     }
@@ -54,7 +72,9 @@ export function OrgopsSecretInput({ spec }: OrgopsSecretInputProps) {
       <div className="orgops-secret-input-head">
         <strong>{label}</strong>
         <code>
-          {spec.packageId}/{spec.key}
+          {explicitScope
+            ? `${spec.scopeType}${spec.scopeId ? `/${spec.scopeId}` : ""}/${spec.key}`
+            : `only ${agent || "this agent"} · ${spec.key}`}
         </code>
       </div>
       {spec.description ? <p>{spec.description}</p> : null}

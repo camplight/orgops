@@ -1,14 +1,17 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button, Card, Input, Label, Select } from "../components/ui";
 import { useEscapeKey } from "../hooks/useEscapeKey";
-import type { AgentInvite, Channel } from "../types";
+import type { AgentInvite, Channel, Human } from "../types";
 
 type AgentInvitesScreenProps = {
   invites: AgentInvite[];
   channels: Channel[];
+  humans: Human[];
+  currentHumanId: string | null;
   onCreateInvite: (input: {
     agentName: string;
     visibility: "PUBLIC" | "PRIVATE";
+    ownerHumanId?: string | null;
     runnerScopeMode: "SCOPED" | "GLOBAL";
     allowChannelExpansion: boolean;
     channelIds: string[];
@@ -34,6 +37,8 @@ function formatDate(value: number | null | undefined) {
 export function AgentInvitesScreen({
   invites,
   channels,
+  humans,
+  currentHumanId,
   onCreateInvite,
   onRevokeInvite,
   onDeleteInvite,
@@ -44,6 +49,7 @@ export function AgentInvitesScreen({
 }: AgentInvitesScreenProps) {
   const [agentName, setAgentName] = useState("");
   const [visibility, setVisibility] = useState<"PUBLIC" | "PRIVATE">("PUBLIC");
+  const [ownerHumanId, setOwnerHumanId] = useState<string | null>(currentHumanId);
   const [selectedChannelIds, setSelectedChannelIds] = useState<string[]>([]);
   const [runnerScopeMode, setRunnerScopeMode] = useState<"SCOPED" | "GLOBAL">("SCOPED");
   const [allowChannelExpansion, setAllowChannelExpansion] = useState(false);
@@ -68,6 +74,14 @@ export function AgentInvitesScreen({
     () => [...channels].sort((left, right) => left.name.localeCompare(right.name)),
     [channels],
   );
+  const sortedHumans = useMemo(
+    () => [...humans].sort((left, right) => left.username.localeCompare(right.username)),
+    [humans],
+  );
+  const humanNameById = useMemo(
+    () => new Map(sortedHumans.map((human) => [human.id, human.username])),
+    [sortedHumans],
+  );
   const visibleChannels = useMemo(() => {
     const query = channelQuery.trim().toLowerCase();
     if (!query) return sortedChannels;
@@ -89,6 +103,12 @@ export function AgentInvitesScreen({
   );
   const drawerOpen = createDrawerOpen || Boolean(selectedInvite);
 
+  useEffect(() => {
+    if (visibility === "PRIVATE" && !ownerHumanId && currentHumanId) {
+      setOwnerHumanId(currentHumanId);
+    }
+  }, [currentHumanId, ownerHumanId, visibility]);
+
   const closeDrawers = () => {
     setCreateDrawerOpen(false);
     setChannelsOpen(false);
@@ -97,6 +117,7 @@ export function AgentInvitesScreen({
 
   const openCreateDrawer = () => {
     setSelectedInviteId(null);
+    setOwnerHumanId(currentHumanId);
     setCreateDrawerOpen(true);
   };
 
@@ -125,6 +146,10 @@ export function AgentInvitesScreen({
       setStatus("Agent name must match ^[a-zA-Z0-9._-]{1,80}$.");
       return;
     }
+    if (visibility === "PRIVATE" && !ownerHumanId) {
+      setStatus("Choose an owner for private invites.");
+      return;
+    }
     setBusy(true);
     setStatus(null);
     setLatestInviteLink(null);
@@ -136,6 +161,7 @@ export function AgentInvitesScreen({
       const created = await onCreateInvite({
         agentName: trimmedAgentName,
         visibility,
+        ...(visibility === "PRIVATE" ? { ownerHumanId } : {}),
         runnerScopeMode,
         allowChannelExpansion:
           runnerScopeMode === "SCOPED" && (channelExpansionRequired || allowChannelExpansion),
@@ -148,6 +174,7 @@ export function AgentInvitesScreen({
       );
       setAgentName("");
       setVisibility("PUBLIC");
+      setOwnerHumanId(currentHumanId);
       setRunnerScopeMode("SCOPED");
       setAllowChannelExpansion(false);
       setSelectedChannelIds([]);
@@ -346,6 +373,14 @@ export function AgentInvitesScreen({
                           Channel expansion: {invite.allowChannelExpansion ? "enabled" : "disabled"}
                         </div>
                       ) : null}
+                      {invite.visibility === "PRIVATE" ? (
+                        <div className="mt-1 text-xs text-slate-500">
+                          Owner:{" "}
+                          {invite.ownerHumanId
+                            ? humanNameById.get(invite.ownerHumanId) ?? invite.ownerHumanId
+                            : "none"}
+                        </div>
+                      ) : null}
                     </td>
                     <td className="px-2 py-2 text-slate-300">
                       {(invite.createdByType ?? "HUMAN").toLowerCase()}:
@@ -428,14 +463,42 @@ export function AgentInvitesScreen({
               <Select
                 className="mt-1"
                 value={visibility}
-                onChange={(event) =>
-                  setVisibility(event.target.value === "PRIVATE" ? "PRIVATE" : "PUBLIC")
-                }
+                onChange={(event) => {
+                  const next = event.target.value === "PRIVATE" ? "PRIVATE" : "PUBLIC";
+                  setVisibility(next);
+                  if (next === "PRIVATE" && !ownerHumanId) {
+                    setOwnerHumanId(currentHumanId);
+                  }
+                }}
               >
                 <option value="PUBLIC">Public</option>
                 <option value="PRIVATE">Private</option>
               </Select>
             </Label>
+            {visibility === "PRIVATE" ? (
+              <Label>
+                Owner
+                <Select
+                  className="mt-1"
+                  value={ownerHumanId ?? ""}
+                  onChange={(event) => setOwnerHumanId(event.target.value || null)}
+                >
+                  <option value="" disabled>
+                    Choose a human owner
+                  </option>
+                  {sortedHumans.map((human) => (
+                    <option key={human.id} value={human.id}>
+                      {human.username}
+                      {human.id === currentHumanId ? " (you)" : ""}
+                    </option>
+                  ))}
+                </Select>
+                <div className="mt-1 text-xs text-slate-500">
+                  Private invited agents need a human owner so their scoped runner can manage
+                  wrapped runtime config after redemption.
+                </div>
+              </Label>
+            ) : null}
             <Label>
               Expires at
               <Input
@@ -583,6 +646,17 @@ export function AgentInvitesScreen({
                       </span>
                     </div>
                   </div>
+                  {selectedInvite.visibility === "PRIVATE" ? (
+                    <div>
+                      <div className="text-xs text-slate-500">Owner</div>
+                      <div className="text-slate-100">
+                        {selectedInvite.ownerHumanId
+                          ? humanNameById.get(selectedInvite.ownerHumanId) ??
+                            selectedInvite.ownerHumanId
+                          : "none"}
+                      </div>
+                    </div>
+                  ) : null}
                   <div>
                     <div className="text-xs text-slate-500">Created by</div>
                     <div className="text-slate-100">

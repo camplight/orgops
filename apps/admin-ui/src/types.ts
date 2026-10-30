@@ -273,6 +273,7 @@ export type AgentInvite = {
   createdByType?: "HUMAN" | "AGENT";
   createdById?: string;
   createdByHumanId?: string | null;
+  ownerHumanId?: string | null;
   createdAt: number;
   expiresAt?: number | null;
   revokedAt?: number | null;

@@ -1,0 +1,34 @@
+name: Full CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: full-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  full:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Type-check all workspaces
+        run: npm run lint
+      - name: Run Vitest suite
+        run: npm test -- --testTimeout=30000 --maxWorkers=4
+      - name: Run OpsCLI tests
+        run: npm run --workspace @orgops/opscli test
+      - name: Build UIs
+        run: npm run build

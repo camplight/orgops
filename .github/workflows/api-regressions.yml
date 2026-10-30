@@ -1,0 +1,37 @@
+name: API regressions
+
+on:
+  pull_request:
+    paths:
+      - "apps/api/**"
+      - "packages/**"
+      - "skills/**"
+      - "package.json"
+      - "package-lock.json"
+      - "tsconfig*.json"
+      - "vitest.config.ts"
+      - ".github/workflows/api-regressions.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: api-regressions-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Type-check API
+        run: npm run --workspace @orgops/api lint
+      - name: Existing and security regression tests
+        run: npx vitest run apps/api/src

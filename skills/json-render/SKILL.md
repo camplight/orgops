@@ -94,10 +94,11 @@ For secret actions, the UI writes directly to `/api/secrets` and does not emit c
 
 Recommended params for secret actions:
 
-- `package` (or `packageId`)
 - `key` (or `name`)
 - `valueField` (or `valueFrom` / `secretField`) pointing to a `Question` element id
 - optional: `scopeType`, `scopeId`
+
+The secret is stored privately for the agent that posted the form.
 
 ## SecretInput behavior (preferred for secrets)
 
@@ -105,8 +106,9 @@ Recommended params for secret actions:
 
 Props:
 
-- required: `package` (or `packageId`), `key` (or `name`)
+- required: `key` (or `name`)
 - optional: `title`, `description`, `placeholder`, `submitLabel`, `scopeType`, `scopeId`
+- the value is stored as a private secret for the agent that posted the block
 - optional: `valueField` / `valueFrom` / `secretField` (if value comes from another question field)
 
 ## Secret safety rules

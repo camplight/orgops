@@ -25,6 +25,7 @@
     "test": "vitest run",
     "lint": "npm run lint:all",
     "lint:all": "npm run --workspace @orgops/api lint && npm run --workspace @orgops/agent-runner lint && npm run --workspace @orgops/opscli lint && npm run --workspace @orgops/admin-ui lint && npm run --workspace @orgops/user-ui lint && npm run --workspace @orgops/db lint && npm run --workspace @orgops/schemas lint && npm run --workspace @orgops/event-bus lint && npm run --workspace @orgops/llm lint && npm run --workspace @orgops/crypto lint && npm run --workspace @orgops/skills lint && npm run --workspace @orgops/events-scenario-tests lint",
+    "livekit": "node --import tsx scripts/start-livekit.ts",
     "scenario:test": "npm run --workspace @orgops/events-scenario-tests run",
     "scenario:test:countdown": "npm run --workspace @orgops/events-scenario-tests run:countdown"
   },
@@ -45,7 +46,7 @@
     "esbuild": "^0.28.1",
     "sqlite3": "^6.0.1",
     "tar": "^7.5.22",
-    "undici": "^6.24.0"
+    "undici": "^6.29.1"
   },
   "allowScripts": {
     "esbuild": true,

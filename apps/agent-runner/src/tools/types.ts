@@ -26,6 +26,16 @@ export type ExecuteContext = {
   apiFetch: (path: string, init?: RequestInit) => Promise<Response>;
   emitEvent: (event: unknown) => Promise<void>;
   emitAudit: (type: string, payload: unknown, source?: string) => Promise<void>;
+  // CLASSIC turns can stage unscheduled chat output until final response validation succeeds.
+  deferMessage?: (event: {
+    type: string;
+    payload: unknown;
+    source: string;
+    channelId?: string;
+    parentEventId?: string;
+    deliverAt?: number;
+    idempotencyKey?: string;
+  }) => void;
   validateEvent?: (event: {
     type: string;
     payload: unknown;
@@ -47,6 +57,7 @@ export type CreateExecuteFn = (
 
 const REDACTED_ONE_TIME_SECRET = "[REDACTED: one-time secret]";
 const ORGOPS_INTEGRATION_TOKEN_RE = /org_sk_[A-Za-z0-9]{20,}/g;
+export const MAX_PERSISTED_TOOL_OUTPUT_CHARS = 16_000;
 
 function redactIntegrationTokenStrings(value: unknown): unknown {
   if (typeof value === "string") {
@@ -64,26 +75,45 @@ function redactIntegrationTokenStrings(value: unknown): unknown {
   );
 }
 
-export function redactPersistedToolOutput(toolName: string, output: unknown) {
-  if (toolName !== "agents_create_integration_key") {
-    return { output, redacted: false };
+function truncatePersistedToolOutput(output: unknown): { output: unknown; truncated: boolean } {
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(output) ?? String(output);
+  } catch {
+    serialized = String(output);
   }
+  if (serialized.length <= MAX_PERSISTED_TOOL_OUTPUT_CHARS) {
+    return { output, truncated: false };
+  }
+  const omitted = serialized.length - MAX_PERSISTED_TOOL_OUTPUT_CHARS;
   return {
-    output: redactIntegrationTokenStrings(output),
-    redacted: true,
+    output: {
+      truncated: true,
+      omittedChars: omitted,
+      preview: serialized.slice(0, MAX_PERSISTED_TOOL_OUTPUT_CHARS),
+    },
+    truncated: true,
+  };
+}
+
+export function redactPersistedToolOutput(toolName: string, output: unknown) {
+  const redactedOutput =
+    toolName === "agents_create_integration_key"
+      ? redactIntegrationTokenStrings(output)
+      : output;
+  const tokenRedacted = toolName === "agents_create_integration_key";
+  const sizeLimited = truncatePersistedToolOutput(redactedOutput);
+  return {
+    output: sizeLimited.output,
+    redacted: tokenRedacted || sizeLimited.truncated,
   };
 }
 
 export function createWrapExecute(deps: RunnerToolDeps): CreateExecuteFn {
-  const { agent, event, channelId, runTool, apiFetch, emitEvent } = deps;
+  const { agent, channelId, runTool, emitEvent } = deps;
   return (toolName: string) => async (args: Record<string, unknown>) => {
-    let phase:
-      | "emit_started"
-      | "run_tool"
-      | "mark_trigger_failed_on_tool_error"
-      | "emit_executed"
-      | "emit_failed_audit"
-      | "mark_trigger_failed_in_catch" = "emit_started";
+    let phase: "emit_started" | "run_tool" | "emit_executed" | "emit_failed_audit" =
+      "emit_started";
     try {
       await emitEvent({
         type: "tool.started",
@@ -93,16 +123,8 @@ export function createWrapExecute(deps: RunnerToolDeps): CreateExecuteFn {
       });
       phase = "run_tool";
       const output = await runTool(toolName, args);
-      if (output && typeof output === "object" && "error" in output) {
-        phase = "mark_trigger_failed_on_tool_error";
-        await apiFetch(`/api/events/${event.id}/fail`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            error: String((output as { error: unknown }).error),
-          }),
-        });
-      }
+      // Tool errors are model feedback, not failures of the triggering human event.
+      // The channel loop owns receipt failures when the entire turn throws.
       phase = "emit_executed";
       const persistedOutput = redactPersistedToolOutput(toolName, output);
       await emitEvent({
@@ -131,14 +153,6 @@ export function createWrapExecute(deps: RunnerToolDeps): CreateExecuteFn {
           },
           source: `agent:${agent.name}`,
           ...(channelId ? { channelId } : {}),
-        });
-      } catch {}
-      phase = "mark_trigger_failed_in_catch";
-      try {
-        await apiFetch(`/api/events/${event.id}/fail`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ error: String(error) }),
         });
       } catch {}
       return { error: String(error) };

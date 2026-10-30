@@ -5,6 +5,7 @@ import {
   refreshCrossChannelRecentMemory,
 } from "./context-maintenance";
 import { isAgentSubscribed, type ChannelRecord } from "./models/channel";
+import { withRealtimeHostProviderEnvFallback } from "./realtime-provider-env";
 import type { Agent } from "./types";
 
 type Dependencies = {
@@ -45,7 +46,10 @@ export function createMaintenanceLoop(deps: Dependencies) {
     ): Promise<Record<string, string>> => {
       const cached = injectionEnvByChannel.get(channelId);
       if (cached) return cached;
-      const env = await deps.getPackageSecretsEnv(agent.name, channelId);
+      const env = withRealtimeHostProviderEnvFallback(
+        agent,
+        await deps.getPackageSecretsEnv(agent.name, channelId),
+      );
       injectionEnvByChannel.set(channelId, env);
       return env;
     };
@@ -61,9 +65,9 @@ export function createMaintenanceLoop(deps: Dependencies) {
     )?.id;
     const ensureCrossMemoryEnv = async (): Promise<Record<string, string>> => {
       if (crossMemoryEnv) return crossMemoryEnv;
-      crossMemoryEnv = await deps.getPackageSecretsEnv(
-        agent.name,
-        crossMemoryAuditChannelId,
+      crossMemoryEnv = withRealtimeHostProviderEnvFallback(
+        agent,
+        await deps.getPackageSecretsEnv(agent.name, crossMemoryAuditChannelId),
       );
       return crossMemoryEnv;
     };
@@ -81,38 +85,45 @@ export function createMaintenanceLoop(deps: Dependencies) {
       const shouldRunChannelFull =
         now - channelFullLastRun >= deps.channelFullMemoryIntervalMs;
       if (!shouldRunChannelRecent && !shouldRunChannelFull) continue;
-      try {
-        if (shouldRunChannelRecent) {
-          const previousRecentRunAt = channelRecentLastRunAtByChannel.get(channelKey) ?? 0;
+      // Failed attempts still count toward the interval; otherwise a model that
+      // cannot summarize would be retried (and audit secrets) on every poll.
+      if (shouldRunChannelRecent) {
+        channelRecentLastRunAtByChannel.set(channelKey, now);
+        try {
           const result = await refreshChannelRecentMemory({
             agent,
             channelId: channel.id,
             apiFetch: deps.apiFetch,
             getEnv: () => ensureInjectionEnv(channel.id),
           });
-          if (result && result.updatedAt > previousRecentRunAt) {
+          if (result && result.updatedAt > channelRecentLastRun) {
             updatedAnyChannelRecent = true;
           }
-          channelRecentLastRunAtByChannel.set(channelKey, now);
+        } catch (error) {
+          console.warn(
+            `runner maintenance failed for ${agent.name} channel=${channel.id}`,
+            error,
+          );
         }
-        if (shouldRunChannelFull) {
-          const previousFullRunAt = channelFullLastRunAtByChannel.get(channelKey) ?? 0;
+      }
+      if (shouldRunChannelFull) {
+        channelFullLastRunAtByChannel.set(channelKey, now);
+        try {
           const result = await refreshChannelFullMemory({
             agent,
             channelId: channel.id,
             apiFetch: deps.apiFetch,
             getEnv: () => ensureInjectionEnv(channel.id),
           });
-          if (result && result.updatedAt > previousFullRunAt) {
+          if (result && result.updatedAt > channelFullLastRun) {
             updatedAnyChannelFull = true;
           }
-          channelFullLastRunAtByChannel.set(channelKey, now);
+        } catch (error) {
+          console.warn(
+            `runner maintenance failed for ${agent.name} channel=${channel.id}`,
+            error,
+          );
         }
-      } catch (error) {
-        console.warn(
-          `runner maintenance failed for ${agent.name} channel=${channel.id}`,
-          error,
-        );
       }
     }
 

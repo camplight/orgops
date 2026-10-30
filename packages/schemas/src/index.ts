@@ -1,5 +1,7 @@
 import { z } from "zod";
+import { ModelCapabilitiesSchema } from "./model-capabilities";
 export * from "./event-shapes";
+export * from "./model-capabilities";
 
 export const EventStatusSchema = z.enum([
   "PENDING",
@@ -48,6 +50,7 @@ export const ModelSchema = z.object({
   modelName: z.string(),
   enabled: z.boolean(),
   defaults: z.record(z.unknown()).default({}),
+  capabilities: ModelCapabilitiesSchema.default({}),
 });
 
 export const AuthLoginSchema = z.object({

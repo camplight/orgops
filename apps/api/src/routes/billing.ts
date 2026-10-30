@@ -162,6 +162,28 @@ const usageSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
+const priceUpsertItemSchema = z
+  .object({
+    provider: z.string().trim().min(1).optional(),
+    modelId: z.string().trim().min(1),
+    modelName: z.string().trim().min(1).optional(),
+    currency: z.string().trim().min(1).default(USD),
+    inputPricePerMillion: z.number().nonnegative(),
+    outputPricePerMillion: z.number().nonnegative(),
+    cachedInputPricePerMillion: z.number().nonnegative().nullable().optional(),
+    reasoningPricePerMillion: z.number().nonnegative().nullable().optional(),
+    source: z.string().trim().min(1).default("manual"),
+    sourceUrl: z.string().trim().url().nullable().optional(),
+    effectiveAt: z.number().int().positive().optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+  })
+  .strict();
+
+const priceUpsertSchema = z.union([
+  priceUpsertItemSchema,
+  z.object({ prices: z.array(priceUpsertItemSchema).min(1) }).strict(),
+]);
+
 function parseModelId(modelId: string) {
   const [rawProvider, ...parts] = modelId.split(":");
   const provider = (rawProvider || "unknown").trim().toLowerCase();
@@ -271,6 +293,94 @@ export function registerBillingRoutes(app: Hono<any>, deps: BillingDeps) {
       .orderBy(schema.llmModelPrices.provider, schema.llmModelPrices.model_id)
       .all() as any[];
     return jsonResponse(c, rows.map(normalizePriceRow));
+  });
+
+  app.post("/api/billing/prices", requireAuth, async (c) => {
+    const body = await c.req.json();
+    const parsed = priceUpsertSchema.safeParse(body);
+    if (!parsed.success) {
+      return jsonResponse(c, { error: "Invalid pricing payload", issues: parsed.error.issues }, 400);
+    }
+    const items = "prices" in parsed.data ? parsed.data.prices : [parsed.data];
+    const now = Date.now();
+    let upserted = 0;
+    for (const item of items) {
+      const parsedModel = parseModelId(item.modelId);
+      const provider = (item.provider ?? parsedModel.provider).trim().toLowerCase();
+      if (item.provider && provider !== parsedModel.provider) {
+        return jsonResponse(
+          c,
+          {
+            error: "Invalid pricing payload",
+            issues: [
+              {
+                path: ["provider"],
+                message: "provider must match modelId prefix",
+              },
+            ],
+          },
+          400,
+        );
+      }
+      const effectiveAt = item.effectiveAt ?? now;
+      orm
+        .insert(schema.llmModelPrices)
+        .values({
+          id: priceId(provider, item.modelId, effectiveAt),
+          provider,
+          model_id: item.modelId,
+          model_name: item.modelName ?? parsedModel.modelName,
+          currency: item.currency.toUpperCase(),
+          input_price_per_million: String(item.inputPricePerMillion),
+          output_price_per_million: String(item.outputPricePerMillion),
+          cached_input_price_per_million:
+            item.cachedInputPricePerMillion === undefined
+              ? null
+              : item.cachedInputPricePerMillion === null
+                ? null
+                : String(item.cachedInputPricePerMillion),
+          reasoning_price_per_million:
+            item.reasoningPricePerMillion === undefined
+              ? null
+              : item.reasoningPricePerMillion === null
+                ? null
+                : String(item.reasoningPricePerMillion),
+          source: item.source,
+          source_url: item.sourceUrl ?? null,
+          effective_at: effectiveAt,
+          fetched_at: null,
+          metadata_json: JSON.stringify(item.metadata ?? {}),
+          created_at: now,
+        })
+        .onConflictDoUpdate({
+          target: schema.llmModelPrices.id,
+          set: {
+            model_name: item.modelName ?? parsedModel.modelName,
+            currency: item.currency.toUpperCase(),
+            input_price_per_million: String(item.inputPricePerMillion),
+            output_price_per_million: String(item.outputPricePerMillion),
+            cached_input_price_per_million:
+              item.cachedInputPricePerMillion === undefined
+                ? null
+                : item.cachedInputPricePerMillion === null
+                  ? null
+                  : String(item.cachedInputPricePerMillion),
+            reasoning_price_per_million:
+              item.reasoningPricePerMillion === undefined
+                ? null
+                : item.reasoningPricePerMillion === null
+                  ? null
+                  : String(item.reasoningPricePerMillion),
+            source: item.source,
+            source_url: item.sourceUrl ?? null,
+            fetched_at: null,
+            metadata_json: JSON.stringify(item.metadata ?? {}),
+          },
+        })
+        .run();
+      upserted += 1;
+    }
+    return jsonResponse(c, { upserted }, 201);
   });
 
   app.post("/api/billing/prices/refresh/openrouter", requireAuth, async (c) => {

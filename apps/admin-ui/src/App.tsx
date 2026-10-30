@@ -162,7 +162,7 @@ export default function App() {
   const dashboardEventsRefreshTimerRef = useRef<number | null>(null);
   const dashboardDataRefreshTimerRef = useRef<number | null>(null);
 
-  const { authChecked, authenticated, username, mustChangePassword, refreshAuth, logout } = useAuth();
+  const { authChecked, authenticated, username, userId, mustChangePassword, refreshAuth, logout } = useAuth();
   const data = useOrgOpsData(authenticated && !mustChangePassword);
 
   useEffect(() => {
@@ -487,6 +487,7 @@ export default function App() {
       if (screen === "agent-invites") {
         data.refreshAgentInvites();
         data.refreshChannels();
+        data.refreshHumans();
       }
       if (screen === "humans") data.refreshHumans();
       if (screen === "skills") data.refreshSkills();
@@ -1493,6 +1494,8 @@ export default function App() {
         <AgentInvitesScreen
           invites={data.agentInvites}
           channels={data.channels}
+          humans={data.humans}
+          currentHumanId={userId}
           onCreateInvite={async (input) => {
             const res = await data.apiFetch("/api/agent-invites", {
               method: "POST",
@@ -1562,6 +1565,7 @@ export default function App() {
           onRefresh={async () => {
             await data.refreshAgentInvites();
             await data.refreshChannels();
+            await data.refreshHumans();
           }}
         />
       )}

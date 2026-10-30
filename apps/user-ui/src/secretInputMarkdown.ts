@@ -39,7 +39,7 @@ function parseSpec(rawAttrs: string): SecretInputSpec | null {
   const attrs = parseAttributes(rawAttrs);
   const packageId = readAttr(attrs, "package", "packageid");
   const key = readAttr(attrs, "key", "name");
-  if (!packageId || !key) return null;
+  if (!key) return null;
   return {
     packageId,
     key,

@@ -15,6 +15,13 @@ const PROVIDER_SECRET_ENV_KEYS = [
   "OPENAI_API_KEY",
   "ANTHROPIC_API_KEY",
   "OPENROUTER_API_KEY",
+  "MISTRAL_API_KEY",
+  "LIQUID_API_KEY",
+  "LIQUID_BASE_URL",
+  "OPENAI_COMPATIBLE_API_KEY",
+  "OPENAI_COMPATIBLE_BASE_URL",
+  "GOOGLE_API_KEY",
+  "GEMINI_API_KEY",
 ] as const;
 const shellRunSchema = z.object({
   cmd: z.string().min(1),
@@ -159,6 +166,8 @@ async function spawnTrackedProcess(
   const shell = getShellLaunch(input.cmd);
   const mergedEnv: Record<string, string> = {
     ...(process.env as Record<string, string>),
+    ORGOPS_AGENT_NAME: ctx.agent.name,
+    ORGOPS_AGENT_WORKSPACE: resolveAgentPath(ctx.agent, ctx.agent.workspacePath, ctx.extraAllowedRoots ?? []),
     ...ctx.injectionEnv,
     ...input.env,
   };

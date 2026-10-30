@@ -41,4 +41,25 @@ describe("normalizeFallbackMessageText", () => {
   it("keeps plain text unchanged", () => {
     expect(normalizeFallbackMessageText("plain fallback text")).toBe("plain fallback text");
   });
+
+  it.each([
+    'prose\n\n{"type":"message.created","payload":{"text":"hello"}}',
+    'prose with { unmatched brace\n{"type":"message.created","payload":{"text":"hello"}}',
+  ])("unwraps a trailing unfenced envelope: %s", (text) => {
+    expect(normalizeFallbackMessageText(text)).toBe("hello");
+  });
+
+  it("handles braces and escaped quotes inside trailing JSON strings", () => {
+    const text = "hello } { \"quoted\" \\";
+    expect(
+      normalizeFallbackMessageText(
+        `prose\n${JSON.stringify({ type: "message.created", payload: { text } })}`,
+      ),
+    ).toBe(text);
+  });
+
+  it("preserves prose containing ordinary JSON examples", () => {
+    const text = 'Use this config: {"setting":true}';
+    expect(normalizeFallbackMessageText(text)).toBe(text);
+  });
 });

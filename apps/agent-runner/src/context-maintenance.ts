@@ -582,15 +582,3 @@ export function getMeaningfulEvents(events: Event[]): Event[] {
 export function buildSystemMemoryMessage(title: string, summaryText: string): string {
   return `${title}\n${clampSummaryText(summaryText, MEMORY_PROMPT_SUMMARY_MAX_CHARS)}`;
 }
-
-export function buildChannelRecentDeltaSystemMessage(input: {
-  channelId: string;
-  events: Event[];
-}): string {
-  const compacted = input.events.slice(-MAX_EVENTS_PER_PROMPT).map(compactEvent);
-  return [
-    `Channel Delta Events Since Last Summary (${input.channelId})`,
-    "These are the newest meaningful events after the latest recent channel summary.",
-    JSON.stringify(compacted, null, 2),
-  ].join("\n");
-}

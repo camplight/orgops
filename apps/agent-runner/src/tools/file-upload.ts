@@ -10,6 +10,8 @@ const mimeTypes: Record<string, string> = {
   ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml",
   ".pdf": "application/pdf", ".txt": "text/plain", ".md": "text/markdown",
   ".json": "application/json", ".csv": "text/csv",
+  ".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg", ".opus": "audio/ogg",
+  ".m4a": "audio/mp4", ".aac": "audio/aac", ".flac": "audio/flac", ".webm": "audio/webm",
 };
 
 export async function uploadWorkspaceFile(ctx: ExecuteContext, inputPath: string) {

@@ -4,7 +4,7 @@ import { Button, Card, Input, Select } from "../components/ui";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 import { formatTimestamp } from "../utils/formatTimestamp";
 
-type SecretScopeType = "public" | "team" | "private" | "package";
+type SecretScopeType = "public" | "team" | "private";
 
 type SecretsScreenProps = {
   secrets: SecretRow[];
@@ -53,10 +53,7 @@ export function SecretsScreen({
     }
   });
 
-  const requiresScopeId =
-    newSecret.scopeType === "team" ||
-    newSecret.scopeType === "private" ||
-    newSecret.scopeType === "package";
+  const requiresScopeId = newSecret.scopeType === "team" || newSecret.scopeType === "private";
 
   const handleSave = async () => {
     setError(null);
@@ -82,7 +79,14 @@ export function SecretsScreen({
       setNewSecret({ name: "", scopeType: "public", scopeId: "", value: "" });
       setCreateDrawerOpen(false);
     } catch (saveError) {
-      const message = saveError instanceof Error ? saveError.message : "Failed to create secret.";
+      const raw = saveError instanceof Error ? saveError.message : "Failed to create secret.";
+      let message = raw;
+      try {
+        const parsed = JSON.parse(raw) as { error?: unknown };
+        if (typeof parsed.error === "string" && parsed.error.trim()) message = parsed.error;
+      } catch {
+        // Response body is already plain text.
+      }
       setError(message);
     }
   };
@@ -204,7 +208,6 @@ export function SecretsScreen({
               <option value="public">public</option>
               <option value="team">team</option>
               <option value="private">private (agent-specific)</option>
-              <option value="package">package (legacy)</option>
             </Select>
 
             {newSecret.scopeType === "private" ? (
@@ -233,14 +236,6 @@ export function SecretsScreen({
                   </option>
                 ))}
               </Select>
-            ) : null}
-
-            {newSecret.scopeType === "package" ? (
-              <Input
-                placeholder="Package scope ID (legacy)"
-                value={newSecret.scopeId}
-                onChange={(e) => setNewSecret({ ...newSecret, scopeId: e.target.value })}
-              />
             ) : null}
 
             <Input

@@ -21,6 +21,7 @@ export type AgentInviteRow = {
   created_by_type: string;
   created_by_id: string | null;
   created_by_human_id: string | null;
+  owner_human_id: string | null;
   created_at: number;
   expires_at: number | null;
   revoked_at: number | null;

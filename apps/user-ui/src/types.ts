@@ -30,6 +30,22 @@ export type Agent = {
   ownerHumanId?: string | null;
   runtimeState?: string;
   desiredState?: string;
+  modelId?: string;
+  modelCapabilities?: ModelCapabilities;
+};
+
+export type ModelCapabilities = {
+  textInput?: boolean;
+  textOutput?: boolean;
+  imageInput?: boolean;
+  audioInput?: boolean;
+  audioOutput?: boolean;
+  realtimeAudioInput?: boolean;
+  realtimeAudioOutput?: boolean;
+  multiSpeakerRealtimeAudioInput?: boolean;
+  activeSpeakerRealtimeAudioInput?: boolean;
+  toolCalling?: boolean;
+  [key: string]: boolean | undefined;
 };
 
 export type EventRow = {

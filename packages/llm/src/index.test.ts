@@ -18,11 +18,28 @@ const mocks = vi.hoisted(() => ({
     provider: "anthropic",
     modelName,
   }))),
+  createMistral: vi.fn(() =>
+    Object.assign(
+      vi.fn((modelName: string) => ({ provider: "mistral", modelName })),
+      {
+        transcription: vi.fn((modelName: string) => ({
+          provider: "mistral-transcription",
+          modelName,
+        })),
+      },
+    ),
+  ),
+  experimentalTranscribe: vi.fn(async (_input: Record<string, unknown>) => ({
+    text: " hello team ",
+    language: "en",
+    durationInSeconds: 1.5,
+  })),
 }));
 
 vi.mock("ai", () => ({
   generateText: mocks.generateText,
   stepCountIs: mocks.stepCountIs,
+  experimental_transcribe: mocks.experimentalTranscribe,
 }));
 
 vi.mock("@ai-sdk/openai", () => ({
@@ -33,10 +50,16 @@ vi.mock("@ai-sdk/anthropic", () => ({
   createAnthropic: mocks.createAnthropic,
 }));
 
+vi.mock("@ai-sdk/mistral", () => ({
+  createMistral: mocks.createMistral,
+}));
+
 import {
   generate,
   isOpenAICompletionModel,
   isOpenAIReasoningModel,
+  resolveTranscriptionModelId,
+  transcribe,
 } from "./index";
 
 describe("llm", () => {
@@ -45,10 +68,16 @@ describe("llm", () => {
     mocks.stepCountIs.mockClear();
     mocks.createOpenAI.mockClear();
     mocks.createAnthropic.mockClear();
+    mocks.createMistral.mockClear();
     delete process.env.ORGOPS_LLM_STUB;
     delete process.env.OPENAI_API_KEY;
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.OPENROUTER_API_KEY;
+    delete process.env.MISTRAL_API_KEY;
+    delete process.env.LIQUID_API_KEY;
+    delete process.env.LIQUID_BASE_URL;
+    delete process.env.OPENAI_COMPATIBLE_API_KEY;
+    delete process.env.OPENAI_COMPATIBLE_BASE_URL;
   });
 
   it("detects completion-only OpenAI model ids", () => {
@@ -104,6 +133,82 @@ describe("llm", () => {
     );
   });
 
+  it("uses injected Mistral provider keys", async () => {
+    process.env.ORGOPS_LLM_STUB = "0";
+    process.env.MISTRAL_API_KEY = "host-key";
+    await generate(
+      "mistral:mistral-small-latest",
+      [{ role: "user", content: "hello" }],
+      { env: { MISTRAL_API_KEY: "scoped-key" } },
+    );
+    expect(mocks.createMistral).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: "scoped-key",
+      }),
+    );
+  });
+
+  it("uses Liquid as an OpenAI-compatible provider", async () => {
+    process.env.ORGOPS_LLM_STUB = "0";
+    await generate(
+      "liquid:lfm3",
+      [{ role: "user", content: "hello" }],
+      { env: { LIQUID_API_KEY: "liquid-key", LIQUID_BASE_URL: "https://liquid.example/v1" } },
+    );
+    expect(mocks.createOpenAI).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: "liquid-key",
+        baseURL: "https://liquid.example/v1",
+      }),
+    );
+  });
+
+  it("defaults Liquid to the hosted Labs API", async () => {
+    process.env.ORGOPS_LLM_STUB = "0";
+    await generate(
+      "liquid:lfm3",
+      [{ role: "user", content: "hello" }],
+      { env: { LIQUID_API_KEY: "liquid-key" } },
+    );
+    expect(mocks.createOpenAI).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: "liquid-key",
+        baseURL: "https://labs.liquid.ai/api/v1",
+      }),
+    );
+  });
+
+  it("uses generic OpenAI-compatible provider endpoints", async () => {
+    process.env.ORGOPS_LLM_STUB = "0";
+    await generate(
+      "openai-compatible:local-model",
+      [{ role: "user", content: "hello" }],
+      {
+        env: {
+          OPENAI_COMPATIBLE_API_KEY: "local-key",
+          OPENAI_COMPATIBLE_BASE_URL: "http://127.0.0.1:8000/v1",
+        },
+      },
+    );
+    expect(mocks.createOpenAI).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: "local-key",
+        baseURL: "http://127.0.0.1:8000/v1",
+      }),
+    );
+  });
+
+  it("requires a base URL for generic OpenAI-compatible provider endpoints", async () => {
+    process.env.ORGOPS_LLM_STUB = "0";
+    await expect(
+      generate(
+        "openai-compatible:local-model",
+        [{ role: "user", content: "hello" }],
+        { env: { OPENAI_COMPATIBLE_API_KEY: "local-key" } },
+      ),
+    ).rejects.toThrow("OPENAI_COMPATIBLE_BASE_URL is required");
+  });
+
   it("rejects unsupported providers", async () => {
     process.env.ORGOPS_LLM_STUB = "0";
     await expect(
@@ -135,5 +240,48 @@ describe("llm", () => {
       "LLM generate requires at least one non-empty message.",
     );
     expect(mocks.generateText).not.toHaveBeenCalled();
+  });
+
+  it("picks a transcription model from explicit config or available keys", () => {
+    expect(resolveTranscriptionModelId({})).toBeNull();
+    expect(resolveTranscriptionModelId({ ORGOPS_TRANSCRIPTION_MODEL: "off", MISTRAL_API_KEY: "k" })).toBeNull();
+    expect(resolveTranscriptionModelId({ ORGOPS_TRANSCRIPTION_MODEL: "openai:whisper-1" })).toBe(
+      "openai:whisper-1",
+    );
+    expect(resolveTranscriptionModelId({ ORGOPS_LLM_STUB: "1" })).toBe("stub:transcriber");
+    expect(resolveTranscriptionModelId({ MISTRAL_API_KEY: "k", OPENAI_API_KEY: "k" })).toBe(
+      "mistral:voxtral-mini-latest",
+    );
+    expect(resolveTranscriptionModelId({ OPENAI_API_KEY: "k" })).toBe("openai:gpt-4o-mini-transcribe");
+  });
+
+  it("transcribes audio with the provider transcription model", async () => {
+    const audio = new Uint8Array([1, 2, 3]);
+    const result = await transcribe("mistral:voxtral-mini-latest", { data: audio }, {
+      env: { MISTRAL_API_KEY: "mistral-key" },
+      language: "en",
+    });
+    expect(result).toEqual({ text: "hello team", language: "en", durationInSeconds: 1.5 });
+    expect(mocks.createMistral).toHaveBeenCalledWith({ apiKey: "mistral-key" });
+    expect(mocks.experimentalTranscribe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: { provider: "mistral-transcription", modelName: "voxtral-mini-latest" },
+        audio,
+        providerOptions: { mistral: { language: "en" } },
+      }),
+    );
+  });
+
+  it("returns a stub transcript without calling providers in stub mode", async () => {
+    mocks.experimentalTranscribe.mockClear();
+    const result = await transcribe("stub:transcriber", { data: new Uint8Array(32000) });
+    expect(result.text).toBe("Stub transcript of 2s voice input.");
+    expect(mocks.experimentalTranscribe).not.toHaveBeenCalled();
+  });
+
+  it("rejects providers without transcription support", async () => {
+    await expect(
+      transcribe("anthropic:claude-sonnet-4", { data: new Uint8Array([1]) }),
+    ).rejects.toThrow("does not support transcription");
   });
 });

@@ -1,5 +1,5 @@
 import type { Hono } from "hono";
-import { randomUUID } from "node:crypto";
+import { randomUUID, randomBytes } from "node:crypto";
 import { asc, eq } from "drizzle-orm";
 import {
   CHANNEL_KINDS,
@@ -10,6 +10,7 @@ import {
 import type { AccessControl, RequestUser } from "./access";
 
 type HumansDeps = {
+  revokeSessions: (humanId: string) => void;
   orm: any;
   jsonResponse: (c: any, data: unknown, status?: number) => Response;
   humanSchema: any;
@@ -18,9 +19,7 @@ type HumansDeps = {
 };
 
 function generateTemporaryPassword() {
-  return `tmp-${Math.random().toString(36).slice(2, 8)}-${Math.random()
-    .toString(36)
-    .slice(2, 8)}`;
+  return `tmp-${randomBytes(24).toString('base64url')}`;
 }
 
 export function registerHumansRoutes(app: Hono<any>, deps: HumansDeps) {
@@ -85,6 +84,7 @@ export function registerHumansRoutes(app: Hono<any>, deps: HumansDeps) {
   });
 
   app.post("/api/humans/invite", async (c) => {
+    if (!access.canManageInstance(c.get('user'))) return jsonResponse(c, {error:'Instance owner required'}, 403);
     const body = await c.req.json().catch(() => ({}));
     const username = typeof body.username === "string" ? body.username.trim() : "";
     const suppliedTempPassword =
@@ -238,6 +238,7 @@ export function registerHumansRoutes(app: Hono<any>, deps: HumansDeps) {
   });
 
   app.post("/api/humans/:id/reset-temp-password", async (c) => {
+    if (!access.canManageInstance(c.get('user'))) return jsonResponse(c, {error:'Instance owner required'}, 403);
     const id = c.req.param("id");
     const body = await c.req.json().catch(() => ({}));
     const suppliedTempPassword =
@@ -268,6 +269,7 @@ export function registerHumansRoutes(app: Hono<any>, deps: HumansDeps) {
       .where(eq(humanSchema.id, id))
       .run();
 
+    deps.revokeSessions(id);
     return jsonResponse(c, {
       id: existing.id,
       username: existing.username,

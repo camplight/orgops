@@ -1,6 +1,6 @@
 ---
 name: agent-management
-description: Create, list, and configure OrgOps agents from native agents. Use when the user asks an agent to create agents, list agents, set up WRAPPED agents, OpenClaw wrappers, sidecars, or Cursor coding harnesses.
+description: Create, list, and configure OrgOps agents from native agents. Use when the user asks an agent to create agents, list agents, set up WRAPPED agents, OpenClaw wrappers, sidecars, Cursor coding harnesses, or Claude Code agents.
 ---
 
 # Agent Management
@@ -8,7 +8,7 @@ description: Create, list, and configure OrgOps agents from native agents. Use w
 Use the native runner tools for agent operations:
 
 - `agents_search`: list or filter existing agents.
-- `agents_copy`: copy an agent, including enabled/preloaded skills, agent-local skill files, private secrets that are not already public or package secrets, workspace files, and channel plus cross-channel memory. Pass `federationInstanceId` to copy onto a federated peer.
+- `agents_copy`: copy an agent, including enabled/preloaded skills, agent-local skill files, private secrets that are not already public secrets, workspace files, and channel plus cross-channel memory. Pass `federationInstanceId` to copy onto a federated peer.
 - `agents_move`: move an agent to another local runner, or pass `federationInstanceId` to move it to a federated peer with the same skill, secret, workspace, and memory bundle. A move stops the agent's running processes. Local moves keep the workspace path.
 - `agents_create`: create `CLASSIC`, `RLM_REPL`, or `WRAPPED` agents.
 - `agents_update`: patch an existing agent's config, lifecycle state, skills, model, workspace, or wrapped runtime config.
@@ -57,6 +57,8 @@ For a wrapped agent, set:
 - a `wrappedConfig` object with `kind`, `harness`, optional `setup`, optional `sidecars`, and `runtime`
 
 Wrapped agents do not use OrgOps model calls, prompts, memory, skills, or `allowOutsideWorkspace` for turns. The external runtime owns its session, tools, memory, prompt behavior, and filesystem policy through its own settings.
+
+For Claude Code (the `claude` CLI), follow the `claude-code` skill: it ships the glue script and the recipe. Enable it on the agent doing the setup, not on the wrapped agent.
 
 ## Update Existing Agents
 
@@ -120,7 +122,7 @@ OpenClaw setup notes:
 - Before upgrading an existing OpenClaw agent that relied on OrgOps' root installation, add an explicit local install to its stored `wrappedConfig.setup`; otherwise `npx openclaw` may fail or download an unpinned version.
 - Pin the `openclaw` version in production recipes when reproducible setup is required.
 - Store wrapper source in the agent workspace or configure `source` if it comes from a repo.
-- Put secrets in OrgOps package secrets, not in `wrappedConfig`; setup, sidecars, and runtime receive package secrets as env.
+- Put secrets in OrgOps private secrets for this agent, not in `wrappedConfig`. Setup, sidecars, and runtime receive that agent's resolved secrets as env.
 - Use `ORGOPS_WRAPPED_SESSION_ID` to keep OpenClaw state stable per channel or per agent.
 - Configure OpenClaw's gateway, agents, model allowlist, channel bridges, sandbox, and filesystem policy in OpenClaw itself.
 - Keep the gateway sidecar idempotent and restartable.

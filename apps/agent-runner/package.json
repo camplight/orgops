@@ -10,12 +10,14 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@livekit/rtc-node": "^1.2.1",
     "@orgops/js-runtime": "file:../../packages/js-runtime",
     "@orgops/llm": "file:../../packages/llm",
     "@orgops/schemas": "file:../../packages/schemas",
     "@orgops/skills": "file:../../packages/skills",
     "models-dev-db": "^1.0.353",
     "tsx": "^4.20.5",
+    "ws": "^8.18.3",
     "zod": "^3.23.8"
   },
   "devDependencies": {

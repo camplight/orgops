@@ -30,7 +30,7 @@ const KNOWN_SCOPE_TYPES = new Set([
   SCOPE_PACKAGE,
   LEGACY_SCOPE_APP,
 ]);
-const SAFE_SCOPE_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
+const SAFE_SCOPE_ID_PATTERN = /^[a-zA-Z0-9._ -]+$/;
 const ENV_SCOPE_TYPES = [
   SCOPE_PUBLIC,
   SCOPE_TEAM,
@@ -107,6 +107,96 @@ function decryptRows(
     }
   }
   return env;
+}
+
+function listChannelTeamIdsFor(orm: OrgOpsDrizzleDb, channelId: string | undefined): string[] {
+  if (!channelId) return [];
+  const rows = orm
+    .select({ teamId: schema.channelSubscriptions.subscriber_id })
+    .from(schema.channelSubscriptions)
+    .where(
+      and(
+        eq(schema.channelSubscriptions.channel_id, channelId),
+        eq(schema.channelSubscriptions.subscriber_type, "TEAM"),
+      ),
+    )
+    .all();
+  return rows.map((row) => row.teamId);
+}
+
+/**
+ * Secrets env an agent sees when it runs in a channel (package < public < team < human < private).
+ * Callers must authorize the agent/channel pair first.
+ */
+export function resolveAgentSecretsEnv(
+  orm: OrgOpsDrizzleDb,
+  input: { agentName: string; channelId?: string; masterKey: Uint8Array },
+) {
+  const { agentName, channelId, masterKey } = input;
+  const requestedAgent = orm
+    .select({
+      ownerHumanId: schema.agents.owner_human_id,
+      allowOwnerHumanSecrets: schema.agents.allow_owner_human_secrets,
+    })
+    .from(schema.agents)
+    .where(eq(schema.agents.name, agentName))
+    .get() as
+    | { ownerHumanId: string | null; allowOwnerHumanSecrets: number | null }
+    | undefined;
+  const channelTeamIds = listChannelTeamIdsFor(orm, channelId);
+  const rows = orm
+    .select({
+      id: schema.secrets.id,
+      name: schema.secrets.name,
+      scope_type: schema.secrets.scope_type,
+      scope_id: schema.secrets.scope_id,
+      ciphertext_b64: schema.secrets.ciphertext_b64,
+      created_at: schema.secrets.created_at,
+    })
+    .from(schema.secrets)
+    .where(inArray(schema.secrets.scope_type, ENV_SCOPE_TYPES))
+    .all() as SecretRow[];
+
+  const packageRows = rows.filter((row) => row.scope_type === SCOPE_PACKAGE);
+  const publicRows = rows.filter(
+    (row) => row.scope_type === SCOPE_PUBLIC || row.scope_type === LEGACY_SCOPE_APP,
+  );
+  const teamRows = rows.filter(
+    (row) =>
+      row.scope_type === SCOPE_TEAM &&
+      row.scope_id !== null &&
+      channelTeamIds.includes(row.scope_id),
+  );
+  const humanRows = rows.filter(
+    (row) =>
+      row.scope_type === SCOPE_HUMAN &&
+      row.scope_id !== null &&
+      Boolean(requestedAgent?.allowOwnerHumanSecrets) &&
+      row.scope_id === (requestedAgent?.ownerHumanId ?? ""),
+  );
+  const privateRows = rows.filter(
+    (row) => row.scope_type === SCOPE_PRIVATE && row.scope_id === agentName,
+  );
+
+  // Lowest to highest precedence; later scopes override key collisions.
+  const env = {
+    ...decryptRows(masterKey, packageRows),
+    ...decryptRows(masterKey, publicRows),
+    ...decryptRows(masterKey, teamRows),
+    ...decryptRows(masterKey, humanRows),
+    ...decryptRows(masterKey, privateRows),
+  };
+  return {
+    env,
+    channelTeamIds,
+    appliedScopeCounts: {
+      package: packageRows.length,
+      public: publicRows.length,
+      team: teamRows.length,
+      human: humanRows.length,
+      private: privateRows.length,
+    },
+  };
 }
 
 export function registerSecretsRoutes(app: Hono<any>, deps: SecretsDeps) {
@@ -220,14 +310,20 @@ export function registerSecretsRoutes(app: Hono<any>, deps: SecretsDeps) {
     const packageId = parseScopeId(body.package);
     const scopeTypeProvided = body.scopeType !== undefined && body.scopeType !== null;
     const explicitScopeType = normalizeScopeType(body.scopeType);
+    if (packageId || explicitScopeType === SCOPE_PACKAGE) {
+      return {
+        ok: false as const,
+        error: "Package scope is no longer supported. Store the secret as private for an agent.",
+      };
+    }
     if (scopeTypeProvided && !explicitScopeType) {
       return {
         ok: false as const,
-        error: "Invalid scopeType. Use public, team, private, human, or package.",
+        error: "Invalid scopeType. Use public, team, private, or human.",
       };
     }
-    const scopeType = explicitScopeType ?? (packageId ? SCOPE_PACKAGE : SCOPE_PUBLIC);
-    const rawScopeId = parseScopeId(body.scopeId) ?? packageId;
+    const scopeType = explicitScopeType ?? SCOPE_PUBLIC;
+    const rawScopeId = parseScopeId(body.scopeId);
     let scopeId: string | null = rawScopeId;
     if (scopeType === SCOPE_PUBLIC) {
       scopeId = null;
@@ -236,7 +332,7 @@ export function registerSecretsRoutes(app: Hono<any>, deps: SecretsDeps) {
     } else if (!scopeId) {
       return {
         ok: false as const,
-        error: "scopeId is required for private, team, human, and package secrets",
+        error: "scopeId is required for private, team, and human secrets",
       };
     } else if (!SAFE_SCOPE_ID_PATTERN.test(scopeId)) {
       return { ok: false as const, error: "scopeId contains invalid characters" };
@@ -253,21 +349,6 @@ export function registerSecretsRoutes(app: Hono<any>, deps: SecretsDeps) {
     };
   }
 
-  function listChannelTeamIds(channelId: string | undefined): string[] {
-    if (!channelId) return [];
-    const rows = orm
-      .select({ teamId: schema.channelSubscriptions.subscriber_id })
-      .from(schema.channelSubscriptions)
-      .where(
-        and(
-          eq(schema.channelSubscriptions.channel_id, channelId),
-          eq(schema.channelSubscriptions.subscriber_type, "TEAM"),
-        ),
-      )
-      .all();
-    return rows.map((row) => row.teamId);
-  }
-
   app.get("/api/secrets", requireAuth, (c) => {
     const user = (c as any).get("user") as RequestUser | undefined;
     const rows = orm
@@ -282,34 +363,6 @@ export function registerSecretsRoutes(app: Hono<any>, deps: SecretsDeps) {
       .all()
       .filter((row) => canReadSecretScope(user, row.scope_type, row.scope_id ?? null));
     return jsonResponse(c, rows);
-  });
-
-  app.get("/api/secrets/keys", requireAuth, (c) => {
-    const packageFilter = new URL(c.req.url).searchParams.get("package");
-    const user = (c as any).get("user") as RequestUser | undefined;
-    let rows: { name: string; scope_id: string | null }[];
-    if (packageFilter) {
-      rows = orm
-        .select({ name: schema.secrets.name, scope_id: schema.secrets.scope_id })
-        .from(schema.secrets)
-        .where(
-          and(
-            eq(schema.secrets.scope_type, SCOPE_PACKAGE),
-            eq(schema.secrets.scope_id, packageFilter),
-          ),
-        )
-        .all() as any[];
-    } else {
-      rows = orm
-        .select({ name: schema.secrets.name, scope_id: schema.secrets.scope_id })
-        .from(schema.secrets)
-        .where(eq(schema.secrets.scope_type, SCOPE_PACKAGE))
-        .all() as any[];
-    }
-    const keys = rows
-      .filter((row) => canReadSecretScope(user, SCOPE_PACKAGE, row.scope_id ?? null))
-      .map((row) => ({ package: row.scope_id ?? "", key: row.name }));
-    return jsonResponse(c, { keys });
   });
 
   app.post("/api/secrets", requireAuth, async (c) => {
@@ -459,17 +512,6 @@ export function registerSecretsRoutes(app: Hono<any>, deps: SecretsDeps) {
     if (!access.canManageAgent(user, requestedByAgent)) {
       return jsonResponse(c, { error: "Forbidden" }, 403);
     }
-    const requestedAgent = orm
-      .select({
-        ownerHumanId: schema.agents.owner_human_id,
-        allowOwnerHumanSecrets: schema.agents.allow_owner_human_secrets,
-      })
-      .from(schema.agents)
-      .where(eq(schema.agents.name, requestedByAgent))
-      .get() as
-      | { ownerHumanId: string | null; allowOwnerHumanSecrets: number | null }
-      | undefined;
-
     const channelId =
       requestedChannelId && SAFE_SCOPE_ID_PATTERN.test(requestedChannelId)
         ? requestedChannelId
@@ -478,69 +520,10 @@ export function registerSecretsRoutes(app: Hono<any>, deps: SecretsDeps) {
       return jsonResponse(c, { error: "Forbidden" }, 403);
     }
 
-    const channelTeamIds = listChannelTeamIds(channelId);
-    const rows = orm
-      .select({
-        id: schema.secrets.id,
-        name: schema.secrets.name,
-        scope_type: schema.secrets.scope_type,
-        scope_id: schema.secrets.scope_id,
-        ciphertext_b64: schema.secrets.ciphertext_b64,
-        created_at: schema.secrets.created_at,
-      })
-      .from(schema.secrets)
-      .where(inArray(schema.secrets.scope_type, ENV_SCOPE_TYPES))
-      .all() as SecretRow[];
-
-    const packageRows = rows.filter((row) => row.scope_type === SCOPE_PACKAGE);
-    const publicRows = rows.filter(
-      (row) => row.scope_type === SCOPE_PUBLIC || row.scope_type === LEGACY_SCOPE_APP,
-    );
-    const teamRows = rows.filter(
-      (row) =>
-        row.scope_type === SCOPE_TEAM &&
-        row.scope_id !== null &&
-        channelTeamIds.includes(row.scope_id),
-    );
-    const humanRows = rows.filter(
-      (row) =>
-        row.scope_type === SCOPE_HUMAN &&
-        row.scope_id !== null &&
-        Boolean(requestedAgent?.allowOwnerHumanSecrets) &&
-        row.scope_id === (requestedAgent?.ownerHumanId ?? ""),
-    );
-    const privateRows = rows.filter(
-      (row) => row.scope_type === SCOPE_PRIVATE && row.scope_id === requestedByAgent,
-    );
-
-    // Lowest to highest precedence; later scopes override key collisions.
-    const env = {
-      ...decryptRows(masterKey, packageRows),
-      ...decryptRows(masterKey, publicRows),
-      ...decryptRows(masterKey, teamRows),
-      ...decryptRows(masterKey, humanRows),
-      ...decryptRows(masterKey, privateRows),
-    };
-
-    insertEvent({
-      type: "audit.secret.accessed",
+    const { env } = resolveAgentSecretsEnv(orm, {
+      agentName: requestedByAgent,
       channelId,
-      payload: {
-        scopeType: "resolved",
-        count: Object.keys(env).length,
-        names: Object.keys(env).sort(),
-        requestedByAgent,
-        channelTeamIds,
-        appliedScopeCounts: {
-          package: packageRows.length,
-          public: publicRows.length,
-          team: teamRows.length,
-          human: humanRows.length,
-          private: privateRows.length,
-        },
-      },
-      source: `agent:${requestedByAgent}`,
-      status: "DELIVERED",
+      masterKey,
     });
     return jsonResponse(c, env);
   });

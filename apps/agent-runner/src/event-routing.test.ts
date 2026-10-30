@@ -112,16 +112,61 @@ describe("event routing", () => {
   });
 });
 
-it("routes message target lists without widening legacy targets or bypassing exclusions", () => {
-  const message=makeEvent({payload:{targetAgentNames:["browser","worker"]}});
-  expect(shouldHandleEventForAgent(agent,message)).toBe(true);
-  expect(shouldHandleEventForAgent({...agent,name:"worker"},message)).toBe(true);
-  expect(shouldHandleEventForAgent({...agent,name:"other"},message)).toBe(false);
-  expect(shouldHandleEventForAgent(agent,{...message,source:"agent:browser"})).toBe(false);
-  expect(shouldHandleEventForAgent(agent,{...message,channelId:undefined})).toBe(false);
-  expect(shouldHandleEventForAgent(agent,makeEvent({payload:{targetAgentNames:["browser"],targetAgentName:"worker"}}))).toBe(false);
-  expect(shouldHandleEventForAgent(agent,{...message,type:"agent.scheduled.trigger"})).toBe(false);
-  for(const targetAgentNames of [[],null,"browser",[123],[" "]]) {
-    expect(shouldHandleEventForAgent(agent,makeEvent({payload:{targetAgentNames}}))).toBe(false);
+it("routes target lists without widening legacy targets or bypassing exclusions", () => {
+  const message = makeEvent({ payload: { targetAgentNames: ["browser", "worker"] } });
+  expect(shouldHandleEventForAgent(agent, message)).toBe(true);
+  expect(shouldHandleEventForAgent({ ...agent, name: "worker" }, message)).toBe(true);
+  expect(shouldHandleEventForAgent({ ...agent, name: "other" }, message)).toBe(false);
+  expect(shouldHandleEventForAgent(agent, { ...message, source: "agent:browser" })).toBe(false);
+  expect(shouldHandleEventForAgent(agent, { ...message, channelId: undefined })).toBe(false);
+  expect(
+    shouldHandleEventForAgent(
+      agent,
+      makeEvent({ payload: { targetAgentNames: ["browser"], targetAgentName: "worker" } }),
+    ),
+  ).toBe(false);
+  expect(shouldHandleEventForAgent(agent, { ...message, type: "agent.scheduled.trigger" })).toBe(false);
+  for (const targetAgentNames of [[], null, "browser", [123], [" "]]) {
+    expect(shouldHandleEventForAgent(agent, makeEvent({ payload: { targetAgentNames } }))).toBe(false);
   }
+});
+
+it("treats voice presence and raw audio as bookkeeping but wakes on transcribed speech", () => {
+  for (const type of [
+    "voice.room.started",
+    "voice.room.ended",
+    "voice.session.started",
+    "voice.session.ended",
+    "voice.participant.muted",
+    "voice.active_speaker.changed",
+    "voice.input.chunk",
+  ]) {
+    expect(
+      shouldHandleEventForAgent(
+        agent,
+        makeEvent({ type, payload: { sessionId: "voice-1", speakerId: "admin" } }),
+      ),
+    ).toBe(false);
+  }
+  const transcript = makeEvent({
+    source: "human:admin",
+    payload: { text: "hello", voice: { mode: "live", status: "transcribed" } },
+  });
+  expect(shouldHandleEventForAgent(agent, transcript)).toBe(true);
+});
+
+it("never wakes agents on realtime call lifecycle or call transcripts", () => {
+  for (const type of ["voice.realtime.call.started", "voice.realtime.call.ended"]) {
+    expect(
+      shouldHandleEventForAgent(
+        agent,
+        makeEvent({ type, payload: { targetAgentName: agent.name, callId: "rtc_1" } }),
+      ),
+    ).toBe(false);
+  }
+  const callTranscript = makeEvent({
+    source: "human:admin",
+    payload: { text: "hello", voice: { mode: "realtime", callId: "rtc_1" } },
+  });
+  expect(shouldHandleEventForAgent(agent, callTranscript)).toBe(false);
 });

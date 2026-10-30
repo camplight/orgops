@@ -168,11 +168,13 @@ export function createRunnerApi(deps: RunnerApiDeps) {
   async function listPendingEventsForAgentChannel(
     agentName: string,
     channelId: string,
+    options: { typePrefix?: string } = {},
   ): Promise<Event[]> {
     const query =
       `agentName=${encodeURIComponent(agentName)}` +
       `&status=PENDING` +
       `&channelId=${encodeURIComponent(channelId)}` +
+      (options.typePrefix ? `&typePrefix=${encodeURIComponent(options.typePrefix)}` : "") +
       `&limit=50`;
     const res = await apiFetch(`/api/events?${query}`);
     const payload = await res.json();

@@ -56,6 +56,13 @@ const PROVIDER_SECRET_ENV_KEYS = [
   "OPENAI_API_KEY",
   "ANTHROPIC_API_KEY",
   "OPENROUTER_API_KEY",
+  "MISTRAL_API_KEY",
+  "LIQUID_API_KEY",
+  "LIQUID_BASE_URL",
+  "OPENAI_COMPATIBLE_API_KEY",
+  "OPENAI_COMPATIBLE_BASE_URL",
+  "GOOGLE_API_KEY",
+  "GEMINI_API_KEY",
 ] as const;
 
 function wildcardToRegex(pattern: string): RegExp {
@@ -207,20 +214,37 @@ async function runCommand(
     let stderr = "";
     let timedOut = false;
     let killRequested = false;
+    let forceKillTimeout: ReturnType<typeof setTimeout> | null = null;
+    const useProcessGroup = process.platform !== "win32";
     const child = spawn(commandConfig.command, commandConfig.args ?? [], {
       cwd: commandConfig.cwd,
       env: mergedEnv,
       shell: true,
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
+      detached: useProcessGroup,
     });
+    const killChild = (signal: NodeJS.Signals) => {
+      if (useProcessGroup && child.pid) {
+        try {
+          process.kill(-child.pid, signal);
+          return;
+        } catch {
+          // Fall back to the direct child below. The process may have exited between checks.
+        }
+      }
+      child.kill(signal);
+    };
     hooks?.onSpawn?.({ pid: child.pid });
     const timeout =
       commandConfig.timeoutMs > 0
         ? setTimeout(() => {
             timedOut = true;
             killRequested = true;
-            child.kill("SIGTERM");
+            killChild("SIGTERM");
+            forceKillTimeout = setTimeout(() => {
+              killChild("SIGKILL");
+            }, 2000);
           }, commandConfig.timeoutMs)
         : null;
     child.stdout?.on("data", (chunk) => {
@@ -235,10 +259,12 @@ async function runCommand(
     });
     child.on("error", (error) => {
       if (timeout) clearTimeout(timeout);
+      if (forceKillTimeout) clearTimeout(forceKillTimeout);
       rejectPromise(error);
     });
     child.on("close", (exitCode, signal) => {
       if (timeout) clearTimeout(timeout);
+      if (forceKillTimeout) clearTimeout(forceKillTimeout);
       const result: CommandResult = {
         exitCode,
         signal,
