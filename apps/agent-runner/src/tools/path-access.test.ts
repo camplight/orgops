@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { resolveAgentPath } from "./path-access";
@@ -8,9 +8,10 @@ describe("resolveAgentPath", () => {
   it("authorizes workspace paths and legitimate non-existing targets", () => {
     const root = mkdtempSync(join(tmpdir(), "orgops-path-"));
     try {
+      const canonicalRoot = realpathSync(root);
       const agent = { workspacePath: root, allowOutsideWorkspace: false } as any;
-      expect(resolveAgentPath(agent, "notes.txt")).toBe(join(root, "notes.txt"));
-      expect(resolveAgentPath(agent, "new/deep/file.txt")).toBe(join(root, "new/deep/file.txt"));
+      expect(resolveAgentPath(agent, "notes.txt")).toBe(join(canonicalRoot, "notes.txt"));
+      expect(resolveAgentPath(agent, "new/deep/file.txt")).toBe(join(canonicalRoot, "new/deep/file.txt"));
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
@@ -29,9 +30,10 @@ describe("resolveAgentPath", () => {
       mkdirSync(join(root, "target"));
       writeFileSync(join(root, "target", "existing.txt"), "safe");
       symlinkSync("target", join(root, "link"));
+      const canonicalRoot = realpathSync(root);
       const agent = { workspacePath: root, allowOutsideWorkspace: false } as any;
-      expect(resolveAgentPath(agent, "link/existing.txt")).toBe(join(root, "target/existing.txt"));
-      expect(resolveAgentPath(agent, "link/new/deep/file.txt")).toBe(join(root, "target/new/deep/file.txt"));
+      expect(resolveAgentPath(agent, "link/existing.txt")).toBe(join(canonicalRoot, "target/existing.txt"));
+      expect(resolveAgentPath(agent, "link/new/deep/file.txt")).toBe(join(canonicalRoot, "target/new/deep/file.txt"));
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
@@ -65,11 +67,13 @@ describe("resolveAgentPath", () => {
       const longParts = Array.from({ length: 45 }, (_, index) => `part-${index}`);
       const longPath = join(root, ...longParts, "file.txt");
       mkdirSync(join(root, ...longParts), { recursive: true });
+      const canonicalRoot = realpathSync(root);
+      const canonicalSkill = realpathSync(skill);
       const agent = { workspacePath: root, allowOutsideWorkspace: false } as any;
-      expect(resolveAgentPath(agent, longPath)).toBe(longPath);
-      expect(resolveAgentPath(agent, join(skill, "assets/tool"), [skill])).toBe(join(skill, "assets/tool"));
+      expect(resolveAgentPath(agent, longPath)).toBe(join(canonicalRoot, ...longParts, "file.txt"));
+      expect(resolveAgentPath(agent, join(skill, "assets/tool"), [skill])).toBe(join(canonicalSkill, "assets/tool"));
       const unrestricted = { workspacePath: root, allowOutsideWorkspace: true } as any;
-      expect(resolveAgentPath(unrestricted, "/etc/hosts")).toBe("/etc/hosts");
+      expect(resolveAgentPath(unrestricted, "/etc/hosts")).toBe(realpathSync("/etc/hosts"));
     } finally {
       rmSync(root, { recursive: true, force: true });
       rmSync(skill, { recursive: true, force: true });

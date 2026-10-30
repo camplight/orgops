@@ -13,6 +13,8 @@ export type RequestUser = {
   username?: string;
   mustChangePassword?: boolean;
   runnerScope?: RunnerScope;
+  sourceAgentName?: string;
+  sourceAgentRole?: "STANDARD" | "SYSTEM";
 };
 
 export type RunnerScope = {
@@ -53,6 +55,7 @@ type ChannelAccessRow = {
 type AgentAccessRow = {
   visibility: string | null;
   ownerHumanId: string | null;
+  agentRole: string | null;
 };
 
 function normalizeChannelVisibility(value: unknown): ChannelVisibility {
@@ -65,6 +68,10 @@ function normalizeAgentVisibility(value: unknown): AgentVisibility {
   return value === AGENT_VISIBILITY.PRIVATE
     ? AGENT_VISIBILITY.PRIVATE
     : AGENT_VISIBILITY.PUBLIC;
+}
+
+function isSystemAgentRequest(user: RequestUser | undefined): boolean {
+  return isRunnerUser(user) && user?.sourceAgentRole === "SYSTEM";
 }
 
 export function createAccessControl(deps: AccessDeps) {
@@ -118,10 +125,17 @@ export function createAccessControl(deps: AccessDeps) {
       .select({
         visibility: schema.agents.visibility,
         ownerHumanId: schema.agents.owner_human_id,
+        agentRole: schema.agents.agent_role,
       })
       .from(schema.agents)
       .where(eq(schema.agents.name, agentName))
       .get() as AgentAccessRow | undefined;
+  }
+
+  function canManageAgentAuthority(user: RequestUser | undefined): boolean {
+    if (isSystemAgentRequest(user)) return true;
+    if (isRunnerUser(user)) return false;
+    return canManageInstance(user);
   }
 
   function hasHumanChannelSubscription(channelId: string, username: string): boolean {
@@ -494,6 +508,7 @@ export function createAccessControl(deps: AccessDeps) {
 
   return {
     canManageInstance,
+    canManageAgentAuthority,
     canConfigureHostRuntime,
     canViewChannel,
     canManageChannel,

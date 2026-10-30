@@ -333,9 +333,10 @@ PNG/JPEG/GIF/WebP/AVIF retain inline image previews.
 ### Runner Auth
 
 - Trusted runner token header: `x-orgops-runner-token`
+- Runner-authenticated agent tool calls include `x-orgops-agent-name`; the API resolves that agent's role for agent-level authorization. `SYSTEM` agents may mutate privileged agent authority fields, while ordinary runner requests and `STANDARD` agents may not.
 - Runner-only endpoint for secret env injection: `GET /api/secrets/env`
 - Runner secret env requests must include `x-orgops-agent-name`; optional `x-orgops-channel-id` enables team-scope resolution for that channel context.
-- Scoped and global runner tokens cannot mutate agent ownership, human-secret delegation, visibility, or additional skill roots.
+- Scoped and global runner tokens cannot directly mutate agent ownership, human-secret delegation, visibility, role, or additional skill roots.
 - Invite redemption can mint runner tokens in either mode:
   - `SCOPED` (default): restricted to one agent and one runner ID, and by default restricted to invite-approved channels. When `allowChannelExpansion` is enabled on the invite, the scoped runner may also view and post in channels where that agent is later added as an `AGENT` participant.
   - `GLOBAL`: behaves like a normal unrestricted runner token (full runner access).
@@ -751,7 +752,7 @@ Presence events (bookkeeping only):
   - chat secret forms (`<orgops-secret-input>` and json-render `SecretInput`) store a `private` secret for the agent that posted the form
   - env resolution precedence: `private > human > team > public > package`
 - skills:
-  - `GET /api/skills` (authenticated humans only; GLOBAL and SCOPED runners are forbidden)
+  - `GET /api/skills` (authenticated humans and runners)
   - the API resolves the skill root from `ORGOPS_PROJECT_ROOT` when set, otherwise from the API module location; `createApp({ projectRoot })` provides an explicit embedding/test override
 
 ### Runners

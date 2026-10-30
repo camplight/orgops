@@ -29,6 +29,7 @@ type AgentsDeps = {
   resolveWorkspacePath: (workspacePath: string) => string;
   insertEvent: (input: any) => any;
   access: AccessControl;
+  requireAuth: (c: any, next: any) => Response | Promise<Response | void> | void;
   agentTransfer: AgentTransfer;
   transferToPeer: (instanceId: string, bundle: AgentTransferBundle) => Promise<unknown>;
 };
@@ -38,6 +39,25 @@ const AGENT_MEMORY_CONTEXT_MODES = new Set([
   "FULL_CHANNEL_EVENTS",
   "OFF",
 ] as const);
+const AGENT_ROLES = new Set(["STANDARD", "SYSTEM"] as const);
+const AGENT_AUTHORITY_FIELDS = [
+  "additionalSkillRoots",
+  "agentRole",
+  "ownerHumanId",
+  "allowOwnerHumanSecrets",
+  "visibility",
+] as const;
+
+function normalizeAgentRole(value: unknown, fallback = "STANDARD") {
+  const raw = typeof value === "string" ? value.trim().toUpperCase() : "";
+  return AGENT_ROLES.has(raw as "STANDARD" | "SYSTEM") ? raw : fallback;
+}
+
+function hasAgentAuthorityField(body: unknown) {
+  return AGENT_AUTHORITY_FIELDS.some((field) =>
+    Object.prototype.hasOwnProperty.call(body ?? {}, field),
+  );
+}
 
 export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
   const {
@@ -49,9 +69,12 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     resolveWorkspacePath,
     insertEvent,
     access,
+    requireAuth,
     agentTransfer,
     transferToPeer,
   } = deps;
+  app.use("/api/agents", requireAuth as any);
+  app.use("/api/agents/*", requireAuth as any);
   const workspaceRoot=prepareWorkspaceRoot(process.env.ORGOPS_WORKSPACE_ROOT||resolve(PROJECT_ROOT,'.orgops-data/workspaces'));
   const publishDashboardRefresh = (reason: string, meta?: Record<string, unknown>) => {
     bus.publish("org:dashboard", {
@@ -393,6 +416,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       rows.map((row) => ({
         id: row.id,
         name: row.name,
+        agentRole: row.agent_role === "SYSTEM" ? "SYSTEM" : "STANDARD",
         icon: row.icon,
         description: row.description,
         modelId: row.model_id,
@@ -437,9 +461,8 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         : null;
     if (
       user?.username === "runner" &&
-      ["additionalSkillRoots", "ownerHumanId", "allowOwnerHumanSecrets", "visibility"].some(
-        (field) => Object.prototype.hasOwnProperty.call(body ?? {}, field),
-      )
+      hasAgentAuthorityField(body) &&
+      !access.canManageAgentAuthority(user)
     ) {
       return jsonResponse(c, { error: "Forbidden" }, 403);
     }
@@ -483,6 +506,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       alwaysPreloadedSkillsSet.has(name)
     );
     const additionalSkillRoots = normalizeAdditionalSkillRoots(body.additionalSkillRoots);
+    const agentRole = normalizeAgentRole(body.agentRole);
     const mode = normalizeAgentMode(body.mode);
     if((mode==='WRAPPED'||body.allowOutsideWorkspace||additionalSkillRoots.length)&&!access.canConfigureHostRuntime(user,effectiveAssignedRunnerId))return jsonResponse(c,{error:'Host runtime configuration requires operator approval'},403);
     const allowOutsideWorkspace = mode === "WRAPPED" ? false : Boolean(body.allowOutsideWorkspace);
@@ -530,7 +554,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         ? ownerHumanIdRequested ??
           (user?.username && user.username !== "runner" ? user.id ?? null : null)
         : (user?.username&&user.username!=='runner'?user.id??null:null);
-    if(ownerHumanIdRequested&&ownerHumanIdRequested!==user?.id&&!access.canManageInstance(user))return jsonResponse(c,{error:'Cannot assign another human as owner'},403);
+    if(ownerHumanIdRequested&&ownerHumanIdRequested!==user?.id&&!access.canManageAgentAuthority(user))return jsonResponse(c,{error:'Cannot assign another human as owner'},403);
     if (visibility === AGENT_VISIBILITY.PRIVATE && !ownerHumanId) {
       return jsonResponse(
         c,
@@ -550,6 +574,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       .values({
         id,
         name: body.name,
+        agent_role: agentRole,
         icon: body.icon ?? null,
         description: body.description ?? null,
         model_id: body.modelId,
@@ -592,6 +617,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     return jsonResponse(c, {
       id: row.id,
       name: row.name,
+      agentRole: row.agent_role === "SYSTEM" ? "SYSTEM" : "STANDARD",
       icon: row.icon,
       description: row.description,
       modelId: row.model_id,
@@ -641,15 +667,14 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     const body = await c.req.json();
     if (
       user?.username === "runner" &&
-      ["additionalSkillRoots", "ownerHumanId", "allowOwnerHumanSecrets", "visibility"].some(
-        (field) => Object.prototype.hasOwnProperty.call(body ?? {}, field),
-      )
+      hasAgentAuthorityField(body) &&
+      !access.canManageAgentAuthority(user)
     ) {
       return jsonResponse(c, { error: "Forbidden" }, 403);
     }
     const existing = orm.select().from(schema.agents).where(eq(schema.agents.name, name)).get() as any;
     if (!existing) return jsonResponse(c, { error: "Not found" }, 404);
-    if(body.ownerHumanId!==undefined&&body.ownerHumanId!==existing.owner_human_id&&!access.canManageInstance(user))return jsonResponse(c,{error:'Ownership changes require operator approval'},403);
+    if(body.ownerHumanId!==undefined&&body.ownerHumanId!==existing.owner_human_id&&!access.canManageAgentAuthority(user))return jsonResponse(c,{error:'Ownership changes require operator approval'},403);
     if(!access.canManageInstance(user)&&body.workspacePath!==undefined&&resolveWorkspacePath(String(body.workspacePath))!==existing.workspace_path)return jsonResponse(c,{error:'Workspace changes require operator approval'},403);
     if((existing.mode==='WRAPPED'||String(body.mode??'').toUpperCase()==='WRAPPED'||body.wrappedConfig!==undefined||body.allowOutsideWorkspace||body.additionalSkillRoots!==undefined)&&!access.canConfigureHostRuntime(user,existing.assigned_runner_id))return jsonResponse(c,{error:'Host runtime configuration requires operator approval'},403);
     if (
@@ -736,6 +761,10 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       return jsonResponse(c, { error: wrappedConfigParsed.error }, 400);
     }
     const mode = normalizeAgentMode(body.mode, existing.mode ?? "CLASSIC");
+    const agentRole =
+      body.agentRole !== undefined
+        ? normalizeAgentRole(body.agentRole, existing.agent_role ?? "STANDARD")
+        : (existing.agent_role ?? "STANDARD");
     const emitAuditEvents =
       body.emitAuditEvents !== undefined ? (body.emitAuditEvents ? 1 : 0) : null;
     const assignedRunnerId =
@@ -824,6 +853,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
               ? memoryContextModeParsed.value
               : existing.memory_context_mode,
         mode,
+        agent_role: agentRole,
         wrapped_config_json: wrappedConfigParsed
           ? JSON.stringify(wrappedConfigParsed.value)
           : existing.wrapped_config_json,

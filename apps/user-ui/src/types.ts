@@ -25,6 +25,7 @@ export type Channel = {
 export type Agent = {
   id?: string;
   name: string;
+  agentRole?: "STANDARD" | "SYSTEM";
   description?: string | null;
   visibility?: "PUBLIC" | "PRIVATE";
   ownerHumanId?: string | null;

@@ -1,6 +1,7 @@
 export type Agent = {
   id?: string;
   name: string;
+  agentRole?: "STANDARD" | "SYSTEM";
   runtimeState: string;
   desiredState: string;
   modelId?: string;

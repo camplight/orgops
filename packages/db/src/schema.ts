@@ -20,6 +20,7 @@ export const agents = sqliteTable("agents", {
   name: text("name").notNull().unique(),
   icon: text("icon"),
   description: text("description"),
+  agent_role: text("agent_role").notNull().default("STANDARD"),
   model_id: text("model_id").notNull(),
   soul_contents: text("soul_contents").notNull().default(""),
   workspace_path: text("workspace_path").notNull(),

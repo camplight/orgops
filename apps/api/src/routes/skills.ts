@@ -12,10 +12,6 @@ export function registerSkillsRoutes(app: Hono<any>, deps: SkillsDeps) {
   const { SKILL_ROOTS, jsonResponse, listSkills, requireAuth } = deps;
 
   app.get("/api/skills", requireAuth, (c) => {
-    const user = (c as any).get("user") as { username?: string; runnerScope?: { mode?: string } } | undefined;
-    if (user?.username === "runner") {
-      return jsonResponse(c, { error: "Forbidden" }, 403);
-    }
     const merged = SKILL_ROOTS.flatMap((root) => listSkills(root));
     const deduped = merged.filter((skill, index, array) => {
       return array.findIndex((candidate) => candidate.name === skill.name) === index;

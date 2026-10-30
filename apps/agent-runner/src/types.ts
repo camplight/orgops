@@ -3,6 +3,7 @@ import type { ModelCapabilities } from "@orgops/schemas";
 export type Agent = {
   id?: string;
   name: string;
+  agentRole?: "STANDARD" | "SYSTEM";
   soulContents?: string;
   enabledSkills?: string[];
   alwaysPreloadedSkills?: string[];
