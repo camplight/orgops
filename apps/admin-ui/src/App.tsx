@@ -1607,6 +1607,14 @@ export default function App() {
             await data.refreshHumans();
             return body;
           }}
+          onUpdateHumanRole={async (id, humanRole) => {
+            await data.apiFetch(`/api/humans/${encodeURIComponent(id)}`, {
+              method: "PATCH",
+              headers: data.getApiHeaders(),
+              body: JSON.stringify({ humanRole }),
+            });
+            await data.refreshHumans();
+          }}
           onRefresh={async () => {
             await data.refreshHumans();
             await data.refreshChannels();

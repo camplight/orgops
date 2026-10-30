@@ -229,6 +229,7 @@ export const runnerTokens = sqliteTable(
 export const humans = sqliteTable("humans", {
   id: text("id").primaryKey(),
   username: text("username").notNull().unique(),
+  human_role: text("human_role").notNull().default("MEMBER"),
   password_hash: text("password_hash").notNull(),
   must_change_password: integer("must_change_password").notNull().default(1),
   created_at: integer("created_at").notNull(),

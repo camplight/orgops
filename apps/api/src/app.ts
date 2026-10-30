@@ -165,6 +165,7 @@ export function createApp(config: AppConfig = {}) {
       .values({
         id: randomUUID(),
         username: ADMIN_USER,
+        human_role: "OWNER",
         password_hash: hashPassword(ADMIN_PASS),
         must_change_password: 0,
         created_at: now,
@@ -700,6 +701,7 @@ export function createApp(config: AppConfig = {}) {
     humanSchema: schema.humans,
     hashPassword,
     access,
+    requireAuth,
   });
 
   registerAgentInviteRoutes(app as any, {

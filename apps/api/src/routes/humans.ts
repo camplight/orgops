@@ -16,6 +16,7 @@ type HumansDeps = {
   humanSchema: any;
   hashPassword: (password: string) => string;
   access: AccessControl;
+  requireAuth: (c: any, next: any) => Response | Promise<Response | void> | void;
 };
 
 function generateTemporaryPassword() {
@@ -23,7 +24,14 @@ function generateTemporaryPassword() {
 }
 
 export function registerHumansRoutes(app: Hono<any>, deps: HumansDeps) {
-  const { orm, jsonResponse, humanSchema, hashPassword, access } = deps;
+  const { orm, jsonResponse, humanSchema, hashPassword, access, requireAuth } = deps;
+  app.use("/api/humans", requireAuth as any);
+  app.use("/api/humans/*", requireAuth as any);
+
+  function normalizeHumanRole(value: unknown) {
+    const raw = typeof value === "string" ? value.trim().toUpperCase() : "";
+    return raw === "OWNER" || raw === "ADMIN" ? raw : "MEMBER";
+  }
 
   function isHumanUser(user: RequestUser | undefined): user is RequestUser & {
     id: string;
@@ -57,6 +65,7 @@ export function registerHumansRoutes(app: Hono<any>, deps: HumansDeps) {
       .select({
         id: humanSchema.id,
         username: humanSchema.username,
+        human_role: humanSchema.human_role,
         must_change_password: humanSchema.must_change_password,
         created_at: humanSchema.created_at,
         updated_at: humanSchema.updated_at
@@ -66,6 +75,7 @@ export function registerHumansRoutes(app: Hono<any>, deps: HumansDeps) {
       .all() as Array<{
       id: string;
       username: string;
+      human_role: string | null;
       must_change_password: number;
       created_at: number;
       updated_at: number;
@@ -76,6 +86,7 @@ export function registerHumansRoutes(app: Hono<any>, deps: HumansDeps) {
       rows.map((row) => ({
         id: row.id,
         username: row.username,
+        humanRole: normalizeHumanRole(row.human_role),
         mustChangePassword: Boolean(row.must_change_password),
         createdAt: row.created_at,
         updatedAt: row.updated_at
@@ -166,6 +177,7 @@ export function registerHumansRoutes(app: Hono<any>, deps: HumansDeps) {
         .values({
           id,
           username,
+          human_role: "MEMBER",
           password_hash: hashPassword(tempPassword),
           must_change_password: 1,
           created_at: now,
@@ -275,6 +287,52 @@ export function registerHumansRoutes(app: Hono<any>, deps: HumansDeps) {
       username: existing.username,
       mustChangePassword: true,
       temporaryPassword: tempPassword
+    });
+  });
+
+  app.patch("/api/humans/:id", async (c) => {
+    if (!access.canManageHumanRoles(c.get("user"))) {
+      return jsonResponse(c, { error: "Owner role required" }, 403);
+    }
+    const id = c.req.param("id");
+    const body = await c.req.json().catch(() => ({}));
+    const humanRole =
+      body.humanRole === "OWNER" || body.humanRole === "ADMIN" || body.humanRole === "MEMBER"
+        ? body.humanRole
+        : null;
+    if (!humanRole) return jsonResponse(c, { error: "humanRole must be OWNER, ADMIN, or MEMBER" }, 400);
+    const existing = orm
+      .select({
+        id: humanSchema.id,
+        username: humanSchema.username,
+        human_role: humanSchema.human_role,
+      })
+      .from(humanSchema)
+      .where(eq(humanSchema.id, id))
+      .get() as { id: string; username: string; human_role: string | null } | undefined;
+    if (!existing) return jsonResponse(c, { error: "Human not found" }, 404);
+    if (normalizeHumanRole(existing.human_role) === "OWNER" && humanRole !== "OWNER") {
+      const owners = orm
+        .select({ id: humanSchema.id })
+        .from(humanSchema)
+        .where(eq(humanSchema.human_role, "OWNER"))
+        .all() as Array<{ id: string }>;
+      if (owners.length <= 1) {
+        return jsonResponse(c, { error: "Cannot remove the last owner" }, 400);
+      }
+    }
+    const now = Date.now();
+    orm
+      .update(humanSchema)
+      .set({ human_role: humanRole, updated_at: now })
+      .where(eq(humanSchema.id, id))
+      .run();
+    deps.revokeSessions(id);
+    return jsonResponse(c, {
+      id: existing.id,
+      username: existing.username,
+      humanRole,
+      updatedAt: now,
     });
   });
 }

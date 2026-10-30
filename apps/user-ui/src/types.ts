@@ -65,6 +65,7 @@ export type AuthMe = {
   id?: string | null;
   username?: string | null;
   mustChangePassword?: boolean;
+  humanRole?: "OWNER" | "ADMIN" | "MEMBER";
 };
 
 export type Team = {

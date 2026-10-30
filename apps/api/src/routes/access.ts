@@ -6,12 +6,13 @@ import {
   type ChannelVisibility,
   type OrgOpsDrizzleDb,
 } from "@orgops/db";
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 
 export type RequestUser = {
   id?: string;
   username?: string;
   mustChangePassword?: boolean;
+  humanRole?: "OWNER" | "ADMIN" | "MEMBER";
   runnerScope?: RunnerScope;
   sourceAgentName?: string;
   sourceAgentRole?: "STANDARD" | "SYSTEM";
@@ -74,16 +75,33 @@ function isSystemAgentRequest(user: RequestUser | undefined): boolean {
   return isRunnerUser(user) && user?.sourceAgentRole === "SYSTEM";
 }
 
+function normalizeHumanRole(value: unknown): "OWNER" | "ADMIN" | "MEMBER" {
+  return value === "OWNER" || value === "ADMIN" ? value : "MEMBER";
+}
+
 export function createAccessControl(deps: AccessDeps) {
   const { orm } = deps;
 
-  // Same bootstrap-owner policy used by Google sign-in configuration.
+  function getHumanRole(user: RequestUser | undefined): "OWNER" | "ADMIN" | "MEMBER" {
+    if (!isHumanUser(user) || !user.id) return "MEMBER";
+    const row = orm
+      .select({ role: schema.humans.human_role })
+      .from(schema.humans)
+      .where(eq(schema.humans.id, user.id))
+      .get() as { role: string | null } | undefined;
+    return normalizeHumanRole(row?.role ?? user.humanRole);
+  }
+
   function canManageInstance(user: RequestUser | undefined): boolean {
     if (isRunnerUser(user)) return user?.runnerScope?.mode !== 'SCOPED';
     if (!isHumanUser(user) || !user.id || user.mustChangePassword) return false;
-    const owner = orm.select({id: schema.humans.id}).from(schema.humans)
-      .orderBy(asc(schema.humans.created_at), asc(schema.humans.id)).limit(1).get();
-    return owner?.id === user.id;
+    const role = getHumanRole(user);
+    return role === "OWNER" || role === "ADMIN";
+  }
+
+  function canManageHumanRoles(user: RequestUser | undefined): boolean {
+    if (!isHumanUser(user) || !user.id || user.mustChangePassword) return false;
+    return getHumanRole(user) === "OWNER";
   }
 
   function canConfigureHostRuntime(user:RequestUser|undefined,runnerId:unknown):boolean{
@@ -508,6 +526,7 @@ export function createAccessControl(deps: AccessDeps) {
 
   return {
     canManageInstance,
+    canManageHumanRoles,
     canManageAgentAuthority,
     canConfigureHostRuntime,
     canViewChannel,

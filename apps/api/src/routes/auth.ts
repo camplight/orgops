@@ -103,6 +103,7 @@ export function registerAuthRoutes(app: Hono<any>, deps: AuthDeps) {
       | {
           id: string;
           username: string;
+          human_role: string | null;
           password_hash: string;
           must_change_password: number;
         }
@@ -117,6 +118,7 @@ export function registerAuthRoutes(app: Hono<any>, deps: AuthDeps) {
       id: human.id,
       username: human.username,
       mustChangePassword,
+      humanRole: human.human_role === "OWNER" || human.human_role === "ADMIN" ? human.human_role : "MEMBER",
       expiresAt:Date.now()+sessionAge*1000,
     });
     return new Response(JSON.stringify({ ok: true, mustChangePassword }), {
@@ -148,11 +150,13 @@ export function registerAuthRoutes(app: Hono<any>, deps: AuthDeps) {
       id?: string;
       username: string;
       mustChangePassword?: boolean;
+      humanRole?: "OWNER" | "ADMIN" | "MEMBER";
     };
     return jsonResponse(c, {
       id: user.id ?? null,
       username: user.username,
-      mustChangePassword: Boolean(user.mustChangePassword)
+      mustChangePassword: Boolean(user.mustChangePassword),
+      humanRole: user.humanRole ?? "MEMBER"
     });
   });
 
@@ -161,6 +165,7 @@ export function registerAuthRoutes(app: Hono<any>, deps: AuthDeps) {
       id?: string;
       username: string;
       mustChangePassword?: boolean;
+      humanRole?: "OWNER" | "ADMIN" | "MEMBER";
     };
     if (!user.id || user.username === "runner") {
       return jsonResponse(c, { error: "Authenticated human user required" }, 401);
@@ -236,6 +241,7 @@ export function registerAuthRoutes(app: Hono<any>, deps: AuthDeps) {
         id: user.id,
         username: nextUsername,
         mustChangePassword: wantsPasswordChange ? false : Boolean(user.mustChangePassword),
+        humanRole: user.humanRole ?? "MEMBER",
         expiresAt,
       });
       if(rotate)c.header('Set-Cookie',buildSessionCookie(c,nextSession,Math.max(0,Math.floor((expiresAt-Date.now())/1000))));
@@ -243,7 +249,8 @@ export function registerAuthRoutes(app: Hono<any>, deps: AuthDeps) {
     return jsonResponse(c, {
       ok: true,
       username: nextUsername,
-      mustChangePassword: wantsPasswordChange ? false : Boolean(user.mustChangePassword)
+      mustChangePassword: wantsPasswordChange ? false : Boolean(user.mustChangePassword),
+      humanRole: user.humanRole ?? "MEMBER"
     });
   });
 

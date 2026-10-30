@@ -3478,6 +3478,100 @@ describe("api app", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("enforces explicit human roles for instance and role management", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+
+    const adminLoginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    expect(adminLoginRes.status).toBe(200);
+    const adminCookie = adminLoginRes.headers.get("set-cookie") ?? "";
+    const meRes = await app.request("http://localhost/api/auth/me", {
+      headers: { cookie: adminCookie },
+    });
+    expect(((await meRes.json()) as { humanRole?: string }).humanRole).toBe("OWNER");
+
+    const adminInviteRes = await app.request("http://localhost/api/humans/invite", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ username: "manager", tempPassword: "manager-temp-pass" }),
+    });
+    expect(adminInviteRes.status).toBe(201);
+    const manager = (await adminInviteRes.json()) as { id: string; temporaryPassword: string };
+    const humansBeforeRole = await app.request("http://localhost/api/humans", {
+      headers: { cookie: adminCookie },
+    });
+    expect(((await humansBeforeRole.json()) as Array<{ username: string; humanRole: string }>)
+      .find((human) => human.username === "manager")?.humanRole).toBe("MEMBER");
+
+    const memberPromoteSelf = await app.request(`http://localhost/api/humans/${manager.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie: adminCookie.replace("orgops_session=", "not_session=") },
+      body: JSON.stringify({ humanRole: "ADMIN" }),
+    });
+    expect(memberPromoteSelf.status).toBe(401);
+
+    const promoteRes = await app.request(`http://localhost/api/humans/${manager.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ humanRole: "ADMIN" }),
+    });
+    expect(promoteRes.status).toBe(200);
+
+    const managerLoginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "manager", password: manager.temporaryPassword }),
+    });
+    expect(managerLoginRes.status).toBe(200);
+    let managerCookie = managerLoginRes.headers.get("set-cookie") ?? "";
+    const managerProfile = await app.request("http://localhost/api/auth/profile", {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie: managerCookie },
+      body: JSON.stringify({ username: "manager", newPassword: "manager-password-1" }),
+    });
+    expect(managerProfile.status).toBe(200);
+    managerCookie = managerProfile.headers.get("set-cookie") ?? managerCookie;
+
+    const managerInviteRes = await app.request("http://localhost/api/humans/invite", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: managerCookie },
+      body: JSON.stringify({ username: "member", tempPassword: "member-temp-pass" }),
+    });
+    expect(managerInviteRes.status).toBe(201);
+    const member = (await managerInviteRes.json()) as { id: string };
+
+    const adminRoleAttempt = await app.request(`http://localhost/api/humans/${member.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie: managerCookie },
+      body: JSON.stringify({ humanRole: "ADMIN" }),
+    });
+    expect(adminRoleAttempt.status).toBe(403);
+
+    const demoteLastOwner = await app.request("http://localhost/api/auth/me", {
+      headers: { cookie: adminCookie },
+    });
+    const ownerId = ((await demoteLastOwner.json()) as { id: string }).id;
+    const demoteOwnerRes = await app.request(`http://localhost/api/humans/${ownerId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ humanRole: "ADMIN" }),
+    });
+    expect(demoteOwnerRes.status).toBe(400);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("updates agent runtime state on start and stop actions", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");

@@ -321,6 +321,11 @@ omit private resource metadata for non-administrators. Uploaded active content
 is served as an attachment with an inert MIME, `nosniff` and sandbox CSP; only
 PNG/JPEG/GIF/WebP/AVIF retain inline image previews.
 
+- Humans have an explicit `human_role`: `OWNER`, `ADMIN`, or `MEMBER`. The
+  bootstrap admin and the first existing human in migrations are `OWNER`;
+  invited and Google-provisioned humans default to `MEMBER`. `OWNER` and `ADMIN`
+  can manage instance resources. Only `OWNER` can change human roles, and the
+  API refuses to remove the last owner.
 - `PUBLIC` channels are visible to all authenticated humans.
 - `PRIVATE` channels are visible to:
   - the owner (`channels.owner_human_id`)
