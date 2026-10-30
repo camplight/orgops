@@ -29,6 +29,7 @@ import { Room, RoomEvent, Track } from "livekit-client";
 const MARKDOWN_HINT_RE =
   /(^|\n)\s{0,3}(#{1,6}\s|[-*+]\s|\d+\.\s|>\s)|`{1,3}[^`]|(\*\*|__)[^*_]+(\*\*|__)|(\*|_)[^*_]+(\*|_)|\[[^\]]+\]\([^)]+\)|!\[[^\]]*\]\([^)]+\)|(^|\n)\|.+\|/m;
 const URL_RE = /(https?:\/\/[^\s<]+)/i;
+const TIMELINE_PAGE_MIN_EVENTS = 200;
 
 function formatTime(value?: number) {
   if (!value) return "";
@@ -784,6 +785,10 @@ function adaptiveMessageBatchSize() {
   return 30;
 }
 
+function adaptiveTimelinePageSize() {
+  return Math.max(TIMELINE_PAGE_MIN_EVENTS, adaptiveMessageBatchSize() * 8);
+}
+
 function mergeEventsChronologically(current: EventRow[], incoming: EventRow[]) {
   const byId = new Map<string, EventRow>();
   for (const event of current) byId.set(event.id, event);
@@ -797,6 +802,10 @@ function mergeEventsChronologically(current: EventRow[], incoming: EventRow[]) {
     if (leftCreated !== rightCreated) return leftCreated - rightCreated;
     return left.id.localeCompare(right.id);
   });
+}
+
+function isVisibleTimelineEvent(event: EventRow) {
+  return (event.type === "message.created" && !isHiddenUiActionMessage(event)) || isTraceEvent(event);
 }
 
 function createLocalAttachmentId() {
@@ -986,6 +995,7 @@ export default function App() {
   const activeChannelIdRef = useRef<string | null>(null);
   const channelEventsCacheRef = useRef<Record<string, EventRow[]>>({});
   const hasOlderMessagesByChannelRef = useRef<Record<string, boolean>>({});
+  const oldestLoadedEventAtByChannelRef = useRef<Record<string, number>>({});
   const lastSeenByChannelRef = useRef<Record<string, number>>({});
   const lastLoadedMessageAtByChannelRef = useRef<Record<string, number>>({});
   const lastLoadedTimelineAtByChannelRef = useRef<Record<string, number>>({});
@@ -1107,10 +1117,7 @@ export default function App() {
   }, [userId]);
 
   const visibleTimelineEvents = useMemo(
-    () =>
-      events.filter(
-        (event) => (event.type === "message.created" && !isHiddenUiActionMessage(event)) || isTraceEvent(event)
-      ),
+    () => events.filter(isVisibleTimelineEvent),
     [events]
   );
 
@@ -1593,9 +1600,7 @@ export default function App() {
   }
 
   function updateCachedChannelEvents(channelId: string, incomingEvents: EventRow[]) {
-    const visibleEvents = incomingEvents.filter(
-      (event) => (event.type === "message.created" && !isHiddenUiActionMessage(event)) || isTraceEvent(event)
-    );
+    const visibleEvents = incomingEvents.filter(isVisibleTimelineEvent);
     if (visibleEvents.length === 0) return channelEventsCacheRef.current[channelId] ?? [];
     const nextEvents = mergeEventsChronologically(
       channelEventsCacheRef.current[channelId] ?? [],
@@ -1622,50 +1627,20 @@ export default function App() {
   ) {
     const fetchSeq = messageFetchSeqRef.current + 1;
     messageFetchSeqRef.current = fetchSeq;
-    const limit = adaptiveMessageBatchSize();
+    const limit = adaptiveTimelinePageSize();
     if (options?.showLoading) {
       loadingChannelIdRef.current = channelId;
       setMessagesLoading(true);
     }
     try {
-      const [messageEvents, failureEvents, turnEvents, toolEvents, contextEvents, wrapperEvents, processEvents] =
-        await Promise.all([
-        apiJson<EventRow[]>(
-          `/api/events?channelId=${encodeURIComponent(channelId)}&type=message.created&limit=${limit}&order=desc`
-        ),
-        apiJson<EventRow[]>(
-          `/api/events?channelId=${encodeURIComponent(channelId)}&type=agent.turn.failed&limit=${limit}&order=desc`
-        ),
-        apiJson<EventRow[]>(
-          `/api/events?channelId=${encodeURIComponent(channelId)}&typePrefix=agent.turn.&limit=${limit}&order=desc`
-        ),
-        apiJson<EventRow[]>(
-          `/api/events?channelId=${encodeURIComponent(channelId)}&typePrefix=tool.&limit=${limit}&order=desc`
-        ),
-        apiJson<EventRow[]>(
-          `/api/events?channelId=${encodeURIComponent(channelId)}&type=telemetry.context.window.updated&limit=${limit}&order=desc`
-        ),
-        apiJson<EventRow[]>(
-          `/api/events?channelId=${encodeURIComponent(channelId)}&typePrefix=wrapper.turn.&limit=${limit}&order=desc`
-        ),
-        apiJson<EventRow[]>(
-          `/api/events?channelId=${encodeURIComponent(channelId)}&typePrefix=process.&limit=${limit}&order=desc`
-        )
-      ]);
+      const pageEvents = await apiJson<EventRow[]>(
+        `/api/events?channelId=${encodeURIComponent(channelId)}&limit=${limit}&order=desc`
+      );
       if (fetchSeq !== messageFetchSeqRef.current || channelId !== activeChannelIdRef.current) {
         return;
       }
-      const nextEvents = mergeEventsChronologically(
-        mergeEventsChronologically(
-          mergeEventsChronologically(
-            mergeEventsChronologically(mergeEventsChronologically(messageEvents, failureEvents), turnEvents),
-            mergeEventsChronologically(toolEvents, contextEvents)
-          ),
-          wrapperEvents
-        ),
-        processEvents
-      ).reverse();
-      const chronologicalEvents = [...nextEvents].reverse();
+      const chronologicalEvents = [...pageEvents].reverse().filter(isVisibleTimelineEvent);
+      const nextEvents = [...chronologicalEvents].reverse();
       const previousNewestMessageAt = lastLoadedMessageAtByChannelRef.current[channelId] ?? 0;
       const nextNewestMessageAt = newestMessageTime(nextEvents);
       const previousNewestTimelineAt = lastLoadedTimelineAtByChannelRef.current[channelId] ?? 0;
@@ -1676,7 +1651,8 @@ export default function App() {
       setEvents((current) =>
         options?.showLoading ? chronologicalEvents : mergeEventsChronologically(current, chronologicalEvents)
       );
-      for (const loadedEvent of messageEvents) {
+      for (const loadedEvent of chronologicalEvents) {
+        if (loadedEvent.type !== "message.created") continue;
         const chunkEventId = messageVoiceMeta(loadedEvent.payload)?.chunkEventId;
         if (chunkEventId && !resolvedVoiceChunkIdsRef.current.has(chunkEventId)) {
           resolvePendingVoiceChunk(chunkEventId);
@@ -1686,9 +1662,19 @@ export default function App() {
         ? chronologicalEvents
         : mergeEventsChronologically(channelEventsCacheRef.current[channelId] ?? [], chronologicalEvents);
       if (options?.showLoading) {
-        const hasOlder = messageEvents.length === limit;
+        const hasOlder = pageEvents.length === limit;
         hasOlderMessagesByChannelRef.current[channelId] = hasOlder;
         setHasOlderMessages(hasOlder);
+        const oldestLoadedAt = pageEvents.reduce((oldest, event) => {
+          const createdAt = event.createdAt ?? 0;
+          if (!createdAt) return oldest;
+          return oldest === 0 ? createdAt : Math.min(oldest, createdAt);
+        }, 0);
+        if (oldestLoadedAt > 0) {
+          oldestLoadedEventAtByChannelRef.current[channelId] = oldestLoadedAt;
+        } else {
+          delete oldestLoadedEventAtByChannelRef.current[channelId];
+        }
       }
       markChannelSeen(channelId, nextEvents);
       lastLoadedMessageAtByChannelRef.current[channelId] = Math.max(
@@ -1728,43 +1714,22 @@ export default function App() {
   }
 
   async function handleLoadOlderMessages() {
-    if (!activeChannelId || events.length === 0 || loadingOlderMessages) return;
-    const oldestEventAt = events[0]?.createdAt;
+    if (!activeChannelId || loadingOlderMessages) return;
+    const oldestEventAt = oldestLoadedEventAtByChannelRef.current[activeChannelId] ?? events[0]?.createdAt;
     if (!oldestEventAt) return;
     const channelId = activeChannelId;
-    const limit = adaptiveMessageBatchSize();
+    const limit = adaptiveTimelinePageSize();
     const panel = messagesPanelRef.current;
     const previousScrollHeight = panel?.scrollHeight ?? 0;
 
     setLoadingOlderMessages(true);
     setError(null);
     try {
-      const [olderMessages, olderTurns, olderTools, olderWrappers, olderProcesses] = await Promise.all([
-        apiJson<EventRow[]>(
-          `/api/events?channelId=${encodeURIComponent(channelId)}&type=message.created&limit=${limit}&order=desc&before=${oldestEventAt}`
-        ),
-        apiJson<EventRow[]>(
-          `/api/events?channelId=${encodeURIComponent(channelId)}&typePrefix=agent.turn.&limit=${limit}&order=desc&before=${oldestEventAt}`
-        ),
-        apiJson<EventRow[]>(
-          `/api/events?channelId=${encodeURIComponent(channelId)}&typePrefix=tool.&limit=${limit}&order=desc&before=${oldestEventAt}`
-        ),
-        apiJson<EventRow[]>(
-          `/api/events?channelId=${encodeURIComponent(channelId)}&typePrefix=wrapper.turn.&limit=${limit}&order=desc&before=${oldestEventAt}`
-        ),
-        apiJson<EventRow[]>(
-          `/api/events?channelId=${encodeURIComponent(channelId)}&typePrefix=process.&limit=${limit}&order=desc&before=${oldestEventAt}`
-        )
-      ]);
-      const olderEvents = mergeEventsChronologically(
-        mergeEventsChronologically(
-          mergeEventsChronologically(olderMessages, olderTurns),
-          mergeEventsChronologically(olderTools, olderWrappers)
-        ),
-        olderProcesses
+      const olderPageEvents = await apiJson<EventRow[]>(
+        `/api/events?channelId=${encodeURIComponent(channelId)}&limit=${limit}&order=desc&before=${oldestEventAt}`
       );
       if (channelId !== activeChannelIdRef.current) return;
-      const chronologicalOlderEvents = [...olderEvents].reverse();
+      const chronologicalOlderEvents = [...olderPageEvents].reverse().filter(isVisibleTimelineEvent);
       setEvents((current) => {
         const existingIds = new Set(current.map((event) => event.id));
         const nextEvents = [
@@ -1774,12 +1739,15 @@ export default function App() {
         channelEventsCacheRef.current[channelId] = nextEvents;
         return nextEvents;
       });
-      const hasOlder =
-        olderMessages.length === limit ||
-          olderTurns.length === limit ||
-          olderTools.length === limit ||
-          olderWrappers.length === limit ||
-          olderProcesses.length === limit;
+      const oldestLoadedAt = olderPageEvents.reduce((oldest, event) => {
+        const createdAt = event.createdAt ?? 0;
+        if (!createdAt) return oldest;
+        return oldest === 0 ? createdAt : Math.min(oldest, createdAt);
+      }, 0);
+      if (oldestLoadedAt > 0) {
+        oldestLoadedEventAtByChannelRef.current[channelId] = oldestLoadedAt;
+      }
+      const hasOlder = olderPageEvents.length === limit;
       hasOlderMessagesByChannelRef.current[channelId] = hasOlder;
       setHasOlderMessages(hasOlder);
       window.requestAnimationFrame(() => {
@@ -1917,8 +1885,7 @@ export default function App() {
       return;
     }
 
-    const cacheableRealtimeEvent =
-      (event.type === "message.created" && !isHiddenUiActionMessage(event)) || isTraceEvent(event);
+    const cacheableRealtimeEvent = isVisibleTimelineEvent(event);
     if (cacheableRealtimeEvent) {
       updateCachedChannelEvents(eventChannelId, [event]);
     }
@@ -2446,6 +2413,7 @@ export default function App() {
     setHasNewMessagesBelow(false);
     setExpandedTraceEventId(null);
     lastSeenByChannelRef.current = {};
+    oldestLoadedEventAtByChannelRef.current = {};
     lastLoadedMessageAtByChannelRef.current = {};
     lastLoadedTimelineAtByChannelRef.current = {};
   }
