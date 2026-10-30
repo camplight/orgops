@@ -26,8 +26,9 @@ const trigger: Event = {
   payload: { text: "question" },
 };
 
-function setup() {
+function setup(options: { pendingEventBatches?: Event[][] } = {}) {
   const emitted: Array<{ type?: string; payload?: Record<string, unknown> }> = [];
+  let pendingEventBatchIndex = 0;
   const apiFetch = vi.fn(async (path: string, init?: RequestInit) => {
     if (path === "/api/channels") {
       return Response.json([
@@ -37,7 +38,9 @@ function setup() {
         },
       ]);
     }
-    if (path.startsWith("/api/events?")) return Response.json([]);
+    if (path.startsWith("/api/events?")) {
+      return Response.json(options.pendingEventBatches?.[pendingEventBatchIndex++] ?? []);
+    }
     if (path === "/api/events" && init?.method === "POST") {
       const body = JSON.parse(String(init.body ?? "{}")) as Record<string, unknown>;
       return Response.json({ id: "evt-posted", status: "DELIVERED", ...body });
@@ -200,5 +203,156 @@ describe("CLASSIC empty final output", () => {
         return event.type === "message.created" && payload?.text === "streaming update";
       }),
     ).toBe(true);
+  });
+
+  it("posts a final answer, then continues the same turn for late human events", async () => {
+    const lateEvent: Event = {
+      id: "late-human",
+      type: "message.created",
+      source: "human:test",
+      channelId: "chat",
+      payload: { text: "also answer this" },
+      createdAt: 2,
+    };
+    const ctx = setup({ pendingEventBatches: [[lateEvent], []] });
+    vi.mocked(generate)
+      .mockResolvedValueOnce({
+        toolCalls: [] as never[],
+        toolResults: [] as never[],
+        text: '{"type":"message.created","payload":{"text":"first answer"}}',
+      })
+      .mockImplementationOnce(async (_model, messages) => {
+        const serialized = JSON.stringify(messages);
+        expect(serialized).toContain("system.turn.events_posted");
+        expect(serialized).toContain("also answer this");
+        return {
+          toolCalls: [] as never[],
+          toolResults: [] as never[],
+          text: '{"type":"message.created","payload":{"text":"second answer"}}',
+        };
+      });
+
+    await ctx.run();
+
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(
+      ctx.emitted
+        .filter((event) => event.type === "message.created")
+        .map((event) => event.payload?.text),
+    ).toEqual(["first answer", "second answer"]);
+    expect(
+      ctx.emitted.find(
+        (event) =>
+          event.type === "agent.turn.completed" &&
+          event.payload?.responseFormatError,
+      ),
+    ).toBeUndefined();
+  });
+
+  it("does not let current-turn sync process events consume a valid final answer", async () => {
+    const processEvents: Event[] = [
+      {
+        id: "proc-start",
+        type: "process.started",
+        source: "system:process-runner",
+        channelId: "chat",
+        payload: {
+          processId: "proc-1",
+          executionMode: "SYNC",
+          ownerAgentName: "tester",
+          targetAgentName: "tester",
+        },
+        createdAt: 2,
+      },
+      {
+        id: "proc-output",
+        type: "process.output",
+        source: "system:process-runner",
+        channelId: "chat",
+        payload: {
+          processId: "proc-1",
+          text: "tool output",
+          ownerAgentName: "tester",
+          targetAgentName: "tester",
+        },
+        createdAt: 3,
+      },
+      {
+        id: "proc-exit",
+        type: "process.exited",
+        source: "system:process-runner",
+        channelId: "chat",
+        payload: {
+          processId: "proc-1",
+          exitCode: 0,
+          ownerAgentName: "tester",
+          targetAgentName: "tester",
+        },
+        createdAt: 4,
+      },
+    ];
+    const ctx = setup({ pendingEventBatches: [processEvents] });
+    vi.mocked(generate).mockResolvedValueOnce({
+      toolCalls: [] as never[],
+      toolResults: [] as never[],
+      text: '{"type":"message.created","payload":{"text":"answer survives"}}',
+    });
+
+    await ctx.run();
+
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(
+      ctx.emitted
+        .filter((event) => event.type === "message.created")
+        .map((event) => event.payload?.text),
+    ).toEqual(["answer survives"]);
+    expect(
+      ctx.emitted.find(
+        (event) =>
+          event.type === "agent.turn.phase" &&
+          event.payload?.phase === "response.format_error",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("keeps async process events available as late turn context", async () => {
+    const asyncOutput: Event = {
+      id: "async-output",
+      type: "process.output",
+      source: "system:process-runner",
+      channelId: "chat",
+      payload: {
+        processId: "proc-async",
+        text: "server ready",
+        ownerAgentName: "tester",
+        targetAgentName: "tester",
+      },
+      createdAt: 2,
+    };
+    const ctx = setup({ pendingEventBatches: [[asyncOutput], []] });
+    vi.mocked(generate)
+      .mockResolvedValueOnce({
+        toolCalls: [] as never[],
+        toolResults: [] as never[],
+        text: '{"type":"message.created","payload":{"text":"started"}}',
+      })
+      .mockImplementationOnce(async (_model, messages) => {
+        expect(JSON.stringify(messages)).toContain("server ready");
+        return {
+          toolCalls: [] as never[],
+          toolResults: [] as never[],
+          text: '{"type":"noop","payload":{"reason":"observed async output"}}',
+        };
+      });
+
+    await ctx.run();
+
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(
+      ctx.emitted
+        .filter((event) => event.type === "message.created")
+        .map((event) => event.payload?.text),
+    ).toEqual(["started"]);
+    expect(ctx.emitted.some((event) => event.type === "noop")).toBe(true);
   });
 });

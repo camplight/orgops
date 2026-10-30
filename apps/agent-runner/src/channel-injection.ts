@@ -7,6 +7,7 @@ type PullInjectedEventsInput = {
   channelId: string;
   seenEventIds: Set<string>;
   shouldInclude: (agent: Agent, event: Event) => boolean;
+  shouldSuppress?: (agent: Agent, event: Event) => boolean;
 };
 
 function roleForEvent(event: Event): "user" | "system" {
@@ -30,10 +31,15 @@ export async function pullInjectedEventMessages(
   const res = await input.apiFetch(`/api/events?${query}`);
   const raw = await res.json();
   const events = Array.isArray(raw) ? (raw as Event[]) : [];
-  const fresh = events
-    .filter((event) => !input.seenEventIds.has(event.id))
-    .filter((event) => input.shouldInclude(input.agent, event))
-    .sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0));
+  const fresh: Event[] = [];
+  for (const event of [...events].sort(
+    (left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0),
+  )) {
+    if (input.seenEventIds.has(event.id)) continue;
+    if (input.shouldSuppress?.(input.agent, event)) continue;
+    if (!input.shouldInclude(input.agent, event)) continue;
+    fresh.push(event);
+  }
   for (const event of events) {
     input.seenEventIds.add(event.id);
   }
