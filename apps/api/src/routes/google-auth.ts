@@ -5,7 +5,7 @@ import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { OAuth2Client, CodeChallengeMethod } from 'google-auth-library';
 import { buildSessionCookie } from './auth';
 
-export type HumanSession = { id?: string; username: string; mustChangePassword: boolean; expiresAt?: number; google?: boolean };
+export type HumanSession = { id?: string; username: string; mustChangePassword: boolean; humanRole?: "OWNER" | "ADMIN" | "MEMBER"; expiresAt?: number; google?: boolean };
 type Settings = { enabled: number; allowed_domain: string; team_name: string };
 type Pending = { nonce: string; verifier: string; binding: string; expiresAt: number; returnTo: string; settings: string };
 const random = () => randomBytes(32).toString('base64url');
@@ -33,8 +33,8 @@ export function registerGoogleAuthRoutes(app: Hono<any>, { db, sessions, hashPas
   }
   const owner = (c: any, next: any) => requireAuth(c, async () => {
     const human = c.get('user');
-    const first = db.prepare('SELECT id FROM humans ORDER BY created_at,id LIMIT 1').get() as { id: string } | undefined;
-    if (!human?.id || human.username === 'runner' || human.mustChangePassword || human.id !== first?.id) return c.json({error: 'Only the instance owner can manage Google sign-in'}, 403);
+    const row = human?.id ? db.prepare('SELECT human_role FROM humans WHERE id=?').get(human.id) as { human_role?: string } | undefined : undefined;
+    if (!human?.id || human.username === 'runner' || human.mustChangePassword || row?.human_role !== 'OWNER') return c.json({error: 'Only an owner can manage Google sign-in'}, 403);
     return next();
   });
   app.use('/api/auth/google/*', bodyLimit({maxSize: 4096}));
@@ -75,7 +75,7 @@ export function registerGoogleAuthRoutes(app: Hono<any>, { db, sessions, hashPas
     if (!human) {
       if (db.prepare('SELECT id FROM humans WHERE lower(username)=lower(?)').get(email)) throw new Error('account_conflict');
       human = {id: randomUUID(), username: email};
-      db.prepare('INSERT INTO humans (id,username,password_hash,must_change_password,created_at,updated_at) VALUES (?,?,?,0,?,?)').run(human.id, human.username, hashPassword(random()), time, time);
+      db.prepare('INSERT INTO humans (id,username,human_role,password_hash,must_change_password,created_at,updated_at) VALUES (?,?,?,?,0,?,?)').run(human.id, human.username, 'MEMBER', hashPassword(random()), time, time);
       db.prepare("INSERT INTO human_identities VALUES ('google',?,?,?,?,?,?)").run(subject,human.id,email,domain,time,time);
     } else db.prepare("UPDATE human_identities SET email=?,hosted_domain=?,last_login_at=? WHERE provider='google' AND subject=?").run(email,domain,time,subject);
     let team = db.prepare('SELECT id FROM teams WHERE name=?').get(teamName) as {id: string} | undefined;
@@ -103,9 +103,10 @@ export function registerGoogleAuthRoutes(app: Hono<any>, { db, sessions, hashPas
       // Re-check after remote requests: settings may have changed while Google responded.
       if (JSON.stringify(settings()) !== entry.settings) return fail('google_state');
       const human = provision(claims.sub, claims.email.toLowerCase(), value.allowed_domain, value.team_name);
+      const roleRow = db.prepare('SELECT human_role FROM humans WHERE id=?').get(human.id) as { human_role?: string } | undefined;
       const old = c.req.header('cookie')?.match(/(?:^|;\s*)orgops_session=([^;]+)/)?.[1]; if (old) sessions.delete(old);
       const sessionId = randomUUID();
-      sessions.set(sessionId, {...human, mustChangePassword: false, google: true, expiresAt: Date.now()+sessionAge*1000});
+      sessions.set(sessionId, {...human, mustChangePassword: false, humanRole: roleRow?.human_role === 'OWNER' || roleRow?.human_role === 'ADMIN' ? roleRow.human_role : 'MEMBER', google: true, expiresAt: Date.now()+sessionAge*1000});
       let sessionCookie = buildSessionCookie(c,sessionId,sessionAge);
       if (configuration().redirectUri.startsWith('https:') && !sessionCookie.includes('; Secure')) sessionCookie += '; Secure';
       c.header('Set-Cookie', sessionCookie, {append: true});

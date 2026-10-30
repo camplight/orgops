@@ -25,6 +25,7 @@ export type Channel = {
 export type Agent = {
   id?: string;
   name: string;
+  agentRole?: "STANDARD" | "SYSTEM";
   description?: string | null;
   visibility?: "PUBLIC" | "PRIVATE";
   ownerHumanId?: string | null;
@@ -64,6 +65,7 @@ export type AuthMe = {
   id?: string | null;
   username?: string | null;
   mustChangePassword?: boolean;
+  humanRole?: "OWNER" | "ADMIN" | "MEMBER";
 };
 
 export type Team = {

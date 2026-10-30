@@ -321,6 +321,11 @@ omit private resource metadata for non-administrators. Uploaded active content
 is served as an attachment with an inert MIME, `nosniff` and sandbox CSP; only
 PNG/JPEG/GIF/WebP/AVIF retain inline image previews.
 
+- Humans have an explicit `human_role`: `OWNER`, `ADMIN`, or `MEMBER`. The
+  bootstrap admin and the first existing human in migrations are `OWNER`;
+  invited and Google-provisioned humans default to `MEMBER`. `OWNER` and `ADMIN`
+  can manage instance resources. Only `OWNER` can change human roles, and the
+  API refuses to remove the last owner.
 - `PUBLIC` channels are visible to all authenticated humans.
 - `PRIVATE` channels are visible to:
   - the owner (`channels.owner_human_id`)
@@ -333,8 +338,10 @@ PNG/JPEG/GIF/WebP/AVIF retain inline image previews.
 ### Runner Auth
 
 - Trusted runner token header: `x-orgops-runner-token`
+- Runner-authenticated agent tool calls include `x-orgops-agent-name`; the API resolves that agent's role for agent-level authorization. `SYSTEM` agents may mutate privileged agent authority fields, while ordinary runner requests and `STANDARD` agents may not.
 - Runner-only endpoint for secret env injection: `GET /api/secrets/env`
 - Runner secret env requests must include `x-orgops-agent-name`; optional `x-orgops-channel-id` enables team-scope resolution for that channel context.
+- Scoped and global runner tokens cannot directly mutate agent ownership, human-secret delegation, visibility, role, or additional skill roots.
 - Invite redemption can mint runner tokens in either mode:
   - `SCOPED` (default): restricted to one agent and one runner ID, and by default restricted to invite-approved channels. When `allowChannelExpansion` is enabled on the invite, the scoped runner may also view and post in channels where that agent is later added as an `AGENT` participant.
   - `GLOBAL`: behaves like a normal unrestricted runner token (full runner access).
@@ -349,6 +356,7 @@ Runner tools resolve paths through an allowlist:
 - default: agent workspace root only
 - if `allowOutsideWorkspace=true`: full host root allowed
 - extra allowed roots: enabled skill directories (from repo skill root, configured extra roots, and per-agent additional roots)
+- authorization canonicalizes existing paths and symlink targets, while allowing non-existing descendants beneath authorized roots; broken or escaping symlinks are rejected
 
 This applies to native OrgOps tools only. `WRAPPED` agents do not use OrgOps tool filesystem access; their external runtime enforces its own filesystem policy.
 
@@ -749,7 +757,7 @@ Presence events (bookkeeping only):
   - chat secret forms (`<orgops-secret-input>` and json-render `SecretInput`) store a `private` secret for the agent that posted the form
   - env resolution precedence: `private > human > team > public > package`
 - skills:
-  - `GET /api/skills`
+  - `GET /api/skills` (authenticated humans and runners)
   - the API resolves the skill root from `ORGOPS_PROJECT_ROOT` when set, otherwise from the API module location; `createApp({ projectRoot })` provides an explicit embedding/test override
 
 ### Runners

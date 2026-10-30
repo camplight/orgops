@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { ExecuteContext, ToolDef } from "./types";
 
 const agentModeSchema = z.enum(["CLASSIC", "RLM_REPL", "WRAPPED"]);
+const agentRoleSchema = z.enum(["STANDARD", "SYSTEM"]);
 const desiredStateSchema = z.enum(["RUNNING", "STOPPED"]);
 const runtimeStateSchema = z.enum(["STARTING", "RUNNING", "STOPPED", "CRASHED"]);
 const memoryContextModeSchema = z.enum([
@@ -94,6 +95,7 @@ const agentsCreateSchema = z.object({
   wrappedConfig: z.record(z.unknown()).optional(),
   assignedRunnerId: z.string().optional(),
   desiredState: desiredStateSchema.optional(),
+  agentRole: agentRoleSchema.optional(),
   visibility: z.enum(["PUBLIC", "PRIVATE"]).optional(),
   allowOwnerHumanSecrets: z.boolean().optional(),
   ownerHumanId: z.string().min(1).nullable().optional(),
@@ -124,6 +126,7 @@ const agentsUpdateSchema = z
     assignedRunnerId: z.string().nullable().optional(),
     desiredState: desiredStateSchema.optional(),
     runtimeState: runtimeStateSchema.optional(),
+    agentRole: agentRoleSchema.optional(),
     visibility: z.enum(["PUBLIC", "PRIVATE"]).optional(),
     allowOwnerHumanSecrets: z.boolean().optional(),
     ownerHumanId: z.string().min(1).nullable().optional(),
@@ -233,6 +236,13 @@ async function parseResponseBody(response: Response): Promise<unknown> {
 function trimOptional(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function agentRequestHeaders(ctx: ExecuteContext, headers: Record<string, string> = {}) {
+  return {
+    ...headers,
+    "x-orgops-agent-name": ctx.agent.name,
+  };
 }
 
 function parseWrappedConfigJson(value: string): Record<string, unknown> {
@@ -518,6 +528,7 @@ export async function execute(
         : {}),
       ...(parsed.desiredState !== undefined ? { desiredState: parsed.desiredState } : {}),
       ...(parsed.runtimeState !== undefined ? { runtimeState: parsed.runtimeState } : {}),
+      ...(parsed.agentRole !== undefined ? { agentRole: parsed.agentRole } : {}),
       ...(parsed.visibility !== undefined ? { visibility: parsed.visibility } : {}),
       ...(parsed.allowOwnerHumanSecrets !== undefined
         ? { allowOwnerHumanSecrets: parsed.allowOwnerHumanSecrets }
@@ -527,7 +538,7 @@ export async function execute(
 
     const response = await ctx.apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, {
       method: "PATCH",
-      headers: { "content-type": "application/json" },
+      headers: agentRequestHeaders(ctx, { "content-type": "application/json" }),
       body: JSON.stringify(updateBody),
     });
     const updated = await parseResponseBody(response);
@@ -588,6 +599,7 @@ export async function execute(
         : {}),
       ...(memoryContextMode !== undefined ? { memoryContextMode } : {}),
       ...(parsed.wrappedConfig !== undefined ? { wrappedConfig: parsed.wrappedConfig } : {}),
+      ...(parsed.agentRole !== undefined ? { agentRole: parsed.agentRole } : {}),
       ...(parsed.visibility !== undefined ? { visibility: parsed.visibility } : {}),
       ...(parsed.allowOwnerHumanSecrets !== undefined
         ? { allowOwnerHumanSecrets: parsed.allowOwnerHumanSecrets }
@@ -597,7 +609,7 @@ export async function execute(
 
     const createResponse = await ctx.apiFetch("/api/agents", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: agentRequestHeaders(ctx, { "content-type": "application/json" }),
       body: JSON.stringify(createBody),
     });
     const created = await parseResponseBody(createResponse);

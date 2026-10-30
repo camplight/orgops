@@ -16,6 +16,7 @@ import { formatTimestamp } from "../utils/formatTimestamp";
 type AgentForm = {
   name: string;
   modelId: string;
+  agentRole: "STANDARD" | "SYSTEM";
   visibility: "PUBLIC" | "PRIVATE";
   mode: "CLASSIC" | "RLM_REPL" | "WRAPPED";
   memoryContextMode: "PER_CHANNEL_CROSS_CHANNEL" | "FULL_CHANNEL_EVENTS" | "OFF";
@@ -52,6 +53,7 @@ const DEFAULT_WRAPPED_CONFIG = JSON.stringify(
 const DEFAULT_AGENT_FORM: AgentForm = {
   name: "",
   modelId: "openai:gpt-4o-mini",
+  agentRole: "STANDARD",
   visibility: "PUBLIC",
   mode: "CLASSIC",
   memoryContextMode: "PER_CHANNEL_CROSS_CHANNEL",
@@ -361,6 +363,7 @@ export function AgentsScreen({
     setForm({
       name: selectedAgent.name,
       modelId: selectedAgent.modelId ?? "openai:gpt-4o-mini",
+      agentRole: selectedAgent.agentRole === "SYSTEM" ? "SYSTEM" : "STANDARD",
       visibility: selectedAgent.visibility === "PRIVATE" ? "PRIVATE" : "PUBLIC",
       mode: selectedAgent.mode ?? "CLASSIC",
       memoryContextMode: selectedAgent.memoryContextMode ?? "PER_CHANNEL_CROSS_CHANNEL",
@@ -840,6 +843,7 @@ export function AgentsScreen({
       if (!selectedAgent) return;
       await onUpdateAgent(selectedAgent.name, {
         modelId,
+          agentRole: form.agentRole,
         visibility: form.visibility,
         mode: form.mode,
         memoryContextMode,
@@ -1093,6 +1097,18 @@ export function AgentsScreen({
     </span>
   );
 
+  const renderRoleBadge = (agent: Pick<Agent, "agentRole">) => (
+    <span
+      className={`rounded px-1.5 py-0.5 text-[11px] ${
+        agent.agentRole === "SYSTEM"
+          ? "border border-amber-700/70 bg-amber-950/40 text-amber-200"
+          : "border border-slate-700 bg-slate-900 text-slate-300"
+      }`}
+    >
+      {agent.agentRole === "SYSTEM" ? "System" : "Standard"}
+    </span>
+  );
+
   const renderAgentRows = (list: Agent[]) =>
     list.map((agent) => (
       <tr
@@ -1104,6 +1120,9 @@ export function AgentsScreen({
       >
         <td className="whitespace-nowrap px-2 py-2">
           {renderVisibilityBadge(agent)}
+        </td>
+        <td className="whitespace-nowrap px-2 py-2">
+          {renderRoleBadge(agent)}
         </td>
         <td className="whitespace-nowrap px-2 py-2 text-slate-200">
           {agent.name}
@@ -1157,6 +1176,7 @@ export function AgentsScreen({
             <thead>
               <tr className="border-b border-slate-800 text-left text-slate-300">
                 <th className="px-2 py-2">Visibility</th>
+                <th className="px-2 py-2">Role</th>
                 <th className="px-2 py-2">Name</th>
                 <th className="px-2 py-2">Runtime</th>
                 <th className="px-2 py-2">Desired</th>
@@ -1186,6 +1206,7 @@ export function AgentsScreen({
               <thead>
                 <tr className="border-b border-slate-800 text-left text-slate-300">
                   <th className="px-2 py-2">Visibility</th>
+                  <th className="px-2 py-2">Role</th>
                   <th className="px-2 py-2">Name</th>
                   <th className="px-2 py-2">Runtime</th>
                   <th className="px-2 py-2">Desired</th>
@@ -1428,6 +1449,27 @@ export function AgentsScreen({
                       />
                     </div>
                     ) : null}
+                    <div className="space-y-1">
+                      <div className="text-sm text-slate-400">Role</div>
+                      <select
+                        value={form.agentRole}
+                        onChange={(e) => {
+                          setIsFormDirty(true);
+                          setSaveStatus(null);
+                          setForm((prev) => ({
+                            ...prev,
+                            agentRole: e.target.value === "SYSTEM" ? "SYSTEM" : "STANDARD"
+                          }));
+                        }}
+                        className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+                      >
+                        <option value="STANDARD">Standard</option>
+                        <option value="SYSTEM">System</option>
+                      </select>
+                      <p className="text-xs text-slate-500">
+                        System agents can manage privileged agent authority fields through the API.
+                      </p>
+                    </div>
                     <div className="space-y-1">
                       <div className="text-sm text-slate-400">Visibility</div>
                       <select

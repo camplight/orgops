@@ -20,6 +20,7 @@ export const agents = sqliteTable("agents", {
   name: text("name").notNull().unique(),
   icon: text("icon"),
   description: text("description"),
+  agent_role: text("agent_role").notNull().default("STANDARD"),
   model_id: text("model_id").notNull(),
   soul_contents: text("soul_contents").notNull().default(""),
   workspace_path: text("workspace_path").notNull(),
@@ -228,6 +229,7 @@ export const runnerTokens = sqliteTable(
 export const humans = sqliteTable("humans", {
   id: text("id").primaryKey(),
   username: text("username").notNull().unique(),
+  human_role: text("human_role").notNull().default("MEMBER"),
   password_hash: text("password_hash").notNull(),
   must_change_password: integer("must_change_password").notNull().default(1),
   created_at: integer("created_at").notNull(),

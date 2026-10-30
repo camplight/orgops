@@ -1,9 +1,35 @@
-import { existsSync, realpathSync } from "node:fs";
-import { isAbsolute, relative, resolve } from "node:path";
+import { lstatSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { Agent } from "../types";
 
-function canonicalPath(path: string) {
-  return existsSync(path) ? realpathSync(path) : path;
+function canonicalize(pathValue: string) {
+  let current = resolve(pathValue);
+  const missing: string[] = [];
+  while (true) {
+    let stat;
+    try {
+      stat = lstatSync(current);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException | undefined)?.code;
+      if (code !== "ENOENT") {
+        throw new Error(`Unable to resolve path: ${pathValue}`);
+      }
+      const parent = dirname(current);
+      if (parent === current) {
+        throw new Error(`Unable to resolve path: ${pathValue}`);
+      }
+      missing.push(basename(current));
+      current = parent;
+      continue;
+    }
+    let canonical: string;
+    try {
+      canonical = realpathSync(current);
+    } catch {
+      throw new Error(`Unable to resolve path: ${pathValue}`);
+    }
+    return missing.length > 0 ? join(canonical, ...missing.reverse()) : canonical;
+  }
 }
 
 function isInside(root: string, candidate: string) {
@@ -23,17 +49,17 @@ export function resolveAgentPath(
   value: string,
   extraAllowedRoots: string[] = [],
 ): string {
-  const workspaceRoot = resolve(agent.workspacePath);
-  const candidate = canonicalPath(isAbsolute(value)
-    ? resolve(value)
-    : resolve(workspaceRoot, value));
+  const workspaceRoot = canonicalize(agent.workspacePath);
+  const candidate = canonicalize(
+    isAbsolute(value) ? resolve(value) : resolve(workspaceRoot, value),
+  );
   const allowedRoots = [
-    ...getAllowedRoots(agent),
+    ...getAllowedRoots(agent).map(canonicalize),
     ...extraAllowedRoots
       .map((root) => root.trim())
       .filter(Boolean)
-      .map((root) => resolve(root)),
-  ].map(canonicalPath);
+      .map((root) => canonicalize(root)),
+  ];
   if (allowedRoots.some((root) => isInside(root, candidate))) {
     return candidate;
   }

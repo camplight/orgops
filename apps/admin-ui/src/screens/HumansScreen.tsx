@@ -24,6 +24,7 @@ type HumansScreenProps = {
     id: string;
     tempPassword?: string;
   }) => Promise<{ id: string; username: string; temporaryPassword: string }>;
+  onUpdateHumanRole: (id: string, humanRole: "OWNER" | "ADMIN" | "MEMBER") => Promise<void>;
   onRefresh: () => Promise<void> | void;
 };
 
@@ -38,6 +39,7 @@ export function HumansScreen({
   agents,
   onInviteHuman,
   onResetTempPassword,
+  onUpdateHumanRole,
   onRefresh,
 }: HumansScreenProps) {
   const [newHuman, setNewHuman] = useState({
@@ -52,6 +54,7 @@ export function HumansScreen({
   const [activeHumanId, setActiveHumanId] = useState<string | null>(null);
   const [createDrawerOpen, setCreateDrawerOpen] = useState(false);
   const [resettingPassword, setResettingPassword] = useState(false);
+  const [updatingRole, setUpdatingRole] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [inviteResult, setInviteResult] = useState<{
     username: string;
@@ -140,6 +143,21 @@ export function HumansScreen({
     }
   };
 
+  const handleUpdateRole = async (humanRole: "OWNER" | "ADMIN" | "MEMBER") => {
+    if (!selectedHuman || selectedHuman.humanRole === humanRole) return;
+    setStatus(null);
+    setUpdatingRole(true);
+    try {
+      await onUpdateHumanRole(selectedHuman.id, humanRole);
+      setStatus(`Updated role for "${selectedHuman.username}" to ${humanRole}.`);
+      await onRefresh();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Failed to update role");
+    } finally {
+      setUpdatingRole(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <Card title={`Humans (${sortedHumans.length})`}>
@@ -159,6 +177,7 @@ export function HumansScreen({
             <thead>
               <tr className="border-b border-slate-800 text-left text-slate-300">
                 <th className="px-2 py-2">Username</th>
+                <th className="px-2 py-2">Role</th>
                 <th className="px-2 py-2">Status</th>
                 <th className="px-2 py-2">ID</th>
               </tr>
@@ -173,6 +192,7 @@ export function HumansScreen({
                   onClick={() => setActiveHumanId(human.id)}
                 >
                   <td className="whitespace-nowrap px-2 py-2 text-slate-200">{human.username}</td>
+                  <td className="whitespace-nowrap px-2 py-2 text-slate-300">{human.humanRole}</td>
                   <td className="px-2 py-2">
                     <span
                       className={`rounded px-2 py-0.5 text-xs ${
@@ -350,6 +370,30 @@ export function HumansScreen({
                   </div>
                   <div className="break-all">
                     <span className="text-slate-500">ID:</span> {selectedHuman.id}
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-slate-500">Role:</div>
+                    <select
+                      className="w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+                      value={selectedHuman.humanRole}
+                      disabled={updatingRole}
+                      onChange={(event) => {
+                        const nextRole =
+                          event.target.value === "OWNER"
+                            ? "OWNER"
+                            : event.target.value === "ADMIN"
+                              ? "ADMIN"
+                              : "MEMBER";
+                        void handleUpdateRole(nextRole);
+                      }}
+                    >
+                      <option value="OWNER">Owner</option>
+                      <option value="ADMIN">Admin</option>
+                      <option value="MEMBER">Member</option>
+                    </select>
+                    <div className="text-xs text-slate-500">
+                      Owners manage human roles. Owners and admins manage instance resources.
+                    </div>
                   </div>
                   <div>
                     <span className="text-slate-500">Created:</span> {formatDate(selectedHuman.createdAt)}

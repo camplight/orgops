@@ -1,6 +1,7 @@
 export type Agent = {
   id?: string;
   name: string;
+  agentRole?: "STANDARD" | "SYSTEM";
   runtimeState: string;
   desiredState: string;
   modelId?: string;
@@ -198,6 +199,7 @@ export type Team = {
 export type Human = {
   id: string;
   username: string;
+  humanRole: "OWNER" | "ADMIN" | "MEMBER";
   mustChangePassword: boolean;
   createdAt: number;
   updatedAt: number;
@@ -207,6 +209,7 @@ export type AuthMe = {
   id?: string | null;
   username?: string | null;
   mustChangePassword?: boolean;
+  humanRole?: "OWNER" | "ADMIN" | "MEMBER";
 };
 
 export type TeamMember = {

@@ -70,7 +70,7 @@ import {
   touchRunnerTokenLastUsed,
 } from "./agent-invite-auth";
 import { registerAgentInviteRoutes } from "./routes/agent-invites";
-import { createAccessControl } from "./routes/access";
+import { createAccessControl, type RequestUser } from "./routes/access";
 import {hashPasswordAsync,verifyPasswordAsync} from './passwords';
 import {federationFetch} from './federation-transport';
 
@@ -165,6 +165,7 @@ export function createApp(config: AppConfig = {}) {
       .values({
         id: randomUUID(),
         username: ADMIN_USER,
+        human_role: "OWNER",
         password_hash: hashPassword(ADMIN_PASS),
         must_change_password: 0,
         created_at: now,
@@ -219,21 +220,47 @@ export function createApp(config: AppConfig = {}) {
     }),
   );
 
-  function resolveRunnerUserFromToken(token: string | undefined) {
+  function attachSourceAgent(
+    runnerUser: RequestUser,
+    sourceAgentName: string | undefined,
+  ): RequestUser {
+    const trimmed = (sourceAgentName ?? "").trim();
+    if (!trimmed) return runnerUser;
+    const scoped = runnerUser.runnerScope?.mode === "SCOPED" ? runnerUser.runnerScope : null;
+    if (scoped?.allowedAgentName && scoped.allowedAgentName !== trimmed) {
+      return runnerUser;
+    }
+    const agent = orm
+      .select({ name: schema.agents.name, role: schema.agents.agent_role })
+      .from(schema.agents)
+      .where(eq(schema.agents.name, trimmed))
+      .get() as { name: string; role: string | null } | undefined;
+    if (!agent) return runnerUser;
+    return {
+      ...runnerUser,
+      sourceAgentName: agent.name,
+      sourceAgentRole: agent.role === "SYSTEM" ? "SYSTEM" : "STANDARD",
+    };
+  }
+
+  function resolveRunnerUserFromToken(
+    token: string | undefined,
+    sourceAgentName?: string,
+  ) {
     if (!token) return null;
     if (RUNNER_TOKEN && token === RUNNER_TOKEN) {
-      return {
+      return attachSourceAgent({
         username: "runner",
         mustChangePassword: false,
         runnerScope: { mode: "GLOBAL" as const },
-      };
+      }, sourceAgentName);
     }
     const scoped = findActiveRunnerTokenByToken(orm, token);
     if (!scoped) return null;
     touchRunnerTokenLastUsed(orm, scoped.id);
     const mode: "GLOBAL" | "SCOPED" =
       scoped.runner_scope_mode === "GLOBAL" ? "GLOBAL" : "SCOPED";
-    return {
+    return attachSourceAgent({
       username: "runner",
       mustChangePassword: false,
       runnerScope: {
@@ -257,12 +284,15 @@ export function createApp(config: AppConfig = {}) {
             : undefined,
         inviteId: scoped.invite_id ?? undefined,
       },
-    };
+    }, sourceAgentName);
   }
 
   function requireAuth(c: any, next: any) {
     const runnerHeader = c.req.header("x-orgops-runner-token");
-    const runnerUser = resolveRunnerUserFromToken(runnerHeader);
+    const runnerUser = resolveRunnerUserFromToken(
+      runnerHeader,
+      c.req.header("x-orgops-agent-name"),
+    );
     if (runnerUser) {
       c.set("user", runnerUser);
       return next();
@@ -281,7 +311,10 @@ export function createApp(config: AppConfig = {}) {
 
   function requireRunnerAuth(c: any, next: any) {
     const runnerHeader = c.req.header("x-orgops-runner-token");
-    const runnerUser = resolveRunnerUserFromToken(runnerHeader);
+    const runnerUser = resolveRunnerUserFromToken(
+      runnerHeader,
+      c.req.header("x-orgops-agent-name"),
+    );
     if (!runnerUser) {
       return jsonResponse(c, { error: "Runner token required" }, 401);
     }
@@ -668,6 +701,7 @@ export function createApp(config: AppConfig = {}) {
     humanSchema: schema.humans,
     hashPassword,
     access,
+    requireAuth,
   });
 
   registerAgentInviteRoutes(app as any, {
@@ -741,6 +775,7 @@ export function createApp(config: AppConfig = {}) {
     resolveWorkspacePath,
     insertEvent,
     access,
+    requireAuth,
     agentTransfer,
     transferToPeer,
   });
@@ -782,7 +817,7 @@ export function createApp(config: AppConfig = {}) {
     access,
   });
 
-  registerSkillsRoutes(app as any, { SKILL_ROOTS, jsonResponse, listSkills });
+  registerSkillsRoutes(app as any, { SKILL_ROOTS, jsonResponse, listSkills, requireAuth });
 
   registerSecretsRoutes(app as any, {
     orm,
@@ -1021,6 +1056,7 @@ function seedDefaultSystemAgent(
       .values({
         id: randomUUID(),
         name: SYSTEM_AGENT_NAME,
+        agent_role: "SYSTEM",
         description: "Default system agent",
         model_id: resolved.modelId,
         soul_contents:
