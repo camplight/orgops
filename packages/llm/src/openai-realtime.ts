@@ -1,4 +1,11 @@
-import type { GenerateOptions, GenerateResult, LlmMessage, LlmTool, LlmUsage } from "./index";
+import type {
+  GenerateOptions,
+  GenerateResult,
+  LlmMessage,
+  LlmStyle,
+  LlmTool,
+  LlmUsage,
+} from "./index";
 
 const OPENAI_REALTIME_SOCKET_URL = "wss://api.openai.com/v1/realtime";
 const MAX_TOOL_OUTPUT_CHARS = 16_000;
@@ -22,6 +29,20 @@ type FunctionCall = { callId: string; name: string; arguments: string };
 
 export function isOpenAIRealtimeModel(modelName: string) {
   return /realtime/i.test(modelName);
+}
+
+export function realtimeSupportsReasoningEffort(modelName: string) {
+  return /realtime-2/i.test(modelName);
+}
+
+export function resolveRealtimeReasoningEffort(
+  modelName: string,
+  llmStyle?: LlmStyle,
+): "low" | "medium" | undefined {
+  if (!realtimeSupportsReasoningEffort(modelName)) return undefined;
+  const style =
+    typeof llmStyle === "string" && llmStyle.trim().toUpperCase() === "THINK" ? "THINK" : "DO";
+  return style === "THINK" ? "medium" : "low";
 }
 
 function defaultConnect(url: string, headers: Record<string, string>): RealtimeTextSocket {
@@ -183,6 +204,11 @@ export async function generateWithOpenAIRealtime(
   deps: RealtimeTextDeps,
 ): Promise<GenerateResult> {
   if (!options.apiKey) throw new Error("OPENAI_API_KEY is required for OpenAI realtime models.");
+  const style =
+    typeof options.llmStyle === "string" && options.llmStyle.trim().toUpperCase() === "THINK"
+      ? "THINK"
+      : "DO";
+  const reasoningEffort = resolveRealtimeReasoningEffort(modelName, style);
   const tools = options.tools ?? {};
   const toolDefs = await Promise.all(
     Object.entries(tools).map(async ([name, tool]) => ({
@@ -192,6 +218,12 @@ export async function generateWithOpenAIRealtime(
       parameters: await deps.toolJsonSchema(tool),
     })),
   );
+  const instructions =
+    style === "THINK" && !reasoningEffort
+      ? [system, "Prefer careful reasoning before acting or calling tools."]
+          .filter((part): part is string => Boolean(part && part.trim()))
+          .join("\n\n")
+      : system;
   const maxSteps =
     options.maxSteps !== undefined && Number.isFinite(options.maxSteps) && options.maxSteps > 0
       ? Math.floor(options.maxSteps)
@@ -260,9 +292,10 @@ export async function generateWithOpenAIRealtime(
       session: {
         type: "realtime",
         output_modalities: ["text"],
-        ...(system ? { instructions: system } : {}),
+        ...(instructions ? { instructions } : {}),
         ...(toolDefs.length > 0 ? { tools: toolDefs, tool_choice: "auto" } : {}),
         ...(options.maxTokens ? { max_output_tokens: options.maxTokens } : {}),
+        ...(reasoningEffort ? { reasoning: { effort: reasoningEffort } } : {}),
       },
     });
     await nextOf("session.updated");
@@ -275,7 +308,12 @@ export async function generateWithOpenAIRealtime(
     for (let step = 1; step <= maxSteps; step += 1) {
       let response: any = {};
       for (let attempt = 0; attempt <= MAX_SERVER_ERROR_RETRIES; attempt += 1) {
-        send({ type: "response.create" });
+        send({
+          type: "response.create",
+          ...(reasoningEffort
+            ? { response: { reasoning: { effort: reasoningEffort } } }
+            : {}),
+        });
         const done = await nextOf("response.done");
         response = done.response ?? {};
         addUsage(usage, response.usage);

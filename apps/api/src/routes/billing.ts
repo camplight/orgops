@@ -1,7 +1,7 @@
 import type { Hono } from "hono";
 import { randomUUID } from "node:crypto";
 import { schema, type OrgOpsDrizzleDb } from "@orgops/db";
-import { and, desc, eq, gte, lte } from "drizzle-orm";
+import { and, asc, desc, eq, gte, lte } from "drizzle-orm";
 import { z } from "zod";
 import type { AccessControl, RequestUser } from "./access";
 
@@ -266,7 +266,11 @@ export function registerBillingRoutes(app: Hono<any>, deps: BillingDeps) {
     }
   }
 
-  function findPrice(modelId: string, createdAt: number): PriceSnapshot | null {
+  function findPrice(
+    modelId: string,
+    createdAt: number,
+    options?: { allowLaterSnapshot?: boolean },
+  ): PriceSnapshot | null {
     const { provider } = parseModelId(modelId);
     const row = orm
       .select()
@@ -281,7 +285,50 @@ export function registerBillingRoutes(app: Hono<any>, deps: BillingDeps) {
       .orderBy(desc(schema.llmModelPrices.effective_at))
       .limit(1)
       .get() as any | undefined;
-    return row ? normalizePriceRow(row) : null;
+    if (row) return normalizePriceRow(row);
+    if (!options?.allowLaterSnapshot) return null;
+    const laterRow = orm
+      .select()
+      .from(schema.llmModelPrices)
+      .where(
+        and(
+          eq(schema.llmModelPrices.provider, provider),
+          eq(schema.llmModelPrices.model_id, modelId),
+        ),
+      )
+      .orderBy(asc(schema.llmModelPrices.effective_at))
+      .limit(1)
+      .get() as any | undefined;
+    return laterRow ? normalizePriceRow(laterRow) : null;
+  }
+
+  // Usage recorded before any price existed for its model keeps an empty
+  // snapshot; those rows are priced once a snapshot appears. Priced rows are
+  // never touched so historical totals stay reproducible.
+  function repriceUnpricedUsage() {
+    const rows = orm
+      .select()
+      .from(schema.llmUsage)
+      .where(eq(schema.llmUsage.price_snapshot_json, "{}"))
+      .all() as any[];
+    let repriced = 0;
+    for (const row of rows) {
+      const price = findPrice(row.model_id, row.created_at, { allowLaterSnapshot: true });
+      if (!price) continue;
+      const costUsdMicros = calculateCostUsdMicros(price, {
+        inputTokens: row.input_tokens ?? 0,
+        outputTokens: row.output_tokens ?? 0,
+        reasoningTokens: row.reasoning_tokens ?? 0,
+        cachedInputTokens: row.cached_input_tokens ?? 0,
+      });
+      orm
+        .update(schema.llmUsage)
+        .set({ cost_usd_micros: costUsdMicros, price_snapshot_json: JSON.stringify(price) })
+        .where(eq(schema.llmUsage.id, row.id))
+        .run();
+      repriced += 1;
+    }
+    return repriced;
   }
 
   seedCuratedPrices();
@@ -380,10 +427,35 @@ export function registerBillingRoutes(app: Hono<any>, deps: BillingDeps) {
         .run();
       upserted += 1;
     }
-    return jsonResponse(c, { upserted }, 201);
+    const repriced = repriceUnpricedUsage();
+    return jsonResponse(c, { upserted, repriced }, 201);
   });
 
   app.post("/api/billing/prices/refresh/openrouter", requireAuth, async (c) => {
+    let body: { updaterAgentName?: unknown } = {};
+    try {
+      body = (await c.req.json()) as { updaterAgentName?: unknown };
+    } catch {
+      body = {};
+    }
+    const requestedUpdaterAgentName =
+      typeof body.updaterAgentName === "string" ? body.updaterAgentName.trim() : "";
+    const updaterAgents = orm
+      .select({ name: schema.agents.name, agentRole: schema.agents.agent_role })
+      .from(schema.agents)
+      .all();
+    if (
+      requestedUpdaterAgentName &&
+      !updaterAgents.some((agent) => agent.name === requestedUpdaterAgentName)
+    ) {
+      return jsonResponse(c, { error: "Updater agent not found" }, 400);
+    }
+    const updaterAgentName =
+      requestedUpdaterAgentName ||
+      updaterAgents.find((agent) => agent.agentRole === "SYSTEM")?.name ||
+      updaterAgents[0]?.name ||
+      null;
+
     const response = await fetch(OPENROUTER_MODELS_URL, {
       headers: {
         ...(process.env.OPENROUTER_API_KEY
@@ -411,41 +483,51 @@ export function registerBillingRoutes(app: Hono<any>, deps: BillingDeps) {
     const now = Date.now();
     let upserted = 0;
     for (const model of payload.data ?? []) {
-      const slug = (model.canonical_slug || model.canonicalSlug || model.id || "").trim();
       const prompt = Number(model.pricing?.prompt);
       const completion = Number(model.pricing?.completion);
-      if (!slug || !Number.isFinite(prompt) || !Number.isFinite(completion)) continue;
-      const modelId = `openrouter:${slug}`;
-      orm
-        .insert(schema.llmModelPrices)
-        .values({
-          id: priceId("openrouter", modelId, now),
-          provider: "openrouter",
-          model_id: modelId,
-          model_name: slug,
-          currency: USD,
-          input_price_per_million: String(prompt * 1_000_000),
-          output_price_per_million: String(completion * 1_000_000),
-          cached_input_price_per_million:
-            model.pricing?.input_cache_read !== undefined
-              ? String(Number(model.pricing.input_cache_read) * 1_000_000)
-              : null,
-          reasoning_price_per_million:
-            model.pricing?.internal_reasoning !== undefined
-              ? String(Number(model.pricing.internal_reasoning) * 1_000_000)
-              : null,
-          source: "openrouter-api",
-          source_url: OPENROUTER_MODELS_URL,
-          effective_at: now,
-          fetched_at: now,
-          metadata_json: JSON.stringify({ name: model.name ?? null }),
-          created_at: now,
-        })
-        .onConflictDoNothing()
-        .run();
-      upserted += 1;
+      if (!Number.isFinite(prompt) || !Number.isFinite(completion)) continue;
+      // Agents call models by `id`; the canonical slug is a dated alias of it.
+      const slugs = [
+        ...new Set(
+          [model.id, model.canonical_slug, model.canonicalSlug]
+            .map((value) => value?.trim() ?? "")
+            .filter(Boolean),
+        ),
+      ];
+      for (const slug of slugs) {
+        const modelId = `openrouter:${slug}`;
+        orm
+          .insert(schema.llmModelPrices)
+          .values({
+            id: priceId("openrouter", modelId, now),
+            provider: "openrouter",
+            model_id: modelId,
+            model_name: slug,
+            currency: USD,
+            input_price_per_million: String(prompt * 1_000_000),
+            output_price_per_million: String(completion * 1_000_000),
+            cached_input_price_per_million:
+              model.pricing?.input_cache_read !== undefined
+                ? String(Number(model.pricing.input_cache_read) * 1_000_000)
+                : null,
+            reasoning_price_per_million:
+              model.pricing?.internal_reasoning !== undefined
+                ? String(Number(model.pricing.internal_reasoning) * 1_000_000)
+                : null,
+            source: "openrouter-api",
+            source_url: OPENROUTER_MODELS_URL,
+            effective_at: now,
+            fetched_at: now,
+            metadata_json: JSON.stringify({ name: model.name ?? null }),
+            created_at: now,
+          })
+          .onConflictDoNothing()
+          .run();
+        upserted += 1;
+      }
     }
-    return jsonResponse(c, { upserted, fetchedAt: now });
+    const repriced = repriceUnpricedUsage();
+    return jsonResponse(c, { upserted, repriced, fetchedAt: now, updaterAgentName });
   });
 
   app.post("/api/billing/usage", requireRunnerAuth, async (c) => {
@@ -508,9 +590,16 @@ export function registerBillingRoutes(app: Hono<any>, deps: BillingDeps) {
     const user = (c as any).get("user") as RequestUser | undefined;
     const url = new URL(c.req.url);
     const groupBy = url.searchParams.get("groupBy") ?? "provider";
+    const channelId = url.searchParams.get("channelId")?.trim();
     const since = Number(url.searchParams.get("since") ?? "");
     const until = Number(url.searchParams.get("until") ?? "");
     const clauses: any[] = [];
+    if (channelId) {
+      if (!access.canViewChannel(user, channelId)) {
+        return jsonResponse(c, { error: "Forbidden" }, 403);
+      }
+      clauses.push(eq(schema.llmUsage.channel_id, channelId));
+    }
     if (Number.isFinite(since) && since > 0) clauses.push(gte(schema.llmUsage.created_at, since));
     if (Number.isFinite(until) && until > 0) clauses.push(lte(schema.llmUsage.created_at, until));
     const rows = orm

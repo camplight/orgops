@@ -19,6 +19,7 @@ type AgentForm = {
   agentRole: "STANDARD" | "SYSTEM";
   visibility: "PUBLIC" | "PRIVATE";
   mode: "CLASSIC" | "RLM_REPL" | "WRAPPED";
+  llmStyle: "DO" | "THINK";
   memoryContextMode: "PER_CHANNEL_CROSS_CHANNEL" | "FULL_CHANNEL_EVENTS" | "OFF";
   emitAuditEvents: boolean;
   llmCallTimeoutMs: string;
@@ -56,6 +57,7 @@ const DEFAULT_AGENT_FORM: AgentForm = {
   agentRole: "STANDARD",
   visibility: "PUBLIC",
   mode: "CLASSIC",
+  llmStyle: "DO",
   memoryContextMode: "PER_CHANNEL_CROSS_CHANNEL",
   emitAuditEvents: true,
   llmCallTimeoutMs: "",
@@ -366,6 +368,7 @@ export function AgentsScreen({
       agentRole: selectedAgent.agentRole === "SYSTEM" ? "SYSTEM" : "STANDARD",
       visibility: selectedAgent.visibility === "PRIVATE" ? "PRIVATE" : "PUBLIC",
       mode: selectedAgent.mode ?? "CLASSIC",
+      llmStyle: selectedAgent.llmStyle === "THINK" ? "THINK" : "DO",
       memoryContextMode: selectedAgent.memoryContextMode ?? "PER_CHANNEL_CROSS_CHANNEL",
       emitAuditEvents: selectedAgent.emitAuditEvents !== false,
       llmCallTimeoutMs:
@@ -846,6 +849,7 @@ export function AgentsScreen({
           agentRole: form.agentRole,
         visibility: form.visibility,
         mode: form.mode,
+        llmStyle: form.llmStyle,
         memoryContextMode,
         emitAuditEvents,
         llmCallTimeoutMs: llmCallTimeoutMs === null ? "" : String(llmCallTimeoutMs),
@@ -1447,6 +1451,48 @@ export function AgentsScreen({
                         }}
                         placeholder="openai:gpt-4o-mini"
                       />
+                    </div>
+                    ) : null}
+                    {!isWrappedMode ? (
+                    <div className="space-y-2">
+                      <div className="text-sm text-slate-400">Do / Think</div>
+                      <div className="inline-flex rounded border border-slate-700 bg-slate-950 p-1">
+                        <button
+                          type="button"
+                          className={`rounded px-3 py-1.5 text-sm ${
+                            form.llmStyle === "DO"
+                              ? "bg-slate-700 text-slate-100"
+                              : "text-slate-400 hover:text-slate-200"
+                          }`}
+                          onClick={() => {
+                            setIsFormDirty(true);
+                            setSaveStatus(null);
+                            setForm((prev) => ({ ...prev, llmStyle: "DO" }));
+                          }}
+                        >
+                          Do
+                        </button>
+                        <button
+                          type="button"
+                          className={`rounded px-3 py-1.5 text-sm ${
+                            form.llmStyle === "THINK"
+                              ? "bg-slate-700 text-slate-100"
+                              : "text-slate-400 hover:text-slate-200"
+                          }`}
+                          onClick={() => {
+                            setIsFormDirty(true);
+                            setSaveStatus(null);
+                            setForm((prev) => ({ ...prev, llmStyle: "THINK" }));
+                          }}
+                        >
+                          Think
+                        </button>
+                      </div>
+                      <p className="text-xs text-slate-500">
+                        {form.llmStyle === "THINK"
+                          ? "Think: enable model reasoning. On GPT-5.4+/5.6/6 Chat Completions, host tools are disabled for that turn. Realtime-2 uses higher reasoning effort."
+                          : "Do: keep host tools and disable/minimize OpenAI reasoning effort (required for GPT-5.6 tool use on Chat Completions)."}
+                      </p>
                     </div>
                     ) : null}
                     <div className="space-y-1">

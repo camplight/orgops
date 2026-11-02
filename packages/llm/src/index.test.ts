@@ -58,6 +58,9 @@ import {
   generate,
   isOpenAICompletionModel,
   isOpenAIReasoningModel,
+  normalizeLlmStyle,
+  openaiChatForbidsToolsWithReasoning,
+  resolveLlmStyleCallOptions,
   resolveTranscriptionModelId,
   transcribe,
 } from "./index";
@@ -88,9 +91,84 @@ describe("llm", () => {
 
   it("detects OpenAI reasoning model ids", () => {
     expect(isOpenAIReasoningModel("gpt-5.2")).toBe(true);
+    expect(isOpenAIReasoningModel("gpt-5.6")).toBe(true);
+    expect(isOpenAIReasoningModel("gpt-6-terra")).toBe(true);
     expect(isOpenAIReasoningModel("o3")).toBe(true);
     expect(isOpenAIReasoningModel("openai/gpt-5")).toBe(true);
     expect(isOpenAIReasoningModel("gpt-4o-mini")).toBe(false);
+  });
+
+  it("normalizes llm style and OpenAI tools+reasoning conflict models", () => {
+    expect(normalizeLlmStyle("think")).toBe("THINK");
+    expect(normalizeLlmStyle("nope")).toBe("DO");
+    expect(openaiChatForbidsToolsWithReasoning("gpt-5.6")).toBe(true);
+    expect(openaiChatForbidsToolsWithReasoning("gpt-5.6-terra")).toBe(true);
+    expect(openaiChatForbidsToolsWithReasoning("openai/gpt-5.4")).toBe(true);
+    expect(openaiChatForbidsToolsWithReasoning("gpt-5.5")).toBe(false);
+    expect(openaiChatForbidsToolsWithReasoning("gpt-4o-mini")).toBe(false);
+  });
+
+  it("resolves DO/THINK call options for OpenAI chat models", () => {
+    const tools = {
+      shell_run: { description: "run", parameters: { type: "object" } },
+    };
+    expect(
+      resolveLlmStyleCallOptions({
+        provider: "openai",
+        modelName: "gpt-5.6",
+        llmStyle: "DO",
+        tools,
+      }),
+    ).toEqual({
+      tools,
+      providerOptions: { openai: { reasoningEffort: "none" } },
+      toolsDisabledForReasoning: false,
+    });
+    expect(
+      resolveLlmStyleCallOptions({
+        provider: "openai",
+        modelName: "gpt-5.6",
+        llmStyle: "THINK",
+        tools,
+      }),
+    ).toEqual({
+      tools: undefined,
+      providerOptions: { openai: { reasoningEffort: "medium" } },
+      toolsDisabledForReasoning: true,
+    });
+    expect(
+      resolveLlmStyleCallOptions({
+        provider: "openai",
+        modelName: "gpt-5.5",
+        llmStyle: "THINK",
+        tools,
+      }),
+    ).toEqual({
+      tools,
+      providerOptions: { openai: { reasoningEffort: "medium" } },
+      toolsDisabledForReasoning: false,
+    });
+  });
+
+  it("passes reasoningEffort none for DO style OpenAI reasoning models", async () => {
+    process.env.ORGOPS_LLM_STUB = "0";
+    process.env.OPENAI_API_KEY = "test-key";
+    await generate(
+      "openai:gpt-5.6",
+      [{ role: "user", content: "hello" }],
+      {
+        llmStyle: "DO",
+        tools: {
+          shell_run: { description: "run", parameters: { type: "object" } },
+        },
+      },
+    );
+    expect(mocks.generateText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerOptions: { openai: { reasoningEffort: "none" } },
+        tools: expect.objectContaining({ shell_run: expect.any(Object) }),
+      }),
+    );
   });
 
   it("returns stub response when configured", async () => {

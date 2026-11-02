@@ -32,12 +32,19 @@ export type LlmToolContent = Array<{
 
 export type LlmMessageContent = LlmMessage["content"];
 
+export type LlmStyle = "DO" | "THINK";
+
 export type GenerateOptions = {
   temperature?: number;
   maxTokens?: number;
   /** Maximum tool-loop steps for AI SDK generateText. */
   maxSteps?: number;
   tools?: Record<string, LlmTool>;
+  /**
+   * DO = prefer tools/action (disables OpenAI reasoning effort).
+   * THINK = prefer reasoning (may disable tools on OpenAI chat models that forbid tools+reasoning).
+   */
+  llmStyle?: LlmStyle;
   abortSignal?: AbortSignal;
   /** Env vars for API keys etc.; overrides process.env when set. Used by the runner to inject scoped secrets. */
   env?: Record<string, string | undefined>;
@@ -111,15 +118,76 @@ export function isOpenAICompletionModel(modelName: string) {
   return /(codex|instruct)/i.test(modelName);
 }
 
-export function isOpenAIReasoningModel(modelName: string) {
+function openaiModelBaseName(modelName: string) {
   const normalized = modelName.trim().toLowerCase();
-  const vendorQualifiedName = normalized.includes("/")
+  return normalized.includes("/")
     ? normalized.slice(normalized.lastIndexOf("/") + 1)
     : normalized;
+}
+
+export function isOpenAIReasoningModel(modelName: string) {
+  const normalized = modelName.trim().toLowerCase();
+  const vendorQualifiedName = openaiModelBaseName(modelName);
   return (
-    /^(gpt-5(\.|-|$)|o[1-9](\.|-|$))/i.test(normalized) ||
-    /^(gpt-5(\.|-|$)|o[1-9](\.|-|$))/i.test(vendorQualifiedName)
+    /^(gpt-5(\.|-|$)|gpt-6(\.|-|$)|o[1-9](\.|-|$))/i.test(normalized) ||
+    /^(gpt-5(\.|-|$)|gpt-6(\.|-|$)|o[1-9](\.|-|$))/i.test(vendorQualifiedName)
   );
+}
+
+export function normalizeLlmStyle(value: unknown, fallback: LlmStyle = "DO"): LlmStyle {
+  const normalized =
+    typeof value === "string" && value.trim() ? value.trim().toUpperCase() : fallback;
+  return normalized === "THINK" ? "THINK" : "DO";
+}
+
+/**
+ * OpenAI Chat Completions rejects function tools when reasoning_effort is not `none`
+ * for GPT-5.4+ / GPT-5.6 / GPT-6 families. Responses API is the long-term fix.
+ */
+export function openaiChatForbidsToolsWithReasoning(modelName: string) {
+  const base = openaiModelBaseName(modelName);
+  if (/^gpt-6(\.|-|$)/i.test(base)) return true;
+  // GPT-5.4 and GPT-5.6+ reject tools + non-none reasoning on Chat Completions.
+  // GPT-5.5 still allows the combination in practice.
+  if (/^gpt-5\.4(\.|-|$)/i.test(base)) return true;
+  if (/^gpt-5\.([6-9]|\d{2,})(\.|-|$)/i.test(base)) return true;
+  return false;
+}
+
+export function resolveLlmStyleCallOptions(input: {
+  provider: string;
+  modelName: string;
+  llmStyle?: LlmStyle;
+  tools?: Record<string, LlmTool>;
+}): {
+  tools?: Record<string, LlmTool>;
+  providerOptions?: { openai?: { reasoningEffort: "none" | "medium" } };
+  toolsDisabledForReasoning: boolean;
+} {
+  const style = normalizeLlmStyle(input.llmStyle);
+  const hasTools = Boolean(input.tools && Object.keys(input.tools).length > 0);
+  const usesOpenAIChatSurface =
+    input.provider === "openai" || input.provider === "openrouter";
+  const isReasoning = usesOpenAIChatSurface && isOpenAIReasoningModel(input.modelName);
+  if (!isReasoning) {
+    return { tools: input.tools, toolsDisabledForReasoning: false };
+  }
+
+  if (style === "DO") {
+    return {
+      tools: input.tools,
+      providerOptions: { openai: { reasoningEffort: "none" } },
+      toolsDisabledForReasoning: false,
+    };
+  }
+
+  const mustStripTools =
+    hasTools && openaiChatForbidsToolsWithReasoning(input.modelName);
+  return {
+    tools: mustStripTools ? undefined : input.tools,
+    providerOptions: { openai: { reasoningEffort: "medium" } },
+    toolsDisabledForReasoning: mustStripTools,
+  };
 }
 
 function normalizeProvider(provider: string) {
@@ -372,7 +440,26 @@ export async function generate(
     throw new Error(`Unsupported provider: ${rawProvider}`);
   }
 
-  const splitMessages = splitSystemMessages(messages);
+  const styleCall = resolveLlmStyleCallOptions({
+    provider,
+    modelName,
+    llmStyle: options.llmStyle,
+    tools: options.tools,
+  });
+  const promptMessages =
+    styleCall.toolsDisabledForReasoning
+      ? [
+          ...messages,
+          {
+            role: "system" as const,
+            content: [
+              "This turn is in THINK style: host tools are disabled because this model cannot combine tools with reasoning on Chat Completions.",
+              "Reason carefully, then return exactly one final JSON event object (or plain text when the channel expects it).",
+            ].join(" "),
+          },
+        ]
+      : messages;
+  const splitMessages = splitSystemMessages(promptMessages);
   const shouldSendTemperature =
     options.temperature !== undefined &&
     !(
@@ -388,7 +475,10 @@ export async function generate(
     ...(options.maxSteps !== undefined && Number.isFinite(options.maxSteps) && options.maxSteps > 0
       ? { stopWhen: stepCountIs(Math.floor(options.maxSteps)) }
       : {}),
-    tools: normalizeToolsForSdk(options.tools),
+    tools: normalizeToolsForSdk(styleCall.tools),
+    ...(styleCall.providerOptions
+      ? { providerOptions: styleCall.providerOptions }
+      : {}),
     abortSignal: options.abortSignal,
   });
   return {
