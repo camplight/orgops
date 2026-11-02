@@ -510,6 +510,12 @@ export function createRealtimeVoiceManager(deps: RealtimeVoiceDeps) {
         parameters: await toolParametersJsonSchema(tool),
       })),
     );
+    const reasoningEffort =
+      /realtime-2/i.test(String(call.agent.modelId ?? ""))
+        ? call.agent.llmStyle === "THINK"
+          ? "medium"
+          : "low"
+        : undefined;
     return {
       type: "session.update",
       session: {
@@ -524,6 +530,7 @@ export function createRealtimeVoiceManager(deps: RealtimeVoiceDeps) {
         }),
         tools,
         tool_choice: "auto",
+        ...(reasoningEffort ? { reasoning: { effort: reasoningEffort } } : {}),
       },
     };
   }

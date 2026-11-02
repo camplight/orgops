@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
-import { apiJson } from "../api";
+import { useEffect, useMemo, useState } from "react";
+import { apiFetch, apiJson, getApiHeaders } from "../api";
 import { Button, Card, Input, Select } from "../components/ui";
+import type { Agent, Channel } from "../types";
 
 type BillingGroup = {
   key: string;
@@ -32,6 +33,31 @@ type BillingPrice = {
   effectiveAt: number;
 };
 
+type OpenRouterRefreshResponse = {
+  upserted: number;
+  repriced?: number;
+  fetchedAt: number;
+  updaterAgentName?: string | null;
+};
+
+type SortDirection = "asc" | "desc";
+type BillingGroupSortKey =
+  | "key"
+  | "costUsdMicros"
+  | "calls"
+  | "inputTokens"
+  | "cachedInputTokens"
+  | "outputTokens"
+  | "reasoningTokens";
+type BillingPriceSortKey =
+  | "modelId"
+  | "provider"
+  | "inputPricePerMillion"
+  | "cachedInputPricePerMillion"
+  | "outputPricePerMillion"
+  | "effectiveAt"
+  | "source";
+
 const numberFormatter = new Intl.NumberFormat();
 const usdFormatter = new Intl.NumberFormat(undefined, {
   style: "currency",
@@ -47,6 +73,9 @@ const PERIOD_PRESETS = [
   { value: "all", label: "All time" },
   { value: "custom", label: "Custom" },
 ];
+const BILLING_AUTO_REFRESH_MS = 30_000;
+const BILLING_UPDATER_AGENT_STORAGE_KEY = "orgops.admin-ui.billingUpdaterAgent";
+const SORT_BUTTON_CLASS = "text-left hover:text-slate-300";
 
 function formatUsd(micros: number) {
   return usdFormatter.format((micros || 0) / 1_000_000);
@@ -67,6 +96,43 @@ function fromDateTimeLocalValue(value: string) {
   if (!value) return undefined;
   const parsed = new Date(value).getTime();
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function readStoredUpdaterAgentName() {
+  try {
+    return localStorage.getItem(BILLING_UPDATER_AGENT_STORAGE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function writeStoredUpdaterAgentName(agentName: string) {
+  try {
+    if (agentName) {
+      localStorage.setItem(BILLING_UPDATER_AGENT_STORAGE_KEY, agentName);
+    } else {
+      localStorage.removeItem(BILLING_UPDATER_AGENT_STORAGE_KEY);
+    }
+  } catch {
+    // Cosmetic preference only.
+  }
+}
+
+function sortDirectionFor<T extends string>(current: { key: T; direction: SortDirection }, key: T) {
+  return current.key === key && current.direction === "asc" ? "desc" : "asc";
+}
+
+function sortIndicator<T extends string>(current: { key: T; direction: SortDirection }, key: T) {
+  if (current.key !== key) return "";
+  return current.direction === "asc" ? " ↑" : " ↓";
+}
+
+function compareStrings(left: string | null | undefined, right: string | null | undefined) {
+  return (left ?? "").localeCompare(right ?? "");
+}
+
+function compareNumbers(left: number | string | null | undefined, right: number | string | null | undefined) {
+  return Number(left ?? 0) - Number(right ?? 0);
 }
 
 function resolvePeriod(
@@ -95,6 +161,7 @@ function resolvePeriod(
 
 export function BillingScreen() {
   const [groupBy, setGroupBy] = useState("provider");
+  const [channelId, setChannelId] = useState("");
   const [periodPreset, setPeriodPreset] = useState("7d");
   const [customSince, setCustomSince] = useState(() =>
     toDateTimeLocalValue(Date.now() - 7 * 24 * 60 * 60 * 1000),
@@ -104,12 +171,29 @@ export function BillingScreen() {
   const [prices, setPrices] = useState<BillingPrice[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [channels, setChannels] = useState<Channel[]>([]);
+  const [updaterAgentName, setUpdaterAgentName] = useState(() => readStoredUpdaterAgentName());
+  const [priceRefreshLoading, setPriceRefreshLoading] = useState(false);
+  const [priceRefreshMessage, setPriceRefreshMessage] = useState<string | null>(null);
+  const [updaterOpen, setUpdaterOpen] = useState(false);
+  const [usageSort, setUsageSort] = useState<{ key: BillingGroupSortKey; direction: SortDirection }>({
+    key: "costUsdMicros",
+    direction: "desc",
+  });
+  const [priceSort, setPriceSort] = useState<{ key: BillingPriceSortKey; direction: SortDirection }>({
+    key: "modelId",
+    direction: "asc",
+  });
 
-  const refresh = async (nextGroupBy = groupBy) => {
-    setLoading(true);
-    setError(null);
+  const refresh = async (nextGroupBy = groupBy, options?: { silent?: boolean }) => {
+    if (!options?.silent) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const params = new URLSearchParams({ groupBy: nextGroupBy });
+      if (channelId) params.set("channelId", channelId);
       const period = resolvePeriod(periodPreset, customSince, customUntil);
       if (period.since) params.set("since", String(period.since));
       if (period.until) params.set("until", String(period.until));
@@ -122,16 +206,101 @@ export function BillingScreen() {
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setLoading(false);
+      if (!options?.silent) setLoading(false);
+    }
+  };
+
+  const updatePriceTable = async () => {
+    setPriceRefreshLoading(true);
+    setPriceRefreshMessage(null);
+    setError(null);
+    try {
+      const response = await apiFetch("/api/billing/prices/refresh/openrouter", {
+        method: "POST",
+        headers: getApiHeaders(),
+        body: JSON.stringify({ updaterAgentName: updaterAgentName || null }),
+      });
+      const payload = (await response.json()) as OpenRouterRefreshResponse;
+      const resolvedUpdater = payload.updaterAgentName || updaterAgentName || "Selected updater";
+      setPriceRefreshMessage(
+        `${resolvedUpdater} refreshed ${numberFormatter.format(
+          payload.upserted,
+        )} OpenRouter price snapshots and priced ${numberFormatter.format(
+          payload.repriced ?? 0,
+        )} previously unpriced usage rows.`,
+      );
+      await refresh(groupBy, { silent: true });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPriceRefreshLoading(false);
     }
   };
 
   useEffect(() => {
     void refresh(groupBy);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groupBy, periodPreset, customSince, customUntil]);
+  }, [groupBy, channelId, periodPreset, customSince, customUntil]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      void refresh(groupBy, { silent: true });
+    }, BILLING_AUTO_REFRESH_MS);
+    return () => window.clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupBy, channelId, periodPreset, customSince, customUntil]);
+
+  useEffect(() => {
+    Promise.all([apiJson<Agent[]>("/api/agents"), apiJson<Channel[]>("/api/channels")])
+      .then(([agentItems, channelItems]) => {
+        setAgents(agentItems);
+        setChannels(channelItems);
+        setUpdaterAgentName((current) => {
+          if (current && agentItems.some((agent) => agent.name === current)) return current;
+          return agentItems.find((agent) => agent.agentRole === "SYSTEM")?.name ?? agentItems[0]?.name ?? "";
+        });
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : String(err)));
+  }, []);
+
+  useEffect(() => {
+    writeStoredUpdaterAgentName(updaterAgentName);
+  }, [updaterAgentName]);
 
   const totals = usage?.totals;
+  const updaterAgent = agents.find((agent) => agent.name === updaterAgentName);
+  const sortedChannels = useMemo(
+    () => [...channels].sort((left, right) => left.name.localeCompare(right.name)),
+    [channels],
+  );
+  const sortedUsageGroups = useMemo(() => {
+    const groups = [...(usage?.groups ?? [])];
+    groups.sort((left, right) => {
+      const result =
+        usageSort.key === "key"
+          ? compareStrings(left.key, right.key)
+          : compareNumbers(left[usageSort.key], right[usageSort.key]);
+      return usageSort.direction === "asc" ? result : -result;
+    });
+    return groups;
+  }, [usage?.groups, usageSort]);
+  const sortedPrices = useMemo(() => {
+    const rows = [...prices];
+    rows.sort((left, right) => {
+      const result =
+        priceSort.key === "modelId" || priceSort.key === "provider" || priceSort.key === "source"
+          ? compareStrings(left[priceSort.key], right[priceSort.key])
+          : compareNumbers(left[priceSort.key], right[priceSort.key]);
+      return priceSort.direction === "asc" ? result : -result;
+    });
+    return rows;
+  }, [priceSort, prices]);
+  const changeUsageSort = (key: BillingGroupSortKey) => {
+    setUsageSort((current) => ({ key, direction: sortDirectionFor(current, key) }));
+  };
+  const changePriceSort = (key: BillingPriceSortKey) => {
+    setPriceSort((current) => ({ key, direction: sortDirectionFor(current, key) }));
+  };
 
   return (
     <div className="space-y-6">
@@ -139,7 +308,7 @@ export function BillingScreen() {
         <div>
           <h1 className="text-xl font-semibold text-slate-100">Billing</h1>
           <p className="text-sm text-slate-400">
-            Estimated LLM spend from recorded provider token usage.
+            Estimated LLM spend from recorded provider token usage. Tables auto-refresh every 30 seconds.
           </p>
         </div>
         <div className="flex items-end gap-2">
@@ -166,6 +335,21 @@ export function BillingScreen() {
               <option value="model">Model</option>
               <option value="agent">Agent</option>
               <option value="channel">Channel</option>
+            </Select>
+          </label>
+          <label className="space-y-1 text-xs text-slate-400">
+            <span>Channel</span>
+            <Select
+              value={channelId}
+              onChange={(event) => setChannelId(event.target.value)}
+              className="min-w-48"
+            >
+              <option value="">All channels</option>
+              {sortedChannels.map((channel) => (
+                <option key={channel.id} value={channel.id}>
+                  {channel.name}
+                </option>
+              ))}
             </Select>
           </label>
           <Button onClick={() => void refresh()} disabled={loading}>
@@ -231,17 +415,31 @@ export function BillingScreen() {
           <table className="min-w-full text-sm">
             <thead className="text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
-                <th className="py-2 pr-4">Key</th>
-                <th className="py-2 pr-4">Cost</th>
-                <th className="py-2 pr-4">Calls</th>
-                <th className="py-2 pr-4">Input</th>
-                <th className="py-2 pr-4">Cached</th>
-                <th className="py-2 pr-4">Output</th>
-                <th className="py-2 pr-4">Reasoning</th>
+                <th className="py-2 pr-4">
+                  <button type="button" className={SORT_BUTTON_CLASS} onClick={() => changeUsageSort("key")}>Key{sortIndicator(usageSort, "key")}</button>
+                </th>
+                <th className="py-2 pr-4">
+                  <button type="button" className={SORT_BUTTON_CLASS} onClick={() => changeUsageSort("costUsdMicros")}>Cost{sortIndicator(usageSort, "costUsdMicros")}</button>
+                </th>
+                <th className="py-2 pr-4">
+                  <button type="button" className={SORT_BUTTON_CLASS} onClick={() => changeUsageSort("calls")}>Calls{sortIndicator(usageSort, "calls")}</button>
+                </th>
+                <th className="py-2 pr-4">
+                  <button type="button" className={SORT_BUTTON_CLASS} onClick={() => changeUsageSort("inputTokens")}>Input{sortIndicator(usageSort, "inputTokens")}</button>
+                </th>
+                <th className="py-2 pr-4">
+                  <button type="button" className={SORT_BUTTON_CLASS} onClick={() => changeUsageSort("cachedInputTokens")}>Cached{sortIndicator(usageSort, "cachedInputTokens")}</button>
+                </th>
+                <th className="py-2 pr-4">
+                  <button type="button" className={SORT_BUTTON_CLASS} onClick={() => changeUsageSort("outputTokens")}>Output{sortIndicator(usageSort, "outputTokens")}</button>
+                </th>
+                <th className="py-2 pr-4">
+                  <button type="button" className={SORT_BUTTON_CLASS} onClick={() => changeUsageSort("reasoningTokens")}>Reasoning{sortIndicator(usageSort, "reasoningTokens")}</button>
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800 text-slate-300">
-              {(usage?.groups ?? []).map((group) => (
+              {sortedUsageGroups.map((group) => (
                 <tr key={group.key}>
                   <td className="py-2 pr-4 font-medium text-slate-100">{group.key}</td>
                   <td className="py-2 pr-4">{formatUsd(group.costUsdMicros)}</td>
@@ -252,7 +450,7 @@ export function BillingScreen() {
                   <td className="py-2 pr-4">{numberFormatter.format(group.reasoningTokens)}</td>
                 </tr>
               ))}
-              {(usage?.groups ?? []).length === 0 && (
+              {sortedUsageGroups.length === 0 && (
                 <tr>
                   <td className="py-4 text-slate-500" colSpan={7}>
                     No LLM usage has been recorded yet.
@@ -264,22 +462,83 @@ export function BillingScreen() {
         </div>
       </Card>
 
-      <Card title="Known price snapshots">
+      <Card>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <h2 className="text-lg font-semibold text-slate-100">Known price snapshots</h2>
+          <Button
+            onClick={() => void updatePriceTable()}
+            disabled={priceRefreshLoading || agents.length === 0}
+          >
+            {priceRefreshLoading ? "Updating..." : "Update table"}
+          </Button>
+        </div>
+        <button
+          type="button"
+          className="flex items-center gap-2 text-left text-xs text-slate-400 hover:text-slate-300"
+          aria-expanded={updaterOpen}
+          onClick={() => setUpdaterOpen((open) => !open)}
+        >
+          <span>{updaterOpen ? "▾" : "▸"}</span>
+          <span>
+            Updater agent:{" "}
+            {updaterAgent
+              ? `${updaterAgent.name} (${updaterAgent.agentRole === "SYSTEM" ? "system" : "standard"})`
+              : "none"}
+          </span>
+        </button>
+        {updaterOpen ? (
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+            <label className="space-y-1 text-xs text-slate-400">
+              <span>Updater agent</span>
+              <Select
+                value={updaterAgentName}
+                onChange={(event) => setUpdaterAgentName(event.target.value)}
+                className="min-w-56"
+              >
+                {agents.length === 0 ? <option value="">No agents available</option> : null}
+                {agents.map((agent) => (
+                  <option key={agent.name} value={agent.name}>
+                    {agent.name}
+                    {agent.agentRole === "SYSTEM" ? " (system)" : ""}
+                  </option>
+                ))}
+              </Select>
+            </label>
+            <p className="text-xs text-slate-500 sm:pb-2">
+              The first system agent is selected by default.
+            </p>
+          </div>
+        ) : null}
+        {priceRefreshMessage ? <p className="text-sm text-emerald-300">{priceRefreshMessage}</p> : null}
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead className="text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
-                <th className="py-2 pr-4">Model</th>
-                <th className="py-2 pr-4">Provider</th>
-                <th className="py-2 pr-4">Input / 1M</th>
-                <th className="py-2 pr-4">Cached / 1M</th>
-                <th className="py-2 pr-4">Output / 1M</th>
-                <th className="py-2 pr-4">Effective</th>
-                <th className="py-2 pr-4">Source</th>
+                <th className="py-2 pr-4">
+                  <button type="button" className={SORT_BUTTON_CLASS} onClick={() => changePriceSort("modelId")}>Model{sortIndicator(priceSort, "modelId")}</button>
+                </th>
+                <th className="py-2 pr-4">
+                  <button type="button" className={SORT_BUTTON_CLASS} onClick={() => changePriceSort("provider")}>Provider{sortIndicator(priceSort, "provider")}</button>
+                </th>
+                <th className="py-2 pr-4">
+                  <button type="button" className={SORT_BUTTON_CLASS} onClick={() => changePriceSort("inputPricePerMillion")}>Input / 1M{sortIndicator(priceSort, "inputPricePerMillion")}</button>
+                </th>
+                <th className="py-2 pr-4">
+                  <button type="button" className={SORT_BUTTON_CLASS} onClick={() => changePriceSort("cachedInputPricePerMillion")}>Cached / 1M{sortIndicator(priceSort, "cachedInputPricePerMillion")}</button>
+                </th>
+                <th className="py-2 pr-4">
+                  <button type="button" className={SORT_BUTTON_CLASS} onClick={() => changePriceSort("outputPricePerMillion")}>Output / 1M{sortIndicator(priceSort, "outputPricePerMillion")}</button>
+                </th>
+                <th className="py-2 pr-4">
+                  <button type="button" className={SORT_BUTTON_CLASS} onClick={() => changePriceSort("effectiveAt")}>Effective{sortIndicator(priceSort, "effectiveAt")}</button>
+                </th>
+                <th className="py-2 pr-4">
+                  <button type="button" className={SORT_BUTTON_CLASS} onClick={() => changePriceSort("source")}>Source{sortIndicator(priceSort, "source")}</button>
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800 text-slate-300">
-              {prices.map((price) => (
+              {sortedPrices.map((price) => (
                 <tr key={price.id}>
                   <td className="py-2 pr-4 font-medium text-slate-100">{price.modelId}</td>
                   <td className="py-2 pr-4">{price.provider}</td>

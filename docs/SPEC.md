@@ -62,7 +62,7 @@ Stored in `agents`:
 - identity/config: `id`, `name`, `icon`, `description`, `model_id`
 - prompting/runtime config: `soul_contents`
 - workspace/safety: `workspace_path`, `allow_outside_workspace`
-- per-agent runtime tuning: `llm_call_timeout_ms`, `classic_max_model_steps`, `context_session_gap_ms`, `emit_audit_events`, `memory_context_mode`
+- per-agent runtime tuning: `llm_call_timeout_ms`, `classic_max_model_steps`, `context_session_gap_ms`, `emit_audit_events`, `llm_style` (`DO` | `THINK`), `memory_context_mode`
 - mode/state: `mode` (`CLASSIC` | `RLM_REPL` | `WRAPPED`), `desired_state`, `runtime_state`, `last_heartbeat_at`
 - host assignment: `assigned_runner_id` (nullable; when set, only matching runner executes the agent)
 - skills: `enabled_skills_json`, `always_preloaded_skills_json`
@@ -613,6 +613,16 @@ and the realtime loop stop on it and return the call to the runner. If the
 model posts to the current channel through `events_emit` anyway, its final
 text is not posted a second time.
 
+Agents store `llm_style` (`DO` default, or `THINK`), configured per agent in
+the admin UI. CLASSIC turns pass it into `generate()`. For OpenAI reasoning
+models on Chat Completions, `DO` keeps tools and sets
+`reasoningEffort: "none"` (required for GPT-5.6 tool use). `THINK` sets
+`reasoningEffort: "medium"` and, on GPT-5.4 / GPT-5.6+ / GPT-6 families that
+reject tools+reasoning together, disables host tools for that turn so the
+model can still reason and emit a final JSON/plain-text event. OpenAI
+realtime-2 text/voice sessions map `DO`→`reasoning.effort=low` and
+`THINK`→`medium` while keeping tools.
+
 Runner guidance names the agent (``You are the agent `name` ``) and its own
 `agent:<name>` source, so agents can tell their messages from other
 participants'.
@@ -634,9 +644,9 @@ Presence events (bookkeeping only):
 
 - `GET /api/billing/prices` returns known model price snapshots
 - `POST /api/billing/prices` upserts one price snapshot (or a `{ prices: [...] }` batch) for `provider:model` IDs; useful for runner-authenticated agent maintenance when billing encounters unknown models
-- `POST /api/billing/prices/refresh/openrouter` fetches OpenRouter's live model/pricing catalog and snapshots rates as `openrouter:<slug>` model IDs
+- `POST /api/billing/prices/refresh/openrouter` fetches OpenRouter's live model/pricing catalog and snapshots rates as `openrouter:<slug>` model IDs; an optional `updaterAgentName` body field identifies the inventory agent responsible for the refresh, defaulting to the first system agent and then the first agent
 - `POST /api/billing/usage` is runner-authenticated and records provider token usage for native runner calls
-- `GET /api/billing/usage?groupBy=provider|model|agent|channel&since=<ms>&until=<ms>` returns visible aggregate usage/cost totals; the admin UI exposes predefined periods and custom start/end filters
+- `GET /api/billing/usage?groupBy=provider|model|agent|channel&channelId=<id>&since=<ms>&until=<ms>` returns visible aggregate usage/cost totals; `channelId` narrows totals to one visible channel, and the admin UI exposes predefined periods and custom start/end filters
 - Pricing is best-effort but reproducible: every usage row stores the exact price snapshot used, so historical totals do not change when provider prices change later.
 
 ### Agents

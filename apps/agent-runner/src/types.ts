@@ -14,6 +14,7 @@ export type Agent = {
   classicMaxModelSteps?: number | null;
   contextSessionGapMs?: number | null;
   emitAuditEvents?: boolean;
+  llmStyle?: "DO" | "THINK";
   memoryContextMode?:
     | "PER_CHANNEL_CROSS_CHANNEL"
     | "FULL_CHANNEL_EVENTS"

@@ -90,6 +90,7 @@ const agentsCreateSchema = z.object({
   classicMaxModelSteps: z.number().int().positive().nullable().optional(),
   contextSessionGapMs: z.number().int().positive().nullable().optional(),
   emitAuditEvents: z.boolean().optional(),
+  llmStyle: z.enum(["DO", "THINK"]).optional(),
   memoryContextMode: memoryContextModeSchema.optional(),
   mode: agentModeSchema.optional(),
   wrappedConfig: z.record(z.unknown()).optional(),
@@ -119,6 +120,7 @@ const agentsUpdateSchema = z
     classicMaxModelSteps: z.number().int().positive().nullable().optional(),
     contextSessionGapMs: z.number().int().positive().nullable().optional(),
     emitAuditEvents: z.boolean().optional(),
+    llmStyle: z.enum(["DO", "THINK"]).optional(),
     memoryContextMode: memoryContextModeSchema.optional(),
     mode: agentModeSchema.optional(),
     wrappedConfig: z.record(z.unknown()).optional(),
@@ -517,6 +519,7 @@ export async function execute(
         ? { contextSessionGapMs: parsed.contextSessionGapMs }
         : {}),
       ...(parsed.emitAuditEvents !== undefined ? { emitAuditEvents: parsed.emitAuditEvents } : {}),
+      ...(parsed.llmStyle !== undefined ? { llmStyle: parsed.llmStyle } : {}),
       ...(parsed.memoryContextMode !== undefined
         ? { memoryContextMode: parsed.memoryContextMode }
         : {}),
@@ -597,6 +600,7 @@ export async function execute(
       ...(parsed.emitAuditEvents !== undefined
         ? { emitAuditEvents: parsed.emitAuditEvents }
         : {}),
+      ...(parsed.llmStyle !== undefined ? { llmStyle: parsed.llmStyle } : {}),
       ...(memoryContextMode !== undefined ? { memoryContextMode } : {}),
       ...(parsed.wrappedConfig !== undefined ? { wrappedConfig: parsed.wrappedConfig } : {}),
       ...(parsed.agentRole !== undefined ? { agentRole: parsed.agentRole } : {}),

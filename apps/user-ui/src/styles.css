@@ -3126,6 +3126,87 @@ button {
   text-transform: uppercase;
 }
 
+.billing-summary {
+  display: grid;
+  gap: 2px;
+  margin-bottom: 12px;
+  padding: 14px;
+  border-radius: 18px;
+  background: #f8fafc;
+}
+
+.billing-summary strong {
+  margin: 0;
+  color: #0f172a;
+  font-size: 28px;
+}
+
+.billing-summary span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.billing-error {
+  color: #be123c !important;
+  font-weight: 800;
+}
+
+.billing-agent-list {
+  display: grid;
+  gap: 10px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.billing-agent-list article {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 16px;
+  background: #f8fafc;
+}
+
+.billing-agent-row,
+.billing-agent-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.billing-agent-row strong {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: #0f172a;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.billing-agent-row span {
+  flex: 0 0 auto;
+  color: #0f766e;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.billing-agent-meta span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.billing-agent-list article i {
+  display: block;
+  height: 6px;
+  min-width: 0;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #14b8a6, #0f766e);
+}
+
 .participant-avatar {
   display: grid;
   flex: 0 0 auto;

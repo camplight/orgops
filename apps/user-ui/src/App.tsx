@@ -214,11 +214,39 @@ type VoiceRoomJoinResponse =
 type LiveVoiceActivity = "connecting" | "listening" | "you" | "thinking" | "agent" | "tool";
 type LiveVoiceMode = "room" | "direct";
 
+type BillingGroup = {
+  key: string;
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  reasoningTokens: number;
+  cachedInputTokens: number;
+  costUsdMicros: number;
+};
+
+type BillingUsageResponse = {
+  groupBy: string;
+  totals: BillingGroup;
+  groups: BillingGroup[];
+};
+
 const VOICE_MIN_RECORDING_MS = 450;
 const VOICE_MAX_RECORDING_MS = 120_000;
 const VOICE_PENDING_TIMEOUT_MS = 45_000;
 const VOICE_PRESENCE_STALE_MS = 12 * 60 * 60 * 1000;
 const VOICE_ACTIVE_SPEAKER_WINDOW_MS = 4_000;
+
+const compactNumberFormatter = new Intl.NumberFormat(undefined, {
+  notation: "compact",
+  maximumFractionDigits: 1
+});
+const usdFormatter = new Intl.NumberFormat(undefined, {
+  style: "currency",
+  currency: "USD",
+  minimumFractionDigits: 4,
+  maximumFractionDigits: 6
+});
 
 type WsServerEventMessage = {
   type: "event";
@@ -951,6 +979,14 @@ function formatAttachmentSize(size?: number) {
   return `${mb.toFixed(mb >= 100 ? 0 : 1)} MB`;
 }
 
+function formatUsdMicros(micros: number) {
+  return usdFormatter.format((micros || 0) / 1_000_000);
+}
+
+function formatTokenCount(tokens: number) {
+  return compactNumberFormatter.format(tokens || 0);
+}
+
 export default function App() {
   const messagesPanelRef = useRef<HTMLElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -1098,11 +1134,48 @@ export default function App() {
   const [revealedSensitiveByEvent, setRevealedSensitiveByEvent] = useState<Record<string, string>>({});
   const [revealingSensitiveEventId, setRevealingSensitiveEventId] = useState<string | null>(null);
   const [sensitiveRevealErrors, setSensitiveRevealErrors] = useState<Record<string, string>>({});
+  const [channelBilling, setChannelBilling] = useState<BillingUsageResponse | null>(null);
+  const [channelBillingLoading, setChannelBillingLoading] = useState(false);
+  const [channelBillingError, setChannelBillingError] = useState<string | null>(null);
 
   const activeChannel = useMemo(
     () => channels.find((channel) => channel.id === activeChannelId) ?? null,
     [activeChannelId, channels]
   );
+
+  useEffect(() => {
+    if (!authenticated || !activeChannelId) {
+      setChannelBilling(null);
+      setChannelBillingLoading(false);
+      setChannelBillingError(null);
+      return;
+    }
+
+    let cancelled = false;
+    const params = new URLSearchParams({
+      groupBy: "agent",
+      channelId: activeChannelId
+    });
+    setChannelBillingLoading(true);
+    setChannelBillingError(null);
+    apiJson<BillingUsageResponse>(`/api/billing/usage?${params.toString()}`)
+      .then((usage) => {
+        if (!cancelled) setChannelBilling(usage);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error(err);
+        setChannelBilling(null);
+        setChannelBillingError("Could not load this channel's bill.");
+      })
+      .finally(() => {
+        if (!cancelled) setChannelBillingLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authenticated, activeChannelId, events.length]);
 
   useEffect(() => {
     channelsRef.current = channels;
@@ -1247,6 +1320,14 @@ export default function App() {
     }
     return activeTurns > 0;
   }, [events]);
+  const maxChannelBillingBasis = useMemo(() => {
+    return Math.max(
+      0,
+      ...(channelBilling?.groups ?? []).map((group) =>
+        group.costUsdMicros > 0 ? group.costUsdMicros : group.totalTokens
+      )
+    );
+  }, [channelBilling]);
 
   const viewerTeamIds = useMemo(() => new Set(teams.map((team) => team.id)), [teams]);
   useEffect(() => {
@@ -4811,17 +4892,44 @@ export default function App() {
         </section>
 
         <section>
-          <h2>Recent Activity</h2>
+          <h2>Channel bill</h2>
           {agentIsThinking ? <p className="thinking-indicator">Agent is thinking...</p> : null}
-          <div className="activity-list">
-            {events.slice(-6).reverse().map((event) => (
-              <article key={event.id}>
-                <strong>{sourceLabel(event.source)}</strong>
-                <span>{event.type.replaceAll(".", " ")}</span>
-              </article>
-            ))}
-            {events.length === 0 ? <p>No recent activity in this channel.</p> : null}
+          <div className="billing-summary">
+            <strong>{formatUsdMicros(channelBilling?.totals.costUsdMicros ?? 0)}</strong>
+            <span>
+              {(channelBilling?.totals.calls ?? 0) === 1
+                ? "1 LLM call"
+                : `${channelBilling?.totals.calls ?? 0} LLM calls`}{" "}
+              in this channel
+            </span>
           </div>
+          {channelBillingError ? <p className="billing-error">{channelBillingError}</p> : null}
+          {channelBillingLoading ? <p>Loading channel bill...</p> : null}
+          {!channelBillingLoading && !channelBillingError ? (
+            <div className="billing-agent-list">
+              {channelBilling?.groups.map((group) => {
+                const basis = group.costUsdMicros > 0 ? group.costUsdMicros : group.totalTokens;
+                const share =
+                  maxChannelBillingBasis > 0 ? Math.max(4, Math.round((basis / maxChannelBillingBasis) * 100)) : 0;
+                return (
+                  <article key={group.key}>
+                    <div className="billing-agent-row">
+                      <strong>{group.key === "none" ? "Unassigned" : group.key}</strong>
+                      <span>{formatUsdMicros(group.costUsdMicros)}</span>
+                    </div>
+                    <div className="billing-agent-meta">
+                      <span>{formatTokenCount(group.totalTokens)} tokens</span>
+                      <span>{group.calls === 1 ? "1 call" : `${group.calls} calls`}</span>
+                    </div>
+                    <i style={{ width: `${share}%` }} aria-hidden="true" />
+                  </article>
+                );
+              })}
+              {channelBilling && channelBilling.groups.length === 0 ? (
+                <p>No billable agent usage in this channel yet.</p>
+              ) : null}
+            </div>
+          ) : null}
         </section>
       </aside>
       ) : null}

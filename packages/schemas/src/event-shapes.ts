@@ -140,6 +140,7 @@ const coreEventShapes: EventShapeDefinition[] = [
             .optional(),
           hopCount: z.number().int().nonnegative().optional(),
           inReplyTo: z.string().min(1).optional(),
+          llmStyle: z.enum(["DO", "THINK"]).optional(),
           intent: z
             .union([
               z.boolean(),

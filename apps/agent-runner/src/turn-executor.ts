@@ -3,9 +3,11 @@ import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import {
   generate,
+  normalizeLlmStyle,
   type GenerateResult,
   type LlmMessage,
   type LlmMessageContent,
+  type LlmStyle,
   type LlmUsage,
 } from "@orgops/llm";
 import { getModel } from "models-dev-db";
@@ -475,6 +477,10 @@ export function resolveAgentClassicMaxModelSteps(agent: Agent): number {
     return Math.floor(configured);
   }
   return DEFAULT_CLASSIC_MAX_MODEL_STEPS;
+}
+
+export function resolveTurnLlmStyle(agent: Agent, _events?: Event[]): LlmStyle {
+  return normalizeLlmStyle(agent.llmStyle);
 }
 
 export function resolveAgentMemoryContextMode(agent: Agent): MemoryContextMode {
@@ -984,6 +990,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
             {
             tools,
             maxSteps: classicMaxModelSteps,
+            llmStyle: resolveTurnLlmStyle(agent, events),
             env: injectionEnv,
             pullMessages: async () => {
               const injected = await pullInjectedEventMessages({

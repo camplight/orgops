@@ -287,6 +287,24 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     };
   }
 
+  function parseLlmStyle(
+    value: unknown,
+    fallback: string = "DO"
+  ): { ok: true; value: string } | { ok: false; error: string } {
+    if (value === undefined || value === null) {
+      return { ok: true, value: fallback };
+    }
+    const normalized = String(value).trim().toUpperCase();
+    if (normalized === "DO" || normalized === "THINK") {
+      return { ok: true, value: normalized };
+    }
+    return { ok: false, error: "llmStyle must be one of DO, THINK" };
+  }
+
+  function getAgentLlmStyle(row: { llm_style?: string | null }) {
+    return row.llm_style === "THINK" ? "THINK" : "DO";
+  }
+
   function parseJsonRecordSafe(input: string | null | undefined): Record<string, unknown> | null {
     if (!input) return null;
     try {
@@ -431,6 +449,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         classicMaxModelSteps: row.classic_max_model_steps ?? null,
         contextSessionGapMs: row.context_session_gap_ms ?? null,
         emitAuditEvents: Boolean(row.emit_audit_events ?? 1),
+        llmStyle: getAgentLlmStyle(row),
         memoryContextMode: getAgentMemoryContextMode(row),
         mode: row.mode ?? "CLASSIC",
         wrappedConfig: parseJsonRecordSafe(row.wrapped_config_json) ?? {},
@@ -537,6 +556,10 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     if (!memoryContextModeParsed.ok) {
       return jsonResponse(c, { error: memoryContextModeParsed.error }, 400);
     }
+    const llmStyleParsed = parseLlmStyle(body.llmStyle, "DO");
+    if (!llmStyleParsed.ok) {
+      return jsonResponse(c, { error: llmStyleParsed.error }, 400);
+    }
     const wrappedConfigParsed = parseWrappedConfigInput(body.wrappedConfig);
     if (!wrappedConfigParsed.ok) {
       return jsonResponse(c, { error: wrappedConfigParsed.error }, 400);
@@ -585,6 +608,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         classic_max_model_steps: classicMaxModelStepsParsed.value,
         context_session_gap_ms: contextSessionGapParsed.value,
         emit_audit_events: emitAuditEvents ? 1 : 0,
+        llm_style: llmStyleParsed.value,
         memory_context_mode: mode === "WRAPPED" ? "OFF" : memoryContextModeParsed.value,
         mode,
         wrapped_config_json: JSON.stringify(wrappedConfigParsed.value),
@@ -632,6 +656,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       classicMaxModelSteps: row.classic_max_model_steps ?? null,
       contextSessionGapMs: row.context_session_gap_ms ?? null,
       emitAuditEvents: Boolean(row.emit_audit_events ?? 1),
+      llmStyle: getAgentLlmStyle(row),
       memoryContextMode: getAgentMemoryContextMode(row),
       mode: row.mode ?? "CLASSIC",
       wrappedConfig: parseJsonRecordSafe(row.wrapped_config_json) ?? {},
@@ -752,6 +777,13 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     if (memoryContextModeParsed && !memoryContextModeParsed.ok) {
       return jsonResponse(c, { error: memoryContextModeParsed.error }, 400);
     }
+    const llmStyleParsed =
+      body.llmStyle !== undefined
+        ? parseLlmStyle(body.llmStyle, getAgentLlmStyle(existing))
+        : null;
+    if (llmStyleParsed && !llmStyleParsed.ok) {
+      return jsonResponse(c, { error: llmStyleParsed.error }, 400);
+    }
     const existingWrappedConfig = parseJsonRecordSafe(existing.wrapped_config_json) ?? {};
     const wrappedConfigParsed =
       body.wrappedConfig !== undefined
@@ -846,6 +878,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
             ? contextSessionGapParsed.value
             : existing.context_session_gap_ms,
         emit_audit_events: emitAuditEvents ?? existing.emit_audit_events,
+        llm_style: llmStyleParsed ? llmStyleParsed.value : getAgentLlmStyle(existing),
         memory_context_mode:
           mode === "WRAPPED"
             ? "OFF"
@@ -1119,6 +1152,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         classic_max_model_steps: source.classic_max_model_steps ?? null,
         context_session_gap_ms: source.context_session_gap_ms ?? null,
         emit_audit_events: source.emit_audit_events ?? 1,
+        llm_style: source.llm_style === "THINK" ? "THINK" : "DO",
         memory_context_mode: source.memory_context_mode ?? "PER_CHANNEL_CROSS_CHANNEL",
         mode: source.mode ?? "CLASSIC",
         wrapped_config_json: source.wrapped_config_json ?? "{}",

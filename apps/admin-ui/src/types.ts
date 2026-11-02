@@ -14,6 +14,8 @@ export type Agent = {
   classicMaxModelSteps?: number | null;
   contextSessionGapMs?: number | null;
   emitAuditEvents?: boolean;
+  /** DO = tools / low reasoning; THINK = reasoning (may disable tools on some OpenAI chat models). */
+  llmStyle?: "DO" | "THINK";
   memoryContextMode?:
     | "PER_CHANNEL_CROSS_CHANNEL"
     | "FULL_CHANNEL_EVENTS"
