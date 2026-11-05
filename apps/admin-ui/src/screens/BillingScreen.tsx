@@ -33,11 +33,23 @@ type BillingPrice = {
   effectiveAt: number;
 };
 
-type OpenRouterRefreshResponse = {
-  upserted: number;
-  repriced?: number;
-  fetchedAt: number;
-  updaterAgentName?: string | null;
+type PricingRefreshStartResponse = {
+  refreshId: string;
+  updaterAgentName: string;
+};
+
+type PricingRefreshStatusResponse = {
+  refreshId: string;
+  status: "RUNNING" | "COMPLETED";
+  events: Array<{
+    type: string;
+    payload: {
+      provider?: string;
+      updatedModelIds?: string[];
+      unresolved?: Array<{ modelId: string; reason: string }>;
+      repriced?: number;
+    };
+  }>;
 };
 
 type SortDirection = "asc" | "desc";
@@ -176,6 +188,7 @@ export function BillingScreen() {
   const [updaterAgentName, setUpdaterAgentName] = useState(() => readStoredUpdaterAgentName());
   const [priceRefreshLoading, setPriceRefreshLoading] = useState(false);
   const [priceRefreshMessage, setPriceRefreshMessage] = useState<string | null>(null);
+  const [activeRefreshId, setActiveRefreshId] = useState<string | null>(null);
   const [updaterOpen, setUpdaterOpen] = useState(false);
   const [usageSort, setUsageSort] = useState<{ key: BillingGroupSortKey; direction: SortDirection }>({
     key: "costUsdMicros",
@@ -215,21 +228,16 @@ export function BillingScreen() {
     setPriceRefreshMessage(null);
     setError(null);
     try {
-      const response = await apiFetch("/api/billing/prices/refresh/openrouter", {
+      const response = await apiFetch("/api/billing/prices/refresh", {
         method: "POST",
         headers: getApiHeaders(),
-        body: JSON.stringify({ updaterAgentName: updaterAgentName || null }),
+        body: JSON.stringify({ updaterAgentName }),
       });
-      const payload = (await response.json()) as OpenRouterRefreshResponse;
-      const resolvedUpdater = payload.updaterAgentName || updaterAgentName || "Selected updater";
+      const payload = (await response.json()) as PricingRefreshStartResponse;
+      setActiveRefreshId(payload.refreshId);
       setPriceRefreshMessage(
-        `${resolvedUpdater} refreshed ${numberFormatter.format(
-          payload.upserted,
-        )} OpenRouter price snapshots and priced ${numberFormatter.format(
-          payload.repriced ?? 0,
-        )} previously unpriced usage rows.`,
+        `${payload.updaterAgentName} is refreshing prices for models used by this OrgOps instance.`,
       );
-      await refresh(groupBy, { silent: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -266,6 +274,56 @@ export function BillingScreen() {
   useEffect(() => {
     writeStoredUpdaterAgentName(updaterAgentName);
   }, [updaterAgentName]);
+
+  useEffect(() => {
+    if (!activeRefreshId) return;
+    let stopped = false;
+    const poll = async () => {
+      try {
+        const status = await apiJson<PricingRefreshStatusResponse>(
+          `/api/billing/prices/refresh/${encodeURIComponent(activeRefreshId)}`,
+        );
+        if (stopped) return;
+        const providerEvents = status.events.filter(
+          (event) => event.type === "billing.prices.refresh.provider.updated",
+        );
+        const updated = providerEvents.reduce(
+          (count, event) => count + (event.payload.updatedModelIds?.length ?? 0),
+          0,
+        );
+        const repriced = providerEvents.reduce(
+          (count, event) => count + (event.payload.repriced ?? 0),
+          0,
+        );
+        const completed = status.events.find(
+          (event) => event.type === "billing.prices.refresh.completed",
+        );
+        if (completed || status.status === "COMPLETED") {
+          const unresolved = completed?.payload.unresolved?.length ?? 0;
+          setPriceRefreshMessage(
+            `Refresh completed: ${numberFormatter.format(updated)} model prices updated, ${numberFormatter.format(
+              repriced,
+            )} usage rows priced, ${numberFormatter.format(unresolved)} unresolved.`,
+          );
+          setActiveRefreshId(null);
+          await refresh(groupBy, { silent: true });
+        } else {
+          setPriceRefreshMessage(
+            `Refresh running: ${numberFormatter.format(providerEvents.length)} providers reported, ${numberFormatter.format(updated)} model prices updated.`,
+          );
+        }
+      } catch (err) {
+        if (!stopped) setError(err instanceof Error ? err.message : String(err));
+      }
+    };
+    void poll();
+    const interval = window.setInterval(() => void poll(), 2_000);
+    return () => {
+      stopped = true;
+      window.clearInterval(interval);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeRefreshId]);
 
   const totals = usage?.totals;
   const updaterAgent = agents.find((agent) => agent.name === updaterAgentName);
@@ -467,9 +525,9 @@ export function BillingScreen() {
           <h2 className="text-lg font-semibold text-slate-100">Known price snapshots</h2>
           <Button
             onClick={() => void updatePriceTable()}
-            disabled={priceRefreshLoading || agents.length === 0}
+            disabled={priceRefreshLoading || Boolean(activeRefreshId) || !updaterAgentName}
           >
-            {priceRefreshLoading ? "Updating..." : "Update table"}
+            {priceRefreshLoading || activeRefreshId ? "Updating..." : "Update table"}
           </Button>
         </div>
         <button

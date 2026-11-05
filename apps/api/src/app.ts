@@ -535,6 +535,11 @@ export function createApp(config: AppConfig = {}) {
     },
   });
 
+  const eventObservers = new Set<(input: any, row: any) => void>();
+  function registerEventObserver(observer: (input: any, row: any) => void) {
+    eventObservers.add(observer);
+  }
+
   function insertEvent(input: any) {
     const resolveRecipientAgents = (): string[] => {
       const recipients = new Set<string>();
@@ -664,6 +669,13 @@ export function createApp(config: AppConfig = {}) {
     publishEvent(row);
     runnerSocketHub.notifyEvent(row, recipientAgents);
     void pushFederatedEvent(row);
+    for (const observer of eventObservers) {
+      try {
+        observer(input, row);
+      } catch (error) {
+        console.warn("event observer failed", error);
+      }
+    }
     return row;
   }
 
@@ -908,6 +920,8 @@ export function createApp(config: AppConfig = {}) {
     access,
     requireAuth,
     requireRunnerAuth,
+    insertEvent,
+    registerEventObserver,
   });
 
   return { app, db, bus, injectWebSocket, voiceTranscriber };
