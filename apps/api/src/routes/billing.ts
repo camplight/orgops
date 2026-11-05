@@ -1,7 +1,7 @@
 import type { Hono } from "hono";
 import { randomUUID } from "node:crypto";
 import { schema, type OrgOpsDrizzleDb } from "@orgops/db";
-import { and, asc, desc, eq, gte, lte } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lte } from "drizzle-orm";
 import { z } from "zod";
 import type { AccessControl, RequestUser } from "./access";
 
@@ -11,6 +11,8 @@ type BillingDeps = {
   access: AccessControl;
   requireAuth: (c: any, next: any) => Response | Promise<Response>;
   requireRunnerAuth: (c: any, next: any) => Response | Promise<Response>;
+  insertEvent: (input: any) => any;
+  registerEventObserver: (observer: (input: any, row: any) => void) => void;
 };
 
 type PriceSnapshot = {
@@ -32,6 +34,13 @@ const USD = "USD";
 const OPENAI_PRICING_URL = "https://developers.openai.com/api/docs/pricing";
 const ANTHROPIC_PRICING_URL = "https://platform.claude.com/docs/en/about-claude/pricing";
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
+const PROVIDER_PRICING_SOURCES: Record<string, string[]> = {
+  openai: [OPENAI_PRICING_URL, "https://developers.openai.com/api/docs/models"],
+  anthropic: [ANTHROPIC_PRICING_URL, "https://platform.claude.com/docs/en/models/overview"],
+  mistral: ["https://docs.mistral.ai/inference/pricing", "https://docs.mistral.ai/models"],
+  liquid: ["https://www.liquid.ai/pricing", "https://docs.liquid.ai/api/models"],
+  openrouter: [OPENROUTER_MODELS_URL],
+};
 
 const CURATED_PRICES: Array<Omit<PriceSnapshot, "id" | "currency">> = [
   {
@@ -184,6 +193,24 @@ const priceUpsertSchema = z.union([
   z.object({ prices: z.array(priceUpsertItemSchema).min(1) }).strict(),
 ]);
 
+const refreshStartSchema = z
+  .object({ updaterAgentName: z.string().trim().min(1) })
+  .strict();
+
+const refreshAgentResponseSchema = z
+  .object({
+    prices: z.array(priceUpsertItemSchema).default([]),
+    unresolved: z
+      .array(
+        z.object({
+          modelId: z.string().trim().min(1),
+          reason: z.string().trim().min(1),
+        }),
+      )
+      .default([]),
+  })
+  .strict();
+
 function parseModelId(modelId: string) {
   const [rawProvider, ...parts] = modelId.split(":");
   const provider = (rawProvider || "unknown").trim().toLowerCase();
@@ -237,7 +264,15 @@ function calculateCostUsdMicros(
 }
 
 export function registerBillingRoutes(app: Hono<any>, deps: BillingDeps) {
-  const { orm, jsonResponse, access, requireAuth, requireRunnerAuth } = deps;
+  const {
+    orm,
+    jsonResponse,
+    access,
+    requireAuth,
+    requireRunnerAuth,
+    insertEvent,
+    registerEventObserver,
+  } = deps;
 
   function seedCuratedPrices() {
     const now = Date.now();
@@ -331,6 +366,239 @@ export function registerBillingRoutes(app: Hono<any>, deps: BillingDeps) {
     return repriced;
   }
 
+  function upsertPrice(
+    item: z.infer<typeof priceUpsertItemSchema>,
+    now = Date.now(),
+    fetchedAt: number | null = null,
+  ) {
+    const parsedModel = parseModelId(item.modelId);
+    const provider = (item.provider ?? parsedModel.provider).trim().toLowerCase();
+    if (provider !== parsedModel.provider) {
+      throw new Error("provider must match modelId prefix");
+    }
+    const effectiveAt = item.effectiveAt ?? now;
+    orm
+      .insert(schema.llmModelPrices)
+      .values({
+        id: priceId(provider, item.modelId, effectiveAt),
+        provider,
+        model_id: item.modelId,
+        model_name: item.modelName ?? parsedModel.modelName,
+        currency: item.currency.toUpperCase(),
+        input_price_per_million: String(item.inputPricePerMillion),
+        output_price_per_million: String(item.outputPricePerMillion),
+        cached_input_price_per_million:
+          item.cachedInputPricePerMillion == null
+            ? null
+            : String(item.cachedInputPricePerMillion),
+        reasoning_price_per_million:
+          item.reasoningPricePerMillion == null
+            ? null
+            : String(item.reasoningPricePerMillion),
+        source: item.source,
+        source_url: item.sourceUrl ?? null,
+        effective_at: effectiveAt,
+        fetched_at: fetchedAt,
+        metadata_json: JSON.stringify(item.metadata ?? {}),
+        created_at: now,
+      })
+      .onConflictDoUpdate({
+        target: schema.llmModelPrices.id,
+        set: {
+          model_name: item.modelName ?? parsedModel.modelName,
+          currency: item.currency.toUpperCase(),
+          input_price_per_million: String(item.inputPricePerMillion),
+          output_price_per_million: String(item.outputPricePerMillion),
+          cached_input_price_per_million:
+            item.cachedInputPricePerMillion == null
+              ? null
+              : String(item.cachedInputPricePerMillion),
+          reasoning_price_per_million:
+            item.reasoningPricePerMillion == null
+              ? null
+              : String(item.reasoningPricePerMillion),
+          source: item.source,
+          source_url: item.sourceUrl ?? null,
+          fetched_at: fetchedAt,
+          metadata_json: JSON.stringify(item.metadata ?? {}),
+        },
+      })
+      .run();
+  }
+
+  function findRefreshRequest(refreshId: string) {
+    const rows = orm
+      .select()
+      .from(schema.events)
+      .where(eq(schema.events.type, "billing.prices.refresh.requested"))
+      .orderBy(desc(schema.events.created_at))
+      .all() as any[];
+    for (const row of rows) {
+      try {
+        const payload = JSON.parse(row.payload_json);
+        if (payload.refreshId === refreshId) return { row, payload };
+      } catch {}
+    }
+    return null;
+  }
+
+  function refreshEvents(refreshId: string) {
+    return (orm
+      .select()
+      .from(schema.events)
+      .where(
+        inArray(schema.events.type, [
+          "billing.prices.refresh.requested",
+          "billing.prices.refresh.provider.updated",
+          "billing.prices.refresh.completed",
+        ]),
+      )
+      .orderBy(asc(schema.events.created_at))
+      .all() as any[])
+      .filter((row) => row.type.startsWith("billing.prices.refresh."))
+      .flatMap((row) => {
+        try {
+          const payload = JSON.parse(row.payload_json);
+          return payload.refreshId === refreshId
+            ? [{ id: row.id, type: row.type, createdAt: row.created_at, payload }]
+            : [];
+        } catch {
+          return [];
+        }
+      });
+  }
+
+  function parseAgentPriceResponse(text: string) {
+    const trimmed = text.trim();
+    const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)?.[1] ?? trimmed;
+    return refreshAgentResponseSchema.safeParse(JSON.parse(fenced));
+  }
+
+  function completeRefreshWithFailure(request: any, reason: string) {
+    const requestedModelIds = Object.values(request.payload.modelsByProvider ?? {}).flat() as string[];
+    insertEvent({
+      type: "billing.prices.refresh.completed",
+      source: "system:billing",
+      channelId: request.row.channel_id,
+      parentEventId: request.row.id,
+      payload: {
+        refreshId: request.payload.refreshId,
+        unresolved: requestedModelIds.map((modelId) => ({ modelId, reason })),
+      },
+    });
+  }
+
+  registerEventObserver((input, row) => {
+    if (
+      input.type !== "message.created" ||
+      typeof input.parentEventId !== "string" ||
+      typeof input.source !== "string" ||
+      !input.source.startsWith("agent:")
+    ) {
+      return;
+    }
+    const requestRow = orm
+      .select()
+      .from(schema.events)
+      .where(eq(schema.events.id, input.parentEventId))
+      .get() as any | undefined;
+    if (!requestRow || requestRow.type !== "billing.prices.refresh.requested") return;
+    let requestPayload: any;
+    try {
+      requestPayload = JSON.parse(requestRow.payload_json);
+    } catch {
+      return;
+    }
+    const request = { row: requestRow, payload: requestPayload };
+    if (input.source !== `agent:${requestPayload.targetAgentName}`) return;
+    if (
+      refreshEvents(requestPayload.refreshId).some(
+        (event) => event.type === "billing.prices.refresh.completed",
+      )
+    ) {
+      return;
+    }
+
+    const text = input.payload?.text;
+    if (typeof text !== "string") {
+      completeRefreshWithFailure(request, "Selected agent returned no JSON price table.");
+      return;
+    }
+    let parsed: ReturnType<typeof parseAgentPriceResponse>;
+    try {
+      parsed = parseAgentPriceResponse(text);
+    } catch {
+      completeRefreshWithFailure(request, "Selected agent returned invalid JSON.");
+      return;
+    }
+    if (!parsed.success) {
+      completeRefreshWithFailure(request, "Selected agent returned an invalid price-table schema.");
+      return;
+    }
+
+    const requestedModelIds = new Set<string>(
+      Object.values(requestPayload.modelsByProvider ?? {}).flat() as string[],
+    );
+    for (const price of parsed.data.prices) {
+      if (!requestedModelIds.has(price.modelId)) {
+        completeRefreshWithFailure(request, `Agent proposed unrequested model ${price.modelId}.`);
+        return;
+      }
+      if (!price.sourceUrl || new URL(price.sourceUrl).protocol !== "https:") {
+        completeRefreshWithFailure(request, `Model ${price.modelId} lacks an HTTPS source URL.`);
+        return;
+      }
+    }
+    for (const unresolved of parsed.data.unresolved) {
+      if (!requestedModelIds.has(unresolved.modelId)) {
+        completeRefreshWithFailure(
+          request,
+          `Agent reported unrequested model ${unresolved.modelId}.`,
+        );
+        return;
+      }
+    }
+
+    const now = Date.now();
+    for (const price of parsed.data.prices) upsertPrice(price, now, now);
+    const repriced = repriceUnpricedUsage();
+    const pricesByProvider = new Map<string, string[]>();
+    for (const price of parsed.data.prices) {
+      const { provider } = parseModelId(price.modelId);
+      const ids = pricesByProvider.get(provider) ?? [];
+      ids.push(price.modelId);
+      pricesByProvider.set(provider, ids);
+    }
+    const requestedProviders = Object.keys(requestPayload.modelsByProvider ?? {});
+    for (const [providerIndex, provider] of requestedProviders.entries()) {
+      insertEvent({
+        type: "billing.prices.refresh.provider.updated",
+        source: `agent:${requestPayload.targetAgentName}`,
+        channelId: requestRow.channel_id,
+        parentEventId: requestRow.id,
+        payload: {
+          refreshId: requestPayload.refreshId,
+          provider,
+          updatedModelIds: pricesByProvider.get(provider) ?? [],
+          unresolved: parsed.data.unresolved.filter(
+            (item) => parseModelId(item.modelId).provider === provider,
+          ),
+          repriced: providerIndex === 0 ? repriced : 0,
+        },
+      });
+    }
+    insertEvent({
+      type: "billing.prices.refresh.completed",
+      source: "system:billing",
+      channelId: requestRow.channel_id,
+      parentEventId: requestRow.id,
+      payload: {
+        refreshId: requestPayload.refreshId,
+        unresolved: parsed.data.unresolved,
+      },
+    });
+  });
+
   seedCuratedPrices();
 
   app.get("/api/billing/prices", requireAuth, (c) => {
@@ -349,82 +617,20 @@ export function registerBillingRoutes(app: Hono<any>, deps: BillingDeps) {
       return jsonResponse(c, { error: "Invalid pricing payload", issues: parsed.error.issues }, 400);
     }
     const items = "prices" in parsed.data ? parsed.data.prices : [parsed.data];
-    const now = Date.now();
     let upserted = 0;
     for (const item of items) {
-      const parsedModel = parseModelId(item.modelId);
-      const provider = (item.provider ?? parsedModel.provider).trim().toLowerCase();
-      if (item.provider && provider !== parsedModel.provider) {
+      try {
+        upsertPrice(item);
+      } catch (error) {
         return jsonResponse(
           c,
           {
             error: "Invalid pricing payload",
-            issues: [
-              {
-                path: ["provider"],
-                message: "provider must match modelId prefix",
-              },
-            ],
+            issues: [{ path: ["provider"], message: String(error) }],
           },
           400,
         );
       }
-      const effectiveAt = item.effectiveAt ?? now;
-      orm
-        .insert(schema.llmModelPrices)
-        .values({
-          id: priceId(provider, item.modelId, effectiveAt),
-          provider,
-          model_id: item.modelId,
-          model_name: item.modelName ?? parsedModel.modelName,
-          currency: item.currency.toUpperCase(),
-          input_price_per_million: String(item.inputPricePerMillion),
-          output_price_per_million: String(item.outputPricePerMillion),
-          cached_input_price_per_million:
-            item.cachedInputPricePerMillion === undefined
-              ? null
-              : item.cachedInputPricePerMillion === null
-                ? null
-                : String(item.cachedInputPricePerMillion),
-          reasoning_price_per_million:
-            item.reasoningPricePerMillion === undefined
-              ? null
-              : item.reasoningPricePerMillion === null
-                ? null
-                : String(item.reasoningPricePerMillion),
-          source: item.source,
-          source_url: item.sourceUrl ?? null,
-          effective_at: effectiveAt,
-          fetched_at: null,
-          metadata_json: JSON.stringify(item.metadata ?? {}),
-          created_at: now,
-        })
-        .onConflictDoUpdate({
-          target: schema.llmModelPrices.id,
-          set: {
-            model_name: item.modelName ?? parsedModel.modelName,
-            currency: item.currency.toUpperCase(),
-            input_price_per_million: String(item.inputPricePerMillion),
-            output_price_per_million: String(item.outputPricePerMillion),
-            cached_input_price_per_million:
-              item.cachedInputPricePerMillion === undefined
-                ? null
-                : item.cachedInputPricePerMillion === null
-                  ? null
-                  : String(item.cachedInputPricePerMillion),
-            reasoning_price_per_million:
-              item.reasoningPricePerMillion === undefined
-                ? null
-                : item.reasoningPricePerMillion === null
-                  ? null
-                  : String(item.reasoningPricePerMillion),
-            source: item.source,
-            source_url: item.sourceUrl ?? null,
-            fetched_at: null,
-            metadata_json: JSON.stringify(item.metadata ?? {}),
-          },
-        })
-        .run();
       upserted += 1;
     }
     const repriced = repriceUnpricedUsage();
@@ -528,6 +734,96 @@ export function registerBillingRoutes(app: Hono<any>, deps: BillingDeps) {
     }
     const repriced = repriceUnpricedUsage();
     return jsonResponse(c, { upserted, repriced, fetchedAt: now, updaterAgentName });
+  });
+
+  app.post("/api/billing/prices/refresh", requireAuth, async (c) => {
+    const parsed = refreshStartSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) {
+      return jsonResponse(c, { error: "Invalid refresh request", issues: parsed.error.issues }, 400);
+    }
+    const agent = orm
+      .select()
+      .from(schema.agents)
+      .where(eq(schema.agents.name, parsed.data.updaterAgentName))
+      .get() as any | undefined;
+    if (!agent) {
+      return jsonResponse(c, { error: "Selected agent was not found" }, 400);
+    }
+    if (agent.desired_state !== "RUNNING" || !agent.assigned_runner_id) {
+      return jsonResponse(c, { error: "Selected agent is not assigned and running" }, 409);
+    }
+    const lifecycle = orm
+      .select({ id: schema.channels.id })
+      .from(schema.channels)
+      .where(eq(schema.channels.name, `agent.lifecycle.${agent.name}`))
+      .get();
+    if (!lifecycle?.id) {
+      return jsonResponse(c, { error: "Selected agent lifecycle channel is not ready" }, 409);
+    }
+    const modelIds = new Set<string>();
+    for (const row of orm.select({ modelId: schema.agents.model_id }).from(schema.agents).all()) {
+      if (row.modelId) modelIds.add(row.modelId);
+    }
+    for (const row of orm.select({ modelId: schema.llmUsage.model_id }).from(schema.llmUsage).all()) {
+      if (row.modelId) modelIds.add(row.modelId);
+    }
+    for (const row of orm.select().from(schema.models).all() as any[]) {
+      if (row.provider && row.model_name) modelIds.add(`${row.provider}:${row.model_name}`);
+    }
+    const modelsByProvider: Record<string, string[]> = {};
+    for (const modelId of [...modelIds].sort()) {
+      const { provider } = parseModelId(modelId);
+      (modelsByProvider[provider] ??= []).push(modelId);
+    }
+    const refreshId = randomUUID();
+    const payload = {
+      refreshId,
+      targetAgentName: agent.name,
+      modelsByProvider,
+      sources: Object.fromEntries(
+        Object.keys(modelsByProvider).map((provider) => [
+          provider,
+          PROVIDER_PRICING_SOURCES[provider] ?? [],
+        ]),
+      ),
+      instructions:
+        "Research authoritative current standard text-token prices for every exact model ID listed in modelsByProvider, using the supplied source URLs or other authoritative provider sources. Never guess. Return only one JSON object matching responseContract; do not call OrgOps billing APIs or emit a custom event. Put unverifiable, non-token, private-contract, modality-tiered, or ambiguous aliases in unresolved.",
+      responseContract: {
+        prices: [{
+          modelId: "provider:exact-model-id",
+          inputPricePerMillion: 0,
+          outputPricePerMillion: 0,
+          cachedInputPricePerMillion: null,
+          reasoningPricePerMillion: null,
+          source: "provider-docs",
+          sourceUrl: "https://authoritative.example/pricing",
+        }],
+        unresolved: [{ modelId: "provider:exact-model-id", reason: "Why it cannot be priced safely" }],
+      },
+    };
+    const event = insertEvent({
+      type: "billing.prices.refresh.requested",
+      source: "system:billing",
+      channelId: lifecycle.id,
+      payload,
+      idempotencyKey: `billing-price-refresh:${refreshId}`,
+    });
+    return jsonResponse(c, { refreshId, eventId: event.id, updaterAgentName: agent.name, modelsByProvider }, 202);
+  });
+
+  app.get("/api/billing/prices/refresh/:refreshId", requireAuth, (c) => {
+    const refreshId = c.req.param("refreshId");
+    const request = findRefreshRequest(refreshId);
+    if (!request) return jsonResponse(c, { error: "Refresh not found" }, 404);
+    const events = refreshEvents(refreshId);
+    const completed = events.find((event) => event.type === "billing.prices.refresh.completed");
+    return jsonResponse(c, {
+      refreshId,
+      status: completed ? "COMPLETED" : "RUNNING",
+      updaterAgentName: request.payload.targetAgentName,
+      modelsByProvider: request.payload.modelsByProvider,
+      events,
+    });
   });
 
   app.post("/api/billing/usage", requireRunnerAuth, async (c) => {

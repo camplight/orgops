@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openDb } from "@orgops/db";
+import { createDrizzleDb, openDb, schema } from "@orgops/db";
 import { createApp } from "../app";
 
 describe("billing routes", () => {
@@ -216,6 +216,113 @@ describe("billing routes", () => {
         expect.objectContaining({ key: "bob", calls: 1, totalTokens: 225 }),
         expect.objectContaining({ key: "alice", calls: 1, totalTokens: 150 }),
       ]);
+    } finally {
+      db.close();
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts an isolated price proposal from any selected agent and reprices usage", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-billing-"));
+    const db = openDb(":memory:");
+    const runnerToken = "runner-billing-token";
+    const engine = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken,
+      systemAgentModel: "",
+    });
+    const orm = createDrizzleDb(db);
+    const now = Date.now();
+    const headers = {
+      "content-type": "application/json",
+      "x-orgops-runner-token": runnerToken,
+    };
+
+    try {
+      orm.insert(schema.agents).values({
+        id: "pricing-agent-id",
+        name: "pricing-agent",
+        agent_role: "STANDARD",
+        model_id: "openai:gpt-4o-mini",
+        soul_contents: "",
+        workspace_path: dataDir,
+        desired_state: "RUNNING",
+        runtime_state: "RUNNING",
+        assigned_runner_id: "runner-1",
+        created_at: now,
+        updated_at: now,
+      }).run();
+      orm.insert(schema.channels).values({
+        id: "pricing-lifecycle",
+        name: "agent.lifecycle.pricing-agent",
+        visibility: "PUBLIC",
+        created_at: now,
+      }).run();
+      orm.insert(schema.channelSubscriptions).values({
+        channel_id: "pricing-lifecycle",
+        subscriber_type: "AGENT",
+        subscriber_id: "pricing-agent",
+      }).run();
+
+      const usage = await engine.app.request("http://localhost/api/billing/usage", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          modelId: "openai:gpt-agent-refresh-test",
+          inputTokens: 1_000_000,
+          outputTokens: 500_000,
+        }),
+      });
+      expect(await usage.json()).toMatchObject({ priceFound: false });
+
+      const start = await engine.app.request("http://localhost/api/billing/prices/refresh", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ updaterAgentName: "pricing-agent" }),
+      });
+      expect(start.status).toBe(202);
+      const started = await start.json();
+      expect(started.modelsByProvider.openai).toContain("openai:gpt-agent-refresh-test");
+
+      const proposal = await engine.app.request("http://localhost/api/events", {
+        method: "POST",
+        headers: { ...headers, "x-orgops-agent-name": "pricing-agent" },
+        body: JSON.stringify({
+          type: "message.created",
+          source: "agent:pricing-agent",
+          channelId: "pricing-lifecycle",
+          parentEventId: started.eventId,
+          payload: {
+            text: JSON.stringify({
+              prices: [{
+                modelId: "openai:gpt-agent-refresh-test",
+                inputPricePerMillion: 2,
+                outputPricePerMillion: 4,
+                source: "openai-docs",
+                sourceUrl: "https://developers.openai.com/api/docs/pricing",
+              }],
+              unresolved: [],
+            }),
+          },
+        }),
+      });
+      const proposalBody = await proposal.json();
+      expect(proposal.status, JSON.stringify(proposalBody)).toBe(201);
+
+      const status = await engine.app.request(
+        `http://localhost/api/billing/prices/refresh/${started.refreshId}`,
+        { headers },
+      );
+      expect(await status.json()).toMatchObject({ status: "COMPLETED" });
+
+      const aggregate = await engine.app.request(
+        "http://localhost/api/billing/usage?groupBy=model",
+        { headers },
+      );
+      expect((await aggregate.json()).totals.costUsdMicros).toBe(4_000_000);
     } finally {
       db.close();
       rmSync(dataDir, { recursive: true, force: true });

@@ -358,6 +358,65 @@ const coreEventShapes: EventShapeDefinition[] = [
     }),
   },
   {
+    type: "billing.prices.refresh.requested",
+    description: "Targeted request for a selected agent to propose exact model price snapshots.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1),
+      source: sourceSchema,
+      payload: z
+        .object({
+          refreshId: z.string().uuid(),
+          targetAgentName: z.string().min(1),
+          modelsByProvider: z.record(z.string(), z.array(z.string().min(1))),
+          sources: z.record(z.string(), z.array(z.string().url())),
+          instructions: z.string().min(1),
+          responseContract: z.object({
+            prices: z.array(z.record(z.string(), z.unknown())),
+            unresolved: z.array(z.record(z.string(), z.unknown())),
+          }),
+        })
+        .strict(),
+    }),
+  },
+  {
+    type: "billing.prices.refresh.provider.updated",
+    description: "Progress report for one provider in an agent-driven pricing refresh.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1),
+      source: sourceSchema,
+      payload: z
+        .object({
+          refreshId: z.string().uuid(),
+          provider: z.string().min(1),
+          updatedModelIds: z.array(z.string().min(1)),
+          unresolved: z.array(
+            z.object({ modelId: z.string().min(1), reason: z.string().min(1) }),
+          ),
+          repriced: z.number().int().nonnegative(),
+        })
+        .strict(),
+    }),
+  },
+  {
+    type: "billing.prices.refresh.completed",
+    description: "Final report for an agent-driven pricing refresh.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1),
+      source: sourceSchema,
+      payload: z
+        .object({
+          refreshId: z.string().uuid(),
+          unresolved: z.array(
+            z.object({ modelId: z.string().min(1), reason: z.string().min(1) }),
+          ),
+        })
+        .strict(),
+    }),
+  },
+  {
     type: "agent.intent.timeout",
     description:
       "Runner-generated timeout nudge when an agent-declared intent has not been followed by an actionable event.",
