@@ -474,6 +474,15 @@ export function registerBillingRoutes(app: Hono<any>, deps: BillingDeps) {
     return refreshAgentResponseSchema.safeParse(JSON.parse(fenced));
   }
 
+  function archiveRefreshChannel(channelId: string | null | undefined) {
+    if (!channelId) return;
+    orm
+      .update(schema.channels)
+      .set({ archived_at: Date.now() })
+      .where(eq(schema.channels.id, channelId))
+      .run();
+  }
+
   function completeRefreshWithFailure(request: any, reason: string) {
     const requestedModelIds = Object.values(request.payload.modelsByProvider ?? {}).flat() as string[];
     insertEvent({
@@ -486,6 +495,7 @@ export function registerBillingRoutes(app: Hono<any>, deps: BillingDeps) {
         unresolved: requestedModelIds.map((modelId) => ({ modelId, reason })),
       },
     });
+    archiveRefreshChannel(request.row.channel_id);
   }
 
   registerEventObserver((input, row) => {
@@ -597,6 +607,7 @@ export function registerBillingRoutes(app: Hono<any>, deps: BillingDeps) {
         unresolved: parsed.data.unresolved,
       },
     });
+    archiveRefreshChannel(requestRow.channel_id);
   });
 
   seedCuratedPrices();
@@ -752,14 +763,6 @@ export function registerBillingRoutes(app: Hono<any>, deps: BillingDeps) {
     if (agent.desired_state !== "RUNNING" || !agent.assigned_runner_id) {
       return jsonResponse(c, { error: "Selected agent is not assigned and running" }, 409);
     }
-    const lifecycle = orm
-      .select({ id: schema.channels.id })
-      .from(schema.channels)
-      .where(eq(schema.channels.name, `agent.lifecycle.${agent.name}`))
-      .get();
-    if (!lifecycle?.id) {
-      return jsonResponse(c, { error: "Selected agent lifecycle channel is not ready" }, 409);
-    }
     const modelIds = new Set<string>();
     for (const row of orm.select({ modelId: schema.agents.model_id }).from(schema.agents).all()) {
       if (row.modelId) modelIds.add(row.modelId);
@@ -776,6 +779,35 @@ export function registerBillingRoutes(app: Hono<any>, deps: BillingDeps) {
       (modelsByProvider[provider] ??= []).push(modelId);
     }
     const refreshId = randomUUID();
+    const refreshChannelId = randomUUID();
+    orm
+      .insert(schema.channels)
+      .values({
+        id: refreshChannelId,
+        name: `agent.billing-refresh.${agent.name}.${refreshId}`,
+        description: `Internal billing price refresh for ${agent.name}`,
+        metadata_json: JSON.stringify({
+          internal: true,
+          purpose: "billing-price-refresh",
+          refreshId,
+          agentName: agent.name,
+        }),
+        visibility: "PRIVATE",
+        owner_human_id: null,
+        kind: "GROUP",
+        direct_participant_key: null,
+        created_at: Date.now(),
+        archived_at: null,
+      })
+      .run();
+    orm
+      .insert(schema.channelSubscriptions)
+      .values({
+        channel_id: refreshChannelId,
+        subscriber_type: "AGENT",
+        subscriber_id: agent.name,
+      })
+      .run();
     const payload = {
       refreshId,
       targetAgentName: agent.name,
@@ -804,11 +836,20 @@ export function registerBillingRoutes(app: Hono<any>, deps: BillingDeps) {
     const event = insertEvent({
       type: "billing.prices.refresh.requested",
       source: "system:billing",
-      channelId: lifecycle.id,
+      channelId: refreshChannelId,
       payload,
       idempotencyKey: `billing-price-refresh:${refreshId}`,
     });
-    return jsonResponse(c, { refreshId, eventId: event.id, updaterAgentName: agent.name, modelsByProvider }, 202);
+    return jsonResponse(
+      c,
+      {
+        refreshId,
+        eventId: event.id,
+        updaterAgentName: agent.name,
+        modelsByProvider,
+      },
+      202,
+    );
   });
 
   app.get("/api/billing/prices/refresh/:refreshId", requireAuth, (c) => {

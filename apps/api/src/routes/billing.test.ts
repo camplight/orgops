@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDrizzleDb, openDb, schema } from "@orgops/db";
+import { eq } from "drizzle-orm";
 import { createApp } from "../app";
 
 describe("billing routes", () => {
@@ -255,18 +256,6 @@ describe("billing routes", () => {
         created_at: now,
         updated_at: now,
       }).run();
-      orm.insert(schema.channels).values({
-        id: "pricing-lifecycle",
-        name: "agent.lifecycle.pricing-agent",
-        visibility: "PUBLIC",
-        created_at: now,
-      }).run();
-      orm.insert(schema.channelSubscriptions).values({
-        channel_id: "pricing-lifecycle",
-        subscriber_type: "AGENT",
-        subscriber_id: "pricing-agent",
-      }).run();
-
       const usage = await engine.app.request("http://localhost/api/billing/usage", {
         method: "POST",
         headers,
@@ -286,6 +275,13 @@ describe("billing routes", () => {
       expect(start.status).toBe(202);
       const started = await start.json();
       expect(started.modelsByProvider.openai).toContain("openai:gpt-agent-refresh-test");
+      const requestEvent = orm
+        .select()
+        .from(schema.events)
+        .where(eq(schema.events.id, started.eventId))
+        .get();
+      expect(requestEvent?.channel_id).toBeTruthy();
+      const refreshChannelId = requestEvent!.channel_id!;
 
       const proposal = await engine.app.request("http://localhost/api/events", {
         method: "POST",
@@ -293,7 +289,7 @@ describe("billing routes", () => {
         body: JSON.stringify({
           type: "message.created",
           source: "agent:pricing-agent",
-          channelId: "pricing-lifecycle",
+          channelId: refreshChannelId,
           parentEventId: started.eventId,
           payload: {
             text: JSON.stringify({
@@ -317,6 +313,13 @@ describe("billing routes", () => {
         { headers },
       );
       expect(await status.json()).toMatchObject({ status: "COMPLETED" });
+      const refreshChannel = orm
+        .select()
+        .from(schema.channels)
+        .where(eq(schema.channels.id, refreshChannelId))
+        .get();
+      expect(refreshChannel?.metadata_json).toContain('"purpose":"billing-price-refresh"');
+      expect(refreshChannel?.archived_at).toBeTypeOf("number");
 
       const aggregate = await engine.app.request(
         "http://localhost/api/billing/usage?groupBy=model",

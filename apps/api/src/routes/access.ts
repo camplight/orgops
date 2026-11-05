@@ -213,6 +213,15 @@ export function createAccessControl(deps: AccessDeps) {
     );
   }
 
+  function isScopedAgentInternalChannel(scopedRunner: RunnerScope, channelName: string) {
+    const agentName = scopedRunner.allowedAgentName;
+    if (!agentName) return false;
+    return (
+      channelName === `agent.lifecycle.${agentName}` ||
+      channelName.startsWith(`agent.billing-refresh.${agentName}.`)
+    );
+  }
+
   function hasHumanChannelViewerShare(channelId: string, username: string): boolean {
     const sharedViewer = orm
       .select({ channelId: schema.channelViewers.channel_id })
@@ -251,10 +260,7 @@ export function createAccessControl(deps: AccessDeps) {
       const allowedChannelIds = new Set(scopedRunner.allowedChannelIds ?? []);
       if (allowedChannelIds.has(channelId)) return true;
       if (scopedRunnerCanUseSubscribedChannel(scopedRunner, channelId)) return true;
-      const lifecycleName = scopedRunner.allowedAgentName
-        ? `agent.lifecycle.${scopedRunner.allowedAgentName}`
-        : "";
-      if (lifecycleName && channel.name === lifecycleName) return true;
+      if (isScopedAgentInternalChannel(scopedRunner, channel.name)) return true;
       if (scopedRunner.allowedAgentName) {
         return hasAgentChannelViewerShare(channelId, scopedRunner.allowedAgentName);
       }
@@ -282,10 +288,7 @@ export function createAccessControl(deps: AccessDeps) {
       if (!channel) return false;
       const allowedChannelIds = new Set(scopedRunner.allowedChannelIds ?? []);
       if (allowedChannelIds.has(channelId)) return true;
-      const lifecycleName = scopedRunner.allowedAgentName
-        ? `agent.lifecycle.${scopedRunner.allowedAgentName}`
-        : "";
-      return Boolean(lifecycleName && channel.name === lifecycleName);
+      return isScopedAgentInternalChannel(scopedRunner, channel.name);
     }
     // Preserve idempotent delete/update behavior for missing legacy channel ids.
     if (!channel) return true;
@@ -323,10 +326,7 @@ export function createAccessControl(deps: AccessDeps) {
         .from(schema.channels)
         .all();
       for (const row of rows) {
-        if (
-          scopedRunner.allowedAgentName &&
-          row.name === `agent.lifecycle.${scopedRunner.allowedAgentName}`
-        ) {
+        if (isScopedAgentInternalChannel(scopedRunner, row.name)) {
           allowed.add(row.id);
         }
       }
