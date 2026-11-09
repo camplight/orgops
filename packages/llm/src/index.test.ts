@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
     text: "mock response",
     toolCalls: [],
     toolResults: [],
+    response: { messages: [{role: "assistant" as const, content: "mock response"}] },
   })),
   stepCountIs: vi.fn((stepCount: number) => ({ stepCount })),
   createOpenAI: vi.fn(() => ({
@@ -81,6 +82,11 @@ describe("llm", () => {
     delete process.env.LIQUID_BASE_URL;
     delete process.env.OPENAI_COMPATIBLE_API_KEY;
     delete process.env.OPENAI_COMPATIBLE_BASE_URL;
+  });
+
+  it("preserves SDK response history for tool-free finalization", async () => {
+    const result = await generate("openrouter:test/model", [{role:"user",content:"question"}], {env:{OPENROUTER_API_KEY:"test-key"}});
+    expect(result.responseMessages).toEqual([{role:"assistant",content:"mock response"}]);
   });
 
   it("detects completion-only OpenAI model ids", () => {

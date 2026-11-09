@@ -1056,6 +1056,49 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
           await emitTurnEvent("agent.turn.completed", {});
           return;
         }
+        const explicitNoop = (result.toolCalls ?? []).some(
+          (call) => (call as { toolName?: unknown }).toolName === NOOP_TOOL_NAME,
+        );
+        const humanRequest = events.some(
+          (event) => event.type === "message.created" && event.source?.startsWith("human:"),
+        );
+        if (humanRequest && generateUsedTools(result) && !explicitNoop) {
+          // Never replay the tools to obtain a reply. The SDK transcript lets a
+          // single tool-free call summarize actual results, including failures.
+          let reply = "I stopped after using tools without producing an answer. The requested work may be incomplete. Please ask me to continue.";
+          if (result.responseMessages?.length) {
+            try {
+              const summary = await withTimeout(generate(agent.modelId,
+                clampMessagesForProviderLimit([
+                  ...invokeMessages, ...retryMessages, ...result.responseMessages,
+                  { role: "system", content: "The tool phase has ended. Write a short plain-text reply to the human using only the results above. Explain what was accomplished, what failed, and what remains incomplete. Do not claim completion without evidence. Do not call tools or return a JSON event. Do not reveal credentials or secret tool output." },
+                ]), {
+                  maxSteps: 1,
+                  maxTokens: 1200,
+                  env: injectionEnv,
+                  abortSignal: AbortSignal.timeout(Math.min(llmCallTimeoutMs, 15_000)),
+                }), Math.min(llmCallTimeoutMs, 15_000), "LLM final summary");
+              if (summary.usage) await recordLlmUsage(input.api.apiFetch, {
+                channelId, agentName: agent.name, modelId: agent.modelId,
+                runtime: "classic", purpose: "turn", triggerEventId: triggerEvent.id,
+                usage: summary.usage, metadata: { attempt, finalSummary: true },
+              });
+              const text = summary.text?.trim();
+              if (text && !/^(\{|```)/.test(text) && !generateUsedTools(summary)) reply = text;
+            } catch {
+              // A failed or timed-out summary must still leave a visible notice.
+            }
+          }
+          const notice: ModelEventDraft = {
+            type: "message.created", source: `agent:${agent.name}`, channelId,
+            payload: { text: reply }, parentEventId: triggerEvent.id,
+            idempotencyKey: `turn:${agent.name}:${triggerEvent.id}:final-summary:${attempt}`,
+          };
+          await input.api.emitEvent(notice);
+          if (await continueForLateEvents([notice], attempt)) continue;
+          await emitTurnEvent("agent.turn.completed", { completedWithFallback: true });
+          return;
+        }
         if (plainTextReplies || generateUsedTools(result)) {
           await emitTurnEvent("agent.turn.completed", { noReply: true });
           return;
