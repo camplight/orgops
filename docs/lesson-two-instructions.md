@@ -18,3 +18,5 @@
 11. On step 3 notice that the agent wasn't able to test stuff properly because it mocked what it doesn't own - so now we have to test in integration
     1. Rewrite the tests so it uses msw to mock the api calls themselves
 12. Continue with step 4
+13. Step 5 and start in parallel with another component
+14. Work on the turn-executor refactoring in parallel
