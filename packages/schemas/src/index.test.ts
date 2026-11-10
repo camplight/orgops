@@ -120,6 +120,52 @@ describe("schemas", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("validates compact and clear context lifecycle events", () => {
+    const shapes = getCoreEventShapes();
+    expect(
+      validateEventAgainstShapes(
+        {
+          type: "agent.context.compacted",
+          source: "agent:worker-a",
+          channelId: "chan-1",
+          payload: {
+            targetAgentName: "worker-a",
+            summary: "Whole-channel runtime memory.",
+            cutoffAt: 123,
+            cutoffEventId: "evt-123",
+          },
+        },
+        shapes,
+      ).ok,
+    ).toBe(true);
+    expect(
+      validateEventAgainstShapes(
+        {
+          type: "agent.context.cleared",
+          source: "agent:worker-a",
+          channelId: "chan-1",
+          payload: { targetAgentName: "worker-a" },
+        },
+        shapes,
+      ).ok,
+    ).toBe(true);
+    expect(
+      validateEventAgainstShapes(
+        {
+          type: "agent.context.compacted",
+          source: "agent:worker-a",
+          channelId: "chan-1",
+          payload: {
+            targetAgentName: "worker-a",
+            summary: "",
+            cutoffAt: 123,
+          },
+        },
+        shapes,
+      ).ok,
+    ).toBe(false);
+  });
+
   it("returns shape issues for invalid event payload", () => {
     const result = validateEventAgainstShapes(
       {

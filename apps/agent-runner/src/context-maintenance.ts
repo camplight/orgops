@@ -1,6 +1,7 @@
 import { generate } from "@orgops/llm";
 import { recordLlmUsage } from "./billing";
 import { listChannelEventsAfter } from "./channel-events";
+import { getLatestContextBoundary } from "./context-boundary";
 import type { Agent, Event } from "./types";
 
 type ApiFetch = (path: string, init?: RequestInit) => Promise<Response>;
@@ -20,6 +21,7 @@ function isMeaningfulEvent(event: Event): boolean {
   if (event.type.startsWith("telemetry.")) return false;
   if (event.type.startsWith("tool.")) return false;
   if (event.type.startsWith("agent.turn.")) return false;
+  if (event.type.startsWith("agent.context.")) return false;
   if (event.type.startsWith("memory.")) return false;
   if (event.type === "event.deadlettered") return false;
   return true;
@@ -252,31 +254,57 @@ export async function refreshChannelRecentMemory(input: {
 }): Promise<ChannelMemoryRecord | null> {
   const now = Date.now();
   const windowStartAt = now - RECENT_MEMORY_WINDOW_MS;
-  const existing = await getChannelMemoryRecord(
-    input.apiFetch,
-    "recent",
-    input.agent.name,
-    input.channelId,
-  );
+  const [storedExisting, boundary] = await Promise.all([
+    getChannelMemoryRecord(
+      input.apiFetch,
+      "recent",
+      input.agent.name,
+      input.channelId,
+    ),
+    getLatestContextBoundary(input.apiFetch, input.agent.name, input.channelId),
+  ]);
+  const existing =
+    storedExisting &&
+    normalizeTimestamp(storedExisting.lastProcessedAt) >=
+      normalizeTimestamp(boundary?.cutoffAt)
+      ? storedExisting
+      : null;
   const events = await listChannelEventsAfter(
     input.apiFetch,
     input.channelId,
-    Math.max(0, windowStartAt - 1),
+    Math.max(0, windowStartAt - 1, normalizeTimestamp(boundary?.cutoffAt)),
   );
   const meaningfulEvents = events.filter(isMeaningfulEvent);
   const meaningfulLastProcessedAt = maxEventTimestamp(meaningfulEvents);
   const nextLastProcessedAt = Math.max(
     meaningfulLastProcessedAt,
     normalizeTimestamp(existing?.lastProcessedAt),
+    normalizeTimestamp(boundary?.cutoffAt),
   );
   if (meaningfulEvents.length === 0) {
     if (existing) return existing;
+    const currentBoundary = await getLatestContextBoundary(
+      input.apiFetch,
+      input.agent.name,
+      input.channelId,
+    );
+    if (currentBoundary?.eventId !== boundary?.eventId) {
+      return getChannelMemoryRecord(
+        input.apiFetch,
+        "recent",
+        input.agent.name,
+        input.channelId,
+      );
+    }
     const emptyRecord = await upsertChannelMemoryRecord(input.apiFetch, "recent", {
       agentName: input.agent.name,
       channelId: input.channelId,
       summaryText: "",
       windowStartAt,
       lastProcessedAt: nextLastProcessedAt,
+      ...(boundary?.cutoffEventId || boundary?.eventId
+        ? { lastProcessedEventId: boundary.cutoffEventId ?? boundary.eventId }
+        : {}),
     });
     return emptyRecord;
   }
@@ -315,6 +343,19 @@ export async function refreshChannelRecentMemory(input: {
     summary || existing?.summaryText || "",
     MEMORY_SUMMARY_MAX_CHARS,
   );
+  const currentBoundary = await getLatestContextBoundary(
+    input.apiFetch,
+    input.agent.name,
+    input.channelId,
+  );
+  if (currentBoundary?.eventId !== boundary?.eventId) {
+    return getChannelMemoryRecord(
+      input.apiFetch,
+      "recent",
+      input.agent.name,
+      input.channelId,
+    );
+  }
   return await upsertOrKeepNewer(
     () =>
       upsertChannelMemoryRecord(input.apiFetch, "recent", {
@@ -346,13 +387,25 @@ export async function refreshChannelFullMemory(input: {
   apiFetch: ApiFetch;
   getEnv: () => Promise<Record<string, string>>;
 }): Promise<ChannelMemoryRecord | null> {
-  const existing = await getChannelMemoryRecord(
-    input.apiFetch,
-    "full",
-    input.agent.name,
-    input.channelId,
+  const [storedExisting, boundary] = await Promise.all([
+    getChannelMemoryRecord(
+      input.apiFetch,
+      "full",
+      input.agent.name,
+      input.channelId,
+    ),
+    getLatestContextBoundary(input.apiFetch, input.agent.name, input.channelId),
+  ]);
+  const existing =
+    storedExisting &&
+    normalizeTimestamp(storedExisting.lastProcessedAt) >=
+      normalizeTimestamp(boundary?.cutoffAt)
+      ? storedExisting
+      : null;
+  const after = Math.max(
+    normalizeTimestamp(existing?.lastProcessedAt),
+    normalizeTimestamp(boundary?.cutoffAt),
   );
-  const after = normalizeTimestamp(existing?.lastProcessedAt);
   const newEvents = await listChannelEventsAfter(
     input.apiFetch,
     input.channelId,
@@ -360,10 +413,37 @@ export async function refreshChannelFullMemory(input: {
   );
   const meaningfulNewEvents = newEvents.filter(isMeaningfulEvent);
   if (meaningfulNewEvents.length === 0) {
-    return existing;
+    if (existing) return existing;
+    const currentBoundary = await getLatestContextBoundary(
+      input.apiFetch,
+      input.agent.name,
+      input.channelId,
+    );
+    if (currentBoundary?.eventId !== boundary?.eventId) {
+      return getChannelMemoryRecord(
+        input.apiFetch,
+        "full",
+        input.agent.name,
+        input.channelId,
+      );
+    }
+    return upsertChannelMemoryRecord(input.apiFetch, "full", {
+      agentName: input.agent.name,
+      channelId: input.channelId,
+      summaryText:
+        boundary?.kind === "compact" ? boundary.summary ?? "" : "",
+      lastProcessedAt: after,
+      ...(boundary?.cutoffEventId || boundary?.eventId
+        ? { lastProcessedEventId: boundary.cutoffEventId ?? boundary.eventId }
+        : {}),
+    });
   }
   const chunks = chunkEvents(meaningfulNewEvents, MAX_EVENTS_PER_PROMPT);
-  let summaryText = clampSummaryText(existing?.summaryText ?? "", MEMORY_SUMMARY_MAX_CHARS);
+  let summaryText = clampSummaryText(
+    existing?.summaryText ??
+      (boundary?.kind === "compact" ? boundary.summary ?? "" : ""),
+    MEMORY_SUMMARY_MAX_CHARS,
+  );
   for (const chunk of chunks) {
     const nextSummary = await summarizeText(
       input.agent,
@@ -396,7 +476,21 @@ export async function refreshChannelFullMemory(input: {
   const nextLastProcessedAt = Math.max(
     maxEventTimestamp(newEvents),
     normalizeTimestamp(existing?.lastProcessedAt),
+    normalizeTimestamp(boundary?.cutoffAt),
   );
+  const currentBoundary = await getLatestContextBoundary(
+    input.apiFetch,
+    input.agent.name,
+    input.channelId,
+  );
+  if (currentBoundary?.eventId !== boundary?.eventId) {
+    return getChannelMemoryRecord(
+      input.apiFetch,
+      "full",
+      input.agent.name,
+      input.channelId,
+    );
+  }
   return await upsertOrKeepNewer(
     () =>
       upsertChannelMemoryRecord(input.apiFetch, "full", {
@@ -422,6 +516,26 @@ function compactChannelMemoryInput(record: ChannelMemoryRecord) {
   };
 }
 
+async function getContextBoundarySignature(
+  apiFetch: ApiFetch,
+  agentName: string,
+  channelIds: string[],
+): Promise<string> {
+  const entries = await Promise.all(
+    [...channelIds]
+      .sort()
+      .map(async (channelId) => {
+        const boundary = await getLatestContextBoundary(
+          apiFetch,
+          agentName,
+          channelId,
+        );
+        return `${channelId}:${boundary?.eventId ?? ""}`;
+      }),
+  );
+  return entries.join("|");
+}
+
 async function refreshCrossChannelMemory(input: {
   agent: Agent;
   mode: CrossMemoryMode;
@@ -429,6 +543,11 @@ async function refreshCrossChannelMemory(input: {
   apiFetch: ApiFetch;
   getEnv: () => Promise<Record<string, string>>;
 }): Promise<CrossChannelMemoryRecord | null> {
+  const boundarySignature = await getContextBoundarySignature(
+    input.apiFetch,
+    input.agent.name,
+    input.channelIds,
+  );
   const existing = await getCrossMemoryRecord(input.apiFetch, input.mode, input.agent.name);
   const channelMemories = await listChannelMemoryRecords(
     input.apiFetch,
@@ -450,6 +569,14 @@ async function refreshCrossChannelMemory(input: {
   }
   if (usable.length === 0) {
     if (existing) return existing;
+    const currentBoundarySignature = await getContextBoundarySignature(
+      input.apiFetch,
+      input.agent.name,
+      input.channelIds,
+    );
+    if (currentBoundarySignature !== boundarySignature) {
+      return getCrossMemoryRecord(input.apiFetch, input.mode, input.agent.name);
+    }
     const emptyRecord = await upsertCrossMemoryRecord(input.apiFetch, input.mode, {
       agentName: input.agent.name,
       summaryText: "",
@@ -495,6 +622,14 @@ async function refreshCrossChannelMemory(input: {
     summaryText || existing?.summaryText || "",
     MEMORY_SUMMARY_MAX_CHARS,
   );
+  const currentBoundarySignature = await getContextBoundarySignature(
+    input.apiFetch,
+    input.agent.name,
+    input.channelIds,
+  );
+  if (currentBoundarySignature !== boundarySignature) {
+    return getCrossMemoryRecord(input.apiFetch, input.mode, input.agent.name);
+  }
   return await upsertOrKeepNewer(
     () =>
       upsertCrossMemoryRecord(input.apiFetch, input.mode, {
