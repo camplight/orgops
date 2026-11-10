@@ -342,14 +342,15 @@ export async function generateWithOpenAIRealtime(
       if (calls.length === 0) break;
       // Like the AI SDK: a call to a tool without execute ends the loop and is returned to the caller.
       const terminalCalls = calls.filter((call) => tools[call.name] && !tools[call.name]?.execute);
-      if (terminalCalls.length > 0) {
+      const executableCalls = calls.filter((call) => !terminalCalls.includes(call));
+      if (terminalCalls.length > 0 && executableCalls.length === 0) {
         for (const call of terminalCalls) {
           toolCalls.push({ toolCallId: call.callId, toolName: call.name, input: call.arguments });
         }
         finishReason = "tool-calls";
         break;
       }
-      for (const call of calls) {
+      for (const call of executableCalls) {
         const result = await runTool(tools[call.name], call.name, call.arguments);
         toolCalls.push({ toolCallId: call.callId, toolName: call.name, input: call.arguments });
         toolResults.push({ toolCallId: call.callId, toolName: call.name, output: result });
@@ -359,6 +360,20 @@ export async function generateWithOpenAIRealtime(
             type: "function_call_output",
             call_id: call.callId,
             output: truncate(stringify(result), MAX_TOOL_OUTPUT_CHARS),
+          },
+        });
+      }
+      // A terminal outcome emitted beside an action cannot describe that action's
+      // result. Reject it in-band and require the model to finish again after it
+      // observes all executable sibling results.
+      for (const call of terminalCalls) {
+        send({
+          type: "conversation.item.create",
+          item: {
+            type: "function_call_output",
+            call_id: call.callId,
+            output:
+              "Terminal tool call deferred because executable sibling calls were present. Review their results, then call the terminal tool again by itself.",
           },
         });
       }

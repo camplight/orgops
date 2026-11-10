@@ -953,11 +953,31 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
     let correctionAttempts = 0;
     let lateEventContinuations = 0;
     let completionContinuations = 0;
+    let completionEventSequence = 0;
     let completionProtocolFailed = false;
     const humanRequest = events.some(
       (event) => event.type === "message.created" && event.source?.startsWith("human:"),
     );
-    const currentScheduledCompletionAttempt = scheduledCompletionAttempt(triggerEvent.payload);
+    let currentScheduledCompletionAttempt = 0;
+    let scheduledCompletionRootTriggerId = triggerEvent.id;
+    for (const event of events) {
+      if (
+        event.type !== "agent.scheduled.trigger" ||
+        event.source !== "system:scheduler"
+      ) {
+        continue;
+      }
+      const payload = getPayloadRecord(event.payload);
+      if (payload?.targetAgentName !== agent.name) continue;
+      const attempt = scheduledCompletionAttempt(payload);
+      if (attempt <= 0 || attempt < currentScheduledCompletionAttempt) continue;
+      currentScheduledCompletionAttempt = attempt;
+      scheduledCompletionRootTriggerId =
+        typeof payload.originalTriggerEventId === "string" &&
+        payload.originalTriggerEventId.trim()
+          ? payload.originalTriggerEventId.trim()
+          : event.id;
+    }
     const maxModelAttempts =
       MAX_EVENT_DISPATCH_ATTEMPTS +
       MAX_LATE_EVENT_CONTINUATIONS +
@@ -1176,7 +1196,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
 
         if (eventDraft) {
           eventDraft.idempotencyKey ??=
-            `turn:${agent.name}:${triggerEvent.id}:completion`;
+            `turn:${agent.name}:${triggerEvent.id}:completion:${completionEventSequence}`;
           const validation = validateEventAgainstShapes(eventDraft, eventShapes);
           let validationError = validation.ok ? "" : formatValidationErrors(validation);
           const targetChannelId = eventDraft.channelId?.trim();
@@ -1236,6 +1256,10 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
           if (eventDraft) {
             await input.api.emitEvent(eventDraft);
             postedEvents.push(eventDraft);
+            completionEventSequence += 1;
+          }
+          if (await continueForLateEvents(postedEvents, attempt)) {
+            continue;
           }
           const scheduledEvent: ModelEventDraft = {
             type: "agent.scheduled.trigger",
@@ -1246,9 +1270,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
               text: "Resume the unfinished work from the previous turn. Verify current state before repeating side effects.",
               targetAgentName: agent.name,
               turnCompletionAttempt: currentScheduledCompletionAttempt + 1,
-              originalTriggerEventId:
-                (triggerEvent.payload as { originalTriggerEventId?: unknown } | null)
-                  ?.originalTriggerEventId ?? triggerEvent.id,
+              originalTriggerEventId: scheduledCompletionRootTriggerId,
             },
             idempotencyKey: `turn:${agent.name}:${triggerEvent.id}:scheduled-continuation`,
           };
@@ -1265,6 +1287,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         if (eventDraft) {
           await input.api.emitEvent(eventDraft);
           postedEvents.push(eventDraft);
+          completionEventSequence += 1;
         }
         if (await continueForLateEvents(postedEvents, attempt)) continue;
         await emitTurnEvent("agent.turn.completed", {

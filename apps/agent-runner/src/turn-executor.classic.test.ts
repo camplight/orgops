@@ -32,9 +32,15 @@ function setup(
     source?: string;
     agent?: Partial<Agent>;
     trigger?: Partial<Event>;
+    events?: Event[];
   } = {},
 ) {
-  const emitted: Array<{ type?: string; payload?: Record<string, unknown> }> = [];
+  const emitted: Array<{
+    type?: string;
+    payload?: Record<string, unknown>;
+    idempotencyKey?: string;
+    deliverAt?: number;
+  }> = [];
   let pendingEventBatchIndex = 0;
   const apiFetch = vi.fn(async (path: string, init?: RequestInit) => {
     if (path === "/api/channels") {
@@ -79,7 +85,7 @@ function setup(
     run: () =>
       execute(
         { ...agent, ...options.agent },
-        [
+        options.events ?? [
           {
             ...trigger,
             ...options.trigger,
@@ -259,6 +265,14 @@ describe("CLASSIC empty final output", () => {
         .filter((event) => event.type === "message.created")
         .map((event) => event.payload?.text),
     ).toEqual(["first answer", "second answer"]);
+    expect(
+      ctx.emitted
+        .filter((event) => event.type === "message.created")
+        .map((event) => event.idempotencyKey),
+    ).toEqual([
+      "turn:tester:trigger:completion:0",
+      "turn:tester:trigger:completion:1",
+    ]);
     expect(
       ctx.emitted.find(
         (event) =>
@@ -534,6 +548,109 @@ describe("CLASSIC turn completion contract", () => {
     ).toMatchObject({
       scheduledContinuation: true,
       retryAfterSeconds: 30,
+    });
+  });
+
+  it("reconciles late events before scheduling RETRY_LATER", async () => {
+    const lateEvent: Event = {
+      id: "late-human",
+      type: "message.created",
+      source: "human:test",
+      channelId: "chat",
+      payload: { text: "Use the cached export instead." },
+      createdAt: 2,
+    };
+    const ctx = setup({ pendingEventBatches: [[lateEvent], []] });
+    vi.mocked(generate)
+      .mockResolvedValueOnce({
+        text: "",
+        toolCalls: [
+          {
+            toolName: "turn_finish",
+            input: {
+              status: "RETRY_LATER",
+              message: "Sheets is rate-limited; I will retry shortly.",
+              retryAfterSeconds: 30,
+            },
+          },
+        ],
+        toolResults: [],
+        finishReason: "tool-calls",
+      })
+      .mockImplementationOnce(async (_model, messages) => {
+        expect(JSON.stringify(messages)).toContain("Use the cached export instead.");
+        return {
+          text: "",
+          toolCalls: [
+            {
+              toolName: "turn_finish",
+              input: { status: "DONE", message: "Used the cached export." },
+            },
+          ],
+          toolResults: [],
+          finishReason: "tool-calls",
+        };
+      });
+
+    await ctx.run();
+
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(
+      ctx.emitted.filter((event) => event.type === "agent.scheduled.trigger"),
+    ).toHaveLength(0);
+    expect(
+      ctx.emitted
+        .filter((event) => event.type === "message.created")
+        .map((event) => event.payload?.text),
+    ).toEqual([
+      "Sheets is rate-limited; I will retry shortly.",
+      "Used the cached export.",
+    ]);
+  });
+
+  it("keeps trusted retry bounds when a newer human event shares the batch", async () => {
+    const scheduled: Event = {
+      id: "scheduled-retry",
+      type: "agent.scheduled.trigger",
+      source: "system:scheduler",
+      channelId: "chat",
+      payload: {
+        text: "resume",
+        targetAgentName: "tester",
+        turnCompletionAttempt: 2,
+        originalTriggerEventId: "root-trigger",
+      },
+      createdAt: 1,
+    };
+    const newerHuman: Event = {
+      id: "newer-human",
+      type: "message.created",
+      source: "human:test",
+      channelId: "chat",
+      payload: { text: "Also check this.", turnCompletionAttempt: 3 },
+      createdAt: 2,
+    };
+    const ctx = setup({ events: [scheduled, newerHuman] });
+    vi.mocked(generate).mockResolvedValueOnce({
+      text: "",
+      toolCalls: [
+        {
+          toolName: "turn_finish",
+          input: { status: "RETRY_LATER", retryAfterSeconds: 30 },
+        },
+      ],
+      toolResults: [],
+      finishReason: "tool-calls",
+    });
+
+    await ctx.run();
+
+    const retry = ctx.emitted.find(
+      (event) => event.type === "agent.scheduled.trigger",
+    );
+    expect(retry?.payload).toMatchObject({
+      turnCompletionAttempt: 3,
+      originalTriggerEventId: "root-trigger",
     });
   });
 
