@@ -91,8 +91,6 @@ export type AppConfig = {
   voiceTranscriberEnv?: () => Record<string, string | undefined>;
   /** Overrides the HTTP client used to create OpenAI realtime calls (tests). */
   realtimeFetch?: typeof fetch;
-  /** Overrides provider pricing document fetches (tests). */
-  pricingFetch?: typeof fetch;
 };
 
 type AppEnv = {
@@ -930,9 +928,6 @@ export function createApp(config: AppConfig = {}) {
     access,
     requireAuth,
     requireRunnerAuth,
-    insertEvent,
-    registerEventObserver,
-    pricingFetch: config.pricingFetch,
   });
 
   return { app, db, bus, injectWebSocket, voiceTranscriber };

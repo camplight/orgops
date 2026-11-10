@@ -7,97 +7,7 @@ import { eq } from "drizzle-orm";
 import { createApp } from "../app";
 
 describe("billing routes", () => {
-  it("allows runner-authenticated price upsert and uses it for billing", async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "orgops-billing-"));
-    const db = openDb(":memory:");
-    const runnerToken = "runner-billing-token";
-    const engine = createApp({
-      db,
-      dataDir,
-      adminUser: "admin",
-      adminPass: "admin",
-      runnerToken,
-      systemAgentModel: "",
-    });
-
-    try {
-      const upsert = await engine.app.request("http://localhost/api/billing/prices", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-orgops-runner-token": runnerToken,
-        },
-        body: JSON.stringify({
-          modelId: "openrouter:acme/new-model",
-          inputPricePerMillion: 2,
-          outputPricePerMillion: 6,
-          source: "test",
-        }),
-      });
-      expect(upsert.status).toBe(201);
-      expect(await upsert.json()).toMatchObject({ upserted: 1 });
-
-      const usage = await engine.app.request("http://localhost/api/billing/usage", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-orgops-runner-token": runnerToken,
-        },
-        body: JSON.stringify({
-          modelId: "openrouter:acme/new-model",
-          inputTokens: 1_000_000,
-          outputTokens: 500_000,
-        }),
-      });
-      expect(usage.status).toBe(201);
-      expect(await usage.json()).toMatchObject({
-        priceFound: true,
-        costUsdMicros: 5_000_000,
-      });
-    } finally {
-      db.close();
-      rmSync(dataDir, { recursive: true, force: true });
-    }
-  });
-
-  it("rejects provider values that do not match modelId prefix", async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "orgops-billing-"));
-    const db = openDb(":memory:");
-    const runnerToken = "runner-billing-token";
-    const engine = createApp({
-      db,
-      dataDir,
-      adminUser: "admin",
-      adminPass: "admin",
-      runnerToken,
-      systemAgentModel: "",
-    });
-
-    try {
-      const response = await engine.app.request("http://localhost/api/billing/prices", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-orgops-runner-token": runnerToken,
-        },
-        body: JSON.stringify({
-          provider: "openai",
-          modelId: "anthropic:claude-sonnet-5-5",
-          inputPricePerMillion: 1,
-          outputPricePerMillion: 2,
-          source: "test",
-        }),
-      });
-      expect(response.status).toBe(400);
-      const payload = await response.json();
-      expect(payload.error).toBe("Invalid pricing payload");
-    } finally {
-      db.close();
-      rmSync(dataDir, { recursive: true, force: true });
-    }
-  });
-
-  it("prices usage that was recorded before its model had a price", async () => {
+  it("loads the checked-in catalog and prices deployed OpenAI model IDs", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-billing-"));
     const db = openDb(":memory:");
     const runnerToken = "runner-billing-token";
@@ -115,36 +25,106 @@ describe("billing routes", () => {
     };
 
     try {
-      const usage = await engine.app.request("http://localhost/api/billing/usage", {
-        method: "POST",
+      const pricesResponse = await engine.app.request("http://localhost/api/billing/prices", {
         headers,
-        body: JSON.stringify({
-          modelId: "openrouter:acme/late-priced",
-          agentName: "late",
-          inputTokens: 1_000_000,
-          outputTokens: 1_000_000,
-        }),
       });
-      expect(await usage.json()).toMatchObject({ priceFound: false, costUsdMicros: 0 });
-
-      const upsert = await engine.app.request("http://localhost/api/billing/prices", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          modelId: "openrouter:acme/late-priced",
-          inputPricePerMillion: 1,
-          outputPricePerMillion: 3,
-          source: "test",
-        }),
-      });
-      expect(await upsert.json()).toMatchObject({ upserted: 1, repriced: 1 });
-
-      const aggregate = await engine.app.request(
-        "http://localhost/api/billing/usage?groupBy=agent",
-        { headers },
+      const prices = await pricesResponse.json();
+      expect(prices).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ modelId: "openai:gpt-5.5" }),
+          expect.objectContaining({ modelId: "openai:gpt-5.6" }),
+          expect.objectContaining({ modelId: "openai:gpt-realtime" }),
+        ]),
       );
-      const payload = await aggregate.json();
-      expect(payload.totals.costUsdMicros).toBe(4_000_000);
+
+      for (const usage of [
+        {
+          modelId: "openai:gpt-5.5",
+          inputTokens: 300_000,
+          outputTokens: 10_000,
+          expectedCost: 3_450_000,
+        },
+        {
+          modelId: "openai:gpt-5.6",
+          inputTokens: 100_000,
+          outputTokens: 500_000,
+          expectedCost: 10_400_000,
+        },
+        {
+          modelId: "openai:gpt-realtime",
+          inputTokens: 1_000_000,
+          outputTokens: 500_000,
+          expectedCost: 12_000_000,
+        },
+      ]) {
+        const response = await engine.app.request("http://localhost/api/billing/usage", {
+          method: "POST",
+          headers,
+          body: JSON.stringify(usage),
+        });
+        expect(await response.json()).toMatchObject({
+          priceFound: true,
+          costUsdMicros: usage.expectedCost,
+        });
+      }
+
+      const orm = createDrizzleDb(db);
+      orm
+        .update(schema.llmUsage)
+        .set({ cost_usd_micros: 0, price_snapshot_json: "{}" })
+        .where(eq(schema.llmUsage.model_id, "openai:gpt-5.5"))
+        .run();
+      orm
+        .insert(schema.llmModelPrices)
+        .values({
+          id: "stale:price",
+          provider: "stale",
+          model_id: "stale:model",
+          model_name: "model",
+          currency: "USD",
+          input_price_per_million: "1",
+          output_price_per_million: "1",
+          source: "manual",
+          effective_at: Date.now(),
+          metadata_json: "{}",
+          created_at: Date.now(),
+        })
+        .run();
+      createApp({
+        db,
+        dataDir,
+        adminUser: "admin",
+        adminPass: "admin",
+        runnerToken,
+        systemAgentModel: "",
+      });
+      expect(
+        orm
+          .select()
+          .from(schema.llmModelPrices)
+          .where(eq(schema.llmModelPrices.model_id, "stale:model"))
+          .get(),
+      ).toBeUndefined();
+      expect(
+        orm
+          .select()
+          .from(schema.llmUsage)
+          .where(eq(schema.llmUsage.model_id, "openai:gpt-5.5"))
+          .get()?.cost_usd_micros,
+      ).toBe(3_450_000);
+
+      for (const endpoint of [
+        "/api/billing/prices",
+        "/api/billing/prices/refresh",
+        "/api/billing/prices/refresh/openrouter",
+      ]) {
+        const response = await engine.app.request(`http://localhost${endpoint}`, {
+          method: "POST",
+          headers,
+          body: "{}",
+        });
+        expect(response.status).toBe(404);
+      }
     } finally {
       db.close();
       rmSync(dataDir, { recursive: true, force: true });
@@ -165,21 +145,6 @@ describe("billing routes", () => {
     });
 
     try {
-      const price = await engine.app.request("http://localhost/api/billing/prices", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-orgops-runner-token": runnerToken,
-        },
-        body: JSON.stringify({
-          modelId: "openrouter:acme/channel-model",
-          inputPricePerMillion: 1,
-          outputPricePerMillion: 1,
-          source: "test",
-        }),
-      });
-      expect(price.status).toBe(201);
-
       for (const usage of [
         { channelId: "channel-a", agentName: "alice", inputTokens: 100, outputTokens: 50 },
         { channelId: "channel-a", agentName: "bob", inputTokens: 200, outputTokens: 25 },
@@ -192,7 +157,7 @@ describe("billing routes", () => {
             "x-orgops-runner-token": runnerToken,
           },
           body: JSON.stringify({
-            modelId: "openrouter:acme/channel-model",
+            modelId: "openai:gpt-4o-mini",
             ...usage,
           }),
         });
@@ -223,283 +188,4 @@ describe("billing routes", () => {
     }
   });
 
-  it("accepts an isolated price proposal from any selected agent and reprices usage", async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "orgops-billing-"));
-    const db = openDb(":memory:");
-    const runnerToken = "runner-billing-token";
-    const engine = createApp({
-      db,
-      dataDir,
-      adminUser: "admin",
-      adminPass: "admin",
-      runnerToken,
-      systemAgentModel: "",
-      pricingFetch: async () =>
-        new Response(
-          "| Model | Input | Cached input | Output |\n| gpt-agent-refresh-test | $5 | $0.50 | $30 |",
-          { headers: { "content-type": "text/markdown" } },
-        ),
-    });
-    const orm = createDrizzleDb(db);
-    const now = Date.now();
-    const headers = {
-      "content-type": "application/json",
-      "x-orgops-runner-token": runnerToken,
-    };
-
-    try {
-      orm.insert(schema.agents).values({
-        id: "pricing-agent-id",
-        name: "pricing-agent",
-        agent_role: "STANDARD",
-        model_id: "openai:gpt-4o-mini",
-        soul_contents: "",
-        workspace_path: dataDir,
-        desired_state: "RUNNING",
-        runtime_state: "RUNNING",
-        assigned_runner_id: "runner-1",
-        created_at: now,
-        updated_at: now,
-      }).run();
-      orm.insert(schema.agents).values({
-        id: "wrapped-placeholder-id",
-        name: "wrapped-placeholder",
-        agent_role: "STANDARD",
-        model_id: "wrapped:none",
-        mode: "WRAPPED",
-        soul_contents: "",
-        workspace_path: dataDir,
-        desired_state: "RUNNING",
-        runtime_state: "RUNNING",
-        assigned_runner_id: "runner-1",
-        created_at: now,
-        updated_at: now,
-      }).run();
-      for (const usage of [
-        { inputTokens: 100_000, outputTokens: 10_000 },
-        { inputTokens: 300_000, outputTokens: 10_000 },
-      ]) {
-        const response = await engine.app.request("http://localhost/api/billing/usage", {
-          method: "POST",
-          headers,
-          body: JSON.stringify({
-            modelId: "openai:gpt-agent-refresh-test",
-            ...usage,
-          }),
-        });
-        expect(await response.json()).toMatchObject({ priceFound: false });
-      }
-
-      const start = await engine.app.request("http://localhost/api/billing/prices/refresh", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ updaterAgentName: "pricing-agent" }),
-      });
-      expect(start.status).toBe(202);
-      const started = await start.json();
-      expect(started.modelsByProvider.openai).toContain("openai:gpt-agent-refresh-test");
-      expect(started.modelsByProvider.wrapped).toBeUndefined();
-      const requestEvent = orm
-        .select()
-        .from(schema.events)
-        .where(eq(schema.events.id, started.eventId))
-        .get();
-      expect(requestEvent?.channel_id).toBeTruthy();
-      const refreshChannelId = requestEvent!.channel_id!;
-      const requestPayload = JSON.parse(requestEvent!.payload_json);
-      expect(requestPayload.sourceDocuments.openai[0].content).toContain(
-        "gpt-agent-refresh-test",
-      );
-
-      const forgedCompletion = await engine.app.request("http://localhost/api/events", {
-        method: "POST",
-        headers: { ...headers, "x-orgops-agent-name": "pricing-agent" },
-        body: JSON.stringify({
-          type: "billing.prices.refresh.completed",
-          source: "agent:pricing-agent",
-          channelId: refreshChannelId,
-          payload: { refreshId: started.refreshId, unresolved: [] },
-        }),
-      });
-      expect(forgedCompletion.status).toBe(403);
-      const forgedSystemCompletion = await engine.app.request("http://localhost/api/events", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          type: "billing.prices.refresh.completed",
-          source: "system:billing",
-          channelId: refreshChannelId,
-          parentEventId: started.eventId,
-          payload: { refreshId: started.refreshId, unresolved: [] },
-        }),
-      });
-      expect(forgedSystemCompletion.status).toBe(403);
-      const runningStatus = await engine.app.request(
-        `http://localhost/api/billing/prices/refresh/${started.refreshId}`,
-        { headers },
-      );
-      expect(await runningStatus.json()).toMatchObject({ status: "RUNNING" });
-
-      const proposal = await engine.app.request("http://localhost/api/events", {
-        method: "POST",
-        headers: { ...headers, "x-orgops-agent-name": "pricing-agent" },
-        body: JSON.stringify({
-          type: "message.created",
-          source: "agent:pricing-agent",
-          channelId: refreshChannelId,
-          parentEventId: started.eventId,
-          payload: {
-            text: JSON.stringify({
-              prices: [{
-                modelId: "openai:gpt-agent-refresh-test",
-                inputPricePerMillion: 5,
-                outputPricePerMillion: 30,
-                cachedInputPricePerMillion: 0.5,
-                pricingTiers: [{
-                  minInputTokens: 272_001,
-                  inputPricePerMillion: 10,
-                  outputPricePerMillion: 45,
-                  cachedInputPricePerMillion: 1,
-                }],
-                source: "openai-docs",
-                sourceUrl: "https://developers.openai.com/api/docs/pricing",
-              }],
-              unresolved: [{
-                modelId: "openai:gpt-4o-mini",
-                reason: "Not included in this synthetic source fixture.",
-              }],
-            }),
-          },
-        }),
-      });
-      const proposalBody = await proposal.json();
-      expect(proposal.status, JSON.stringify(proposalBody)).toBe(201);
-
-      const status = await engine.app.request(
-        `http://localhost/api/billing/prices/refresh/${started.refreshId}`,
-        { headers },
-      );
-      const statusPayload = await status.json();
-      expect(statusPayload).toMatchObject({ status: "COMPLETED" });
-      expect(
-        statusPayload.events.find(
-          (event: { type: string }) => event.type === "billing.prices.refresh.completed",
-        )?.payload.unresolved,
-      ).toEqual([
-        {
-          modelId: "openai:gpt-4o-mini",
-          reason: "Not included in this synthetic source fixture.",
-        },
-      ]);
-      const refreshChannel = orm
-        .select()
-        .from(schema.channels)
-        .where(eq(schema.channels.id, refreshChannelId))
-        .get();
-      expect(refreshChannel?.metadata_json).toContain('"purpose":"billing-price-refresh"');
-      expect(refreshChannel?.archived_at).toBeTypeOf("number");
-
-      const aggregate = await engine.app.request(
-        "http://localhost/api/billing/usage?groupBy=model",
-        { headers },
-      );
-      expect((await aggregate.json()).totals.costUsdMicros).toBe(4_250_000);
-    } finally {
-      db.close();
-      rmSync(dataDir, { recursive: true, force: true });
-    }
-  });
-
-  it("uses the structured OpenRouter adapter without waking the selected agent", async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "orgops-billing-"));
-    const db = openDb(":memory:");
-    const runnerToken = "runner-billing-token";
-    const engine = createApp({
-      db,
-      dataDir,
-      adminUser: "admin",
-      adminPass: "admin",
-      runnerToken,
-      systemAgentModel: "",
-      pricingFetch: async () =>
-        Response.json({
-          data: [{
-            id: "acme/structured",
-            name: "Structured",
-            pricing: { prompt: "0.000002", completion: "0.000006" },
-          }],
-        }),
-    });
-    const orm = createDrizzleDb(db);
-    const now = Date.now();
-    const headers = {
-      "content-type": "application/json",
-      "x-orgops-runner-token": runnerToken,
-    };
-
-    try {
-      orm.insert(schema.agents).values({
-        id: "openrouter-agent-id",
-        name: "openrouter-agent",
-        agent_role: "STANDARD",
-        model_id: "openrouter:acme/structured",
-        soul_contents: "",
-        workspace_path: dataDir,
-        desired_state: "RUNNING",
-        runtime_state: "RUNNING",
-        assigned_runner_id: "runner-1",
-        created_at: now,
-        updated_at: now,
-      }).run();
-      await engine.app.request("http://localhost/api/billing/usage", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          modelId: "openrouter:acme/structured",
-          inputTokens: 1_000_000,
-          outputTokens: 500_000,
-        }),
-      });
-
-      const start = await engine.app.request("http://localhost/api/billing/prices/refresh", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ updaterAgentName: "openrouter-agent" }),
-      });
-      expect(start.status).toBe(202);
-      const started = await start.json();
-      const status = await engine.app.request(
-        `http://localhost/api/billing/prices/refresh/${started.refreshId}`,
-        { headers },
-      );
-      const statusPayload = await status.json();
-      expect(statusPayload).toMatchObject({ status: "COMPLETED" });
-      expect(statusPayload.events).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            type: "billing.prices.refresh.provider.updated",
-            payload: expect.objectContaining({
-              provider: "openrouter",
-              updatedModelIds: ["openrouter:acme/structured"],
-            }),
-          }),
-        ]),
-      );
-      const requestEvent = orm
-        .select()
-        .from(schema.events)
-        .where(eq(schema.events.id, started.eventId))
-        .get();
-      expect(requestEvent?.status).toBe("DELIVERED");
-
-      const aggregate = await engine.app.request(
-        "http://localhost/api/billing/usage?groupBy=model",
-        { headers },
-      );
-      expect((await aggregate.json()).totals.costUsdMicros).toBe(5_000_000);
-    } finally {
-      db.close();
-      rmSync(dataDir, { recursive: true, force: true });
-    }
-  });
 });

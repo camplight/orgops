@@ -1,8 +1,9 @@
 import type { Hono } from "hono";
 import { randomUUID } from "node:crypto";
 import { schema, type OrgOpsDrizzleDb } from "@orgops/db";
-import { and, asc, desc, eq, gte, inArray, lte } from "drizzle-orm";
+import { and, asc, desc, eq, gte, lte } from "drizzle-orm";
 import { z } from "zod";
+import providerPriceCatalog from "../provider-prices.json" with { type: "json" };
 import type { AccessControl, RequestUser } from "./access";
 
 type BillingDeps = {
@@ -11,9 +12,6 @@ type BillingDeps = {
   access: AccessControl;
   requireAuth: (c: any, next: any) => Response | Promise<Response>;
   requireRunnerAuth: (c: any, next: any) => Response | Promise<Response>;
-  insertEvent: (input: any) => any;
-  registerEventObserver: (observer: (input: any, row: any) => void) => void;
-  pricingFetch?: typeof fetch;
 };
 
 type PriceTier = {
@@ -41,131 +39,6 @@ type PriceSnapshot = {
 };
 
 const USD = "USD";
-const OPENAI_PRICING_URL = "https://developers.openai.com/api/docs/pricing";
-const ANTHROPIC_PRICING_URL = "https://platform.claude.com/docs/en/about-claude/pricing";
-const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
-const PROVIDER_PRICING_SOURCES: Record<string, string[]> = {
-  openai: [OPENAI_PRICING_URL, "https://developers.openai.com/api/docs/models"],
-  anthropic: [ANTHROPIC_PRICING_URL, "https://platform.claude.com/docs/en/models/overview"],
-  mistral: ["https://docs.mistral.ai/inference/pricing", "https://docs.mistral.ai/models"],
-  liquid: ["https://www.liquid.ai/pricing", "https://docs.liquid.ai/api/models"],
-  openrouter: [OPENROUTER_MODELS_URL],
-};
-const MAX_SOURCE_DOCUMENT_CHARS = 48_000;
-const MAX_PROVIDER_SOURCE_CHARS = 24_000;
-
-const CURATED_PRICES: Array<Omit<PriceSnapshot, "id" | "currency">> = [
-  {
-    provider: "openai",
-    modelId: "openai:gpt-5.6-sol",
-    modelName: "gpt-5.6-sol",
-    inputPricePerMillion: "4.00",
-    outputPricePerMillion: "20.00",
-    cachedInputPricePerMillion: "0.40",
-    source: "openai-docs",
-    sourceUrl: OPENAI_PRICING_URL,
-    effectiveAt: Date.UTC(2026, 9, 19),
-  },
-  {
-    provider: "openai",
-    modelId: "openai:gpt-5.6-terra",
-    modelName: "gpt-5.6-terra",
-    inputPricePerMillion: "2.00",
-    outputPricePerMillion: "12.00",
-    cachedInputPricePerMillion: "0.20",
-    source: "openai-docs",
-    sourceUrl: OPENAI_PRICING_URL,
-    effectiveAt: Date.UTC(2026, 9, 19),
-  },
-  {
-    provider: "openai",
-    modelId: "openai:gpt-5.6-luna",
-    modelName: "gpt-5.6-luna",
-    inputPricePerMillion: "0.20",
-    outputPricePerMillion: "1.20",
-    cachedInputPricePerMillion: "0.02",
-    source: "openai-docs",
-    sourceUrl: OPENAI_PRICING_URL,
-    effectiveAt: Date.UTC(2026, 9, 19),
-  },
-  {
-    provider: "openai",
-    modelId: "openai:gpt-5.2",
-    modelName: "gpt-5.2",
-    inputPricePerMillion: "1.75",
-    outputPricePerMillion: "14.00",
-    cachedInputPricePerMillion: "0.175",
-    source: "openai-docs",
-    sourceUrl: OPENAI_PRICING_URL,
-    effectiveAt: Date.UTC(2026, 9, 19),
-  },
-  {
-    provider: "openai",
-    modelId: "openai:gpt-5",
-    modelName: "gpt-5",
-    inputPricePerMillion: "1.25",
-    outputPricePerMillion: "10.00",
-    cachedInputPricePerMillion: "0.125",
-    source: "openai-docs",
-    sourceUrl: OPENAI_PRICING_URL,
-    effectiveAt: Date.UTC(2026, 9, 19),
-  },
-  {
-    provider: "openai",
-    modelId: "openai:gpt-4o-mini",
-    modelName: "gpt-4o-mini",
-    inputPricePerMillion: "0.15",
-    outputPricePerMillion: "0.60",
-    cachedInputPricePerMillion: "0.075",
-    source: "openai-docs",
-    sourceUrl: OPENAI_PRICING_URL,
-    effectiveAt: Date.UTC(2026, 9, 19),
-  },
-  {
-    provider: "anthropic",
-    modelId: "anthropic:claude-opus-5-5",
-    modelName: "claude-opus-5-5",
-    inputPricePerMillion: "4.00",
-    outputPricePerMillion: "20.00",
-    cachedInputPricePerMillion: "0.20",
-    source: "anthropic-docs",
-    sourceUrl: ANTHROPIC_PRICING_URL,
-    effectiveAt: Date.UTC(2026, 9, 7),
-  },
-  {
-    provider: "anthropic",
-    modelId: "anthropic:claude-sonnet-5-5",
-    modelName: "claude-sonnet-5-5",
-    inputPricePerMillion: "2.00",
-    outputPricePerMillion: "10.00",
-    cachedInputPricePerMillion: "0.10",
-    source: "anthropic-docs",
-    sourceUrl: ANTHROPIC_PRICING_URL,
-    effectiveAt: Date.UTC(2026, 9, 7),
-  },
-  {
-    provider: "anthropic",
-    modelId: "anthropic:claude-haiku-5-5",
-    modelName: "claude-haiku-5-5",
-    inputPricePerMillion: "0.10",
-    outputPricePerMillion: "0.50",
-    cachedInputPricePerMillion: "0.01",
-    source: "anthropic-docs",
-    sourceUrl: ANTHROPIC_PRICING_URL,
-    effectiveAt: Date.UTC(2026, 9, 7),
-  },
-  {
-    provider: "anthropic",
-    modelId: "anthropic:claude-3-5-sonnet-latest",
-    modelName: "claude-3-5-sonnet-latest",
-    inputPricePerMillion: "3.00",
-    outputPricePerMillion: "15.00",
-    cachedInputPricePerMillion: "0.30",
-    source: "anthropic-docs",
-    sourceUrl: ANTHROPIC_PRICING_URL,
-    effectiveAt: Date.UTC(2026, 9, 7),
-  },
-];
 
 const usageSchema = z.object({
   channelId: z.string().min(1).optional(),
@@ -211,39 +84,27 @@ const priceUpsertItemSchema = z
   })
   .strict();
 
-const priceUpsertSchema = z.union([
-  priceUpsertItemSchema,
-  z.object({ prices: z.array(priceUpsertItemSchema).min(1) }).strict(),
-]);
-
-const refreshStartSchema = z
-  .object({ updaterAgentName: z.string().trim().min(1) })
-  .strict();
-
-const refreshAgentResponseSchema = z
+const staticPriceCatalogSchema = z
   .object({
-    prices: z.array(priceUpsertItemSchema).default([]),
-    unresolved: z
-      .array(
-        z.object({
-          modelId: z.string().trim().min(1),
-          reason: z.string().trim().min(1),
-        }),
-      )
-      .default([]),
+    prices: z.array(
+      priceUpsertItemSchema.extend({
+        source: z.string().trim().min(1),
+        sourceUrl: z.string().trim().url(),
+        effectiveAt: z
+          .string()
+          .datetime()
+          .transform((value) => Date.parse(value)),
+      }),
+    ),
   })
   .strict();
+const STATIC_PRICES = staticPriceCatalogSchema.parse(providerPriceCatalog).prices;
 
 function parseModelId(modelId: string) {
   const [rawProvider, ...parts] = modelId.split(":");
   const provider = (rawProvider || "unknown").trim().toLowerCase();
   const modelName = parts.join(":").trim() || modelId;
   return { provider, modelName };
-}
-
-function isBillableModelId(modelId: string) {
-  const { provider, modelName } = parseModelId(modelId);
-  return provider !== "wrapped" && modelName.toLowerCase() !== "none";
 }
 
 function priceId(provider: string, modelId: string, effectiveAt: number) {
@@ -301,32 +162,6 @@ function numericPrice(value: string | null | undefined) {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
 }
 
-function pricingDocumentUrl(url: string) {
-  if (
-    (url.startsWith("https://developers.openai.com/") ||
-      url.startsWith("https://platform.claude.com/docs/") ||
-      url.startsWith("https://docs.mistral.ai/")) &&
-    !url.endsWith(".md")
-  ) {
-    return `${url}.md`;
-  }
-  return url;
-}
-
-function pricingDocumentText(raw: string, contentType: string | null) {
-  if (!contentType?.includes("html")) return raw;
-  return raw
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 function calculateCostUsdMicros(
   price: PriceSnapshot | null,
   usage: {
@@ -358,77 +193,7 @@ export function registerBillingRoutes(app: Hono<any>, deps: BillingDeps) {
     access,
     requireAuth,
     requireRunnerAuth,
-    insertEvent,
-    registerEventObserver,
-    pricingFetch = fetch,
   } = deps;
-
-  async function fetchPricingDocuments(modelsByProvider: Record<string, string[]>) {
-    const documents: Record<
-      string,
-      Array<{ url: string; content: string; error?: string }>
-    > = {};
-    let remainingTotal = MAX_SOURCE_DOCUMENT_CHARS;
-    for (const provider of Object.keys(modelsByProvider)) {
-      let remainingProvider = Math.min(MAX_PROVIDER_SOURCE_CHARS, remainingTotal);
-      documents[provider] = [];
-      for (const sourceUrl of PROVIDER_PRICING_SOURCES[provider] ?? []) {
-        if (remainingProvider <= 0 || remainingTotal <= 0) break;
-        const fetchUrl = pricingDocumentUrl(sourceUrl);
-        try {
-          let response = await pricingFetch(fetchUrl, {
-            headers: { accept: "text/markdown,text/plain,text/html,application/json" },
-            signal: AbortSignal.timeout(15_000),
-          });
-          if (!response.ok && fetchUrl !== sourceUrl) {
-            response = await pricingFetch(sourceUrl, {
-              headers: { accept: "text/markdown,text/plain,text/html,application/json" },
-              signal: AbortSignal.timeout(15_000),
-            });
-          }
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          const raw = await response.text();
-          const content = pricingDocumentText(raw, response.headers.get("content-type")).slice(
-            0,
-            remainingProvider,
-          );
-          documents[provider].push({ url: sourceUrl, content });
-          remainingProvider -= content.length;
-          remainingTotal -= content.length;
-        } catch (error) {
-          documents[provider].push({ url: sourceUrl, content: "", error: String(error) });
-        }
-      }
-    }
-    return documents;
-  }
-
-  function seedCuratedPrices() {
-    const now = Date.now();
-    for (const price of CURATED_PRICES) {
-      orm
-        .insert(schema.llmModelPrices)
-        .values({
-          id: priceId(price.provider, price.modelId, price.effectiveAt),
-          provider: price.provider,
-          model_id: price.modelId,
-          model_name: price.modelName,
-          currency: USD,
-          input_price_per_million: price.inputPricePerMillion,
-          output_price_per_million: price.outputPricePerMillion,
-          cached_input_price_per_million: price.cachedInputPricePerMillion ?? null,
-          reasoning_price_per_million: price.reasoningPricePerMillion ?? null,
-          source: price.source,
-          source_url: price.sourceUrl ?? null,
-          effective_at: price.effectiveAt,
-          fetched_at: null,
-          metadata_json: "{}",
-          created_at: now,
-        })
-        .onConflictDoNothing()
-        .run();
-    }
-  }
 
   function findPrice(
     modelId: string,
@@ -559,355 +324,21 @@ export function registerBillingRoutes(app: Hono<any>, deps: BillingDeps) {
       .run();
   }
 
-  async function refreshOpenRouterCatalog() {
-    const response = await pricingFetch(OPENROUTER_MODELS_URL, {
-      headers: {
-        ...(process.env.OPENROUTER_API_KEY
-          ? { Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}` }
-          : {}),
-      },
-    });
-    if (!response.ok) {
-      throw new Error(`OpenRouter model fetch failed: ${response.status}`);
+  const catalogKeys = new Set<string>();
+  for (const price of STATIC_PRICES) {
+    const parsedModel = parseModelId(price.modelId);
+    const provider = (price.provider ?? parsedModel.provider).trim().toLowerCase();
+    if (provider !== parsedModel.provider) {
+      throw new Error(`Catalog provider does not match model ID ${price.modelId}`);
     }
-    const payload = (await response.json()) as {
-      data?: Array<{
-        id?: string;
-        canonical_slug?: string;
-        canonicalSlug?: string;
-        name?: string;
-        pricing?: {
-          prompt?: string;
-          completion?: string;
-          input_cache_read?: string;
-          internal_reasoning?: string;
-        };
-      }>;
-    };
-    const now = Date.now();
-    let upserted = 0;
-    for (const model of payload.data ?? []) {
-      const prompt = Number(model.pricing?.prompt);
-      const completion = Number(model.pricing?.completion);
-      if (!Number.isFinite(prompt) || !Number.isFinite(completion)) continue;
-      const slugs = [
-        ...new Set(
-          [model.id, model.canonical_slug, model.canonicalSlug]
-            .map((value) => value?.trim() ?? "")
-            .filter(Boolean),
-        ),
-      ];
-      for (const slug of slugs) {
-        upsertPrice(
-          {
-            provider: "openrouter",
-            modelId: `openrouter:${slug}`,
-            modelName: slug,
-            currency: USD,
-            inputPricePerMillion: prompt * 1_000_000,
-            outputPricePerMillion: completion * 1_000_000,
-            cachedInputPricePerMillion:
-              model.pricing?.input_cache_read !== undefined
-                ? Number(model.pricing.input_cache_read) * 1_000_000
-                : null,
-            reasoningPricePerMillion:
-              model.pricing?.internal_reasoning !== undefined
-                ? Number(model.pricing.internal_reasoning) * 1_000_000
-                : null,
-            source: "openrouter-api",
-            sourceUrl: OPENROUTER_MODELS_URL,
-            effectiveAt: now,
-            metadata: { name: model.name ?? null },
-          },
-          now,
-          now,
-        );
-        upserted += 1;
-      }
-    }
-    return { upserted, repriced: repriceUnpricedUsage(), fetchedAt: now };
+    const key = priceId(provider, price.modelId, price.effectiveAt);
+    if (catalogKeys.has(key)) throw new Error(`Duplicate provider price catalog row ${key}`);
+    catalogKeys.add(key);
   }
-
-  function findRefreshRequest(refreshId: string) {
-    const rows = orm
-      .select()
-      .from(schema.events)
-      .where(eq(schema.events.type, "billing.prices.refresh.requested"))
-      .orderBy(desc(schema.events.created_at))
-      .all() as any[];
-    for (const row of rows) {
-      try {
-        const payload = JSON.parse(row.payload_json);
-        if (row.source === "system:billing" && payload.refreshId === refreshId) {
-          return { row, payload };
-        }
-      } catch {}
-    }
-    return null;
-  }
-
-  function refreshEvents(refreshId: string) {
-    const request = findRefreshRequest(refreshId);
-    if (!request) return [];
-    return (orm
-      .select()
-      .from(schema.events)
-      .where(
-        inArray(schema.events.type, [
-          "billing.prices.refresh.requested",
-          "billing.prices.refresh.provider.updated",
-          "billing.prices.refresh.completed",
-        ]),
-      )
-      .orderBy(asc(schema.events.created_at))
-      .all() as any[])
-      .filter((row) => row.type.startsWith("billing.prices.refresh."))
-      .flatMap((row) => {
-        try {
-          const payload = JSON.parse(row.payload_json);
-          const isRequest = row.id === request.row.id;
-          const isApiResult =
-            row.source === "system:billing" &&
-            row.parent_event_id === request.row.id &&
-            row.channel_id === request.row.channel_id;
-          return payload.refreshId === refreshId && (isRequest || isApiResult)
-            ? [{
-                id: row.id,
-                type: row.type,
-                source: row.source,
-                parentEventId: row.parent_event_id,
-                createdAt: row.created_at,
-                payload,
-              }]
-            : [];
-        } catch {
-          return [];
-        }
-      });
-  }
-
-  function parseAgentPriceResponse(text: string) {
-    const trimmed = text.trim();
-    const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)?.[1] ?? trimmed;
-    const decoded = JSON.parse(fenced);
-    const proposal =
-      decoded?.type === "message.created" && typeof decoded?.payload?.text === "string"
-        ? JSON.parse(decoded.payload.text)
-        : decoded;
-    return refreshAgentResponseSchema.safeParse(proposal);
-  }
-
-  function archiveRefreshChannel(channelId: string | null | undefined) {
-    if (!channelId) return;
-    orm
-      .update(schema.channels)
-      .set({ archived_at: Date.now() })
-      .where(eq(schema.channels.id, channelId))
-      .run();
-  }
-
-  function completeRefreshWithFailure(request: any, reason: string) {
-    const requestedModelIds = Object.values(
-      request.payload.agentModelsByProvider ?? request.payload.modelsByProvider ?? {},
-    ).flat() as string[];
-    const preUnresolved = Array.isArray(request.payload.preUnresolved)
-      ? request.payload.preUnresolved
-      : [];
-    insertEvent({
-      type: "billing.prices.refresh.completed",
-      source: "system:billing",
-      channelId: request.row.channel_id,
-      parentEventId: request.row.id,
-      payload: {
-        refreshId: request.payload.refreshId,
-        unresolved: [
-          ...preUnresolved,
-          ...requestedModelIds.map((modelId) => ({ modelId, reason })),
-        ],
-      },
-    });
-    archiveRefreshChannel(request.row.channel_id);
-  }
-
-  registerEventObserver((input, row) => {
-    if (input.type === "agent.turn.completed") {
-      const triggerEventId = input.payload?.triggerEventId;
-      if (typeof triggerEventId !== "string") return;
-      const requestRow = orm
-        .select()
-        .from(schema.events)
-        .where(eq(schema.events.id, triggerEventId))
-        .get() as any | undefined;
-      if (!requestRow || requestRow.type !== "billing.prices.refresh.requested") return;
-      let requestPayload: any;
-      try {
-        requestPayload = JSON.parse(requestRow.payload_json);
-      } catch {
-        return;
-      }
-      if (
-        input.source !== `agent:${requestPayload.targetAgentName}` ||
-        row.channel_id !== requestRow.channel_id
-      ) {
-        return;
-      }
-      if (
-        !refreshEvents(requestPayload.refreshId).some(
-          (event) => event.type === "billing.prices.refresh.completed",
-        )
-      ) {
-        completeRefreshWithFailure(
-          { row: requestRow, payload: requestPayload },
-          "Selected agent completed without returning a valid JSON price proposal.",
-        );
-      }
-      return;
-    }
-    if (
-      input.type !== "message.created" ||
-      typeof input.parentEventId !== "string" ||
-      typeof input.source !== "string" ||
-      !input.source.startsWith("agent:")
-    ) {
-      return;
-    }
-    const requestRow = orm
-      .select()
-      .from(schema.events)
-      .where(eq(schema.events.id, input.parentEventId))
-      .get() as any | undefined;
-    if (!requestRow || requestRow.type !== "billing.prices.refresh.requested") return;
-    let requestPayload: any;
-    try {
-      requestPayload = JSON.parse(requestRow.payload_json);
-    } catch {
-      return;
-    }
-    const request = { row: requestRow, payload: requestPayload };
-    if (input.source !== `agent:${requestPayload.targetAgentName}`) return;
-    if (
-      refreshEvents(requestPayload.refreshId).some(
-        (event) => event.type === "billing.prices.refresh.completed",
-      )
-    ) {
-      return;
-    }
-
-    const text = input.payload?.text;
-    if (typeof text !== "string") {
-      completeRefreshWithFailure(request, "Selected agent returned no JSON price table.");
-      return;
-    }
-    let parsed: ReturnType<typeof parseAgentPriceResponse>;
-    try {
-      parsed = parseAgentPriceResponse(text);
-    } catch {
-      completeRefreshWithFailure(request, "Selected agent returned invalid JSON.");
-      return;
-    }
-    if (!parsed.success) {
-      completeRefreshWithFailure(request, "Selected agent returned an invalid price-table schema.");
-      return;
-    }
-
-    const requestedModelIds = new Set<string>(
-      Object.values(
-        requestPayload.agentModelsByProvider ?? requestPayload.modelsByProvider ?? {},
-      ).flat() as string[],
-    );
-    const reportedModelIds = new Set<string>();
-    for (const price of parsed.data.prices) {
-      if (!requestedModelIds.has(price.modelId)) {
-        completeRefreshWithFailure(request, `Agent proposed unrequested model ${price.modelId}.`);
-        return;
-      }
-      if (reportedModelIds.has(price.modelId)) {
-        completeRefreshWithFailure(request, `Agent reported model ${price.modelId} more than once.`);
-        return;
-      }
-      reportedModelIds.add(price.modelId);
-      if (!price.sourceUrl || new URL(price.sourceUrl).protocol !== "https:") {
-        completeRefreshWithFailure(request, `Model ${price.modelId} lacks an HTTPS source URL.`);
-        return;
-      }
-    }
-    for (const unresolved of parsed.data.unresolved) {
-      if (!requestedModelIds.has(unresolved.modelId)) {
-        completeRefreshWithFailure(
-          request,
-          `Agent reported unrequested model ${unresolved.modelId}.`,
-        );
-        return;
-      }
-      if (reportedModelIds.has(unresolved.modelId)) {
-        completeRefreshWithFailure(
-          request,
-          `Agent reported model ${unresolved.modelId} more than once.`,
-        );
-        return;
-      }
-      reportedModelIds.add(unresolved.modelId);
-    }
-    const missingModelIds = [...requestedModelIds].filter(
-      (modelId) => !reportedModelIds.has(modelId),
-    );
-    if (missingModelIds.length > 0) {
-      completeRefreshWithFailure(
-        request,
-        `Agent omitted requested models: ${missingModelIds.join(", ")}.`,
-      );
-      return;
-    }
-
-    const now = Date.now();
-    for (const price of parsed.data.prices) upsertPrice(price, now, now);
-    const repriced = repriceUnpricedUsage();
-    const pricesByProvider = new Map<string, string[]>();
-    for (const price of parsed.data.prices) {
-      const { provider } = parseModelId(price.modelId);
-      const ids = pricesByProvider.get(provider) ?? [];
-      ids.push(price.modelId);
-      pricesByProvider.set(provider, ids);
-    }
-    const requestedProviders = Object.keys(
-      requestPayload.agentModelsByProvider ?? requestPayload.modelsByProvider ?? {},
-    );
-    for (const [providerIndex, provider] of requestedProviders.entries()) {
-      insertEvent({
-        type: "billing.prices.refresh.provider.updated",
-        source: "system:billing",
-        channelId: requestRow.channel_id,
-        parentEventId: requestRow.id,
-        payload: {
-          refreshId: requestPayload.refreshId,
-          provider,
-          updatedModelIds: pricesByProvider.get(provider) ?? [],
-          unresolved: parsed.data.unresolved.filter(
-            (item) => parseModelId(item.modelId).provider === provider,
-          ),
-          repriced: providerIndex === 0 ? repriced : 0,
-        },
-      });
-    }
-    insertEvent({
-      type: "billing.prices.refresh.completed",
-      source: "system:billing",
-      channelId: requestRow.channel_id,
-      parentEventId: requestRow.id,
-      payload: {
-        refreshId: requestPayload.refreshId,
-        unresolved: [
-          ...(Array.isArray(requestPayload.preUnresolved)
-            ? requestPayload.preUnresolved
-            : []),
-          ...parsed.data.unresolved,
-        ],
-      },
-    });
-    archiveRefreshChannel(requestRow.channel_id);
-  });
-
-  seedCuratedPrices();
+  orm.delete(schema.llmModelPrices).run();
+  const seededAt = Date.now();
+  for (const price of STATIC_PRICES) upsertPrice(price, seededAt);
+  repriceUnpricedUsage();
 
   app.get("/api/billing/prices", requireAuth, (c) => {
     const rows = orm
@@ -916,265 +347,6 @@ export function registerBillingRoutes(app: Hono<any>, deps: BillingDeps) {
       .orderBy(schema.llmModelPrices.provider, schema.llmModelPrices.model_id)
       .all() as any[];
     return jsonResponse(c, rows.map(normalizePriceRow));
-  });
-
-  app.post("/api/billing/prices", requireAuth, async (c) => {
-    const body = await c.req.json();
-    const parsed = priceUpsertSchema.safeParse(body);
-    if (!parsed.success) {
-      return jsonResponse(c, { error: "Invalid pricing payload", issues: parsed.error.issues }, 400);
-    }
-    const items = "prices" in parsed.data ? parsed.data.prices : [parsed.data];
-    let upserted = 0;
-    for (const item of items) {
-      try {
-        upsertPrice(item);
-      } catch (error) {
-        return jsonResponse(
-          c,
-          {
-            error: "Invalid pricing payload",
-            issues: [{ path: ["provider"], message: String(error) }],
-          },
-          400,
-        );
-      }
-      upserted += 1;
-    }
-    const repriced = repriceUnpricedUsage();
-    return jsonResponse(c, { upserted, repriced }, 201);
-  });
-
-  app.post("/api/billing/prices/refresh/openrouter", requireAuth, async (c) => {
-    let body: { updaterAgentName?: unknown } = {};
-    try {
-      body = (await c.req.json()) as { updaterAgentName?: unknown };
-    } catch {
-      body = {};
-    }
-    const requestedUpdaterAgentName =
-      typeof body.updaterAgentName === "string" ? body.updaterAgentName.trim() : "";
-    const updaterAgents = orm
-      .select({ name: schema.agents.name, agentRole: schema.agents.agent_role })
-      .from(schema.agents)
-      .all();
-    if (
-      requestedUpdaterAgentName &&
-      !updaterAgents.some((agent) => agent.name === requestedUpdaterAgentName)
-    ) {
-      return jsonResponse(c, { error: "Updater agent not found" }, 400);
-    }
-    const updaterAgentName =
-      requestedUpdaterAgentName ||
-      updaterAgents.find((agent) => agent.agentRole === "SYSTEM")?.name ||
-      updaterAgents[0]?.name ||
-      null;
-
-    try {
-      const result = await refreshOpenRouterCatalog();
-      return jsonResponse(c, { ...result, updaterAgentName });
-    } catch (error) {
-      return jsonResponse(c, { error: String(error) }, 502);
-    }
-  });
-
-  app.post("/api/billing/prices/refresh", requireAuth, async (c) => {
-    const parsed = refreshStartSchema.safeParse(await c.req.json().catch(() => ({})));
-    if (!parsed.success) {
-      return jsonResponse(c, { error: "Invalid refresh request", issues: parsed.error.issues }, 400);
-    }
-    const agent = orm
-      .select()
-      .from(schema.agents)
-      .where(eq(schema.agents.name, parsed.data.updaterAgentName))
-      .get() as any | undefined;
-    if (!agent) {
-      return jsonResponse(c, { error: "Selected agent was not found" }, 400);
-    }
-    if (agent.desired_state !== "RUNNING" || !agent.assigned_runner_id) {
-      return jsonResponse(c, { error: "Selected agent is not assigned and running" }, 409);
-    }
-    const modelIds = new Set<string>();
-    for (const row of orm
-      .select({ modelId: schema.agents.model_id, mode: schema.agents.mode })
-      .from(schema.agents)
-      .all()) {
-      if (row.mode !== "WRAPPED" && row.modelId && isBillableModelId(row.modelId)) {
-        modelIds.add(row.modelId);
-      }
-    }
-    for (const row of orm.select({ modelId: schema.llmUsage.model_id }).from(schema.llmUsage).all()) {
-      if (row.modelId && isBillableModelId(row.modelId)) modelIds.add(row.modelId);
-    }
-    for (const row of orm.select().from(schema.models).all() as any[]) {
-      const modelId = `${row.provider}:${row.model_name}`;
-      if (row.enabled && row.provider && row.model_name && isBillableModelId(modelId)) {
-        modelIds.add(modelId);
-      }
-    }
-    const modelsByProvider: Record<string, string[]> = {};
-    for (const modelId of [...modelIds].sort()) {
-      const { provider } = parseModelId(modelId);
-      (modelsByProvider[provider] ??= []).push(modelId);
-    }
-    const agentModelsByProvider = Object.fromEntries(
-      Object.entries(modelsByProvider).map(([provider, ids]) => [provider, [...ids]]),
-    );
-    const preResolvedModelIds: string[] = [];
-    const preUnresolved: Array<{ modelId: string; reason: string }> = [];
-    let openRouterRepriced = 0;
-    if (modelsByProvider.openrouter?.length) {
-      try {
-        const result = await refreshOpenRouterCatalog();
-        openRouterRepriced = result.repriced;
-        for (const modelId of modelsByProvider.openrouter) {
-          if (findPrice(modelId, Date.now(), { allowLaterSnapshot: true })) {
-            preResolvedModelIds.push(modelId);
-          } else {
-            preUnresolved.push({
-              modelId,
-              reason: "OpenRouter's structured catalog did not contain this exact model ID.",
-            });
-          }
-        }
-        delete agentModelsByProvider.openrouter;
-      } catch {
-        // Fall back to the selected agent with the structured response body as source material.
-      }
-    }
-    const sourceDocuments = await fetchPricingDocuments(agentModelsByProvider);
-    const refreshId = randomUUID();
-    const refreshChannelId = randomUUID();
-    orm
-      .insert(schema.channels)
-      .values({
-        id: refreshChannelId,
-        name: `agent.billing-refresh.${agent.name}.${refreshId}`,
-        description: `Internal billing price refresh for ${agent.name}`,
-        metadata_json: JSON.stringify({
-          internal: true,
-          purpose: "billing-price-refresh",
-          refreshId,
-          agentName: agent.name,
-        }),
-        visibility: "PRIVATE",
-        owner_human_id: null,
-        kind: "GROUP",
-        direct_participant_key: null,
-        created_at: Date.now(),
-        archived_at: null,
-      })
-      .run();
-    orm
-      .insert(schema.channelSubscriptions)
-      .values({
-        channel_id: refreshChannelId,
-        subscriber_type: "AGENT",
-        subscriber_id: agent.name,
-      })
-      .run();
-    const payload = {
-      refreshId,
-      targetAgentName: agent.name,
-      modelsByProvider,
-      agentModelsByProvider,
-      preResolvedModelIds,
-      preUnresolved,
-      sources: Object.fromEntries(
-        Object.keys(agentModelsByProvider).map((provider) => [
-          provider,
-          PROVIDER_PRICING_SOURCES[provider] ?? [],
-        ]),
-      ),
-      sourceDocuments,
-      instructions:
-        "Extract authoritative current standard token prices for every exact model ID listed in agentModelsByProvider from sourceDocuments. Use pricingTiers when a provider applies higher rates above an input-token threshold. Never guess or map ambiguous aliases. Emit exactly one message.created event matching responseContract; do not emit a billing event. Put unverifiable, non-token, private-contract, modality-dependent, or ambiguous models in unresolved.",
-      responseContract: {
-        type: "message.created",
-        payload: {
-          text: JSON.stringify({
-            prices: [{
-              modelId: "provider:exact-model-id",
-              inputPricePerMillion: 0,
-              outputPricePerMillion: 0,
-              cachedInputPricePerMillion: null,
-              reasoningPricePerMillion: null,
-              source: "provider-docs",
-              sourceUrl: "https://authoritative.example/pricing",
-              pricingTiers: [{
-                minInputTokens: 272001,
-                inputPricePerMillion: 0,
-                outputPricePerMillion: 0,
-                cachedInputPricePerMillion: null,
-                reasoningPricePerMillion: null,
-              }],
-            }],
-            unresolved: [{
-              modelId: "provider:exact-model-id",
-              reason: "Why it cannot be priced safely",
-            }],
-          }),
-        },
-      },
-    };
-    const event = insertEvent({
-      type: "billing.prices.refresh.requested",
-      source: "system:billing",
-      channelId: refreshChannelId,
-      payload,
-      ...(Object.keys(agentModelsByProvider).length === 0 ? { status: "DELIVERED" } : {}),
-      idempotencyKey: `billing-price-refresh:${refreshId}`,
-    });
-    if (modelsByProvider.openrouter && !agentModelsByProvider.openrouter) {
-      insertEvent({
-        type: "billing.prices.refresh.provider.updated",
-        source: "system:billing",
-        channelId: refreshChannelId,
-        parentEventId: event.id,
-        payload: {
-          refreshId,
-          provider: "openrouter",
-          updatedModelIds: preResolvedModelIds,
-          unresolved: preUnresolved,
-          repriced: openRouterRepriced,
-        },
-      });
-    }
-    if (Object.keys(agentModelsByProvider).length === 0) {
-      insertEvent({
-        type: "billing.prices.refresh.completed",
-        source: "system:billing",
-        channelId: refreshChannelId,
-        parentEventId: event.id,
-        payload: { refreshId, unresolved: preUnresolved },
-      });
-      archiveRefreshChannel(refreshChannelId);
-    }
-    return jsonResponse(
-      c,
-      {
-        refreshId,
-        eventId: event.id,
-        updaterAgentName: agent.name,
-        modelsByProvider,
-      },
-      202,
-    );
-  });
-
-  app.get("/api/billing/prices/refresh/:refreshId", requireAuth, (c) => {
-    const refreshId = c.req.param("refreshId");
-    const request = findRefreshRequest(refreshId);
-    if (!request) return jsonResponse(c, { error: "Refresh not found" }, 404);
-    const events = refreshEvents(refreshId);
-    const completed = events.find((event) => event.type === "billing.prices.refresh.completed");
-    return jsonResponse(c, {
-      refreshId,
-      status: completed ? "COMPLETED" : "RUNNING",
-      updaterAgentName: request.payload.targetAgentName,
-      modelsByProvider: request.payload.modelsByProvider,
-      events,
-    });
   });
 
   app.post("/api/billing/usage", requireRunnerAuth, async (c) => {

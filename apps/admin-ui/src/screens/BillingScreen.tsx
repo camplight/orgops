@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { apiFetch, apiJson, getApiHeaders } from "../api";
+import { apiJson } from "../api";
 import { Button, Card, Input, Select } from "../components/ui";
-import type { Agent, Channel } from "../types";
+import type { Channel } from "../types";
 
 type BillingGroup = {
   key: string;
@@ -32,25 +32,6 @@ type BillingPrice = {
   source: string;
   sourceUrl?: string | null;
   effectiveAt: number;
-};
-
-type PricingRefreshStartResponse = {
-  refreshId: string;
-  updaterAgentName: string;
-};
-
-type PricingRefreshStatusResponse = {
-  refreshId: string;
-  status: "RUNNING" | "COMPLETED";
-  events: Array<{
-    type: string;
-    payload: {
-      provider?: string;
-      updatedModelIds?: string[];
-      unresolved?: Array<{ modelId: string; reason: string }>;
-      repriced?: number;
-    };
-  }>;
 };
 
 type SortDirection = "asc" | "desc";
@@ -87,7 +68,6 @@ const PERIOD_PRESETS = [
   { value: "custom", label: "Custom" },
 ];
 const BILLING_AUTO_REFRESH_MS = 30_000;
-const BILLING_UPDATER_AGENT_STORAGE_KEY = "orgops.admin-ui.billingUpdaterAgent";
 const SORT_BUTTON_CLASS = "text-left hover:text-slate-300";
 
 function formatUsd(micros: number) {
@@ -109,26 +89,6 @@ function fromDateTimeLocalValue(value: string) {
   if (!value) return undefined;
   const parsed = new Date(value).getTime();
   return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function readStoredUpdaterAgentName() {
-  try {
-    return localStorage.getItem(BILLING_UPDATER_AGENT_STORAGE_KEY) ?? "";
-  } catch {
-    return "";
-  }
-}
-
-function writeStoredUpdaterAgentName(agentName: string) {
-  try {
-    if (agentName) {
-      localStorage.setItem(BILLING_UPDATER_AGENT_STORAGE_KEY, agentName);
-    } else {
-      localStorage.removeItem(BILLING_UPDATER_AGENT_STORAGE_KEY);
-    }
-  } catch {
-    // Cosmetic preference only.
-  }
 }
 
 function sortDirectionFor<T extends string>(current: { key: T; direction: SortDirection }, key: T) {
@@ -184,16 +144,7 @@ export function BillingScreen() {
   const [prices, setPrices] = useState<BillingPrice[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [agents, setAgents] = useState<Agent[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
-  const [updaterAgentName, setUpdaterAgentName] = useState(() => readStoredUpdaterAgentName());
-  const [priceRefreshLoading, setPriceRefreshLoading] = useState(false);
-  const [priceRefreshMessage, setPriceRefreshMessage] = useState<string | null>(null);
-  const [priceRefreshUnresolved, setPriceRefreshUnresolved] = useState<
-    Array<{ modelId: string; reason: string }>
-  >([]);
-  const [activeRefreshId, setActiveRefreshId] = useState<string | null>(null);
-  const [updaterOpen, setUpdaterOpen] = useState(false);
   const [usageSort, setUsageSort] = useState<{ key: BillingGroupSortKey; direction: SortDirection }>({
     key: "costUsdMicros",
     direction: "desc",
@@ -227,29 +178,6 @@ export function BillingScreen() {
     }
   };
 
-  const updatePriceTable = async () => {
-    setPriceRefreshLoading(true);
-    setPriceRefreshMessage(null);
-    setPriceRefreshUnresolved([]);
-    setError(null);
-    try {
-      const response = await apiFetch("/api/billing/prices/refresh", {
-        method: "POST",
-        headers: getApiHeaders(),
-        body: JSON.stringify({ updaterAgentName }),
-      });
-      const payload = (await response.json()) as PricingRefreshStartResponse;
-      setActiveRefreshId(payload.refreshId);
-      setPriceRefreshMessage(
-        `${payload.updaterAgentName} is refreshing prices for models used by this OrgOps instance.`,
-      );
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setPriceRefreshLoading(false);
-    }
-  };
-
   useEffect(() => {
     void refresh(groupBy);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -264,75 +192,12 @@ export function BillingScreen() {
   }, [groupBy, channelId, periodPreset, customSince, customUntil]);
 
   useEffect(() => {
-    Promise.all([apiJson<Agent[]>("/api/agents"), apiJson<Channel[]>("/api/channels")])
-      .then(([agentItems, channelItems]) => {
-        setAgents(agentItems);
-        setChannels(channelItems);
-        setUpdaterAgentName((current) => {
-          if (current && agentItems.some((agent) => agent.name === current)) return current;
-          return agentItems.find((agent) => agent.agentRole === "SYSTEM")?.name ?? agentItems[0]?.name ?? "";
-        });
-      })
+    apiJson<Channel[]>("/api/channels")
+      .then(setChannels)
       .catch((err) => setError(err instanceof Error ? err.message : String(err)));
   }, []);
 
-  useEffect(() => {
-    writeStoredUpdaterAgentName(updaterAgentName);
-  }, [updaterAgentName]);
-
-  useEffect(() => {
-    if (!activeRefreshId) return;
-    let stopped = false;
-    const poll = async () => {
-      try {
-        const status = await apiJson<PricingRefreshStatusResponse>(
-          `/api/billing/prices/refresh/${encodeURIComponent(activeRefreshId)}`,
-        );
-        if (stopped) return;
-        const providerEvents = status.events.filter(
-          (event) => event.type === "billing.prices.refresh.provider.updated",
-        );
-        const updated = providerEvents.reduce(
-          (count, event) => count + (event.payload.updatedModelIds?.length ?? 0),
-          0,
-        );
-        const repriced = providerEvents.reduce(
-          (count, event) => count + (event.payload.repriced ?? 0),
-          0,
-        );
-        const completed = status.events.find(
-          (event) => event.type === "billing.prices.refresh.completed",
-        );
-        if (completed || status.status === "COMPLETED") {
-          const unresolved = completed?.payload.unresolved?.length ?? 0;
-          setPriceRefreshUnresolved(completed?.payload.unresolved ?? []);
-          setPriceRefreshMessage(
-            `Refresh completed: ${numberFormatter.format(updated)} model prices updated, ${numberFormatter.format(
-              repriced,
-            )} usage rows priced, ${numberFormatter.format(unresolved)} unresolved.`,
-          );
-          setActiveRefreshId(null);
-          await refresh(groupBy, { silent: true });
-        } else {
-          setPriceRefreshMessage(
-            `Refresh running: ${numberFormatter.format(providerEvents.length)} providers reported, ${numberFormatter.format(updated)} model prices updated.`,
-          );
-        }
-      } catch (err) {
-        if (!stopped) setError(err instanceof Error ? err.message : String(err));
-      }
-    };
-    void poll();
-    const interval = window.setInterval(() => void poll(), 2_000);
-    return () => {
-      stopped = true;
-      window.clearInterval(interval);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeRefreshId]);
-
   const totals = usage?.totals;
-  const updaterAgent = agents.find((agent) => agent.name === updaterAgentName);
   const sortedChannels = useMemo(
     () => [...channels].sort((left, right) => left.name.localeCompare(right.name)),
     [channels],
@@ -527,62 +392,10 @@ export function BillingScreen() {
       </Card>
 
       <Card>
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <h2 className="text-lg font-semibold text-slate-100">Known price snapshots</h2>
-          <Button
-            onClick={() => void updatePriceTable()}
-            disabled={priceRefreshLoading || Boolean(activeRefreshId) || !updaterAgentName}
-          >
-            {priceRefreshLoading || activeRefreshId ? "Updating..." : "Update table"}
-          </Button>
-        </div>
-        <button
-          type="button"
-          className="flex items-center gap-2 text-left text-xs text-slate-400 hover:text-slate-300"
-          aria-expanded={updaterOpen}
-          onClick={() => setUpdaterOpen((open) => !open)}
-        >
-          <span>{updaterOpen ? "▾" : "▸"}</span>
-          <span>
-            Updater agent:{" "}
-            {updaterAgent
-              ? `${updaterAgent.name} (${updaterAgent.agentRole === "SYSTEM" ? "system" : "standard"})`
-              : "none"}
-          </span>
-        </button>
-        {updaterOpen ? (
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-            <label className="space-y-1 text-xs text-slate-400">
-              <span>Updater agent</span>
-              <Select
-                value={updaterAgentName}
-                onChange={(event) => setUpdaterAgentName(event.target.value)}
-                className="min-w-56"
-              >
-                {agents.length === 0 ? <option value="">No agents available</option> : null}
-                {agents.map((agent) => (
-                  <option key={agent.name} value={agent.name}>
-                    {agent.name}
-                    {agent.agentRole === "SYSTEM" ? " (system)" : ""}
-                  </option>
-                ))}
-              </Select>
-            </label>
-            <p className="text-xs text-slate-500 sm:pb-2">
-              The first system agent is selected by default.
-            </p>
-          </div>
-        ) : null}
-        {priceRefreshMessage ? <p className="text-sm text-emerald-300">{priceRefreshMessage}</p> : null}
-        {priceRefreshUnresolved.length > 0 ? (
-          <ul className="space-y-1 text-xs text-amber-300">
-            {priceRefreshUnresolved.map((item) => (
-              <li key={item.modelId}>
-                <span className="font-medium">{item.modelId}</span>: {item.reason}
-              </li>
-            ))}
-          </ul>
-        ) : null}
+        <h2 className="text-lg font-semibold text-slate-100">Known price snapshots</h2>
+        <p className="text-xs text-slate-500">
+          Loaded from the provider price catalog bundled with this OrgOps release.
+        </p>
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead className="text-left text-xs uppercase tracking-wide text-slate-500">
