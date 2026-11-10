@@ -654,15 +654,12 @@ Presence events (bookkeeping only):
 
 ### Billing
 
-- `GET /api/billing/prices` returns known model price snapshots
-- `POST /api/billing/prices` upserts one price snapshot (or a `{ prices: [...] }` batch) for `provider:model` IDs; optional `pricingTiers` select higher input/cached/output/reasoning rates when a usage row reaches `minInputTokens`
-- `POST /api/billing/prices/refresh` starts an asynchronous refresh for exact billable model IDs present in native agents, the enabled model registry, or recorded usage; wrapped placeholders such as `wrapped:none` are excluded. Any assigned, running agent can be selected as updater, including wrapped agents. OrgOps first runs deterministic structured adapters (currently OpenRouter), then fetches bounded content from allowlisted authoritative provider pricing pages for the remaining IDs. It creates a private internal `agent.billing-refresh.<agent>.<refreshId>` channel subscribed only to the selected agent and emits `billing.prices.refresh.requested` with the fetched documents and a strict JSON response contract.
-- The selected agent can only return an ordinary `message.created` proposal. `billing.prices.refresh.provider.updated` and `.completed` require `source=system:billing`; agent-authored terminal events fail event validation and cannot make a job appear complete. The API requires every requested model to appear exactly once as a source-backed price or unresolved result, writes accepted snapshots, reprices historical unpriced usage with the applicable context tier, and archives the ad hoc channel on every terminal path. If the turn ends without a valid proposal, the API completes the job as unresolved and archives the channel. Scoped runners may access only their own agent's internal refresh channels. No billing-specific runner tools or execution path are involved.
-- `GET /api/billing/prices/refresh/:refreshId` reports provider progress and completion from `billing.prices.refresh.provider.updated` / `billing.prices.refresh.completed` events. The admin billing screen polls this endpoint and presents updated, repriced, and unresolved totals.
-- `POST /api/billing/prices/refresh/openrouter` exposes the same deterministic OpenRouter catalog adapter for direct/manual use; fetched rates retain `openrouter:<slug>` IDs and are never copied to a direct-provider ID.
+- `apps/api/src/provider-prices.json` is the source-controlled provider price catalog. Each exact `provider:model` row includes standard per-million-token rates, an effective timestamp, an authoritative source URL, and optional context-threshold `pricingTiers`.
+- The API validates the catalog at startup, synchronizes the price table to it, then prices historical rows that were previously unpriced. To change a rate, update the catalog and use a new `effectiveAt`; existing priced usage keeps its stored snapshot and remains reproducible.
+- `GET /api/billing/prices` returns the seeded price snapshots. There is no runtime price-write or refresh endpoint, agent workflow, refresh channel, or billing refresh event contract.
 - `POST /api/billing/usage` is runner-authenticated and records provider token usage for native runner calls
 - `GET /api/billing/usage?groupBy=provider|model|agent|channel&channelId=<id>&since=<ms>&until=<ms>` returns visible aggregate usage/cost totals; `channelId` narrows totals to one visible channel, and the admin UI exposes predefined periods and custom start/end filters
-- Pricing is best-effort but reproducible: every usage row stores the exact price snapshot used, so historical totals do not change when provider prices change later.
+- Every priced usage row stores the exact snapshot used, so historical totals do not change when later catalog releases add new snapshots.
 
 ### Agents
 

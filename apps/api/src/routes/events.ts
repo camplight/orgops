@@ -954,9 +954,6 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     if (!type || !source) {
       return jsonResponse(c, { error: "Missing type or source" }, 400);
     }
-    if (type.startsWith("billing.prices.refresh.")) {
-      return jsonResponse(c, { error: "Billing refresh lifecycle events are API-owned" }, 403);
-    }
     if (type === "agent.context.compacted" || type === "agent.context.cleared") {
       return jsonResponse(
         c,
