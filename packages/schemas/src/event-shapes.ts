@@ -453,6 +453,43 @@ const coreEventShapes: EventShapeDefinition[] = [
     }),
   },
   {
+    type: "agent.context.compacted",
+    description:
+      "Per-agent channel context boundary retaining a private whole-channel summary while leaving older events discoverable.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1),
+      source: sourceSchema,
+      payload: z
+        .object({
+          targetAgentName: z.string().min(1),
+          summary: z.string().min(1),
+          cutoffAt: z.number().int().nonnegative(),
+          cutoffEventId: z.string().min(1),
+          reason: z.string().min(1).optional(),
+          requestedBy: z.string().min(1).optional(),
+        })
+        .strict(),
+    }),
+  },
+  {
+    type: "agent.context.cleared",
+    description:
+      "Per-agent channel context boundary that retains no prior runtime summary while leaving older events discoverable.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1),
+      source: sourceSchema,
+      payload: z
+        .object({
+          targetAgentName: z.string().min(1),
+          reason: z.string().min(1).optional(),
+          requestedBy: z.string().min(1).optional(),
+        })
+        .strict(),
+    }),
+  },
+  {
     type: "agent.turn.started",
     description: "Agent began handling a triggered turn in a channel.",
     source: "core",

@@ -954,6 +954,16 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     if (!type || !source) {
       return jsonResponse(c, { error: "Missing type or source" }, 400);
     }
+    if (type === "agent.context.compacted" || type === "agent.context.cleared") {
+      return jsonResponse(
+        c,
+        {
+          error:
+            "Context lifecycle events must use the dedicated agent context compact/clear endpoint",
+        },
+        400,
+      );
+    }
     if (type === "message.created" && !parsed.data.channelId) {
       return jsonResponse(
         c,

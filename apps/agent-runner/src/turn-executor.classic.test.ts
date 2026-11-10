@@ -30,7 +30,7 @@ function setup(
   options: {
     pendingEventBatches?: Event[][];
     source?: string;
-    agent?: Partial<Agent>;
+    agentOverrides?: Partial<Agent>;
     trigger?: Partial<Event>;
     events?: Event[];
   } = {},
@@ -84,7 +84,7 @@ function setup(
     apiFetch,
     run: () =>
       execute(
-        { ...agent, ...options.agent },
+        { ...agent, ...options.agentOverrides },
         options.events ?? [
           {
             ...trigger,
@@ -128,6 +128,50 @@ describe("CLASSIC empty final output", () => {
     expect(ctx.emitted.find((event) => event.type === "agent.turn.completed")?.payload).toMatchObject({
       completedWithFallback: true,
     });
+  });
+
+  it("starts future prompt history at a compacted whole-channel boundary", async () => {
+    const compactMarker: Event = {
+      id: "compact-1",
+      type: "agent.context.compacted",
+      source: "agent:tester",
+      channelId: "chat",
+      payload: {
+        targetAgentName: "tester",
+        summary: "Preserved whole-channel memory.",
+        cutoffAt: 100,
+      },
+      createdAt: 150,
+    };
+    const postCutEvent: Event = {
+      id: "after-cut",
+      type: "message.created",
+      source: "human:test",
+      channelId: "chat",
+      payload: { text: "Visible after cut" },
+      createdAt: 200,
+    };
+    const ctx = setup({
+      agentOverrides: { memoryContextMode: "FULL_CHANNEL_EVENTS" },
+      pendingEventBatches: [[compactMarker], [postCutEvent], []],
+    });
+    vi.mocked(generate).mockImplementationOnce(async (_model, messages) => {
+      const serialized = JSON.stringify(messages);
+      expect(serialized).toContain("Preserved whole-channel memory.");
+      expect(serialized).toContain("Visible after cut");
+      expect(serialized).not.toContain("invisible old history");
+      return {
+        toolCalls: [] as never[],
+        toolResults: [] as never[],
+        text: '{"turnStatus":"DONE","type":"noop","payload":{}}',
+      };
+    });
+    await ctx.run();
+    expect(
+      ctx.apiFetch.mock.calls.some(([path]) =>
+        String(path).includes("after=100"),
+      ),
+    ).toBe(true);
   });
 
   it("posts a completion fallback when the model never returns the contract", async () => {
@@ -456,7 +500,7 @@ describe("CLASSIC turn completion contract", () => {
 
   it("withholds a plain-text CONTINUE message and keeps the same turn running", async () => {
     const ctx = setup({
-      agent: { modelCapabilities: { replyContract: "plain-text" } },
+      agentOverrides: { modelCapabilities: { replyContract: "plain-text" } },
     });
     vi.mocked(generate)
       .mockResolvedValueOnce({
@@ -488,7 +532,7 @@ describe("CLASSIC turn completion contract", () => {
 
   it("does not publish an unmarked promise to continue as a completed reply", async () => {
     const ctx = setup({
-      agent: { modelCapabilities: { replyContract: "plain-text" } },
+      agentOverrides: { modelCapabilities: { replyContract: "plain-text" } },
     });
     vi.mocked(generate).mockResolvedValue({
       text: "I will continue with the remaining work next.",
