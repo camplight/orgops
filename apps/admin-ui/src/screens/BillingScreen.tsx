@@ -28,6 +28,7 @@ type BillingPrice = {
   inputPricePerMillion: string;
   outputPricePerMillion: string;
   cachedInputPricePerMillion?: string | null;
+  pricingTiers?: Array<{ minInputTokens: number }>;
   source: string;
   sourceUrl?: string | null;
   effectiveAt: number;
@@ -188,6 +189,9 @@ export function BillingScreen() {
   const [updaterAgentName, setUpdaterAgentName] = useState(() => readStoredUpdaterAgentName());
   const [priceRefreshLoading, setPriceRefreshLoading] = useState(false);
   const [priceRefreshMessage, setPriceRefreshMessage] = useState<string | null>(null);
+  const [priceRefreshUnresolved, setPriceRefreshUnresolved] = useState<
+    Array<{ modelId: string; reason: string }>
+  >([]);
   const [activeRefreshId, setActiveRefreshId] = useState<string | null>(null);
   const [updaterOpen, setUpdaterOpen] = useState(false);
   const [usageSort, setUsageSort] = useState<{ key: BillingGroupSortKey; direction: SortDirection }>({
@@ -226,6 +230,7 @@ export function BillingScreen() {
   const updatePriceTable = async () => {
     setPriceRefreshLoading(true);
     setPriceRefreshMessage(null);
+    setPriceRefreshUnresolved([]);
     setError(null);
     try {
       const response = await apiFetch("/api/billing/prices/refresh", {
@@ -300,6 +305,7 @@ export function BillingScreen() {
         );
         if (completed || status.status === "COMPLETED") {
           const unresolved = completed?.payload.unresolved?.length ?? 0;
+          setPriceRefreshUnresolved(completed?.payload.unresolved ?? []);
           setPriceRefreshMessage(
             `Refresh completed: ${numberFormatter.format(updated)} model prices updated, ${numberFormatter.format(
               repriced,
@@ -568,6 +574,15 @@ export function BillingScreen() {
           </div>
         ) : null}
         {priceRefreshMessage ? <p className="text-sm text-emerald-300">{priceRefreshMessage}</p> : null}
+        {priceRefreshUnresolved.length > 0 ? (
+          <ul className="space-y-1 text-xs text-amber-300">
+            {priceRefreshUnresolved.map((item) => (
+              <li key={item.modelId}>
+                <span className="font-medium">{item.modelId}</span>: {item.reason}
+              </li>
+            ))}
+          </ul>
+        ) : null}
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead className="text-left text-xs uppercase tracking-wide text-slate-500">
@@ -598,7 +613,14 @@ export function BillingScreen() {
             <tbody className="divide-y divide-slate-800 text-slate-300">
               {sortedPrices.map((price) => (
                 <tr key={price.id}>
-                  <td className="py-2 pr-4 font-medium text-slate-100">{price.modelId}</td>
+                  <td className="py-2 pr-4 font-medium text-slate-100">
+                    <div>{price.modelId}</div>
+                    {price.pricingTiers?.length ? (
+                      <div className="text-xs font-normal text-slate-500">
+                        {price.pricingTiers.length + 1} context tiers
+                      </div>
+                    ) : null}
+                  </td>
                   <td className="py-2 pr-4">{price.provider}</td>
                   <td className="py-2 pr-4">${price.inputPricePerMillion}</td>
                   <td className="py-2 pr-4">

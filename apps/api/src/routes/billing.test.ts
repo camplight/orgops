@@ -234,6 +234,11 @@ describe("billing routes", () => {
       adminPass: "admin",
       runnerToken,
       systemAgentModel: "",
+      pricingFetch: async () =>
+        new Response(
+          "| Model | Input | Cached input | Output |\n| gpt-agent-refresh-test | $5 | $0.50 | $30 |",
+          { headers: { "content-type": "text/markdown" } },
+        ),
     });
     const orm = createDrizzleDb(db);
     const now = Date.now();
@@ -256,16 +261,34 @@ describe("billing routes", () => {
         created_at: now,
         updated_at: now,
       }).run();
-      const usage = await engine.app.request("http://localhost/api/billing/usage", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          modelId: "openai:gpt-agent-refresh-test",
-          inputTokens: 1_000_000,
-          outputTokens: 500_000,
-        }),
-      });
-      expect(await usage.json()).toMatchObject({ priceFound: false });
+      orm.insert(schema.agents).values({
+        id: "wrapped-placeholder-id",
+        name: "wrapped-placeholder",
+        agent_role: "STANDARD",
+        model_id: "wrapped:none",
+        mode: "WRAPPED",
+        soul_contents: "",
+        workspace_path: dataDir,
+        desired_state: "RUNNING",
+        runtime_state: "RUNNING",
+        assigned_runner_id: "runner-1",
+        created_at: now,
+        updated_at: now,
+      }).run();
+      for (const usage of [
+        { inputTokens: 100_000, outputTokens: 10_000 },
+        { inputTokens: 300_000, outputTokens: 10_000 },
+      ]) {
+        const response = await engine.app.request("http://localhost/api/billing/usage", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            modelId: "openai:gpt-agent-refresh-test",
+            ...usage,
+          }),
+        });
+        expect(await response.json()).toMatchObject({ priceFound: false });
+      }
 
       const start = await engine.app.request("http://localhost/api/billing/prices/refresh", {
         method: "POST",
@@ -275,6 +298,7 @@ describe("billing routes", () => {
       expect(start.status).toBe(202);
       const started = await start.json();
       expect(started.modelsByProvider.openai).toContain("openai:gpt-agent-refresh-test");
+      expect(started.modelsByProvider.wrapped).toBeUndefined();
       const requestEvent = orm
         .select()
         .from(schema.events)
@@ -282,6 +306,39 @@ describe("billing routes", () => {
         .get();
       expect(requestEvent?.channel_id).toBeTruthy();
       const refreshChannelId = requestEvent!.channel_id!;
+      const requestPayload = JSON.parse(requestEvent!.payload_json);
+      expect(requestPayload.sourceDocuments.openai[0].content).toContain(
+        "gpt-agent-refresh-test",
+      );
+
+      const forgedCompletion = await engine.app.request("http://localhost/api/events", {
+        method: "POST",
+        headers: { ...headers, "x-orgops-agent-name": "pricing-agent" },
+        body: JSON.stringify({
+          type: "billing.prices.refresh.completed",
+          source: "agent:pricing-agent",
+          channelId: refreshChannelId,
+          payload: { refreshId: started.refreshId, unresolved: [] },
+        }),
+      });
+      expect(forgedCompletion.status).toBe(403);
+      const forgedSystemCompletion = await engine.app.request("http://localhost/api/events", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          type: "billing.prices.refresh.completed",
+          source: "system:billing",
+          channelId: refreshChannelId,
+          parentEventId: started.eventId,
+          payload: { refreshId: started.refreshId, unresolved: [] },
+        }),
+      });
+      expect(forgedSystemCompletion.status).toBe(403);
+      const runningStatus = await engine.app.request(
+        `http://localhost/api/billing/prices/refresh/${started.refreshId}`,
+        { headers },
+      );
+      expect(await runningStatus.json()).toMatchObject({ status: "RUNNING" });
 
       const proposal = await engine.app.request("http://localhost/api/events", {
         method: "POST",
@@ -295,12 +352,22 @@ describe("billing routes", () => {
             text: JSON.stringify({
               prices: [{
                 modelId: "openai:gpt-agent-refresh-test",
-                inputPricePerMillion: 2,
-                outputPricePerMillion: 4,
+                inputPricePerMillion: 5,
+                outputPricePerMillion: 30,
+                cachedInputPricePerMillion: 0.5,
+                pricingTiers: [{
+                  minInputTokens: 272_001,
+                  inputPricePerMillion: 10,
+                  outputPricePerMillion: 45,
+                  cachedInputPricePerMillion: 1,
+                }],
                 source: "openai-docs",
                 sourceUrl: "https://developers.openai.com/api/docs/pricing",
               }],
-              unresolved: [],
+              unresolved: [{
+                modelId: "openai:gpt-4o-mini",
+                reason: "Not included in this synthetic source fixture.",
+              }],
             }),
           },
         }),
@@ -312,7 +379,18 @@ describe("billing routes", () => {
         `http://localhost/api/billing/prices/refresh/${started.refreshId}`,
         { headers },
       );
-      expect(await status.json()).toMatchObject({ status: "COMPLETED" });
+      const statusPayload = await status.json();
+      expect(statusPayload).toMatchObject({ status: "COMPLETED" });
+      expect(
+        statusPayload.events.find(
+          (event: { type: string }) => event.type === "billing.prices.refresh.completed",
+        )?.payload.unresolved,
+      ).toEqual([
+        {
+          modelId: "openai:gpt-4o-mini",
+          reason: "Not included in this synthetic source fixture.",
+        },
+      ]);
       const refreshChannel = orm
         .select()
         .from(schema.channels)
@@ -325,7 +403,100 @@ describe("billing routes", () => {
         "http://localhost/api/billing/usage?groupBy=model",
         { headers },
       );
-      expect((await aggregate.json()).totals.costUsdMicros).toBe(4_000_000);
+      expect((await aggregate.json()).totals.costUsdMicros).toBe(4_250_000);
+    } finally {
+      db.close();
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the structured OpenRouter adapter without waking the selected agent", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-billing-"));
+    const db = openDb(":memory:");
+    const runnerToken = "runner-billing-token";
+    const engine = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken,
+      systemAgentModel: "",
+      pricingFetch: async () =>
+        Response.json({
+          data: [{
+            id: "acme/structured",
+            name: "Structured",
+            pricing: { prompt: "0.000002", completion: "0.000006" },
+          }],
+        }),
+    });
+    const orm = createDrizzleDb(db);
+    const now = Date.now();
+    const headers = {
+      "content-type": "application/json",
+      "x-orgops-runner-token": runnerToken,
+    };
+
+    try {
+      orm.insert(schema.agents).values({
+        id: "openrouter-agent-id",
+        name: "openrouter-agent",
+        agent_role: "STANDARD",
+        model_id: "openrouter:acme/structured",
+        soul_contents: "",
+        workspace_path: dataDir,
+        desired_state: "RUNNING",
+        runtime_state: "RUNNING",
+        assigned_runner_id: "runner-1",
+        created_at: now,
+        updated_at: now,
+      }).run();
+      await engine.app.request("http://localhost/api/billing/usage", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          modelId: "openrouter:acme/structured",
+          inputTokens: 1_000_000,
+          outputTokens: 500_000,
+        }),
+      });
+
+      const start = await engine.app.request("http://localhost/api/billing/prices/refresh", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ updaterAgentName: "openrouter-agent" }),
+      });
+      expect(start.status).toBe(202);
+      const started = await start.json();
+      const status = await engine.app.request(
+        `http://localhost/api/billing/prices/refresh/${started.refreshId}`,
+        { headers },
+      );
+      const statusPayload = await status.json();
+      expect(statusPayload).toMatchObject({ status: "COMPLETED" });
+      expect(statusPayload.events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "billing.prices.refresh.provider.updated",
+            payload: expect.objectContaining({
+              provider: "openrouter",
+              updatedModelIds: ["openrouter:acme/structured"],
+            }),
+          }),
+        ]),
+      );
+      const requestEvent = orm
+        .select()
+        .from(schema.events)
+        .where(eq(schema.events.id, started.eventId))
+        .get();
+      expect(requestEvent?.status).toBe("DELIVERED");
+
+      const aggregate = await engine.app.request(
+        "http://localhost/api/billing/usage?groupBy=model",
+        { headers },
+      );
+      expect((await aggregate.json()).totals.costUsdMicros).toBe(5_000_000);
     } finally {
       db.close();
       rmSync(dataDir, { recursive: true, force: true });

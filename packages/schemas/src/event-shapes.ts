@@ -363,18 +363,30 @@ const coreEventShapes: EventShapeDefinition[] = [
     source: "core",
     eventSchema: z.object({
       channelId: z.string().min(1),
-      source: sourceSchema,
+      source: z.literal("system:billing"),
       payload: z
         .object({
           refreshId: z.string().uuid(),
           targetAgentName: z.string().min(1),
           modelsByProvider: z.record(z.string(), z.array(z.string().min(1))),
+          agentModelsByProvider: z.record(z.string(), z.array(z.string().min(1))),
+          preResolvedModelIds: z.array(z.string().min(1)),
+          preUnresolved: z.array(
+            z.object({ modelId: z.string().min(1), reason: z.string().min(1) }),
+          ),
           sources: z.record(z.string(), z.array(z.string().url())),
+          sourceDocuments: z.record(
+            z.string(),
+            z.array(
+              z.object({
+                url: z.string().url(),
+                content: z.string(),
+                error: z.string().optional(),
+              }),
+            ),
+          ),
           instructions: z.string().min(1),
-          responseContract: z.object({
-            prices: z.array(z.record(z.string(), z.unknown())),
-            unresolved: z.array(z.record(z.string(), z.unknown())),
-          }),
+          responseContract: z.record(z.string(), z.unknown()),
         })
         .strict(),
     }),
@@ -385,7 +397,7 @@ const coreEventShapes: EventShapeDefinition[] = [
     source: "core",
     eventSchema: z.object({
       channelId: z.string().min(1),
-      source: sourceSchema,
+      source: z.literal("system:billing"),
       payload: z
         .object({
           refreshId: z.string().uuid(),
@@ -405,7 +417,7 @@ const coreEventShapes: EventShapeDefinition[] = [
     source: "core",
     eventSchema: z.object({
       channelId: z.string().min(1),
-      source: sourceSchema,
+      source: z.literal("system:billing"),
       payload: z
         .object({
           refreshId: z.string().uuid(),
