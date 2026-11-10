@@ -63,6 +63,8 @@ export type LlmUsage = {
 
 export type GenerateResult = {
   text: string;
+  /** Assistant/tool history for a bounded, tool-free final summary. */
+  responseMessages?: LlmMessage[];
   toolCalls?: unknown[];
   toolResults?: unknown[];
   finishReason?: string;
@@ -483,6 +485,7 @@ export async function generate(
   });
   return {
     text: result.text,
+    responseMessages: result.response?.messages,
     toolCalls: (result as { toolCalls?: unknown[] }).toolCalls,
     toolResults: (result as { toolResults?: unknown[] }).toolResults,
     finishReason: (result as { finishReason?: string }).finishReason,

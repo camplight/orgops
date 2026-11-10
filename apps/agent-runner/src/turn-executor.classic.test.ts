@@ -26,7 +26,7 @@ const trigger: Event = {
   payload: { text: "question" },
 };
 
-function setup(options: { pendingEventBatches?: Event[][] } = {}) {
+function setup(options: { pendingEventBatches?: Event[][]; source?: string } = {}) {
   const emitted: Array<{ type?: string; payload?: Record<string, unknown> }> = [];
   let pendingEventBatchIndex = 0;
   const apiFetch = vi.fn(async (path: string, init?: RequestInit) => {
@@ -69,7 +69,7 @@ function setup(options: { pendingEventBatches?: Event[][] } = {}) {
   return {
     emitted,
     apiFetch,
-    run: () => execute(agent, [trigger]),
+    run: () => execute(agent, [{...trigger, source: options.source ?? trigger.source}]),
   };
 }
 
@@ -90,7 +90,7 @@ beforeEach(() => {
 });
 
 describe("CLASSIC empty final output", () => {
-  it("does not post a structured-output fallback after tool-calls with empty text", async () => {
+  it("posts an incomplete-work notice for a human tool-only turn without a transcript", async () => {
     const ctx = setup();
     vi.mocked(generate).mockResolvedValue({
       text: "",
@@ -100,9 +100,10 @@ describe("CLASSIC empty final output", () => {
     });
     await ctx.run();
     expect(generate).toHaveBeenCalledTimes(1);
-    expect(ctx.emitted.filter((event) => event.type === "message.created")).toHaveLength(0);
+    expect(ctx.emitted.filter((event) => event.type === "message.created")).toHaveLength(1);
+    expect(ctx.emitted.find((event) => event.type === "message.created")?.payload?.text).toContain("may be incomplete");
     expect(ctx.emitted.find((event) => event.type === "agent.turn.completed")?.payload).toMatchObject({
-      noReply: true,
+      completedWithFallback: true,
     });
   });
 
@@ -354,5 +355,69 @@ describe("CLASSIC empty final output", () => {
         .map((event) => event.payload?.text),
     ).toEqual(["started"]);
     expect(ctx.emitted.some((event) => event.type === "noop")).toBe(true);
+  });
+});
+
+
+describe("human tool-only final summaries", () => {
+  const exhausted = {
+    text: "", finishReason: "tool-calls",
+    toolCalls: [{toolName: "shell_run"}],
+    responseMessages: [{role: "assistant" as const, content: "Retrieved interview notes, but analysis is unfinished."}],
+  };
+  it("makes one tool-free summary call with the completed tool history", async () => {
+    const ctx = setup();
+    vi.mocked(generate).mockResolvedValueOnce(exhausted).mockResolvedValueOnce({text: "I retrieved the notes; analysis remains incomplete."});
+    await ctx.run();
+    expect(generate).toHaveBeenCalledTimes(2);
+    const [, messages, options] = vi.mocked(generate).mock.calls[1];
+    expect(messages).toContainEqual(exhausted.responseMessages[0]);
+    expect(options?.tools).toBeUndefined();
+    expect(options?.maxSteps).toBe(1);
+    expect(options?.abortSignal).toBeDefined();
+    const replies = ctx.emitted.filter(event => event.type === "message.created");
+    expect(replies).toHaveLength(1);
+    expect(replies[0].payload?.text).toContain("analysis remains incomplete");
+  });
+  it.each(["empty", "error", "structured"])("posts a notice when the summary is %s", async failure => {
+    const ctx = setup();
+    vi.mocked(generate).mockResolvedValueOnce(exhausted);
+    if (failure === "error") vi.mocked(generate).mockRejectedValueOnce(new Error("provider failed"));
+    else vi.mocked(generate).mockResolvedValueOnce({text: failure === "empty" ? "" : '{"type":"noop"}'});
+    await ctx.run();
+    expect(generate).toHaveBeenCalledTimes(2);
+    const replies = ctx.emitted.filter(event => event.type === "message.created");
+    expect(replies).toHaveLength(1);
+    expect(replies[0].payload?.text).toContain("may be incomplete");
+  });
+  it("bounds a hanging summary and posts one notice", async () => {
+    vi.useFakeTimers();
+    try {
+      const ctx = setup();
+      vi.mocked(generate).mockResolvedValueOnce(exhausted).mockImplementationOnce(() => new Promise(() => {}));
+      const run = ctx.run();
+      await vi.advanceTimersByTimeAsync(10_001);
+      await run;
+      expect(generate).toHaveBeenCalledTimes(2);
+      const replies = ctx.emitted.filter(event => event.type === "message.created");
+      expect(replies).toHaveLength(1);
+      expect(replies[0].payload?.text).toContain("may be incomplete");
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("preserves explicit no-reply calls", async () => {
+    const ctx = setup();
+    vi.mocked(generate).mockResolvedValueOnce({...exhausted,toolCalls:[{toolName:"noop"}]});
+    await ctx.run();
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(ctx.emitted.filter(event=>event.type === "message.created")).toHaveLength(0);
+  });
+
+  it("keeps non-human tool-only turns silent", async () => {
+    const ctx = setup({source:"system:timer"});
+    vi.mocked(generate).mockResolvedValueOnce(exhausted);
+    await ctx.run();
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(ctx.emitted.filter(event=>event.type === "message.created")).toHaveLength(0);
   });
 });
