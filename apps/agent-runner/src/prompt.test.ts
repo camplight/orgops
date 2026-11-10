@@ -28,7 +28,8 @@ describe("buildRunnerGuidance", () => {
     expect(guidance).toContain(
       "SKILL.md` must start with YAML frontmatter at the very first line (`---` as the first bytes in the file).",
     );
-    expect(guidance).toContain("Your final response MUST be JSON");
+    expect(guidance).toContain("call `turn_finish`");
+    expect(guidance).toContain("MUST be JSON with `turnStatus`");
   });
 
   it("swaps the JSON event contract for plain-text replies", () => {
@@ -46,7 +47,7 @@ describe("buildRunnerGuidance", () => {
     });
 
     expect(guidance).toContain("You are the agent `voice-agent`");
-    expect(guidance).toContain("your final answer is plain text");
+    expect(guidance).toContain("ORGOPS_TURN_STATUS");
     expect(guidance).toContain("call the `noop` tool");
     expect(guidance).not.toContain("MUST be JSON");
     expect(guidance).not.toContain("prose outside of JSON");

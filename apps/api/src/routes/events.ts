@@ -957,6 +957,16 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     if (type.startsWith("billing.prices.refresh.")) {
       return jsonResponse(c, { error: "Billing refresh lifecycle events are API-owned" }, 403);
     }
+    if (type === "agent.context.compacted" || type === "agent.context.cleared") {
+      return jsonResponse(
+        c,
+        {
+          error:
+            "Context lifecycle events must use the dedicated agent context compact/clear endpoint",
+        },
+        400,
+      );
+    }
     if (type === "message.created" && !parsed.data.channelId) {
       return jsonResponse(
         c,

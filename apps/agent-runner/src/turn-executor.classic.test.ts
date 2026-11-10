@@ -26,8 +26,21 @@ const trigger: Event = {
   payload: { text: "question" },
 };
 
-function setup(options: { pendingEventBatches?: Event[][]; source?: string } = {}) {
-  const emitted: Array<{ type?: string; payload?: Record<string, unknown> }> = [];
+function setup(
+  options: {
+    pendingEventBatches?: Event[][];
+    source?: string;
+    agentOverrides?: Partial<Agent>;
+    trigger?: Partial<Event>;
+    events?: Event[];
+  } = {},
+) {
+  const emitted: Array<{
+    type?: string;
+    payload?: Record<string, unknown>;
+    idempotencyKey?: string;
+    deliverAt?: number;
+  }> = [];
   let pendingEventBatchIndex = 0;
   const apiFetch = vi.fn(async (path: string, init?: RequestInit) => {
     if (path === "/api/channels") {
@@ -69,7 +82,17 @@ function setup(options: { pendingEventBatches?: Event[][]; source?: string } = {
   return {
     emitted,
     apiFetch,
-    run: () => execute(agent, [{...trigger, source: options.source ?? trigger.source}]),
+    run: () =>
+      execute(
+        { ...agent, ...options.agentOverrides },
+        options.events ?? [
+          {
+            ...trigger,
+            ...options.trigger,
+            source: options.source ?? options.trigger?.source ?? trigger.source,
+          },
+        ],
+      ),
   };
 }
 
@@ -107,7 +130,51 @@ describe("CLASSIC empty final output", () => {
     });
   });
 
-  it("still posts a format fallback when the model returns invalid JSON without tools", async () => {
+  it("starts future prompt history at a compacted whole-channel boundary", async () => {
+    const compactMarker: Event = {
+      id: "compact-1",
+      type: "agent.context.compacted",
+      source: "agent:tester",
+      channelId: "chat",
+      payload: {
+        targetAgentName: "tester",
+        summary: "Preserved whole-channel memory.",
+        cutoffAt: 100,
+      },
+      createdAt: 150,
+    };
+    const postCutEvent: Event = {
+      id: "after-cut",
+      type: "message.created",
+      source: "human:test",
+      channelId: "chat",
+      payload: { text: "Visible after cut" },
+      createdAt: 200,
+    };
+    const ctx = setup({
+      agentOverrides: { memoryContextMode: "FULL_CHANNEL_EVENTS" },
+      pendingEventBatches: [[compactMarker], [postCutEvent], []],
+    });
+    vi.mocked(generate).mockImplementationOnce(async (_model, messages) => {
+      const serialized = JSON.stringify(messages);
+      expect(serialized).toContain("Preserved whole-channel memory.");
+      expect(serialized).toContain("Visible after cut");
+      expect(serialized).not.toContain("invisible old history");
+      return {
+        toolCalls: [] as never[],
+        toolResults: [] as never[],
+        text: '{"turnStatus":"DONE","type":"noop","payload":{}}',
+      };
+    });
+    await ctx.run();
+    expect(
+      ctx.apiFetch.mock.calls.some(([path]) =>
+        String(path).includes("after=100"),
+      ),
+    ).toBe(true);
+  });
+
+  it("posts a completion fallback when the model never returns the contract", async () => {
     const ctx = setup();
     vi.mocked(generate).mockResolvedValue({
       text: "not json",
@@ -118,14 +185,15 @@ describe("CLASSIC empty final output", () => {
     await ctx.run();
     expect(generate).toHaveBeenCalledTimes(3);
     const messages = ctx.emitted.filter((event) => event.type === "message.created");
-    expect(messages).toHaveLength(0);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.payload?.text).toContain("without confirming");
     expect(
       ctx.emitted.find(
         (event) =>
           event.type === "agent.turn.phase" &&
-          event.payload?.phase === "response.format_error",
+          event.payload?.phase === "turn.completion_error",
       )?.payload?.detail,
-    ).toContain("response-format issue");
+    ).toContain("may be incomplete");
   });
 
   it("discards contradictory staged messages on validation retry", async () => {
@@ -139,16 +207,16 @@ describe("CLASSIC empty final output", () => {
         return {
           toolCalls: [] as never[],
           toolResults: [] as never[],
-          text: '{"type":"message.created","payload":"bad"}',
+          text: '{"turnStatus":"DONE","type":"message.created","payload":"bad"}',
         };
       })
       .mockImplementationOnce(async (_model, messages, options) => {
-        expect(JSON.stringify(messages)).toContain("Event validation failed");
+        expect(JSON.stringify(messages)).toContain("completion event failed validation");
         await emit(options?.tools, "no", { stageUntilTurnSettled: true });
         return {
           toolCalls: [] as never[],
           toolResults: [] as never[],
-          text: '{"type":"noop","payload":{}}',
+          text: '{"turnStatus":"DONE","type":"noop","payload":{}}',
         };
       });
     await ctx.run();
@@ -163,10 +231,10 @@ describe("CLASSIC empty final output", () => {
     const ctx = setup();
     vi.mocked(generate).mockImplementation(async (_model, _messages, options) => {
       await emit(options?.tools, "answer", { stageUntilTurnSettled: true });
-      return { toolCalls: [] as never[], toolResults: [] as never[], text: '{"type":"message.created","payload":{}}' };
+      return { toolCalls: [] as never[], toolResults: [] as never[], text: '{"turnStatus":"DONE","type":"noop","payload":{}}' };
     });
     await ctx.run();
-    expect(generate).toHaveBeenCalledTimes(3);
+    expect(generate).toHaveBeenCalledTimes(1);
     expect(
       ctx.emitted
         .filter((event) => event.type === "message.created")
@@ -191,7 +259,7 @@ describe("CLASSIC empty final output", () => {
       return {
         toolCalls: [] as never[],
         toolResults: [] as never[],
-        text: '{"type":"noop","payload":{}}',
+        text: '{"turnStatus":"DONE","type":"noop","payload":{}}',
       };
     });
     await ctx.run();
@@ -220,7 +288,7 @@ describe("CLASSIC empty final output", () => {
       .mockResolvedValueOnce({
         toolCalls: [] as never[],
         toolResults: [] as never[],
-        text: '{"type":"message.created","payload":{"text":"first answer"}}',
+        text: '{"turnStatus":"DONE","type":"message.created","payload":{"text":"first answer"}}',
       })
       .mockImplementationOnce(async (_model, messages) => {
         const serialized = JSON.stringify(messages);
@@ -229,7 +297,7 @@ describe("CLASSIC empty final output", () => {
         return {
           toolCalls: [] as never[],
           toolResults: [] as never[],
-          text: '{"type":"message.created","payload":{"text":"second answer"}}',
+          text: '{"turnStatus":"DONE","type":"message.created","payload":{"text":"second answer"}}',
         };
       });
 
@@ -241,6 +309,14 @@ describe("CLASSIC empty final output", () => {
         .filter((event) => event.type === "message.created")
         .map((event) => event.payload?.text),
     ).toEqual(["first answer", "second answer"]);
+    expect(
+      ctx.emitted
+        .filter((event) => event.type === "message.created")
+        .map((event) => event.idempotencyKey),
+    ).toEqual([
+      "turn:tester:trigger:completion:0",
+      "turn:tester:trigger:completion:1",
+    ]);
     expect(
       ctx.emitted.find(
         (event) =>
@@ -296,7 +372,7 @@ describe("CLASSIC empty final output", () => {
     vi.mocked(generate).mockResolvedValueOnce({
       toolCalls: [] as never[],
       toolResults: [] as never[],
-      text: '{"type":"message.created","payload":{"text":"answer survives"}}',
+      text: '{"turnStatus":"DONE","type":"message.created","payload":{"text":"answer survives"}}',
     });
 
     await ctx.run();
@@ -335,14 +411,14 @@ describe("CLASSIC empty final output", () => {
       .mockResolvedValueOnce({
         toolCalls: [] as never[],
         toolResults: [] as never[],
-        text: '{"type":"message.created","payload":{"text":"started"}}',
+        text: '{"turnStatus":"DONE","type":"message.created","payload":{"text":"started"}}',
       })
       .mockImplementationOnce(async (_model, messages) => {
         expect(JSON.stringify(messages)).toContain("server ready");
         return {
           toolCalls: [] as never[],
           toolResults: [] as never[],
-          text: '{"type":"noop","payload":{"reason":"observed async output"}}',
+          text: '{"turnStatus":"DONE","type":"noop","payload":{"reason":"observed async output"}}',
         };
       });
 
@@ -355,6 +431,305 @@ describe("CLASSIC empty final output", () => {
         .map((event) => event.payload?.text),
     ).toEqual(["started"]);
     expect(ctx.emitted.some((event) => event.type === "noop")).toBe(true);
+  });
+});
+
+describe("CLASSIC turn completion contract", () => {
+  it("accepts a terminal tool call and posts only its user-facing message", async () => {
+    const ctx = setup();
+    vi.mocked(generate).mockImplementationOnce(async (_model, _messages, options) => {
+      expect(options?.tools?.turn_finish).toBeDefined();
+      expect(options?.tools?.turn_finish.execute).toBeUndefined();
+      return {
+        text: "",
+        toolCalls: [
+          {
+            toolName: "turn_finish",
+            input: { status: "DONE", message: "The report is complete." },
+          },
+        ],
+        toolResults: [],
+        finishReason: "tool-calls",
+      };
+    });
+
+    await ctx.run();
+
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(
+      ctx.emitted
+        .filter((event) => event.type === "message.created")
+        .map((event) => event.payload?.text),
+    ).toEqual(["The report is complete."]);
+    expect(
+      ctx.emitted.find((event) => event.type === "agent.turn.completed")?.payload,
+    ).toMatchObject({ turnStatus: "DONE" });
+  });
+
+  it("corrects an invalid terminal tool call before closing", async () => {
+    const ctx = setup();
+    vi.mocked(generate)
+      .mockResolvedValueOnce({
+        text: "",
+        toolCalls: [{ toolName: "turn_finish", input: { status: "DONE" } }],
+        toolResults: [],
+        finishReason: "tool-calls",
+      })
+      .mockImplementationOnce(async (_model, messages) => {
+        expect(JSON.stringify(messages)).toContain("turn_finish call was invalid");
+        return {
+          text: "",
+          toolCalls: [
+            {
+              toolName: "turn_finish",
+              input: { status: "DONE", message: "Finished after correction." },
+            },
+          ],
+          toolResults: [],
+          finishReason: "tool-calls",
+        };
+      });
+
+    await ctx.run();
+
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(
+      ctx.emitted.find((event) => event.type === "message.created")?.payload?.text,
+    ).toBe("Finished after correction.");
+  });
+
+  it("withholds a plain-text CONTINUE message and keeps the same turn running", async () => {
+    const ctx = setup({
+      agentOverrides: { modelCapabilities: { replyContract: "plain-text" } },
+    });
+    vi.mocked(generate)
+      .mockResolvedValueOnce({
+        text: "I will continue now.\nORGOPS_TURN_STATUS: CONTINUE",
+        toolCalls: [],
+        toolResults: [],
+        finishReason: "stop",
+      })
+      .mockImplementationOnce(async (_model, messages) => {
+        expect(JSON.stringify(messages)).toContain("requested CONTINUE");
+        expect(JSON.stringify(messages)).toContain("I will continue now.");
+        return {
+          text: "The report is complete.\nORGOPS_TURN_STATUS: DONE",
+          toolCalls: [],
+          toolResults: [],
+          finishReason: "stop",
+        };
+      });
+
+    await ctx.run();
+
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(
+      ctx.emitted
+        .filter((event) => event.type === "message.created")
+        .map((event) => event.payload?.text),
+    ).toEqual(["The report is complete."]);
+  });
+
+  it("does not publish an unmarked promise to continue as a completed reply", async () => {
+    const ctx = setup({
+      agentOverrides: { modelCapabilities: { replyContract: "plain-text" } },
+    });
+    vi.mocked(generate).mockResolvedValue({
+      text: "I will continue with the remaining work next.",
+      toolCalls: [],
+      toolResults: [],
+      finishReason: "stop",
+    });
+
+    await ctx.run();
+
+    expect(generate).toHaveBeenCalledTimes(3);
+    expect(
+      ctx.emitted
+        .filter((event) => event.type === "message.created")
+        .map((event) => event.payload?.text),
+    ).toEqual([
+      "I stopped without confirming whether the requested work was completed. The work may be incomplete; please ask me to continue.",
+    ]);
+  });
+
+  it("schedules a bounded self-trigger for RETRY_LATER", async () => {
+    const before = Date.now();
+    const ctx = setup();
+    vi.mocked(generate).mockResolvedValueOnce({
+      text: "",
+      toolCalls: [
+        {
+          toolName: "turn_finish",
+          input: {
+            status: "RETRY_LATER",
+            message: "Sheets is rate-limited; I will retry shortly.",
+            retryAfterSeconds: 30,
+          },
+        },
+      ],
+      toolResults: [],
+      finishReason: "tool-calls",
+    });
+
+    await ctx.run();
+
+    const scheduled = ctx.emitted.find(
+      (event) => event.type === "agent.scheduled.trigger",
+    ) as
+      | {
+          deliverAt?: number;
+          payload?: Record<string, unknown>;
+        }
+      | undefined;
+    expect(scheduled?.deliverAt).toBeGreaterThanOrEqual(before + 30_000);
+    expect(scheduled?.payload).toMatchObject({
+      targetAgentName: "tester",
+      turnCompletionAttempt: 1,
+    });
+    expect(
+      ctx.emitted.find((event) => event.type === "agent.turn.completed")?.payload,
+    ).toMatchObject({
+      scheduledContinuation: true,
+      retryAfterSeconds: 30,
+    });
+  });
+
+  it("reconciles late events before scheduling RETRY_LATER", async () => {
+    const lateEvent: Event = {
+      id: "late-human",
+      type: "message.created",
+      source: "human:test",
+      channelId: "chat",
+      payload: { text: "Use the cached export instead." },
+      createdAt: 2,
+    };
+    const ctx = setup({ pendingEventBatches: [[lateEvent], []] });
+    vi.mocked(generate)
+      .mockResolvedValueOnce({
+        text: "",
+        toolCalls: [
+          {
+            toolName: "turn_finish",
+            input: {
+              status: "RETRY_LATER",
+              message: "Sheets is rate-limited; I will retry shortly.",
+              retryAfterSeconds: 30,
+            },
+          },
+        ],
+        toolResults: [],
+        finishReason: "tool-calls",
+      })
+      .mockImplementationOnce(async (_model, messages) => {
+        expect(JSON.stringify(messages)).toContain("Use the cached export instead.");
+        return {
+          text: "",
+          toolCalls: [
+            {
+              toolName: "turn_finish",
+              input: { status: "DONE", message: "Used the cached export." },
+            },
+          ],
+          toolResults: [],
+          finishReason: "tool-calls",
+        };
+      });
+
+    await ctx.run();
+
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(
+      ctx.emitted.filter((event) => event.type === "agent.scheduled.trigger"),
+    ).toHaveLength(0);
+    expect(
+      ctx.emitted
+        .filter((event) => event.type === "message.created")
+        .map((event) => event.payload?.text),
+    ).toEqual([
+      "Sheets is rate-limited; I will retry shortly.",
+      "Used the cached export.",
+    ]);
+  });
+
+  it("keeps trusted retry bounds when a newer human event shares the batch", async () => {
+    const scheduled: Event = {
+      id: "scheduled-retry",
+      type: "agent.scheduled.trigger",
+      source: "system:scheduler",
+      channelId: "chat",
+      payload: {
+        text: "resume",
+        targetAgentName: "tester",
+        turnCompletionAttempt: 2,
+        originalTriggerEventId: "root-trigger",
+      },
+      createdAt: 1,
+    };
+    const newerHuman: Event = {
+      id: "newer-human",
+      type: "message.created",
+      source: "human:test",
+      channelId: "chat",
+      payload: { text: "Also check this.", turnCompletionAttempt: 3 },
+      createdAt: 2,
+    };
+    const ctx = setup({ events: [scheduled, newerHuman] });
+    vi.mocked(generate).mockResolvedValueOnce({
+      text: "",
+      toolCalls: [
+        {
+          toolName: "turn_finish",
+          input: { status: "RETRY_LATER", retryAfterSeconds: 30 },
+        },
+      ],
+      toolResults: [],
+      finishReason: "tool-calls",
+    });
+
+    await ctx.run();
+
+    const retry = ctx.emitted.find(
+      (event) => event.type === "agent.scheduled.trigger",
+    );
+    expect(retry?.payload).toMatchObject({
+      turnCompletionAttempt: 3,
+      originalTriggerEventId: "root-trigger",
+    });
+  });
+
+  it("does not schedule beyond the continuation limit", async () => {
+    const ctx = setup({
+      source: "system:scheduler",
+      trigger: {
+        type: "agent.scheduled.trigger",
+        payload: {
+          text: "resume",
+          targetAgentName: "tester",
+          turnCompletionAttempt: 3,
+        },
+      },
+    });
+    vi.mocked(generate).mockResolvedValueOnce({
+      text: "",
+      toolCalls: [
+        {
+          toolName: "turn_finish",
+          input: { status: "RETRY_LATER", retryAfterSeconds: 30 },
+        },
+      ],
+      toolResults: [],
+      finishReason: "tool-calls",
+    });
+
+    await ctx.run();
+
+    expect(
+      ctx.emitted.filter((event) => event.type === "agent.scheduled.trigger"),
+    ).toHaveLength(0);
+    expect(
+      ctx.emitted.find((event) => event.type === "message.created")?.payload?.text,
+    ).toContain("remains incomplete");
   });
 });
 

@@ -153,6 +153,88 @@ describe("generateWithOpenAIRealtime", () => {
     expect(fake.sent.some((message) => message.item?.type === "function_call_output")).toBe(false);
   });
 
+  it("executes action calls before accepting a sibling terminal call", async () => {
+    const fake = createFakeRealtime([
+      {
+        status: "completed",
+        output: [
+          {
+            type: "function_call",
+            call_id: "action-1",
+            name: "fs_list",
+            arguments: '{"path":"."}',
+          },
+          {
+            type: "function_call",
+            call_id: "finish-too-early",
+            name: "turn_finish",
+            arguments: '{"status":"DONE","message":"done"}',
+          },
+        ],
+      },
+      {
+        status: "completed",
+        output: [
+          {
+            type: "function_call",
+            call_id: "finish-after-result",
+            name: "turn_finish",
+            arguments: '{"status":"DONE","message":"done"}',
+          },
+        ],
+      },
+    ]);
+    const executed: unknown[] = [];
+    const result = await generateWithOpenAIRealtime(
+      "gpt-realtime",
+      undefined,
+      [{ role: "user", content: "list files" }],
+      {
+        apiKey: "k",
+        maxSteps: 4,
+        tools: {
+          fs_list: {
+            inputSchema: z.object({ path: z.string() }),
+            execute: async (args) => {
+              executed.push(args);
+              return { entries: ["a.txt"] };
+            },
+          },
+          turn_finish: {
+            inputSchema: z.object({
+              status: z.literal("DONE"),
+              message: z.string(),
+            }),
+          },
+        },
+      },
+      { connect: fake.connect, toolJsonSchema },
+    );
+
+    expect(executed).toEqual([{ path: "." }]);
+    expect(result.toolCalls).toEqual([
+      {
+        toolCallId: "action-1",
+        toolName: "fs_list",
+        input: '{"path":"."}',
+      },
+      {
+        toolCallId: "finish-after-result",
+        toolName: "turn_finish",
+        input: '{"status":"DONE","message":"done"}',
+      },
+    ]);
+    expect(fake.sent).toContainEqual({
+      type: "conversation.item.create",
+      item: {
+        type: "function_call_output",
+        call_id: "finish-too-early",
+        output:
+          "Terminal tool call deferred because executable sibling calls were present. Review their results, then call the terminal tool again by itself.",
+      },
+    });
+  });
+
   it("retries transient server errors", async () => {
     const fake = createFakeRealtime([
       { status: "failed", status_details: { error: { type: "server_error", message: "try again" } } },

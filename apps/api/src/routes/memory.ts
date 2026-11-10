@@ -159,15 +159,14 @@ export function registerMemoryRoutes(app: Hono<any>, deps: MemoryDeps) {
           : undefined;
       if (
         expectedVersion !== undefined &&
-        existing &&
-        asInt(existing.version, 0) !== expectedVersion
+        (!existing || asInt(existing.version, 0) !== expectedVersion)
       ) {
         return jsonResponse(
           c,
           {
             error: "Version conflict",
             expectedVersion,
-            actualVersion: asInt(existing.version, 0),
+            actualVersion: existing ? asInt(existing.version, 0) : null,
           },
           409,
         );
@@ -247,15 +246,14 @@ export function registerMemoryRoutes(app: Hono<any>, deps: MemoryDeps) {
           : undefined;
       if (
         expectedVersion !== undefined &&
-        existing &&
-        asInt(existing.version, 0) !== expectedVersion
+        (!existing || asInt(existing.version, 0) !== expectedVersion)
       ) {
         return jsonResponse(
           c,
           {
             error: "Version conflict",
             expectedVersion,
-            actualVersion: asInt(existing.version, 0),
+            actualVersion: existing ? asInt(existing.version, 0) : null,
           },
           409,
         );
