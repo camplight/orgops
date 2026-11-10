@@ -26,7 +26,11 @@ const trigger: Event = {
   payload: { text: "question" },
 };
 
-function setup(options: { pendingEventBatches?: Event[][]; source?: string } = {}) {
+function setup(options: {
+  pendingEventBatches?: Event[][];
+  source?: string;
+  agentOverrides?: Partial<Agent>;
+} = {}) {
   const emitted: Array<{ type?: string; payload?: Record<string, unknown> }> = [];
   let pendingEventBatchIndex = 0;
   const apiFetch = vi.fn(async (path: string, init?: RequestInit) => {
@@ -69,7 +73,11 @@ function setup(options: { pendingEventBatches?: Event[][]; source?: string } = {
   return {
     emitted,
     apiFetch,
-    run: () => execute(agent, [{...trigger, source: options.source ?? trigger.source}]),
+    run: () =>
+      execute(
+        { ...agent, ...options.agentOverrides },
+        [{ ...trigger, source: options.source ?? trigger.source }],
+      ),
   };
 }
 
@@ -105,6 +113,50 @@ describe("CLASSIC empty final output", () => {
     expect(ctx.emitted.find((event) => event.type === "agent.turn.completed")?.payload).toMatchObject({
       completedWithFallback: true,
     });
+  });
+
+  it("starts future prompt history at a compacted whole-channel boundary", async () => {
+    const compactMarker: Event = {
+      id: "compact-1",
+      type: "agent.context.compacted",
+      source: "agent:tester",
+      channelId: "chat",
+      payload: {
+        targetAgentName: "tester",
+        summary: "Preserved whole-channel memory.",
+        cutoffAt: 100,
+      },
+      createdAt: 150,
+    };
+    const postCutEvent: Event = {
+      id: "after-cut",
+      type: "message.created",
+      source: "human:test",
+      channelId: "chat",
+      payload: { text: "Visible after cut" },
+      createdAt: 200,
+    };
+    const ctx = setup({
+      agentOverrides: { memoryContextMode: "FULL_CHANNEL_EVENTS" },
+      pendingEventBatches: [[compactMarker], [postCutEvent], []],
+    });
+    vi.mocked(generate).mockImplementationOnce(async (_model, messages) => {
+      const serialized = JSON.stringify(messages);
+      expect(serialized).toContain("Preserved whole-channel memory.");
+      expect(serialized).toContain("Visible after cut");
+      expect(serialized).not.toContain("invisible old history");
+      return {
+        toolCalls: [] as never[],
+        toolResults: [] as never[],
+        text: '{"type":"noop","payload":{}}',
+      };
+    });
+    await ctx.run();
+    expect(
+      ctx.apiFetch.mock.calls.some(([path]) =>
+        String(path).includes("after=100"),
+      ),
+    ).toBe(true);
   });
 
   it("still posts a format fallback when the model returns invalid JSON without tools", async () => {

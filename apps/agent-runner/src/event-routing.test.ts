@@ -54,6 +54,26 @@ describe("event routing", () => {
         makeEvent({ type: "noop", source: "agent:worker-a" }),
       ),
     ).toBe(false);
+    expect(
+      shouldHandleEventForAgent(
+        agent,
+        makeEvent({
+          type: "agent.context.compacted",
+          source: "agent:worker-a",
+          payload: { targetAgentName: "worker-a", summary: "memory", cutoffAt: 1 },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      shouldHandleEventForAgent(
+        agent,
+        makeEvent({
+          type: "agent.context.cleared",
+          source: "agent:worker-a",
+          payload: { targetAgentName: "worker-a" },
+        }),
+      ),
+    ).toBe(false);
   });
 
   it("still allows normal channel events from others", () => {

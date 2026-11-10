@@ -46,6 +46,7 @@ import {
   estimateContextUsage,
 } from "./prompt-composer";
 import { recordLlmUsage } from "./billing";
+import { getLatestContextBoundary } from "./context-boundary";
 import type { Agent, Event } from "./types";
 import type { RunnerApi } from "./runner/api";
 
@@ -640,6 +641,14 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       { replyContract: plainTextReplies ? "plain-text" : "json", agentName: agent.name },
     );
     const memoryContextMode = resolveAgentMemoryContextMode(agent);
+    const contextBoundary =
+      memoryContextMode === "OFF"
+        ? null
+        : await getLatestContextBoundary(
+            input.api.apiFetch,
+            agent.name,
+            channelId,
+          );
     let eventHistory: Event[] = [];
     let systemContextMessages: string[] = [];
     if (memoryContextMode === "PER_CHANNEL_CROSS_CHANNEL") {
@@ -650,26 +659,36 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
           getCrossRecentMemoryRecord(input.api.apiFetch, agent.name),
           getCrossFullMemoryRecord(input.api.apiFetch, agent.name),
         ]);
-      const recentSummaryWatermark = channelRecentMemory?.lastProcessedAt;
+      const cutoffAt = contextBoundary?.cutoffAt ?? 0;
+      const validChannelRecentMemory =
+        channelRecentMemory && channelRecentMemory.lastProcessedAt >= cutoffAt
+          ? channelRecentMemory
+          : null;
+      const validChannelFullMemory =
+        channelFullMemory && channelFullMemory.lastProcessedAt >= cutoffAt
+          ? channelFullMemory
+          : null;
+      const recentSummaryWatermark = validChannelRecentMemory?.lastProcessedAt;
       const rawDeltaEvents = await listEventsAfterTimestamp(
         input.api.apiFetch,
         channelId,
-        typeof recentSummaryWatermark === "number" && recentSummaryWatermark > 0
-          ? recentSummaryWatermark
-          : undefined,
+        Math.max(
+          cutoffAt,
+          typeof recentSummaryWatermark === "number" ? recentSummaryWatermark : 0,
+        ) || undefined,
       );
       eventHistory = getMeaningfulEvents(rawDeltaEvents);
       systemContextMessages = [
-        channelRecentMemory?.summaryText
+        validChannelRecentMemory?.summaryText
           ? buildSystemMemoryMessage(
               `Channel Recent Summary (last 10 minutes, ${channelId})`,
-              channelRecentMemory.summaryText,
+              validChannelRecentMemory.summaryText,
             )
           : "",
-        channelFullMemory?.summaryText
+        validChannelFullMemory?.summaryText || contextBoundary?.summary
           ? buildSystemMemoryMessage(
               `Channel Full Memory (${channelId})`,
-              channelFullMemory.summaryText,
+              validChannelFullMemory?.summaryText ?? contextBoundary?.summary ?? "",
             )
           : "",
         crossRecentMemory?.summaryText
@@ -686,8 +705,20 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
           : "",
       ].filter(Boolean);
     } else if (memoryContextMode === "FULL_CHANNEL_EVENTS") {
-      const fullChannelHistory = await listEventsAfterTimestamp(input.api.apiFetch, channelId);
+      const fullChannelHistory = await listEventsAfterTimestamp(
+        input.api.apiFetch,
+        channelId,
+        contextBoundary?.cutoffAt,
+      );
       eventHistory = getMeaningfulEvents(fullChannelHistory);
+      if (contextBoundary?.kind === "compact" && contextBoundary.summary) {
+        systemContextMessages = [
+          buildSystemMemoryMessage(
+            `Compacted Channel Context (${channelId})`,
+            contextBoundary.summary,
+          ),
+        ];
+      }
     }
     const system = [
       runnerGuidance,

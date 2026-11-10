@@ -17,6 +17,11 @@ const channelMemorySchema = z.object({
   channelId: z.string().min(1).optional(),
 });
 
+const contextLifecycleSchema = z.object({
+  channelId: z.string().min(1).optional(),
+  reason: z.string().min(1).optional(),
+});
+
 const crossMemorySchema = z.object({
   channelIds: z.array(z.string().min(1)).optional(),
 });
@@ -40,6 +45,16 @@ const crossUpdateSchema = z.object({
 });
 
 export const memoryToolDefs: ToolDef[] = [
+  [
+    "memory_context_compact",
+    "Compact this agent's future runtime context in one channel. Refreshes a private summary of the whole meaningful channel history, preserves that summary, and excludes summarized events from later model prompts. Defaults to the current channel.",
+    contextLifecycleSchema,
+  ],
+  [
+    "memory_context_clear",
+    "Make a clean cut in this agent's future runtime context for one channel without preserving a summary. Older events remain searchable through event tools and APIs. Defaults to the current channel.",
+    contextLifecycleSchema,
+  ],
   [
     "memory_channel_recent_get",
     "Get recent (short-term) memory summary for one channel. Defaults to current channel.",
@@ -252,6 +267,91 @@ export async function execute(
   tool: string,
   args: Record<string, unknown>,
 ): Promise<unknown> {
+  if (tool === "memory_context_compact") {
+    const parsedResult = parseToolArgs(tool, contextLifecycleSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const resolved = resolveChannelId(ctx, parsedResult.data.channelId);
+    if (!resolved.ok) return { error: resolved.error };
+    const record = await refreshChannelFullMemory({
+      agent: ctx.agent,
+      channelId: resolved.channelId,
+      apiFetch: ctx.apiFetch,
+      getEnv: async () => ctx.injectionEnv,
+    });
+    if (
+      !record?.summaryText?.trim() ||
+      record.lastProcessedAt <= 0 ||
+      !record.lastProcessedEventId
+    ) {
+      return {
+        error:
+          "Unable to compact context because no whole-channel memory summary is available.",
+      };
+    }
+    const response = await ctx.apiFetch(
+      `/api/agents/${encodeURIComponent(ctx.agent.name)}/context/compact`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-orgops-agent-name": ctx.agent.name,
+        },
+        body: JSON.stringify({
+          channelId: resolved.channelId,
+          summary: record.summaryText,
+          cutoffAt: record.lastProcessedAt,
+          cutoffEventId: record.lastProcessedEventId,
+          ...(parsedResult.data.reason
+            ? { reason: parsedResult.data.reason }
+            : {}),
+          idempotencyKey: `context:compact:${ctx.agent.name}:${resolved.channelId}:${ctx.triggerEvent.id}`,
+        }),
+      },
+    );
+    const event = await response.json();
+    if (!response.ok) return { error: event };
+    return {
+      ok: true,
+      operation: "compact",
+      channelId: resolved.channelId,
+      summarizedThrough: record.lastProcessedAt,
+      summaryChars: record.summaryText.length,
+      event,
+    };
+  }
+
+  if (tool === "memory_context_clear") {
+    const parsedResult = parseToolArgs(tool, contextLifecycleSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const resolved = resolveChannelId(ctx, parsedResult.data.channelId);
+    if (!resolved.ok) return { error: resolved.error };
+    const response = await ctx.apiFetch(
+      `/api/agents/${encodeURIComponent(ctx.agent.name)}/context/clear`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-orgops-agent-name": ctx.agent.name,
+        },
+        body: JSON.stringify({
+          channelId: resolved.channelId,
+          ...(parsedResult.data.reason
+            ? { reason: parsedResult.data.reason }
+            : {}),
+          idempotencyKey: `context:clear:${ctx.agent.name}:${resolved.channelId}:${ctx.triggerEvent.id}`,
+        }),
+      },
+    );
+    const event = await response.json();
+    if (!response.ok) return { error: event };
+    return {
+      ok: true,
+      operation: "clear",
+      channelId: resolved.channelId,
+      event,
+    };
+  }
+
   if (tool === "memory_channel_recent_get") {
     const parsedResult = parseToolArgs(tool, channelMemorySchema, args);
     if (!parsedResult.ok) return { error: parsedResult.error };

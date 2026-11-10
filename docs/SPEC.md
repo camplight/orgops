@@ -257,6 +257,13 @@ retain channel history access but do not start a turn for this message. Messages
 without either field keep ordinary channel routing. Scheduled triggers continue
 to require their singular target.
 
+`agent.context.compacted` and `agent.context.cleared` are private runtime
+boundaries for one `(agent, channel)`. Compact carries a whole-channel summary
+and the exact event watermark summarized; clear carries no summary and cuts at
+the marker itself. Both remain in the append-only log, never wake agents, and
+do not hide older events from humans, `/api/events`, or event tools. They only
+change future CLASSIC/RLM prompt and memory composition for the targeted agent.
+
 Target lists are also honored for non-message events. All `voice.*` events are
 runner bookkeeping and never wake agents; speech reaches agents as transcribed
 `message.created` events (see Realtime Voice). Realtime call transcripts
@@ -737,6 +744,12 @@ Presence events (bookkeeping only):
 
 ### Memory
 
+- agent context lifecycle:
+  - `POST /api/agents/:name/context/compact`
+  - `POST /api/agents/:name/context/clear`
+  - both require one channel in which the target agent participates; compact
+    accepts a private whole-channel summary plus its summarized-through
+    timestamp/event ID, while clear retains no summary
 - channel memory:
   - `GET /api/memory/channel/recent`
   - `PUT /api/memory/channel/recent`
@@ -879,7 +892,7 @@ Runner loop:
    - `CLASSIC`: call LLM, enforce JSON event output with retries, validate and emit. Empty final text after tool calls in a human message batch, without a current-channel reply or explicit `noop`, triggers one tool-free summary using the SDK response transcript (maximum 1,200 output tokens and 15 seconds, or the lower agent timeout). Missing transcripts, summary errors, timeouts or unusable output produce a visible incomplete-work notice. This finalization never re-executes tools. Already-posted/staged replies, explicit `noop` calls and non-human batches retain their existing completion behavior. Summary/notice messages have deterministic per-attempt idempotency keys; completion uses `completedWithFallback`. No new event type is introduced. After retry exhaustion, response-format failures are reported on `agent.turn.phase` (`phase: "response.format_error"`) and do not publish a conversational fallback `message.created`. Models whose `replyContract` capability is `plain-text` instead have their final text posted as the reply (see Models and Realtime Voice).
    - `RLM_REPL`: run recursive REPL loop in child process with explicit `done(result)`.
    - `WRAPPED`: skip orgops memory/prompt/skills/model calls and run the configured external runtime recipe.
-9. For native modes, build context from runner guidance + bounded channel history + skills + `soul_contents`, plus a synthetic merged-trigger message when a batch contains multiple events. Human message attachments (except voice-note audio) are downloaded once into `<workspace>/.orgops-attachments/<fileId>/<name>` and exposed as `payload.attachments[].localPath`; image attachments are also inlined as image parts.
+9. For native modes, build context from runner guidance + bounded channel history + skills + `soul_contents`, plus a synthetic merged-trigger message when a batch contains multiple events. The latest per-agent/channel context lifecycle marker is applied before history composition: compact seeds context with its private whole-channel summary and includes only later events, while clear includes only later events. Existing channel/cross-channel summaries are invalidated and rebuilt from that boundary. Human message attachments (except voice-note audio) are downloaded once into `<workspace>/.orgops-attachments/<fileId>/<name>` and exposed as `payload.attachments[].localPath`; image attachments are also inlined as image parts.
 10. For native modes, run model generation in step mode (single-step/attempt calls) and poll pending events for the same `(agent, channel)` between model steps; newly arrived events are merged into subsequent model context. Once a CLASSIC model emits a valid final event, the runner posts it before checking for additional late events. If meaningful late events are present, they extend the same turn as follow-up context rather than invalidating the already-posted response; this continuation is capped. Current-turn `SYNC` `process.*` lifecycle events from the agent's own `shell_run` are suppressed from mid-turn injection because the synchronous tool result already reached the model, while `ASYNC` process output/exit can still provide follow-up context. During CLASSIC turns, unscheduled `events_emit` calls for `message.created` post immediately by default to allow mid-turn collaboration. Callers can opt into retry-safe staging by passing `stageUntilTurnSettled=true`, which returns `delivery.status = staged_until_turn_settled`; validation retries discard staged drafts and only the accepted attempt (or last attempt after retries are exhausted) flushes staged chat output.
 11. On handler failure, call `/api/events/:id/fail` for each event in the failed channel batch. Tool errors during a turn are returned to the model and recorded as `tool.failed` / `tool.executed`; they do not increment the triggering event's failure count.
 
@@ -916,6 +929,13 @@ Current tool families exposed to models:
   - `agents_search`, `agents_create`
   - `agents_publish_workspace`, `agents_unpublish_workspace`, `agents_list_publications`
   - `agents_create_integration_key`
+- memory helpers:
+  - `memory_context_compact` synchronously refreshes the calling agent's full
+    memory from all meaningful human/agent events in the channel, then records
+    the summary and its watermark as the new future-turn boundary
+  - `memory_context_clear` creates a future-turn boundary without a summary
+  - context lifecycle is per agent/channel; events arriving while compacting
+    remain after the summarized watermark and are not lost
 
 ### Workspace Publications
 

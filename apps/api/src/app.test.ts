@@ -6536,6 +6536,195 @@ describe("api app", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("compacts and clears one agent channel without deleting event history", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+    });
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    const cookie = loginRes.headers.get("set-cookie") ?? "";
+    const jsonHeaders = { "content-type": "application/json", cookie };
+    expect(
+      (
+        await app.request("http://localhost/api/agents", {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify({
+            name: "context-agent",
+            modelId: "openai:gpt-4o-mini",
+            workspacePath: ".orgops-data/workspaces/context-agent",
+          }),
+        })
+      ).status,
+    ).toBe(201);
+    const channelRes = await app.request("http://localhost/api/channels", {
+      method: "POST",
+      headers: jsonHeaders,
+      body: JSON.stringify({ name: "context-channel" }),
+    });
+    const channel = (await channelRes.json()) as { id: string };
+    expect(
+      (
+        await app.request(
+          `http://localhost/api/channels/${encodeURIComponent(channel.id)}/subscribe`,
+          {
+            method: "POST",
+            headers: jsonHeaders,
+            body: JSON.stringify({
+              subscriberType: "AGENT",
+              subscriberId: "context-agent",
+            }),
+          },
+        )
+      ).status,
+    ).toBe(200);
+    const oldEventRes = await app.request("http://localhost/api/events", {
+      method: "POST",
+      headers: jsonHeaders,
+      body: JSON.stringify({
+        type: "message.created",
+        source: "human:admin",
+        channelId: channel.id,
+        payload: { text: "durable old history" },
+      }),
+    });
+    const oldEvent = (await oldEventRes.json()) as { id: string; createdAt: number };
+
+    const orm = createDrizzleDb(db);
+    const now = Date.now();
+    for (const table of [schema.channelMemoryRecent, schema.channelMemoryFull]) {
+      orm.insert(table as any)
+        .values({
+          agent_name: "context-agent",
+          channel_id: channel.id,
+          summary_text: "stale channel memory",
+          ...(table === schema.channelMemoryRecent ? { window_start_at: now - 1000 } : {}),
+          last_processed_at: oldEvent.createdAt,
+          last_processed_event_id: oldEvent.id,
+          version: 1,
+          created_at: now,
+          updated_at: now,
+        })
+        .run();
+    }
+    orm.insert(schema.crossChannelMemoryFull)
+      .values({
+        agent_name: "context-agent",
+        summary_text: "stale cross memory",
+        last_processed_at: oldEvent.createdAt,
+        last_processed_event_id: oldEvent.id,
+        version: 1,
+        created_at: now,
+        updated_at: now,
+      })
+      .run();
+
+    const compactBody = {
+      channelId: channel.id,
+      summary: "Private whole-channel runtime memory.",
+      cutoffAt: oldEvent.createdAt,
+      cutoffEventId: oldEvent.id,
+      idempotencyKey: "compact-once",
+    };
+    const compactRes = await app.request(
+      "http://localhost/api/agents/context-agent/context/compact",
+      {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify(compactBody),
+      },
+    );
+    expect(compactRes.status).toBe(201);
+    const compactEvent = (await compactRes.json()) as { id: string; type: string };
+    expect(compactEvent.type).toBe("agent.context.compacted");
+    const duplicateCompactRes = await app.request(
+      "http://localhost/api/agents/context-agent/context/compact",
+      {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify(compactBody),
+      },
+    );
+    expect(duplicateCompactRes.status).toBe(200);
+    expect(((await duplicateCompactRes.json()) as { id: string }).id).toBe(
+      compactEvent.id,
+    );
+    expect(
+      orm
+        .select()
+        .from(schema.channelMemoryFull)
+        .where(eq(schema.channelMemoryFull.agent_name, "context-agent"))
+        .get(),
+    ).toBeUndefined();
+    expect(
+      orm
+        .select()
+        .from(schema.crossChannelMemoryFull)
+        .where(eq(schema.crossChannelMemoryFull.agent_name, "context-agent"))
+        .get(),
+    ).toBeUndefined();
+    const staleMemoryWriteRes = await app.request(
+      "http://localhost/api/memory/channel/full",
+      {
+        method: "PUT",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          agentName: "context-agent",
+          channelId: channel.id,
+          summaryText: "in-flight stale result",
+          lastProcessedAt: oldEvent.createdAt,
+          expectedVersion: 1,
+        }),
+      },
+    );
+    expect(staleMemoryWriteRes.status).toBe(409);
+
+    const clearRes = await app.request(
+      "http://localhost/api/agents/context-agent/context/clear",
+      {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ channelId: channel.id, reason: "new task" }),
+      },
+    );
+    expect(clearRes.status).toBe(201);
+    const staleCompactRes = await app.request(
+      "http://localhost/api/agents/context-agent/context/compact",
+      {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          ...compactBody,
+          idempotencyKey: "stale-compact",
+        }),
+      },
+    );
+    expect(staleCompactRes.status).toBe(409);
+
+    const historyRes = await app.request(
+      `http://localhost/api/events?channelId=${encodeURIComponent(channel.id)}&order=asc&limit=20`,
+      { headers: { cookie } },
+    );
+    const history = (await historyRes.json()) as Array<{ id: string; type: string }>;
+    expect(history.map((event) => event.id)).toContain(oldEvent.id);
+    expect(history.map((event) => event.type)).toEqual(
+      expect.arrayContaining([
+        "agent.context.compacted",
+        "agent.context.cleared",
+      ]),
+    );
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("shows private channels only to owner and invited humans", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");
