@@ -491,7 +491,7 @@ describe("CLASSIC turn completion contract", () => {
       agent: { modelCapabilities: { replyContract: "plain-text" } },
     });
     vi.mocked(generate).mockResolvedValue({
-      text: "I will continue with the spreadsheet next.",
+      text: "I will continue with the remaining work next.",
       toolCalls: [],
       toolResults: [],
       finishReason: "stop",
