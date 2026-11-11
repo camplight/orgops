@@ -29,7 +29,7 @@ function createTestContext(workspacePath: string, injectionEnv: Record<string, s
   };
 }
 
-describe("shell tool env isolation", () => {
+describe("shell tool", () => {
   const createdDirs: string[] = [];
 
   afterEach(() => {
@@ -37,6 +37,7 @@ describe("shell tool env isolation", () => {
       rmSync(dir, { recursive: true, force: true });
     }
     delete process.env.OPENAI_API_KEY;
+    delete process.env.ORGOPS_SHELL_TIMEOUT_KILL_GRACE_MS;
   });
 
   it("does not leak host provider keys without injected secret", async () => {
@@ -63,5 +64,27 @@ describe("shell tool env isolation", () => {
     })) as { stdout: string; stderr: string; exitCode: number };
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe("agent-key");
+  });
+
+  it("captures a fast command that exits while process registration is pending", async () => {
+    process.env.ORGOPS_SHELL_TIMEOUT_KILL_GRACE_MS = "0";
+    const workspace = mkdtempSync(join(tmpdir(), "orgops-shell-test-"));
+    createdDirs.push(workspace);
+    const ctx = createTestContext(workspace, {});
+    ctx.apiFetch = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return new Response("{}", { status: 200 });
+    };
+    ctx.emitEvent = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    };
+
+    const result = (await execute(ctx, "shell_run", {
+      cmd: 'node -e "process.stdout.write(\\"fast\\")"',
+      cwd: workspace,
+      timeoutMs: 1_000,
+    })) as { stdout: string; stderr: string; exitCode: number };
+
+    expect(result).toEqual({ stdout: "fast", stderr: "", exitCode: 0 });
   });
 });
