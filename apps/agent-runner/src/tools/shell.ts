@@ -153,7 +153,7 @@ export async function stopAllRunningProcesses(
   return { processCount: snapshot.length, terminated, killed };
 }
 
-async function spawnTrackedProcess(
+function spawnTrackedProcess(
   ctx: ExecuteContext,
   input: {
     cmd: string;
@@ -257,9 +257,7 @@ async function spawnTrackedProcess(
     }
   });
 
-  try {
-    await registrationPromise;
-  } catch (error) {
+  const ready = registrationPromise.catch((error) => {
     try {
       child.kill("SIGKILL");
     } catch {
@@ -268,8 +266,8 @@ async function spawnTrackedProcess(
     processes.delete(processId);
     finalize();
     throw error;
-  }
-  return { processId, child };
+  });
+  return { processId, child, ready };
 }
 
 export async function execute(
@@ -288,12 +286,13 @@ export async function execute(
       ctx.extraAllowedRoots ?? [],
     );
     const env = parsed.env ?? {};
-    const started = await spawnTrackedProcess(ctx, {
+    const started = spawnTrackedProcess(ctx, {
       cmd: parsed.cmd,
       cwd,
       env,
       executionMode: "ASYNC",
     });
+    await started.ready;
     return { processId: started.processId, pid: started.child.pid ?? null };
   }
 
@@ -354,7 +353,7 @@ export async function execute(
     ctx.extraAllowedRoots ?? [],
   );
   const env = parsed.env ?? {};
-  const { child } = await spawnTrackedProcess(ctx, {
+  const { child, ready } = spawnTrackedProcess(ctx, {
     cmd: parsed.cmd,
     cwd,
     env,
@@ -461,6 +460,7 @@ export async function execute(
     child.once("error", (error) => settle({ code: null, signal: null, error }));
     child.once("close", (code, signal) => settle({ code, signal }));
   });
+  await ready;
   const result = await Promise.race([closePromise, killGracePromise]);
   clearTimeout(timer);
   if (killGraceTimer) clearTimeout(killGraceTimer);
