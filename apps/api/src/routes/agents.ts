@@ -37,6 +37,7 @@ type AgentsDeps = {
 const AGENT_MEMORY_CONTEXT_MODES = new Set([
   "PER_CHANNEL_CROSS_CHANNEL",
   "FULL_CHANNEL_EVENTS",
+  "FULL_CHANNEL_EVENTS_AUTO_COMPACT",
   "OFF",
 ] as const);
 const AGENT_ROLES = new Set(["STANDARD", "SYSTEM"] as const);
@@ -283,7 +284,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     return {
       ok: false,
       error:
-        "memoryContextMode must be one of PER_CHANNEL_CROSS_CHANNEL, FULL_CHANNEL_EVENTS, OFF"
+        "memoryContextMode must be one of PER_CHANNEL_CROSS_CHANNEL, FULL_CHANNEL_EVENTS, FULL_CHANNEL_EVENTS_AUTO_COMPACT, OFF"
     };
   }
 

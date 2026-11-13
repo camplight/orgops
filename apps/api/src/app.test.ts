@@ -2749,6 +2749,17 @@ describe("api app", () => {
     expect(patchedAgent.classicMaxModelSteps).toBeNull();
     expect(patchedAgent.memoryContextMode).toBe("OFF");
 
+    const autoCompactRes = await app.request("http://localhost/api/agents/tuned-agent", {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ memoryContextMode: "FULL_CHANNEL_EVENTS_AUTO_COMPACT" }),
+    });
+    expect(autoCompactRes.status).toBe(200);
+    const autoCompactAgent = (await (
+      await app.request("http://localhost/api/agents/tuned-agent", { headers: { cookie } })
+    ).json()) as { memoryContextMode?: string };
+    expect(autoCompactAgent.memoryContextMode).toBe("FULL_CHANNEL_EVENTS_AUTO_COMPACT");
+
     const invalidPatchRes = await app.request(
       "http://localhost/api/agents/tuned-agent",
       {

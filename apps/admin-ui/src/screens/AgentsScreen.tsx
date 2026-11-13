@@ -20,7 +20,7 @@ type AgentForm = {
   visibility: "PUBLIC" | "PRIVATE";
   mode: "CLASSIC" | "RLM_REPL" | "WRAPPED";
   llmStyle: "DO" | "THINK";
-  memoryContextMode: "PER_CHANNEL_CROSS_CHANNEL" | "FULL_CHANNEL_EVENTS" | "OFF";
+  memoryContextMode: "PER_CHANNEL_CROSS_CHANNEL" | "FULL_CHANNEL_EVENTS" | "FULL_CHANNEL_EVENTS_AUTO_COMPACT" | "OFF";
   emitAuditEvents: boolean;
   llmCallTimeoutMs: string;
   contextSessionGapMs: string;
@@ -1638,7 +1638,9 @@ export function AgentsScreen({
                             memoryContextMode:
                               mode === "FULL_CHANNEL_EVENTS"
                                 ? "FULL_CHANNEL_EVENTS"
-                                : mode === "OFF"
+                                : mode === "FULL_CHANNEL_EVENTS_AUTO_COMPACT"
+                                  ? "FULL_CHANNEL_EVENTS_AUTO_COMPACT"
+                                  : mode === "OFF"
                                   ? "OFF"
                                   : "PER_CHANNEL_CROSS_CHANNEL"
                           }));
@@ -1649,6 +1651,7 @@ export function AgentsScreen({
                           PER_CHANNEL_CROSS_CHANNEL
                         </option>
                         <option value="FULL_CHANNEL_EVENTS">FULL_CHANNEL_EVENTS</option>
+                        <option value="FULL_CHANNEL_EVENTS_AUTO_COMPACT">FULL_CHANNEL_EVENTS_AUTO_COMPACT</option>
                         <option value="OFF">OFF</option>
                       </select>
                     </div>

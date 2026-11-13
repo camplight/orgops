@@ -18,6 +18,7 @@ export type Agent = {
   memoryContextMode?:
     | "PER_CHANNEL_CROSS_CHANNEL"
     | "FULL_CHANNEL_EVENTS"
+    | "FULL_CHANNEL_EVENTS_AUTO_COMPACT"
     | "OFF";
   mode?: "CLASSIC" | "RLM_REPL" | "WRAPPED";
   wrappedConfig?: Record<string, unknown>;

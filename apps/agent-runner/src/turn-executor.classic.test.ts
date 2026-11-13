@@ -33,6 +33,7 @@ function setup(
     agentOverrides?: Partial<Agent>;
     trigger?: Partial<Event>;
     events?: Event[];
+    fetch?: (path: string, init?: RequestInit) => Response | undefined;
   } = {},
 ) {
   const emitted: Array<{
@@ -43,6 +44,8 @@ function setup(
   }> = [];
   let pendingEventBatchIndex = 0;
   const apiFetch = vi.fn(async (path: string, init?: RequestInit) => {
+    const custom = options.fetch?.(path, init);
+    if (custom) return custom;
     if (path === "/api/channels") {
       return Response.json([
         {
@@ -172,6 +175,85 @@ describe("CLASSIC empty final output", () => {
         String(path).includes("after=100"),
       ),
     ).toBe(true);
+  });
+
+  it("summarizes older full chat history once it outgrows the prompt budget", async () => {
+    const history: Event[] = Array.from({ length: 130 }, (_, index) => ({
+      id: `old-${index}`,
+      type: "message.created",
+      source: index % 2 ? "agent:tester" : "human:test",
+      channelId: "chat",
+      payload: { text: `history message ${index}` },
+      createdAt: 1_000 + index,
+    }));
+    const compactBodies: Array<Record<string, unknown>> = [];
+    const ctx = setup({
+      agentOverrides: { memoryContextMode: "FULL_CHANNEL_EVENTS_AUTO_COMPACT" },
+      pendingEventBatches: [[], history, []],
+      fetch: (path, init) => {
+        if (path === "/api/agents/tester/context/compact" && init?.method === "POST") {
+          compactBodies.push(JSON.parse(String(init.body)));
+          return Response.json({ id: "boundary" }, { status: 201 });
+        }
+        return undefined;
+      },
+    });
+    vi.mocked(generate)
+      .mockImplementationOnce(async (_model, messages) => {
+        expect(JSON.stringify(messages)).toContain("history message 0");
+        return { text: "Summary of the early chat.", toolCalls: [], toolResults: [] } as never;
+      })
+      .mockImplementationOnce(async (_model, messages) => {
+        const serialized = JSON.stringify(messages);
+        expect(serialized).toContain("Compacted Channel Context (chat)");
+        expect(serialized).toContain("Summary of the early chat.");
+        expect(serialized).toContain("history message 129");
+        expect(serialized).not.toContain("history message 69");
+        expect(serialized).not.toContain("system.history.truncated");
+        return {
+          toolCalls: [] as never[],
+          toolResults: [] as never[],
+          text: '{"turnStatus":"DONE","type":"noop","payload":{}}',
+        };
+      });
+    await ctx.run();
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(compactBodies).toEqual([
+      expect.objectContaining({
+        channelId: "chat",
+        summary: "Summary of the early chat.",
+        cutoffAt: 1_069,
+        cutoffEventId: "old-69",
+      }),
+    ]);
+  });
+
+  it("keeps dropping the oldest messages in plain full-history mode", async () => {
+    const history: Event[] = Array.from({ length: 130 }, (_, index) => ({
+      id: `old-${index}`,
+      type: "message.created",
+      source: "human:test",
+      channelId: "chat",
+      payload: { text: `history message ${index}` },
+      createdAt: 1_000 + index,
+    }));
+    const ctx = setup({
+      agentOverrides: { memoryContextMode: "FULL_CHANNEL_EVENTS" },
+      pendingEventBatches: [[], history, []],
+    });
+    vi.mocked(generate).mockImplementationOnce(async (_model, messages) => {
+      expect(JSON.stringify(messages)).toContain("system.history.truncated");
+      return {
+        toolCalls: [] as never[],
+        toolResults: [] as never[],
+        text: '{"turnStatus":"DONE","type":"noop","payload":{}}',
+      };
+    });
+    await ctx.run();
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(
+      ctx.apiFetch.mock.calls.some(([path]) => String(path).includes("/context/compact")),
+    ).toBe(false);
   });
 
   it("posts a completion fallback when the model never returns the contract", async () => {

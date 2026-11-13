@@ -31,7 +31,7 @@ type AgentForm = {
   modelId: string;
   visibility: "PUBLIC" | "PRIVATE";
   mode: "CLASSIC" | "RLM_REPL" | "WRAPPED";
-  memoryContextMode: "PER_CHANNEL_CROSS_CHANNEL" | "FULL_CHANNEL_EVENTS" | "OFF";
+  memoryContextMode: "PER_CHANNEL_CROSS_CHANNEL" | "FULL_CHANNEL_EVENTS" | "FULL_CHANNEL_EVENTS_AUTO_COMPACT" | "OFF";
   emitAuditEvents: boolean;
   llmCallTimeoutMs: string;
   contextSessionGapMs: string;
