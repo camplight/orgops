@@ -339,6 +339,9 @@ function formatValidationErrors(validation: EventValidationResult): string {
     .join("\n");
 }
 
+const FINAL_SUMMARY_MAX_TOKENS = 4_000;
+const FINAL_SUMMARY_TIMEOUT_MS = 45_000;
+
 function generateUsedTools(result: GenerateResult): boolean {
   if ((result.toolCalls?.length ?? 0) > 0) return true;
   if ((result.toolResults?.length ?? 0) > 0) return true;
@@ -1419,6 +1422,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       ) {
         // A tool loop that exhausted its model-step budget cannot reliably
         // self-classify. Summarize its real transcript once, without tools.
+        const finalSummaryTimeoutMs = Math.min(llmCallTimeoutMs, FINAL_SUMMARY_TIMEOUT_MS);
         let reply =
           "I stopped after using tools without producing an answer. The requested work may be incomplete. Please ask me to continue.";
         if (result.responseMessages?.length) {
@@ -1438,12 +1442,15 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
                 ]),
                 {
                   maxSteps: 1,
-                  maxTokens: 1200,
+                  // Thinking models spend part of the budget before they write.
+                  maxTokens: FINAL_SUMMARY_MAX_TOKENS,
                   env: injectionEnv,
-                  abortSignal: AbortSignal.timeout(Math.min(llmCallTimeoutMs, 15_000)),
+                  abortSignal: abortSignal
+                    ? AbortSignal.any([abortSignal, AbortSignal.timeout(finalSummaryTimeoutMs)])
+                    : AbortSignal.timeout(finalSummaryTimeoutMs),
                 },
               ),
-              Math.min(llmCallTimeoutMs, 15_000),
+              finalSummaryTimeoutMs,
               "LLM final summary",
             );
             if (summary.usage) {
@@ -1464,6 +1471,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
             }
           } catch {
             // A failed or timed-out summary must still leave a visible notice.
+            abortSignal?.throwIfAborted();
           }
         }
         const notice: ModelEventDraft = {

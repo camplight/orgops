@@ -192,6 +192,22 @@ export function resolveLlmStyleCallOptions(input: {
   };
 }
 
+const COMPATIBLE_REASONING_EFFORTS = ["minimal", "low", "medium", "high"] as const;
+type CompatibleReasoningEffort = (typeof COMPATIBLE_REASONING_EFFORTS)[number];
+
+/**
+ * OpenAI-compatible hosts run thinking models at their own default effort, often the highest.
+ * OPENAI_COMPATIBLE_REASONING_EFFORT sends `reasoning_effort` with every call; unset sends none.
+ */
+export function resolveCompatibleReasoningEffort(
+  env: Record<string, string | undefined>,
+): CompatibleReasoningEffort | undefined {
+  const value = String(env.OPENAI_COMPATIBLE_REASONING_EFFORT ?? "").trim().toLowerCase();
+  return (COMPATIBLE_REASONING_EFFORTS as readonly string[]).includes(value)
+    ? (value as CompatibleReasoningEffort)
+    : undefined;
+}
+
 function normalizeProvider(provider: string) {
   const normalized = provider.trim().toLowerCase();
   if (normalized === "claude") return "anthropic";
@@ -441,6 +457,8 @@ export async function generate(
   } else {
     throw new Error(`Unsupported provider: ${rawProvider}`);
   }
+  const compatibleReasoningEffort =
+    provider === "openai-compatible" ? resolveCompatibleReasoningEffort(env) : undefined;
 
   const styleCall = resolveLlmStyleCallOptions({
     provider,
@@ -480,7 +498,9 @@ export async function generate(
     tools: normalizeToolsForSdk(styleCall.tools),
     ...(styleCall.providerOptions
       ? { providerOptions: styleCall.providerOptions }
-      : {}),
+      : compatibleReasoningEffort
+        ? { providerOptions: { openai: { reasoningEffort: compatibleReasoningEffort } } }
+        : {}),
     abortSignal: options.abortSignal,
   });
   return {
