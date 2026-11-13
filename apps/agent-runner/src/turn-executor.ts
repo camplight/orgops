@@ -1366,9 +1366,11 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
                   ...retryMessages,
                   ...result.responseMessages,
                   {
-                    role: "system",
+                    // Not a system message: generate() hoists those above the transcript,
+                    // where models ignore them and keep calling tools.
+                    role: "user",
                     content:
-                      "The tool phase has ended. Write a short plain-text reply to the human using only the results above. Explain what was accomplished, what failed, and what remains incomplete. Do not claim completion without evidence. Do not call tools or return a JSON event. Do not reveal credentials or secret tool output.",
+                      "[runner] The tool phase has ended. Write a short plain-text reply to the human using only the results above. Explain what was accomplished, what failed, and what remains incomplete. Do not claim completion without evidence. Do not call tools or return a JSON event. Do not reveal credentials or secret tool output.",
                   },
                 ]),
                 {
