@@ -19,6 +19,8 @@ export type ExecuteContext = {
   channelId?: string;
   extraAllowedRoots?: string[];
   injectionEnv: Record<string, string>;
+  // Aborted when a participant cancels the running turn; long tools stop early.
+  abortSignal?: AbortSignal;
   listEventTypes?: (input?: {
     source?: string;
     typePrefix?: string;

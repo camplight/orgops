@@ -460,8 +460,21 @@ export async function execute(
     child.once("error", (error) => settle({ code: null, signal: null, error }));
     child.once("close", (code, signal) => settle({ code, signal }));
   });
+  // A cancelled turn stops its running command right away instead of waiting for the timeout.
+  let cancelled = false;
+  const onAbort = () => {
+    cancelled = true;
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // Already gone.
+    }
+  };
+  if (ctx.abortSignal?.aborted) onAbort();
+  else ctx.abortSignal?.addEventListener("abort", onAbort, { once: true });
   await ready;
   const result = await Promise.race([closePromise, killGracePromise]);
+  ctx.abortSignal?.removeEventListener("abort", onAbort);
   clearTimeout(timer);
   if (killGraceTimer) clearTimeout(killGraceTimer);
   const stdout = Buffer.concat(stdoutChunks).toString("utf-8");
@@ -471,6 +484,13 @@ export async function execute(
       stdout,
       stderr: [stderr, String(result.error)].filter(Boolean).join("\n"),
       exitCode: 1,
+    };
+  }
+  if (cancelled) {
+    return {
+      stdout,
+      stderr: `${stderr}\nCommand stopped because the turn was cancelled.`,
+      exitCode: 130,
     };
   }
   if (timedOut || result.forcedTimeout) {

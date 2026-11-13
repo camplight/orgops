@@ -47,6 +47,7 @@ import {
 } from "./prompt-composer";
 import { recordLlmUsage } from "./billing";
 import { getLatestContextBoundary } from "./context-boundary";
+import { watchTurnCancel } from "./turn-cancel";
 import type { Agent, Event } from "./types";
 import type { RunnerApi } from "./runner/api";
 import {
@@ -93,6 +94,8 @@ type CreateTurnExecutorInput = {
   projectRoot: string;
   skillRoots: Array<{ path: string }>;
   llmCallTimeoutMs: number;
+  // How often a running CLASSIC turn checks for a cancel request (default 1s).
+  turnCancelPollMs?: number;
   runtimeAuth?: {
     apiBaseUrl?: string;
     runnerToken?: string;
@@ -544,7 +547,8 @@ export async function reconcileLateInjectedMessages(input: {
 }
 
 export function createTurnExecutor(input: CreateTurnExecutorInput) {
-  return async function executeTurn(agent: Agent, events: Event[]) {
+  // `abortSignal` fires when a participant cancels a CLASSIC turn; see executeTurn below.
+  const runTurn = async (agent: Agent, events: Event[], abortSignal?: AbortSignal) => {
     if (events.length === 0) return;
     const triggerEvent = events[events.length - 1]!;
     const channelId = triggerEvent?.channelId;
@@ -864,6 +868,8 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
     let pendingMessages: ModelEventDraft[] = [];
     let stagedMessageSequence = 0;
     const flushMessages = async () => {
+      // A cancelled turn posts nothing it was still holding back.
+      abortSignal?.throwIfAborted();
       const flushed = [...pendingMessages];
       for (const [index, draft] of pendingMessages.entries()) {
         await input.api.emitEvent({
@@ -882,6 +888,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       agent,
       triggerEvent,
       channelId,
+      ...(abortSignal ? { abortSignal } : {}),
       ...((agent.mode ?? "CLASSIC") === "CLASSIC"
         ? {
             deferMessage: (draft: ModelEventDraft) => {
@@ -1058,6 +1065,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       return true;
     };
     for (let attempt = 1; attempt <= maxModelAttempts; attempt += 1) {
+      abortSignal?.throwIfAborted();
       pendingMessages = [];
       postedMessageToChannel = false;
       lastResponseText = "";
@@ -1072,6 +1080,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
             maxSteps: classicMaxModelSteps,
             llmStyle: resolveTurnLlmStyle(agent, events),
             env: injectionEnv,
+            ...(abortSignal ? { abortSignal } : {}),
             pullMessages: async () => {
               const injected = await pullInjectedEventMessages({
                 apiFetch: input.api.apiFetch,
@@ -1089,7 +1098,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
           `LLM generate (attempt ${attempt})`,
         );
       } catch (error) {
-        if (!isRetryableToolArgumentValidationError(error)) throw error;
+        if (abortSignal?.aborted || !isRetryableToolArgumentValidationError(error)) throw error;
         correctionAttempts += 1;
         completionProtocolFailed = true;
         if (correctionAttempts >= MAX_EVENT_DISPATCH_ATTEMPTS) break;
@@ -1481,5 +1490,44 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       noReply: true,
       responseFormatError: true,
     });
+  };
+
+  return async function executeTurn(agent: Agent, events: Event[]) {
+    const triggerEvent = events[events.length - 1];
+    const channelId = triggerEvent?.channelId;
+    if (!triggerEvent || !channelId || (agent.mode ?? "CLASSIC") !== "CLASSIC") {
+      return runTurn(agent, events);
+    }
+    // A participant may stop a CLASSIC turn (POST /api/agents/:name/turns/cancel). The model call
+    // and any running shell_run are aborted, held-back replies are dropped, and the batch is done.
+    const cancel = watchTurnCancel({
+      apiFetch: input.api.apiFetch,
+      agentName: agent.name,
+      channelId,
+      triggerEventId: triggerEvent.id,
+      intervalMs: input.turnCancelPollMs,
+    });
+    try {
+      await runTurn(agent, events, cancel.signal);
+    } catch (error) {
+      if (!cancel.signal.aborted) throw error;
+      try {
+        await input.api.emitEvent({
+          type: "agent.turn.completed",
+          source: `agent:${agent.name}`,
+          channelId,
+          payload: {
+            triggerEventId: triggerEvent.id,
+            eventCount: events.length,
+            cancelled: true,
+            noReply: true,
+          },
+        });
+      } catch (emitError) {
+        console.warn("runner.turn.telemetry_failed", emitError);
+      }
+    } finally {
+      cancel.stop();
+    }
   };
 }
