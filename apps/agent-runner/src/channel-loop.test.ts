@@ -7,6 +7,33 @@ function sleep(ms: number) {
 }
 
 describe("channel loop manager", () => {
+  it("handles events from one poll as a single batch", async () => {
+    const agent: Agent = {
+      name: "browser",
+      workspacePath: "/tmp",
+      modelId: "openai:gpt-4o-mini",
+      desiredState: "RUNNING",
+      runtimeState: "RUNNING",
+    };
+    const processedBatches: string[][] = [];
+    const manager = createChannelLoopManager({
+      processBatch: async (_agent, _channelId, events) => {
+        processedBatches.push(events.map((event) => event.id));
+      },
+    });
+    const event = (id: string, createdAt: number): Event => ({
+      id,
+      type: "message.created",
+      source: "human:admin",
+      channelId: "chan-1",
+      payload: { text: id },
+      createdAt,
+    });
+    manager.enqueue(agent, [event("evt-1", 1000), event("evt-2", 1001), event("evt-3", 1002)]);
+    await sleep(10);
+    expect(processedBatches).toEqual([["evt-1", "evt-2", "evt-3"]]);
+  });
+
   it("queues late same-channel events onto one running worker", async () => {
     const agent: Agent = {
       name: "browser",
