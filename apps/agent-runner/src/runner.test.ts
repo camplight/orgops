@@ -1422,6 +1422,70 @@ describe("agent runner", () => {
     expect(requests[0]?.body.payload).toEqual({ step: "diff-ready" });
   });
 
+  it("accepts an events_emit payload sent as a JSON string, as some models do", async () => {
+    const requests: Array<{ path: string; body: any }> = [];
+    const ctx = {
+      agent: {
+        name: "tester",
+        soulContents: "role prompt",
+        workspacePath: "/tmp",
+        modelId: "openai:gpt-4o-mini",
+        desiredState: "RUNNING",
+        runtimeState: "RUNNING",
+      },
+      triggerEvent: {
+        id: "evt-trigger",
+        type: "message.created",
+        payload: { text: "hello" },
+        source: "human:alice",
+        channelId: "chan-1",
+      },
+      channelId: "chan-1",
+      injectionEnv: {},
+      apiFetch: async (path: string, init?: RequestInit) => {
+        if (path === "/api/channels") {
+          return new Response(
+            JSON.stringify([
+              {
+                id: "chan-1",
+                participants: [{ subscriberType: "AGENT", subscriberId: "tester" }],
+              },
+            ]),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
+        requests.push({
+          path,
+          body: JSON.parse(String(init?.body ?? "{}")),
+        });
+        return new Response(JSON.stringify({ id: "evt-custom" }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        });
+      },
+      emitEvent: async () => {},
+      emitAudit: async () => {},
+    };
+
+    const attachment = { fileId: "file-1", name: "avatar.png", mime: "image/png", size: 10 };
+    const result = (await executeTool(ctx, "events_emit", {
+      type: "message.created",
+      payload: JSON.stringify({ text: "Here is the avatar.", attachments: [attachment] }),
+    })) as { error?: string };
+
+    expect(result.error).toBeUndefined();
+
+    expect(requests.length).toBe(1);
+    expect(requests[0]?.path).toBe("/api/events");
+    expect(requests[0]?.body.type).toBe("message.created");
+    expect(requests[0]?.body.channelId).toBe("chan-1");
+    expect(requests[0]?.body.source).toBe("agent:tester");
+    expect(requests[0]?.body.payload).toMatchObject({ text: "Here is the avatar.", attachments: [attachment] });
+  });
+
   it("rejects events_emit when agent is not a channel participant", async () => {
     const requests: string[] = [];
     const ctx = {
