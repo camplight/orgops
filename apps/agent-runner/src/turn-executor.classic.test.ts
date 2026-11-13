@@ -186,6 +186,59 @@ describe("CLASSIC turn cancellation", () => {
   });
 });
 
+describe("CLASSIC image attachments", () => {
+  const imageMessage: Event = {
+    ...trigger,
+    createdAt: 1_000,
+    payload: { text: "what is in this picture?", attachments: [{ fileId: "img-1", mime: "image/png" }] },
+  };
+  const imageTurn = (agentOverrides: Partial<Agent> = {}) =>
+    setup({
+      agentOverrides: { memoryContextMode: "FULL_CHANNEL_EVENTS", ...agentOverrides },
+      events: [imageMessage],
+      pendingEventBatches: [[], [imageMessage], [], [], []],
+      fetch: (path) =>
+        path === "/api/files/img-1"
+          ? new Response(new Uint8Array([137, 80, 78, 71]), { status: 200, headers: { "content-type": "image/png" } })
+          : undefined,
+    });
+  const hasImage = (messages: unknown) => JSON.stringify(messages).includes('"type":"image"');
+
+  it("retries without images when the provider rejects image input, and says why", async () => {
+    const ctx = imageTurn();
+    vi.mocked(generate)
+      .mockImplementationOnce(async (_model, messages) => {
+        expect(hasImage(messages)).toBe(true);
+        throw new Error("AI_APICallError: Invalid image or video input");
+      })
+      .mockImplementationOnce(async (_model, messages) => {
+        expect(hasImage(messages)).toBe(false);
+        expect(JSON.stringify(messages)).toContain("cannot read images");
+        return { text: '{"turnStatus":"DONE","type":"noop","payload":{}}', toolCalls: [], toolResults: [] } as any;
+      });
+    await ctx.run();
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(ctx.emitted.some((event) => event.type === "agent.turn.failed")).toBe(false);
+  });
+
+  it("leaves images out up front for a model declared without image input", async () => {
+    const ctx = imageTurn({ modelCapabilities: { imageInput: false } });
+    vi.mocked(generate).mockImplementationOnce(async (_model, messages) => {
+      expect(hasImage(messages)).toBe(false);
+      return { text: '{"turnStatus":"DONE","type":"noop","payload":{}}', toolCalls: [], toolResults: [] } as any;
+    });
+    await ctx.run();
+    expect(generate).toHaveBeenCalledTimes(1);
+  });
+
+  it("still fails on unrelated provider errors", async () => {
+    const ctx = imageTurn();
+    vi.mocked(generate).mockRejectedValueOnce(new Error("AI_APICallError: rate limited"));
+    await expect(ctx.run()).rejects.toThrow("rate limited");
+    expect(generate).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("CLASSIC tool loop that runs out of steps", () => {
   it("writes the reply from the tool results with room for a thinking model", async () => {
     const ctx = setup();
