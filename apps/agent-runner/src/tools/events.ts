@@ -25,9 +25,20 @@ const scheduleOptionsSchema = z.object({
   delaySeconds: z.number().int().nonnegative().optional(),
 });
 
+/** Some models send a nested object argument as its JSON text; accept that for a payload object. */
+function parseStringifiedObject(value: unknown): unknown {
+  if (typeof value !== "string" || !value.trim().startsWith("{")) return value;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : value;
+  } catch {
+    return value;
+  }
+}
+
 const emitSchema = z.object({
   type: z.string().min(1),
-  payload: z.unknown().optional(),
+  payload: z.preprocess(parseStringifiedObject, z.unknown()).optional(),
   channelId: z.string().min(1).optional(),
   parentEventId: z.string().min(1).optional(),
   idempotencyKey: z.string().min(1).optional(),
