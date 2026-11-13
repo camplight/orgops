@@ -40,6 +40,23 @@ describe("shell tool", () => {
     delete process.env.ORGOPS_SHELL_TIMEOUT_KILL_GRACE_MS;
   });
 
+  it("stops a running command when the turn is cancelled", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "orgops-shell-test-"));
+    createdDirs.push(workspace);
+    const controller = new AbortController();
+    const ctx = { ...createTestContext(workspace, {}), abortSignal: controller.signal };
+    const started = Date.now();
+    setTimeout(() => controller.abort(), 200);
+    const result = (await execute(ctx, "shell_run", {
+      cmd: 'node -e "setTimeout(() => {}, 20000)"',
+      cwd: workspace,
+      timeoutMs: 30000,
+    })) as { exitCode: number | null; stderr: string };
+    expect(Date.now() - started).toBeLessThan(5000);
+    expect(result.exitCode).toBe(130);
+    expect(result.stderr).toContain("the turn was cancelled");
+  });
+
   it("does not leak host provider keys without injected secret", async () => {
     process.env.OPENAI_API_KEY = "host-key";
     const workspace = mkdtempSync(join(tmpdir(), "orgops-shell-test-"));
