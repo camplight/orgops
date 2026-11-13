@@ -141,6 +141,36 @@ describe("CLASSIC turn cancellation", () => {
     });
   });
 
+  it("stops while summarizing long history, before the main model call", async () => {
+    let cancelled = false;
+    const history: Event[] = Array.from({ length: 130 }, (_, index) => ({
+      id: `old-${index}`,
+      type: "message.created",
+      source: "human:test",
+      channelId: "chat",
+      payload: { text: `history message ${index}` },
+      createdAt: 1_000 + index,
+    }));
+    const ctx = setup({
+      cancelRequested: () => cancelled,
+      agentOverrides: { memoryContextMode: "FULL_CHANNEL_EVENTS_AUTO_COMPACT" },
+      pendingEventBatches: [[], history, []],
+    });
+    vi.mocked(generate).mockImplementation(async (_model, _messages, options) => {
+      cancelled = true;
+      return new Promise((_resolve, reject) => {
+        options?.abortSignal?.addEventListener("abort", () => reject(options.abortSignal!.reason), { once: true });
+      });
+    });
+    await expect(ctx.run()).resolves.toBeUndefined();
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(ctx.apiFetch.mock.calls.some(([path]) => String(path).includes("/context/compact"))).toBe(false);
+    expect(ctx.emitted.at(-1)).toMatchObject({
+      type: "agent.turn.completed",
+      payload: { triggerEventId: "trigger", cancelled: true, noReply: true },
+    });
+  });
+
   it("asks for cancellation by this agent and trigger only", async () => {
     const ctx = setup();
     vi.mocked(generate).mockImplementation(async (_model, _messages, options) => {

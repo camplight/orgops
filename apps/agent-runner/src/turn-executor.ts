@@ -806,8 +806,10 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
               contextBoundary?.kind === "compact" ? contextBoundary.summary : undefined,
             env: injectionEnv,
             apiFetch: input.api.apiFetch,
+            ...(abortSignal ? { abortSignal } : {}),
           });
         });
+        abortSignal?.throwIfAborted();
         const result = compacted as Awaited<ReturnType<typeof compactChannelHistory>>;
         if (result) {
           eventHistory = plan.kept;
