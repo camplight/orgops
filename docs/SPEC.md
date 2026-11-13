@@ -901,7 +901,7 @@ Runner loop:
    - if the API marks the agent `runtime_state=STARTING`, clear the runner bootstrap marker and re-run startup/setup; wrapped runtimes are stopped first so refreshed secret env is injected into new sidecars/setup
 5. Pull pending events with per-agent receipt semantics.
 6. Filter control/audit/self-authored/agent-authored events.
-7. Group remaining pending events by channel and process each channel as a single handling batch.
+7. Group remaining pending events by channel and process each channel as a single handling batch. Events returned by one poll are queued together before a channel worker starts, so they form one batch.
 8. Execute by agent mode:
    - `CLASSIC`: call the LLM with a runner-owned turn-completion contract. The preferred terminal path is the non-executing `turn_finish` tool with `DONE`, `BLOCKED`, `WAITING_USER`, or `RETRY_LATER` plus a user-facing message or final event. Models without usable function tools fall back to a top-level `turnStatus` in JSON-event mode or a stripped `ORGOPS_TURN_STATUS` trailer in plain-text mode; fallback output may return `CONTINUE` to extend the same turn. Missing or invalid completion state receives up to three corrective attempts, after which human-triggered turns publish a deterministic incomplete-work notice and emit `agent.turn.phase` with `phase: "turn.completion_error"`. `RETRY_LATER` first reconciles late channel events, then schedules an internal `agent.scheduled.trigger` after a clamped 5-second to 1-hour delay, with at most three scheduled continuations across the chain. Continuation counts are derived only from targeted `system:scheduler` triggers anywhere in the current batch, so newer batched messages cannot reset or spoof the bound. Empty final text after ordinary tool calls in a human message batch, without an explicit terminal call or `noop`, still triggers one tool-free summary using the SDK response transcript (maximum 4,000 output tokens, so a thinking model has room to write after reasoning, and 45 seconds, or the lower agent timeout; a turn cancel also stops it). The closing instruction is sent as the last user message, after the transcript, because system messages are hoisted above it and models then keep calling tools. Missing transcripts, summary errors, timeouts or unusable output produce a visible incomplete-work notice. This finalization never re-executes tools. Summary, completion, scheduled-continuation and fallback messages/events use deterministic idempotency keys; multiple accepted outputs from late-event continuations use stable per-turn sequence suffixes.
    - `RLM_REPL`: run recursive REPL loop in child process with explicit `done(result)`.
@@ -935,7 +935,7 @@ Shutdown behavior:
 
 Current tool families exposed to models:
 
-- `shell_run` (timeout enforced; default 45s; accepts `timeoutMs`; force-kills on timeout)
+- `shell_run` (timeout enforced; default 45s; accepts `timeoutMs`; force-kills on timeout). Its output is returned in the tool result, so its `process.started`/`process.output`/`process.exited` events are recorded as `DELIVERED` channel history and never start a new turn, including after a cancelled turn or a runner restart. `shell_start` processes keep pending lifecycle events, so their exit wakes the agent.
 - `fs_read`, `fs_write`, `fs_list`, `fs_stat`, `fs_mkdir`, `fs_rm`, `fs_move`
 - `shell_start`, `shell_stop`, `shell_status`, `shell_tail`
   - shell commands receive `ORGOPS_AGENT_NAME`, `ORGOPS_AGENT_WORKSPACE` (resolved workspace path), and the agent's resolved secrets as env

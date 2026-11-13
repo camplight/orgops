@@ -83,6 +83,35 @@ describe("shell tool", () => {
     expect(result.stdout.trim()).toBe("agent-key");
   });
 
+  it("records shell_run process events as delivered so they never wake the agent again", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "orgops-shell-test-"));
+    createdDirs.push(workspace);
+    const ctx = createTestContext(workspace, {});
+    const emitted: Array<{ type: string; status?: string }> = [];
+    const posted: Array<{ path: string; status?: string }> = [];
+    ctx.emitEvent = async (event) => {
+      emitted.push(event as { type: string; status?: string });
+    };
+    ctx.apiFetch = async (path, init) => {
+      const body = init?.body ? JSON.parse(String(init.body)) : {};
+      posted.push({ path, status: body.status });
+      return new Response("{}", { status: 200 });
+    };
+    await execute(ctx, "shell_run", { cmd: 'node -e "console.log(1)"', cwd: workspace });
+    // The tool result already carries the output, so a cancelled or restarted runner must not
+    // treat these lifecycle events as new work.
+    expect(emitted.find((event) => event.type === "process.started")?.status).toBe("DELIVERED");
+    expect(posted.find((call) => call.path.endsWith("/output"))?.status).toBe("DELIVERED");
+    expect(posted.find((call) => call.path.endsWith("/exit"))?.status).toBe("DELIVERED");
+
+    emitted.length = 0;
+    posted.length = 0;
+    await execute(ctx, "shell_start", { cmd: 'node -e "console.log(1)"', cwd: workspace });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(emitted.find((event) => event.type === "process.started")?.status).toBeUndefined();
+    expect(posted.find((call) => call.path.endsWith("/exit"))?.status).toBeUndefined();
+  });
+
   it("captures a fast command that exits while process registration is pending", async () => {
     process.env.ORGOPS_SHELL_TIMEOUT_KILL_GRACE_MS = "0";
     const workspace = mkdtempSync(join(tmpdir(), "orgops-shell-test-"));
