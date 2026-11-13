@@ -199,6 +199,10 @@ describe("CLASSIC tool loop that runs out of steps", () => {
       } as any)
       .mockImplementationOnce(async (_model, messages, options) => {
         expect(JSON.stringify(messages)).toContain("core members: Ana, Bo");
+        // System messages are hoisted above the transcript, where models ignore them and keep
+        // calling tools; the closing instruction must be the last conversation message.
+        expect(messages.at(-1)).toMatchObject({ role: "user" });
+        expect(String(messages.at(-1)?.content)).toContain("The tool phase has ended");
         expect(options?.tools).toBeUndefined();
         expect(options?.maxTokens).toBe(4_000);
         expect(options?.abortSignal).toBeInstanceOf(AbortSignal);
