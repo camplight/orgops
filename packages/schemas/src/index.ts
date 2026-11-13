@@ -37,7 +37,7 @@ export const AgentSchema = z.object({
   contextSessionGapMs: z.number().int().positive().optional().nullable(),
   llmStyle: z.enum(["DO", "THINK"]).optional(),
   memoryContextMode: z
-    .enum(["PER_CHANNEL_CROSS_CHANNEL", "FULL_CHANNEL_EVENTS", "OFF"])
+    .enum(["PER_CHANNEL_CROSS_CHANNEL", "FULL_CHANNEL_EVENTS", "FULL_CHANNEL_EVENTS_AUTO_COMPACT", "OFF"])
     .optional(),
   desiredState: z.enum(["RUNNING", "STOPPED"]).optional(),
   runtimeState: z

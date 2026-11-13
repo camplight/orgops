@@ -8,6 +8,7 @@ const runtimeStateSchema = z.enum(["STARTING", "RUNNING", "STOPPED", "CRASHED"])
 const memoryContextModeSchema = z.enum([
   "PER_CHANNEL_CROSS_CHANNEL",
   "FULL_CHANNEL_EVENTS",
+  "FULL_CHANNEL_EVENTS_AUTO_COMPACT",
   "OFF",
 ]);
 

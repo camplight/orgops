@@ -755,7 +755,7 @@ const coreEventShapes: EventShapeDefinition[] = [
           agentName: z.string().min(1),
           modelId: z.string().min(1),
           memoryContextMode: z
-            .enum(["PER_CHANNEL_CROSS_CHANNEL", "FULL_CHANNEL_EVENTS", "OFF"])
+            .enum(["PER_CHANNEL_CROSS_CHANNEL", "FULL_CHANNEL_EVENTS", "FULL_CHANNEL_EVENTS_AUTO_COMPACT", "OFF"])
             .optional(),
           triggerEventId: z.string().min(1).optional(),
           systemPrompt: z.string(),

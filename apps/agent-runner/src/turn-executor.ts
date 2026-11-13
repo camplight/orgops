@@ -44,7 +44,13 @@ import {
   contentCharLength,
   contentForTelemetry,
   estimateContextUsage,
+  HISTORY_MAX_EVENTS,
+  toHistoryMessage,
 } from "./prompt-composer";
+import {
+  compactChannelHistory,
+  planHistoryCompaction,
+} from "./history-compaction";
 import { recordLlmUsage } from "./billing";
 import { getLatestContextBoundary } from "./context-boundary";
 import { watchTurnCancel } from "./turn-cancel";
@@ -78,7 +84,11 @@ const TURN_COMPLETION_ERROR =
 const TURN_CONTINUATION_EXHAUSTED =
   "I could not complete the work after several continuation attempts. The work remains incomplete; please ask me to continue.";
 
-type MemoryContextMode = "PER_CHANNEL_CROSS_CHANNEL" | "FULL_CHANNEL_EVENTS" | "OFF";
+type MemoryContextMode =
+  | "PER_CHANNEL_CROSS_CHANNEL"
+  | "FULL_CHANNEL_EVENTS"
+  | "FULL_CHANNEL_EVENTS_AUTO_COMPACT"
+  | "OFF";
 
 type ModelEventDraft = {
   type: string;
@@ -509,6 +519,7 @@ export function resolveAgentMemoryContextMode(agent: Agent): MemoryContextMode {
   if (
     configured === "PER_CHANNEL_CROSS_CHANNEL" ||
     configured === "FULL_CHANNEL_EVENTS" ||
+    configured === "FULL_CHANNEL_EVENTS_AUTO_COMPACT" ||
     configured === "OFF"
   ) {
     return configured;
@@ -725,7 +736,10 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
             )
           : "",
       ].filter(Boolean);
-    } else if (memoryContextMode === "FULL_CHANNEL_EVENTS") {
+    } else if (
+      memoryContextMode === "FULL_CHANNEL_EVENTS" ||
+      memoryContextMode === "FULL_CHANNEL_EVENTS_AUTO_COMPACT"
+    ) {
       const fullChannelHistory = await listEventsAfterTimestamp(
         input.api.apiFetch,
         channelId,
@@ -759,11 +773,55 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       .filter(Boolean)
       .join("\n\n");
     const contextWindowTokens = await resolveModelContextWindowTokens(agent);
-    const historyMaxChars = computeHistoryBudgetChars({
+    let historyMaxChars = computeHistoryBudgetChars({
       contextWindowTokens,
       system,
       systemContextMessages,
     });
+    // Full chat history that no longer fits is summarized once, like an auto-compacting chat:
+    // older messages become a compacted boundary summary and recent ones stay verbatim.
+    if (memoryContextMode === "FULL_CHANNEL_EVENTS_AUTO_COMPACT") {
+      const orderedHistory = eventHistory
+        .slice()
+        .sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0));
+      const sizes = await Promise.all(
+        orderedHistory.map(async (event) =>
+          contentCharLength((await toHistoryMessage(agent, event)).content),
+        ),
+      );
+      const plan = planHistoryCompaction({
+        events: orderedHistory,
+        sizes,
+        maxChars: historyMaxChars,
+        maxEvents: HISTORY_MAX_EVENTS,
+      });
+      if (plan) {
+        let compacted: Awaited<ReturnType<typeof compactChannelHistory>> = null;
+        await bestEffort("runner.context.auto_compact_failed", async () => {
+          compacted = await compactChannelHistory({
+            agent,
+            channelId,
+            older: plan.older,
+            previousSummary:
+              contextBoundary?.kind === "compact" ? contextBoundary.summary : undefined,
+            env: injectionEnv,
+            apiFetch: input.api.apiFetch,
+          });
+        });
+        const result = compacted as Awaited<ReturnType<typeof compactChannelHistory>>;
+        if (result) {
+          eventHistory = plan.kept;
+          systemContextMessages = [
+            buildSystemMemoryMessage(`Compacted Channel Context (${channelId})`, result.summary),
+          ];
+          historyMaxChars = computeHistoryBudgetChars({
+            contextWindowTokens,
+            system,
+            systemContextMessages,
+          });
+        }
+      }
+    }
     const baseMessages = await buildModelMessages(agent, system, eventHistory, {
       systemContextMessages,
       apiFetch: input.api.apiFetch,

@@ -26,7 +26,7 @@ function readPositiveIntEnv(value: string | undefined, fallback: number): number
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
 }
 
-const HISTORY_MAX_EVENTS = readPositiveIntEnv(
+export const HISTORY_MAX_EVENTS = readPositiveIntEnv(
   process.env.ORGOPS_HISTORY_MAX_EVENTS,
   DEFAULT_MAX_HISTORY_EVENTS,
 );
