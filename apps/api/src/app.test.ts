@@ -6743,6 +6743,104 @@ describe("api app", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("records a cancel request only for the agent's running turn", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    const db = openDb(":memory:");
+    const { app } = createApp({
+      db,
+      dataDir,
+      adminUser: "admin",
+      adminPass: "admin",
+      runnerToken: "test-token",
+    });
+    const loginRes = await app.request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    });
+    const jsonHeaders = {
+      "content-type": "application/json",
+      cookie: loginRes.headers.get("set-cookie") ?? "",
+    };
+    const runnerHeaders = { "content-type": "application/json", "x-orgops-runner-token": "test-token" };
+    expect(
+      (
+        await app.request("http://localhost/api/agents", {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify({
+            name: "cancel-agent",
+            modelId: "openai:gpt-4o-mini",
+            workspacePath: ".orgops-data/workspaces/cancel-agent",
+          }),
+        })
+      ).status,
+    ).toBe(201);
+    const channel = (await (
+      await app.request("http://localhost/api/channels", {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ name: "cancel-channel" }),
+      })
+    ).json()) as { id: string };
+    const cancel = () =>
+      app.request("http://localhost/api/agents/cancel-agent/turns/cancel", {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ channelId: channel.id }),
+      });
+    expect((await cancel()).status).toBe(404);
+    await app.request(`http://localhost/api/channels/${encodeURIComponent(channel.id)}/subscribe`, {
+      method: "POST",
+      headers: jsonHeaders,
+      body: JSON.stringify({ subscriberType: "AGENT", subscriberId: "cancel-agent" }),
+    });
+    expect((await cancel()).status).toBe(409);
+    const lifecycle = (type: string) =>
+      app.request("http://localhost/api/events", {
+        method: "POST",
+        headers: runnerHeaders,
+        body: JSON.stringify({
+          type,
+          source: "agent:cancel-agent",
+          channelId: channel.id,
+          payload: { triggerEventId: "trigger-1" },
+        }),
+      });
+    expect((await lifecycle("agent.turn.started")).status).toBe(201);
+    const first = await cancel();
+    expect(first.status).toBe(202);
+    const requested = (await first.json()) as { id: string; type: string; source: string; payload: unknown };
+    expect(requested).toMatchObject({
+      type: "agent.turn.cancel_requested",
+      source: "human:admin",
+      payload: { targetAgentName: "cancel-agent", triggerEventId: "trigger-1", requestedBy: "human:admin" },
+    });
+    // A second click on Stop returns the same request.
+    expect(((await (await cancel()).json()) as { id: string }).id).toBe(requested.id);
+    const status = async (trigger: string) => {
+      const response = await app.request(
+        `http://localhost/api/agents/cancel-agent/turns/cancel?channelId=${encodeURIComponent(channel.id)}&triggerEventId=${trigger}`,
+        { headers: runnerHeaders },
+      );
+      return response.json();
+    };
+    expect(await status("trigger-1")).toEqual({ cancelRequested: true });
+    expect(await status("trigger-2")).toEqual({ cancelRequested: false });
+    expect((await lifecycle("agent.turn.completed")).status).toBe(201);
+    expect((await cancel()).status).toBe(409);
+    expect(
+      (
+        await app.request("http://localhost/api/agents/cancel-agent/turns/cancel", {
+          method: "POST",
+          headers: jsonHeaders,
+          body: "{}",
+        })
+      ).status,
+    ).toBe(400);
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("shows private channels only to owner and invited humans", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");

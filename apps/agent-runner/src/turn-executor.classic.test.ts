@@ -34,6 +34,7 @@ function setup(
     agentOverrides?: Partial<Agent>;
     trigger?: Partial<Event>;
     events?: Event[];
+    cancelRequested?: () => boolean;
   } = {},
 ) {
   const emitted: Array<{
@@ -57,6 +58,9 @@ function setup(
     if (path.startsWith("/api/events?")) {
       return Response.json(options.pendingEventBatches?.[pendingEventBatchIndex++] ?? []);
     }
+    if (path.startsWith("/api/agents/tester/turns/cancel?")) {
+      return Response.json({ cancelRequested: options.cancelRequested?.() ?? false });
+    }
     if (path === "/api/events" && init?.method === "POST") {
       const body = JSON.parse(String(init.body ?? "{}")) as Record<string, unknown>;
       return Response.json({ id: "evt-posted", status: "DELIVERED", ...body });
@@ -67,6 +71,7 @@ function setup(
     projectRoot: "/tmp",
     skillRoots: [],
     llmCallTimeoutMs: 10_000,
+    turnCancelPollMs: 10,
     api: {
       apiFetch,
       emitEvent: async (event) => {
@@ -113,6 +118,42 @@ async function emit(
 
 beforeEach(() => {
   vi.mocked(generate).mockReset();
+});
+
+describe("CLASSIC turn cancellation", () => {
+  it("stops the model call, posts nothing held back, and completes the turn as cancelled", async () => {
+    let cancelled = false;
+    const ctx = setup({ cancelRequested: () => cancelled });
+    vi.mocked(generate).mockImplementation(async (_model, _messages, options) => {
+      // The model stages a reply, then keeps working until the turn is aborted.
+      await emit(options?.tools, "half-finished answer", { stageUntilTurnSettled: true });
+      cancelled = true;
+      return new Promise((_resolve, reject) => {
+        options?.abortSignal?.addEventListener("abort", () => reject(options.abortSignal!.reason), { once: true });
+      });
+    });
+    await expect(ctx.run()).resolves.toBeUndefined();
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(ctx.emitted.filter((event) => event.type === "message.created")).toHaveLength(0);
+    expect(ctx.emitted.at(-1)).toMatchObject({
+      type: "agent.turn.completed",
+      payload: { triggerEventId: "trigger", cancelled: true, noReply: true },
+    });
+  });
+
+  it("asks for cancellation by this agent and trigger only", async () => {
+    const ctx = setup();
+    vi.mocked(generate).mockImplementation(async (_model, _messages, options) => {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      await emit(options?.tools, "answer");
+      return { text: "", toolCalls: [{ toolName: "turn_finish", input: { outcome: "completed" } }], finishReason: "tool-calls" } as any;
+    });
+    await ctx.run();
+    const polls = ctx.apiFetch.mock.calls.map(([path]) => String(path)).filter((path) => path.includes("/turns/cancel?"));
+    expect(polls.length).toBeGreaterThan(0);
+    expect(polls[0]).toBe("/api/agents/tester/turns/cancel?channelId=chat&triggerEventId=trigger");
+    expect(ctx.emitted.some((event) => event.type === "agent.turn.completed" && event.payload?.cancelled)).toBe(false);
+  });
 });
 
 describe("CLASSIC empty final output", () => {
