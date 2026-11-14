@@ -938,7 +938,7 @@ Current tool families exposed to models:
 - `shell_run` (timeout enforced; default 45s; accepts `timeoutMs`; force-kills on timeout). Its output is returned in the tool result, so its `process.started`/`process.output`/`process.exited` events are recorded as `DELIVERED` channel history and never start a new turn, including after a cancelled turn or a runner restart. `shell_start` processes keep pending lifecycle events, so their exit wakes the agent.
 - `fs_read`, `fs_write`, `fs_list`, `fs_stat`, `fs_mkdir`, `fs_rm`, `fs_move`
 - `shell_start`, `shell_stop`, `shell_status`, `shell_tail`
-  - shell commands receive `ORGOPS_AGENT_NAME`, `ORGOPS_AGENT_WORKSPACE` (resolved workspace path), and the agent's resolved secrets as env
+  - shell commands receive `ORGOPS_AGENT_NAME`, `ORGOPS_AGENT_WORKSPACE` (resolved workspace path), `ORGOPS_CHANNEL_ID` (the channel the turn runs in, when it has one), and the agent's resolved secrets as env
 - event/navigation helpers:
   - `events_emit`
   - `events_channel_messages`, `events_search`, `events_payload_read`
