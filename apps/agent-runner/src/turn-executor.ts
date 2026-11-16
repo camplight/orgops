@@ -1390,7 +1390,10 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
               });
             }
             const text = summary.text?.trim();
-            if (text && !/^(\{|```)/.test(text) && !generateUsedTools(summary)) {
+            // Some providers serialize attempted tool calls into text even when
+            // tools are disabled. Never publish that protocol as a human reply.
+            const hasToolMarkup = /<\/?(?:tool_call|tool_calls|arg_key|arg_value|function_calls|invoke|parameter)\b|<\|(?:tool_call|tool_calls|function_call)[^>]*\|>/i.test(text ?? "");
+            if (text && !/^(\{|```)/.test(text) && !hasToolMarkup && !generateUsedTools(summary)) {
               reply = text;
             }
           } catch {
