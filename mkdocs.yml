@@ -1,0 +1,90 @@
+site_name: OrgOps
+site_description: Self-hosted control plane for teams of AI agents running across multiple machines.
+site_url: https://camplight.github.io/orgops/
+repo_url: https://github.com/camplight/orgops
+repo_name: camplight/orgops
+edit_uri: edit/main/docs/
+copyright: Licensed under the Apache License 2.0
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.indexes
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  icon:
+    repo: fontawesome/brands/github
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Installation: getting-started/installation.md
+      - Your first agent: getting-started/first-agent.md
+      - Use cases: use-cases.md
+  - Concepts:
+      - Architecture: concepts/architecture.md
+      - Agents: concepts/agents.md
+      - Channels and events: concepts/events.md
+      - Skills: concepts/skills.md
+      - Secrets: concepts/secrets.md
+  - Guides:
+      - Production deployment: guides/deployment.md
+      - Multi-host runners: guides/runners.md
+      - OpsCLI: guides/opscli.md
+      - Wrapped agents: guides/wrapped-agents.md
+      - Wrapped agent invites: WRAPPED_AGENT_INVITES.md
+      - Embedding agents in your app: guides/embedding.md
+      - Deployment security: DEPLOYMENT_SECURITY.md
+  - Reference:
+      - Configuration: reference/configuration.md
+      - HTTP and WebSocket API: reference/api.md
+      - Implementation spec: SPEC.md
+  - Contributing: contributing.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
