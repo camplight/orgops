@@ -32,11 +32,11 @@ jobs:
         with:
           python-version: "3.x"
 
-      - name: Install MkDocs Material
-        run: pip install "mkdocs>=1.6,<2" "mkdocs-material>=9.5,<10"
+      - name: Install Zensical
+        run: pip install "zensical>=0.1.2,<0.2"
 
       - name: Build site
-        run: mkdocs build --strict
+        run: zensical build --clean --strict
 
       - name: Upload Pages artifact
         if: github.event_name != 'pull_request'

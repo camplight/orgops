@@ -75,22 +75,23 @@ npm run scenario:test:countdown
 
 ## Working on the docs
 
-The site is built with [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/).
+The site is built with [Zensical](https://zensical.org/), which reads the existing
+`mkdocs.yml`.
 
-Requires Python 3. Install MkDocs into a virtual environment in the repository root
+Requires Python 3. Install Zensical into a virtual environment in the repository root
 (`.venv/` is gitignored):
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install "mkdocs>=1.6,<2" "mkdocs-material>=9.5,<10"
+pip install "zensical>=0.1.2,<0.2"
 
-mkdocs serve                       # live preview at http://127.0.0.1:8000
-mkdocs build --strict              # the same check CI runs
+zensical serve                     # preview at http://localhost:8000
+zensical build --clean --strict    # the same check CI runs
 ```
 
-`mkdocs serve` reloads the page when you edit files in `docs/` or `mkdocs.yml`. Stop it
-with `Ctrl+C`; run `deactivate` to leave the virtual environment.
+`--strict` fails the build on links to missing pages or anchors. Stop the preview with
+`Ctrl+C`; run `deactivate` to leave the virtual environment.
 
 Pages live in `docs/`, navigation in `mkdocs.yml`. The site is published to GitHub Pages
 by `.github/workflows/docs.yml` on every push to `main` that touches the docs.
