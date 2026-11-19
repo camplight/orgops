@@ -765,6 +765,24 @@ describe("human tool-only final summaries", () => {
     expect(replies).toHaveLength(1);
     expect(replies[0].payload?.text).toContain("may be incomplete");
   });
+  it.each([
+    '<tool_call>shell_run<tool_call>shell_run(cmd="ls /workspace")</arg_value></tool_call>',
+    'Checking now. <tool_call>shell_run</tool_call>',
+    '<TOOL_CALL name="shell_run">ls</TOOL_CALL>',
+    '<function_calls><invoke name="shell_run"><parameter name="cmd">ls</parameter></invoke></function_calls>',
+    '<|tool_call|>shell_run',
+  ])("does not publish serialized tool markup: %s", async text => {
+    const ctx = setup();
+    vi.mocked(generate).mockResolvedValueOnce(exhausted).mockResolvedValueOnce({text});
+    await ctx.run();
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(generate).mock.calls[1][2]?.tools).toBeUndefined();
+    const replies = ctx.emitted.filter(event => event.type === "message.created");
+    expect(replies).toHaveLength(1);
+    expect(replies[0].payload?.text).toContain("may be incomplete");
+    expect(replies[0].payload?.text).not.toContain("shell_run");
+  });
+
   it("bounds a hanging summary and posts one notice", async () => {
     vi.useFakeTimers();
     try {
