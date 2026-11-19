@@ -1052,6 +1052,7 @@ Security note: wrapped `source`, `setup.command`, and `runtime.command` are host
 - `OPENROUTER_BASE_URL`, `OPENROUTER_HTTP_REFERER`, `OPENROUTER_APP_TITLE`
 - `LIQUID_BASE_URL` (optional; defaults to `https://labs.liquid.ai/api/v1`; store with `LIQUID_API_KEY` as OrgOps secrets)
 - `OPENAI_COMPATIBLE_API_KEY`, `OPENAI_COMPATIBLE_BASE_URL` (for local/OpenAI-compatible runtimes)
+- `OPENAI_COMPATIBLE_REASONING_EFFORT` (optional `minimal` | `low` | `medium` | `high`; sent as `reasoning_effort` on every OpenAI-compatible call. Unset sends nothing, so the host's default applies, which for some thinking models is the highest effort)
 - `ORGOPS_VOICE_BROKER` (`direct-openai-calls` default, or `livekit`)
 - `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `LIVEKIT_TOKEN_TTL_SECONDS`
 - `ORGOPS_GIT_BASH_PATH`
