@@ -163,7 +163,7 @@ describe("CLASSIC empty final output", () => {
       return {
         toolCalls: [] as never[],
         toolResults: [] as never[],
-        text: '{"turnStatus":"DONE","type":"noop","payload":{}}',
+        text: '{"turnStatus":"WORK_FULLY_COMPLETE","type":"noop","payload":{}}',
       };
     });
     await ctx.run();
@@ -207,7 +207,7 @@ describe("CLASSIC empty final output", () => {
         return {
           toolCalls: [] as never[],
           toolResults: [] as never[],
-          text: '{"turnStatus":"DONE","type":"message.created","payload":"bad"}',
+          text: '{"turnStatus":"WORK_FULLY_COMPLETE","type":"message.created","payload":"bad"}',
         };
       })
       .mockImplementationOnce(async (_model, messages, options) => {
@@ -216,7 +216,7 @@ describe("CLASSIC empty final output", () => {
         return {
           toolCalls: [] as never[],
           toolResults: [] as never[],
-          text: '{"turnStatus":"DONE","type":"noop","payload":{}}',
+          text: '{"turnStatus":"WORK_FULLY_COMPLETE","type":"noop","payload":{}}',
         };
       });
     await ctx.run();
@@ -231,7 +231,7 @@ describe("CLASSIC empty final output", () => {
     const ctx = setup();
     vi.mocked(generate).mockImplementation(async (_model, _messages, options) => {
       await emit(options?.tools, "answer", { stageUntilTurnSettled: true });
-      return { toolCalls: [] as never[], toolResults: [] as never[], text: '{"turnStatus":"DONE","type":"noop","payload":{}}' };
+      return { toolCalls: [] as never[], toolResults: [] as never[], text: '{"turnStatus":"WORK_FULLY_COMPLETE","type":"noop","payload":{}}' };
     });
     await ctx.run();
     expect(generate).toHaveBeenCalledTimes(1);
@@ -259,7 +259,7 @@ describe("CLASSIC empty final output", () => {
       return {
         toolCalls: [] as never[],
         toolResults: [] as never[],
-        text: '{"turnStatus":"DONE","type":"noop","payload":{}}',
+        text: '{"turnStatus":"WORK_FULLY_COMPLETE","type":"noop","payload":{}}',
       };
     });
     await ctx.run();
@@ -288,7 +288,7 @@ describe("CLASSIC empty final output", () => {
       .mockResolvedValueOnce({
         toolCalls: [] as never[],
         toolResults: [] as never[],
-        text: '{"turnStatus":"DONE","type":"message.created","payload":{"text":"first answer"}}',
+        text: '{"turnStatus":"WORK_FULLY_COMPLETE","type":"message.created","payload":{"text":"first answer"}}',
       })
       .mockImplementationOnce(async (_model, messages) => {
         const serialized = JSON.stringify(messages);
@@ -297,7 +297,7 @@ describe("CLASSIC empty final output", () => {
         return {
           toolCalls: [] as never[],
           toolResults: [] as never[],
-          text: '{"turnStatus":"DONE","type":"message.created","payload":{"text":"second answer"}}',
+          text: '{"turnStatus":"WORK_FULLY_COMPLETE","type":"message.created","payload":{"text":"second answer"}}',
         };
       });
 
@@ -372,7 +372,7 @@ describe("CLASSIC empty final output", () => {
     vi.mocked(generate).mockResolvedValueOnce({
       toolCalls: [] as never[],
       toolResults: [] as never[],
-      text: '{"turnStatus":"DONE","type":"message.created","payload":{"text":"answer survives"}}',
+      text: '{"turnStatus":"WORK_FULLY_COMPLETE","type":"message.created","payload":{"text":"answer survives"}}',
     });
 
     await ctx.run();
@@ -411,14 +411,14 @@ describe("CLASSIC empty final output", () => {
       .mockResolvedValueOnce({
         toolCalls: [] as never[],
         toolResults: [] as never[],
-        text: '{"turnStatus":"DONE","type":"message.created","payload":{"text":"started"}}',
+        text: '{"turnStatus":"WORK_FULLY_COMPLETE","type":"message.created","payload":{"text":"started"}}',
       })
       .mockImplementationOnce(async (_model, messages) => {
         expect(JSON.stringify(messages)).toContain("server ready");
         return {
           toolCalls: [] as never[],
           toolResults: [] as never[],
-          text: '{"turnStatus":"DONE","type":"noop","payload":{"reason":"observed async output"}}',
+          text: '{"turnStatus":"WORK_FULLY_COMPLETE","type":"noop","payload":{"reason":"observed async output"}}',
         };
       });
 
@@ -435,21 +435,19 @@ describe("CLASSIC empty final output", () => {
 });
 
 describe("CLASSIC turn completion contract", () => {
-  it("accepts a terminal tool call and posts only its user-facing message", async () => {
+  it("accepts terminal JSON without exposing a completion tool", async () => {
     const ctx = setup();
     vi.mocked(generate).mockImplementationOnce(async (_model, _messages, options) => {
-      expect(options?.tools?.turn_finish).toBeDefined();
-      expect(options?.tools?.turn_finish.execute).toBeUndefined();
+      expect(options?.tools?.turn_finish).toBeUndefined();
       return {
-        text: "",
-        toolCalls: [
-          {
-            toolName: "turn_finish",
-            input: { status: "DONE", message: "The report is complete." },
-          },
-        ],
+        text: JSON.stringify({
+          turnStatus: "WORK_FULLY_COMPLETE",
+          type: "message.created",
+          payload: { text: "The report is complete." },
+        }),
+        toolCalls: [],
         toolResults: [],
-        finishReason: "tool-calls",
+        finishReason: "stop",
       };
     });
 
@@ -463,30 +461,29 @@ describe("CLASSIC turn completion contract", () => {
     ).toEqual(["The report is complete."]);
     expect(
       ctx.emitted.find((event) => event.type === "agent.turn.completed")?.payload,
-    ).toMatchObject({ turnStatus: "DONE" });
+    ).toMatchObject({ turnStatus: "WORK_FULLY_COMPLETE" });
   });
 
-  it("corrects an invalid terminal tool call before closing", async () => {
+  it("corrects an invalid terminal JSON response before closing", async () => {
     const ctx = setup();
     vi.mocked(generate)
       .mockResolvedValueOnce({
-        text: "",
-        toolCalls: [{ toolName: "turn_finish", input: { status: "DONE" } }],
+        text: '{"turnStatus":"WORK_FULLY_COMPLETE"}',
+        toolCalls: [],
         toolResults: [],
-        finishReason: "tool-calls",
+        finishReason: "stop",
       })
       .mockImplementationOnce(async (_model, messages) => {
-        expect(JSON.stringify(messages)).toContain("turn_finish call was invalid");
+        expect(JSON.stringify(messages)).toContain("omitted its user-facing message or event");
         return {
-          text: "",
-          toolCalls: [
-            {
-              toolName: "turn_finish",
-              input: { status: "DONE", message: "Finished after correction." },
-            },
-          ],
+          text: JSON.stringify({
+            turnStatus: "WORK_FULLY_COMPLETE",
+            type: "message.created",
+            payload: { text: "Finished after correction." },
+          }),
+          toolCalls: [],
           toolResults: [],
-          finishReason: "tool-calls",
+          finishReason: "stop",
         };
       });
 
@@ -513,7 +510,7 @@ describe("CLASSIC turn completion contract", () => {
         expect(JSON.stringify(messages)).toContain("requested CONTINUE");
         expect(JSON.stringify(messages)).toContain("I will continue now.");
         return {
-          text: "The report is complete.\nORGOPS_TURN_STATUS: DONE",
+          text: "The report is complete.\nORGOPS_TURN_STATUS: WORK_FULLY_COMPLETE",
           toolCalls: [],
           toolResults: [],
           finishReason: "stop",
@@ -557,19 +554,14 @@ describe("CLASSIC turn completion contract", () => {
     const before = Date.now();
     const ctx = setup();
     vi.mocked(generate).mockResolvedValueOnce({
-      text: "",
-      toolCalls: [
-        {
-          toolName: "turn_finish",
-          input: {
-            status: "RETRY_LATER",
-            message: "Sheets is rate-limited; I will retry shortly.",
-            retryAfterSeconds: 30,
-          },
-        },
-      ],
+      text: JSON.stringify({
+        turnStatus: "RETRY_LATER",
+        message: "Sheets is rate-limited; I will retry shortly.",
+        retryAfterSeconds: 30,
+      }),
+      toolCalls: [],
       toolResults: [],
-      finishReason: "tool-calls",
+      finishReason: "stop",
     });
 
     await ctx.run();
@@ -607,32 +599,26 @@ describe("CLASSIC turn completion contract", () => {
     const ctx = setup({ pendingEventBatches: [[lateEvent], []] });
     vi.mocked(generate)
       .mockResolvedValueOnce({
-        text: "",
-        toolCalls: [
-          {
-            toolName: "turn_finish",
-            input: {
-              status: "RETRY_LATER",
-              message: "Sheets is rate-limited; I will retry shortly.",
-              retryAfterSeconds: 30,
-            },
-          },
-        ],
+        text: JSON.stringify({
+          turnStatus: "RETRY_LATER",
+          message: "Sheets is rate-limited; I will retry shortly.",
+          retryAfterSeconds: 30,
+        }),
+        toolCalls: [],
         toolResults: [],
-        finishReason: "tool-calls",
+        finishReason: "stop",
       })
       .mockImplementationOnce(async (_model, messages) => {
         expect(JSON.stringify(messages)).toContain("Use the cached export instead.");
         return {
-          text: "",
-          toolCalls: [
-            {
-              toolName: "turn_finish",
-              input: { status: "DONE", message: "Used the cached export." },
-            },
-          ],
+          text: JSON.stringify({
+            turnStatus: "WORK_FULLY_COMPLETE",
+            type: "message.created",
+            payload: { text: "Used the cached export." },
+          }),
+          toolCalls: [],
           toolResults: [],
-          finishReason: "tool-calls",
+          finishReason: "stop",
         };
       });
 
@@ -676,15 +662,10 @@ describe("CLASSIC turn completion contract", () => {
     };
     const ctx = setup({ events: [scheduled, newerHuman] });
     vi.mocked(generate).mockResolvedValueOnce({
-      text: "",
-      toolCalls: [
-        {
-          toolName: "turn_finish",
-          input: { status: "RETRY_LATER", retryAfterSeconds: 30 },
-        },
-      ],
+      text: '{"turnStatus":"RETRY_LATER","retryAfterSeconds":30}',
+      toolCalls: [],
       toolResults: [],
-      finishReason: "tool-calls",
+      finishReason: "stop",
     });
 
     await ctx.run();
@@ -711,15 +692,10 @@ describe("CLASSIC turn completion contract", () => {
       },
     });
     vi.mocked(generate).mockResolvedValueOnce({
-      text: "",
-      toolCalls: [
-        {
-          toolName: "turn_finish",
-          input: { status: "RETRY_LATER", retryAfterSeconds: 30 },
-        },
-      ],
+      text: '{"turnStatus":"RETRY_LATER","retryAfterSeconds":30}',
+      toolCalls: [],
       toolResults: [],
-      finishReason: "tool-calls",
+      finishReason: "stop",
     });
 
     await ctx.run();
