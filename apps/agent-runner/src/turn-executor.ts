@@ -323,6 +323,9 @@ function formatValidationErrors(validation: EventValidationResult): string {
     .join("\n");
 }
 
+const FINAL_SUMMARY_MAX_TOKENS = 4_000;
+const FINAL_SUMMARY_TIMEOUT_MS = 45_000;
+
 function generateUsedTools(result: GenerateResult): boolean {
   if ((result.toolCalls?.length ?? 0) > 0) return true;
   if ((result.toolResults?.length ?? 0) > 0) return true;
@@ -1361,6 +1364,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       ) {
         // A tool loop that exhausted its model-step budget cannot reliably
         // self-classify. Summarize its real transcript once, without tools.
+        const finalSummaryTimeoutMs = Math.min(llmCallTimeoutMs, FINAL_SUMMARY_TIMEOUT_MS);
         let reply =
           "I stopped after using tools without producing an answer. The requested work may be incomplete. Please ask me to continue.";
         if (result.responseMessages?.length) {
@@ -1373,21 +1377,24 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
                   ...retryMessages,
                   ...result.responseMessages,
                   {
-                    role: "system",
+                    // Not a system message: generate() hoists those above the transcript,
+                    // where models ignore them and keep calling tools.
+                    role: "user",
                     content:
-                      "The tool phase has ended. Write a short plain-text reply to the human using only the results above. Explain what was accomplished, what failed, and what remains incomplete. Do not claim completion without evidence. Do not call tools or return a JSON event. Do not reveal credentials or secret tool output.",
+                      "[runner] The tool phase has ended. Write a short plain-text reply to the human using only the results above. Explain what was accomplished, what failed, and what remains incomplete. Do not claim completion without evidence. Do not call tools or return a JSON event. Do not reveal credentials or secret tool output.",
                   },
                 ])),
                 {
                   maxSteps: 1,
-                  maxTokens: 1200,
+                  // Thinking models spend part of the budget before they write.
+                  maxTokens: FINAL_SUMMARY_MAX_TOKENS,
                   openaiCompatibleReasoningEffort:
                     agent.openaiCompatibleReasoningEffort ?? undefined,
                   env: injectionEnv,
-                  abortSignal: AbortSignal.timeout(Math.min(llmCallTimeoutMs, 15_000)),
+                  abortSignal: AbortSignal.timeout(finalSummaryTimeoutMs),
                 },
               ),
-              Math.min(llmCallTimeoutMs, 15_000),
+              finalSummaryTimeoutMs,
               "LLM final summary",
             );
             if (summary.usage) {

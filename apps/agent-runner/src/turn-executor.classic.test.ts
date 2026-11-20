@@ -862,3 +862,32 @@ describe("human tool-only final summaries", () => {
     expect(ctx.emitted.filter(event=>event.type === "message.created")).toHaveLength(0);
   });
 });
+
+describe("CLASSIC tool loop that runs out of steps", () => {
+  it("writes the reply from the tool results with room for a thinking model", async () => {
+    const ctx = setup();
+    vi.mocked(generate)
+      .mockResolvedValueOnce({
+        text: "",
+        toolCalls: [{ toolName: "shell_run" }],
+        toolResults: [{ toolName: "shell_run" }],
+        finishReason: "tool-calls",
+        responseMessages: [{ role: "assistant", content: "core members: Ana, Bo" }],
+      } as any)
+      .mockImplementationOnce(async (_model, messages, options) => {
+        expect(JSON.stringify(messages)).toContain("core members: Ana, Bo");
+        // System messages are hoisted above the transcript, where models ignore them and keep
+        // calling tools; the closing instruction must be the last conversation message.
+        expect(messages.at(-1)).toMatchObject({ role: "user" });
+        expect(String(messages.at(-1)?.content)).toContain("The tool phase has ended");
+        expect(options?.tools).toBeUndefined();
+        expect(options?.maxTokens).toBe(4_000);
+        expect(options?.abortSignal).toBeInstanceOf(AbortSignal);
+        return { text: "| Core member |\n| Ana |\n| Bo |", toolCalls: [], toolResults: [], finishReason: "stop" } as any;
+      });
+    await ctx.run();
+    expect(generate).toHaveBeenCalledTimes(2);
+    const replies = ctx.emitted.filter((event) => event.type === "message.created");
+    expect(replies.map((event) => event.payload?.text)).toEqual(["| Core member |\n| Ana |\n| Bo |"]);
+  });
+});
