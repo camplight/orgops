@@ -613,17 +613,12 @@ served by chat completions, so `generate()` in `packages/llm`
 and retrying transient `server_error` responses. Memory summarization uses the
 same path. Because these models do not follow the JSON event contract
 reliably, their `replyContract` capability defaults to `plain-text`. They use
-the same terminal `turn_finish` tool as other CLASSIC models; if function
-calling is unavailable, the runner accepts and strips an
-`ORGOPS_TURN_STATUS` trailer from final text. Calling the `noop` tool ends the
-turn without posting, and `events_emit` is reserved for other side effects.
-Both terminal tools omit `execute`, so the AI SDK and realtime loop stop on
-them and return the call to the runner. If the model posts to the current
-channel through `events_emit` anyway, the runner requires a completion outcome
-but does not post the final text a second time. If a realtime response contains
-both executable and terminal tool calls, the loop executes the actions, defers
-the terminal call in-band, and requires a fresh terminal call after the model
-has observed the action results.
+an `ORGOPS_TURN_STATUS` trailer in final text, which the runner accepts and
+strips before posting. Calling the `noop` tool ends the turn without posting,
+and `events_emit` is reserved for other side effects. `noop` omits `execute`,
+so the AI SDK and realtime loop stop and return the call to the runner. If the
+model posts to the current channel through `events_emit` anyway, the runner
+requires a completion outcome but does not post the final text a second time.
 
 Agents store `llm_style` (`DO` default, or `THINK`), configured per agent in
 the admin UI. CLASSIC turns pass it into `generate()`. For OpenAI reasoning
@@ -892,7 +887,7 @@ Runner loop:
 6. Filter control/audit/self-authored/agent-authored events.
 7. Group remaining pending events by channel and process each channel as a single handling batch.
 8. Execute by agent mode:
-   - `CLASSIC`: call the LLM with a runner-owned turn-completion contract. The preferred terminal path is the non-executing `turn_finish` tool with `DONE`, `BLOCKED`, `WAITING_USER`, or `RETRY_LATER` plus a user-facing message or final event. Models without usable function tools fall back to a top-level `turnStatus` in JSON-event mode or a stripped `ORGOPS_TURN_STATUS` trailer in plain-text mode; fallback output may return `CONTINUE` to extend the same turn. Missing or invalid completion state receives up to three corrective attempts, after which human-triggered turns publish a deterministic incomplete-work notice and emit `agent.turn.phase` with `phase: "turn.completion_error"`. `RETRY_LATER` first reconciles late channel events, then schedules an internal `agent.scheduled.trigger` after a clamped 5-second to 1-hour delay, with at most three scheduled continuations across the chain. Continuation counts are derived only from targeted `system:scheduler` triggers anywhere in the current batch, so newer batched messages cannot reset or spoof the bound. Empty final text after ordinary tool calls in a human message batch, without an explicit terminal call or `noop`, still triggers one tool-free summary using the SDK response transcript (maximum 1,200 output tokens and 15 seconds, or the lower agent timeout). Missing transcripts, summary errors, timeouts or unusable output (including serialized tool-call markup, even embedded in prose) produce a visible incomplete-work notice. This finalization never re-executes tools. Summary, completion, scheduled-continuation and fallback messages/events use deterministic idempotency keys; multiple accepted outputs from late-event continuations use stable per-turn sequence suffixes.
+   - `CLASSIC`: call the LLM with a runner-owned turn-completion contract and no completion tool. JSON-event models return a top-level `turnStatus`; plain-text models append a stripped `ORGOPS_TURN_STATUS` trailer. Terminal statuses are `WORK_FULLY_COMPLETE`, `BLOCKED`, `WAITING_USER`, and `RETRY_LATER`; `CONTINUE` extends the same turn. `WORK_FULLY_COMPLETE` deliberately names completion of the requested work rather than completion of the current message. Missing or invalid completion state receives up to three corrective attempts, after which human-triggered turns publish a deterministic incomplete-work notice and emit `agent.turn.phase` with `phase: "turn.completion_error"`. `RETRY_LATER` first reconciles late channel events, then schedules an internal `agent.scheduled.trigger` after a clamped 5-second to 1-hour delay, with at most three scheduled continuations across the chain. Continuation counts are derived only from targeted `system:scheduler` triggers anywhere in the current batch, so newer batched messages cannot reset or spoof the bound. Empty final text after ordinary tool calls in a human message batch, without a valid completion response or `noop`, still triggers one tool-free summary using the SDK response transcript (maximum 1,200 output tokens and 15 seconds, or the lower agent timeout). Missing transcripts, summary errors, timeouts or unusable output (including serialized tool-call markup, even embedded in prose) produce a visible incomplete-work notice. This finalization never re-executes tools. Summary, completion, scheduled-continuation and fallback messages/events use deterministic idempotency keys; multiple accepted outputs from late-event continuations use stable per-turn sequence suffixes.
    - `RLM_REPL`: run recursive REPL loop in child process with explicit `done(result)`.
    - `WRAPPED`: skip orgops memory/prompt/skills/model calls and run the configured external runtime recipe.
 9. For native modes, build context from runner guidance + bounded channel history + skills + `soul_contents`, plus a synthetic merged-trigger message when a batch contains multiple events. The latest per-agent/channel context lifecycle marker is applied before history composition: compact seeds context with its private whole-channel summary and includes only later events, while clear includes only later events. Existing channel/cross-channel summaries are invalidated and rebuilt from that boundary. Human message attachments (except voice-note audio) are downloaded once into `<workspace>/.orgops-attachments/<fileId>/<name>` and exposed as `payload.attachments[].localPath`; image attachments are also inlined as image parts. When the agent's `modelCapabilities.imageInput` is `false`, or the provider rejects image input for a CLASSIC turn (for example `Invalid image or video input`), each image part is replaced by a short note that the model cannot read images and the attempt is retried once, so the agent can tell the person instead of the turn failing.
@@ -921,7 +916,7 @@ Current tool families exposed to models:
 - `shell_run` (timeout enforced; default 45s; accepts `timeoutMs`; force-kills on timeout)
 - `fs_read`, `fs_write`, `fs_list`, `fs_stat`, `fs_mkdir`, `fs_rm`, `fs_move`
 - `shell_start`, `shell_stop`, `shell_status`, `shell_tail`
-  - shell commands receive `ORGOPS_AGENT_NAME`, `ORGOPS_AGENT_WORKSPACE` (resolved workspace path), and the agent's resolved secrets as env
+  - shell commands receive `ORGOPS_AGENT_NAME`, `ORGOPS_AGENT_WORKSPACE` (resolved workspace path), `ORGOPS_CHANNEL_ID` (the channel the turn runs in, when it has one), and the agent's resolved secrets as env
 - event/navigation helpers:
   - `events_emit`
   - `events_channel_messages`, `events_search`, `events_payload_read`

@@ -167,8 +167,8 @@ describe("generateWithOpenAIRealtime", () => {
           {
             type: "function_call",
             call_id: "finish-too-early",
-            name: "turn_finish",
-            arguments: '{"status":"DONE","message":"done"}',
+            name: "noop",
+            arguments: '{"reason":"done"}',
           },
         ],
       },
@@ -178,8 +178,8 @@ describe("generateWithOpenAIRealtime", () => {
           {
             type: "function_call",
             call_id: "finish-after-result",
-            name: "turn_finish",
-            arguments: '{"status":"DONE","message":"done"}',
+            name: "noop",
+            arguments: '{"reason":"done"}',
           },
         ],
       },
@@ -200,11 +200,8 @@ describe("generateWithOpenAIRealtime", () => {
               return { entries: ["a.txt"] };
             },
           },
-          turn_finish: {
-            inputSchema: z.object({
-              status: z.literal("DONE"),
-              message: z.string(),
-            }),
+          noop: {
+            inputSchema: z.object({ reason: z.string().optional() }),
           },
         },
       },
@@ -220,8 +217,8 @@ describe("generateWithOpenAIRealtime", () => {
       },
       {
         toolCallId: "finish-after-result",
-        toolName: "turn_finish",
-        input: '{"status":"DONE","message":"done"}',
+        toolName: "noop",
+        input: '{"reason":"done"}',
       },
     ]);
     expect(fake.sent).toContainEqual({
