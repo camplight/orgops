@@ -273,6 +273,40 @@ const scheduleSelfSchema = z
     }
   });
 
+const recurringCreateSchema = z.object({
+  name: z.string().min(1).optional(),
+  channelId: z.string().min(1).optional(),
+  targetAgentName: z.string().min(1).optional(),
+  cronExpression: z.string().min(1),
+  timezone: z.string().min(1).default("UTC"),
+  text: z.string().min(1),
+  payload: z.record(z.string(), z.unknown()).optional(),
+  status: z.enum(["ACTIVE", "PAUSED"]).optional(),
+  misfirePolicy: z.enum(["FIRE_ONCE", "SKIP", "CATCH_UP"]).optional(),
+});
+
+const recurringListSchema = z.object({
+  channelId: z.string().min(1).optional(),
+});
+
+const recurringUpdateSchema = z.object({
+  scheduleId: z.string().min(1),
+  name: z.string().min(1).nullable().optional(),
+  channelId: z.string().min(1).optional(),
+  targetAgentName: z.string().min(1).optional(),
+  cronExpression: z.string().min(1).optional(),
+  timezone: z.string().min(1).optional(),
+  text: z.string().min(1).optional(),
+  payload: z.record(z.string(), z.unknown()).optional(),
+  status: z.enum(["ACTIVE", "PAUSED"]).optional(),
+  misfirePolicy: z.enum(["FIRE_ONCE", "SKIP", "CATCH_UP"]).optional(),
+  version: z.number().int().positive().optional(),
+});
+
+const recurringDeleteSchema = z.object({
+  scheduleId: z.string().min(1),
+});
+
 export const eventsToolDefs: ToolDef[] = [
   [
     "events_emit",
@@ -368,6 +402,26 @@ export const eventsToolDefs: ToolDef[] = [
     "events_schedule_self",
     "Schedule an internal delayed trigger for this agent (not a user-visible message) using exactly one of deliverAt, deliverAtIso, delayMs, or delaySeconds. This agent must be an AGENT participant in the destination channel.",
     scheduleSelfSchema,
+  ],
+  [
+    "events_recurring_create",
+    "Create a durable cron schedule owned by the API. Defaults to the current channel and current agent; timezone must be an IANA timezone.",
+    recurringCreateSchema,
+  ],
+  [
+    "events_recurring_list",
+    "List durable recurring schedules visible to this agent, optionally filtered by channel.",
+    recurringListSchema,
+  ],
+  [
+    "events_recurring_update",
+    "Update, pause, or resume a durable recurring schedule.",
+    recurringUpdateSchema,
+  ],
+  [
+    "events_recurring_delete",
+    "Delete a durable recurring schedule.",
+    recurringDeleteSchema,
   ],
 ];
 
@@ -676,6 +730,69 @@ export async function execute(
   tool: string,
   args: Record<string, unknown>,
 ): Promise<unknown> {
+  const agentHeaders = {
+    "content-type": "application/json",
+    "x-orgops-agent-name": ctx.agent.name,
+  };
+
+  if (tool === "events_recurring_create") {
+    const parsedResult = parseToolArgs(tool, recurringCreateSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const parsed = parsedResult.data;
+    const channelId = parsed.channelId ?? ctx.channelId;
+    if (!channelId) return { error: "No current channelId. Provide channelId explicitly." };
+    const response = await ctx.apiFetch("/api/schedules", {
+      method: "POST",
+      headers: agentHeaders,
+      body: JSON.stringify({
+        ...parsed,
+        channelId,
+        targetAgentName: parsed.targetAgentName ?? ctx.agent.name,
+      }),
+    });
+    return { schedule: await response.json() };
+  }
+
+  if (tool === "events_recurring_list") {
+    const parsedResult = parseToolArgs(tool, recurringListSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const query = new URLSearchParams();
+    if (parsedResult.data.channelId) query.set("channelId", parsedResult.data.channelId);
+    const response = await ctx.apiFetch(
+      `/api/schedules${query.size > 0 ? `?${query.toString()}` : ""}`,
+      { headers: { "x-orgops-agent-name": ctx.agent.name } },
+    );
+    return { schedules: await response.json() };
+  }
+
+  if (tool === "events_recurring_update") {
+    const parsedResult = parseToolArgs(tool, recurringUpdateSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const { scheduleId, ...patch } = parsedResult.data;
+    const response = await ctx.apiFetch(
+      `/api/schedules/${encodeURIComponent(scheduleId)}`,
+      {
+        method: "PATCH",
+        headers: agentHeaders,
+        body: JSON.stringify(patch),
+      },
+    );
+    return { schedule: await response.json() };
+  }
+
+  if (tool === "events_recurring_delete") {
+    const parsedResult = parseToolArgs(tool, recurringDeleteSchema, args);
+    if (!parsedResult.ok) return { error: parsedResult.error };
+    const response = await ctx.apiFetch(
+      `/api/schedules/${encodeURIComponent(parsedResult.data.scheduleId)}`,
+      {
+        method: "DELETE",
+        headers: { "x-orgops-agent-name": ctx.agent.name },
+      },
+    );
+    return await response.json();
+  }
+
   if (tool === "events_channel_messages") {
     const parsedResult = parseToolArgs(tool, channelMessagesSchema, args);
     if (!parsedResult.ok) return { error: parsedResult.error };

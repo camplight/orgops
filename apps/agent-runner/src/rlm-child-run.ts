@@ -100,7 +100,7 @@ process.on("message", async (message: ParentMessage) => {
       },
     };
 
-    await runRlmEvent({
+    const result = await runRlmEvent({
       agent,
       event,
       channelId,
@@ -110,7 +110,12 @@ process.on("message", async (message: ParentMessage) => {
       apiFetch,
       emitEvent,
     });
-    process.send?.({ type: "runEventResult", id, ok: true });
+    process.send?.({
+      type: "runEventResult",
+      id,
+      ok: true,
+      handledEventIds: result?.injectedEventIds ?? [],
+    });
   } catch (error) {
     process.send?.({
       type: "runEventResult",

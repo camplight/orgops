@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { arch, hostname, release } from "node:os";
 import { ChannelRecord, isAgentSubscribed } from "../models/channel";
+import { hydrateEventPayload } from "../channel-events";
 import type { Agent, Event } from "../types";
 import type { RunnerState } from "./state";
 
@@ -176,9 +177,30 @@ export function createRunnerApi(deps: RunnerApiDeps) {
       `&channelId=${encodeURIComponent(channelId)}` +
       (options.typePrefix ? `&typePrefix=${encodeURIComponent(options.typePrefix)}` : "") +
       `&limit=50`;
-    const res = await apiFetch(`/api/events?${query}`);
+    const res = await apiFetch(`/api/events?${query}`, {
+      headers: { "x-orgops-agent-name": agentName },
+    });
     const payload = await res.json();
-    return Array.isArray(payload) ? (payload as Event[]) : [];
+    const events = Array.isArray(payload) ? (payload as Event[]) : [];
+    return Promise.all(events.map((event) => hydrateEventPayload(apiFetch, event)));
+  }
+
+  async function acknowledgeEvent(agentName: string, eventId: string) {
+    await apiFetch(`/api/events/${encodeURIComponent(eventId)}/ack`, {
+      method: "POST",
+      headers: { "x-orgops-agent-name": agentName },
+    });
+  }
+
+  async function failEvent(agentName: string, eventId: string, error: unknown) {
+    await apiFetch(`/api/events/${encodeURIComponent(eventId)}/fail`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orgops-agent-name": agentName,
+      },
+      body: JSON.stringify({ error: String(error) }),
+    });
   }
 
   async function patchAgentState(
@@ -311,6 +333,8 @@ export function createRunnerApi(deps: RunnerApiDeps) {
     sendRunnerHeartbeat,
     listAgents,
     listPendingEventsForAgentChannel,
+    acknowledgeEvent,
+    failEvent,
     patchAgentState,
     emitEvent,
     listChannels,

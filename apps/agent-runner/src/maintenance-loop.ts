@@ -173,7 +173,9 @@ export function createMaintenanceLoop(deps: Dependencies) {
         console.warn(`runner maintenance pass failed for ${agent.name}`, error);
       })
       .finally(() => {
-        maintenanceInFlight.delete(agent.name);
+        if (maintenanceInFlight.get(agent.name) === task) {
+          maintenanceInFlight.delete(agent.name);
+        }
       });
     maintenanceInFlight.set(agent.name, task);
   }

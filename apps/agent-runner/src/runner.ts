@@ -22,11 +22,14 @@ import {
   shouldSuppressProcessLifecycleTrigger,
 } from "./turn-trigger-filter";
 import {
+  boundCurrentEventMessages,
   createTurnExecutor,
+  filterEventsDueForPrompt,
   reconcileLateInjectedMessages,
   resolveAgentClassicMaxModelSteps,
   resolveAgentLlmCallTimeoutMs,
   resolveAgentMemoryContextMode,
+  separateCurrentBatchFromHistory,
 } from "./turn-executor";
 import {
   ensureWrappedAgentReady,
@@ -206,7 +209,18 @@ const channelLoopManager = createChannelLoopManager({
       completedAt: startedAt,
     });
     try {
-      await handleTurn(agent, channelEvents);
+      const turnResult = await handleTurn(agent, channelEvents);
+      const handledIds = turnResult?.handledEventIds?.length
+        ? turnResult.handledEventIds
+        : channelEvents.map((event) => event.id);
+      const acknowledgements = await Promise.allSettled(
+        handledIds.map((eventId) => api.acknowledgeEvent(agent.name, eventId)),
+      );
+      for (const acknowledgement of acknowledgements) {
+        if (acknowledgement.status === "rejected") {
+          console.error("runner.event_ack_failed", summarizeError(acknowledgement.reason));
+        }
+      }
     } finally {
       const existing = state.recentTurnWindows.get(key);
       if (!existing) return;
@@ -230,11 +244,7 @@ const channelLoopManager = createChannelLoopManager({
       });
     }
     for (const event of channelEvents) {
-      await api.apiFetch(`/api/events/${event.id}/fail`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ error: String(error) }),
-      });
+      await api.failEvent(agent.name, event.id, error);
     }
   },
 });
@@ -353,7 +363,14 @@ async function pollAgent(
       return api.listPendingEventsForAgentChannel(agent.name, channelId);
     }),
   );
-  const events = realtimeVoice.consume(agent, pendingBuckets.flat());
+  const polledEvents = pendingBuckets.flat();
+  const events = realtimeVoice.consume(agent, polledEvents);
+  const remainingEventIds = new Set(events.map((event) => event.id));
+  await Promise.all(
+    polledEvents
+      .filter((event) => !remainingEventIds.has(event.id))
+      .map((event) => api.acknowledgeEvent(agent.name, event.id)),
+  );
   ingestIntentEvents({
     intents: state.intentWatch,
     agentName: agent.name,
@@ -397,9 +414,13 @@ async function pollAgent(
         recentWindow,
       })
     ) {
+      await api.acknowledgeEvent(agent.name, event.id);
       continue;
     }
-    if (!shouldHandleEventForAgent(agent, event)) continue;
+    if (!shouldHandleEventForAgent(agent, event)) {
+      await api.acknowledgeEvent(agent.name, event.id);
+      continue;
+    }
     const bucket = pendingByChannel.get(channelId) ?? [];
     bucket.push(event);
     pendingByChannel.set(channelId, bucket);
@@ -538,9 +559,12 @@ export async function loop() {
 }
 
 export {
+  boundCurrentEventMessages,
   buildModelMessages,
+  filterEventsDueForPrompt,
   reconcileLateInjectedMessages,
   resolveAgentClassicMaxModelSteps,
   resolveAgentLlmCallTimeoutMs,
   resolveAgentMemoryContextMode,
+  separateCurrentBatchFromHistory,
 };

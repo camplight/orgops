@@ -50,6 +50,10 @@ it('delivers bounded file-backed inputs completely and keeps later receipts pend
    const text=await response.text();expect(Buffer.byteLength(text)).toBeLessThan(1_200_000);
    const rows=JSON.parse(text);expect(rows).toHaveLength(1);expect(rows[0].id).toBe(ids[i]);
    expect(rows[0].payloadTruncated).toBeUndefined();expect(rows[0].payload.text).toHaveLength(600_000);expect(rows[0].payload.targetAgentNames).toEqual(['tester']);
+   const ack=await app.request(`http://localhost/api/events/${ids[i]}/ack`,{
+    method:'POST',headers:{...headers,'x-orgops-agent-name':'tester'},
+   });
+   expect(ack.status).toBe(200);
    expect((db.prepare("SELECT count(*) AS n FROM event_receipts WHERE status='PENDING'").get() as {n:number}).n).toBe(1-i);
   }
   const chunk=await(await app.request('http://localhost/api/events/'+ids[0]+'/payload?offset=0&limit=128',{headers})).json() as {chunk:string;done:boolean};

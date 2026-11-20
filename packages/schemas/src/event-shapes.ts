@@ -353,6 +353,8 @@ const coreEventShapes: EventShapeDefinition[] = [
         .object({
           text: z.string().min(1),
           targetAgentName: z.string().min(1),
+          scheduleId: z.string().min(1).optional(),
+          scheduledFor: z.number().int().nonnegative().optional(),
         })
         .passthrough(),
     }),

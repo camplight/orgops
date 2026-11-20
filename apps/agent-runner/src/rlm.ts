@@ -99,6 +99,7 @@ type RunReplLoopInput = {
   baseMessages?: LlmMessage[];
   generateFn?: RlmGenerateFn;
   seenEventIds?: Set<string>;
+  consumedEventIds?: Set<string>;
   enableChannelInjection?: boolean;
 };
 
@@ -687,6 +688,7 @@ async function runReplLoop(
     baseMessages,
     generateFn,
     seenEventIds,
+    consumedEventIds,
     enableChannelInjection,
   } = input;
   session.done = false;
@@ -925,6 +927,9 @@ async function runReplLoop(
         shouldInclude: shouldHandleEventForAgent,
       });
       if (injected) {
+        for (const injectedEvent of injected.events) {
+          consumedEventIds?.add(injectedEvent.id);
+        }
         localMessages.push(...injected.messages);
       }
     }
@@ -989,6 +994,7 @@ export async function runRlmEvent(input: {
   }
   const runState: RunState = { spawnedSubagents: 0, toolCallsThisStep: [] };
   const seenEventIds = new Set<string>([event.id]);
+  const consumedEventIds = new Set<string>();
   const rootToolDocs = await bindSessionRuntime({
     agent,
     event,
@@ -1019,8 +1025,10 @@ export async function runRlmEvent(input: {
     baseMessages,
     generateFn,
     seenEventIds,
+    consumedEventIds,
     enableChannelInjection: true,
   });
+  return { injectedEventIds: [...consumedEventIds] };
 }
 
 export function __resetRlmSessionsForTests() {

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { generate } from "@orgops/llm";
 import { recordLlmUsage } from "./billing";
 import { listChannelEventsAfter } from "./channel-events";
@@ -17,14 +18,34 @@ function normalizeTimestamp(value: unknown): number {
 }
 
 function isMeaningfulEvent(event: Event): boolean {
-  if (event.type.startsWith("audit.")) return false;
-  if (event.type.startsWith("telemetry.")) return false;
-  if (event.type.startsWith("tool.")) return false;
-  if (event.type.startsWith("agent.turn.")) return false;
-  if (event.type.startsWith("agent.context.")) return false;
-  if (event.type.startsWith("memory.")) return false;
-  if (event.type === "event.deadlettered") return false;
-  return true;
+  const excludedPrefixes = [
+    "audit.",
+    "telemetry.",
+    "tool.",
+    "process.",
+    "voice.",
+    "wrapper.",
+    "agent.turn.",
+    "agent.control.",
+    "agent.context.",
+    "agent.lifecycle.",
+    "memory.",
+    "scheduler.",
+  ];
+  if (excludedPrefixes.some((prefix) => event.type.startsWith(prefix))) return false;
+  if (
+    event.type === "noop" ||
+    event.type === "event.deadlettered" ||
+    event.source === "system:scheduler"
+  ) {
+    return false;
+  }
+  const source = String(event.source ?? "");
+  return (
+    source.startsWith("human:") ||
+    source.startsWith("agent:") ||
+    (!source.startsWith("system:") && event.type.includes("."))
+  );
 }
 
 function compactEvent(event: Event) {
@@ -81,6 +102,7 @@ type CrossChannelMemoryRecord = {
   windowStartAt?: number;
   lastProcessedAt: number;
   lastProcessedEventId?: string;
+  inputSignature?: string;
   version: number;
   createdAt: number;
   updatedAt: number;
@@ -129,7 +151,7 @@ async function upsertChannelMemoryRecord(
     windowStartAt?: number;
     lastProcessedAt: number;
     lastProcessedEventId?: string;
-    expectedVersion?: number;
+    expectedVersion?: number | null;
   },
 ): Promise<ChannelMemoryRecord> {
   const response = await apiFetch(`/api/memory/channel/${mode}`, {
@@ -188,7 +210,8 @@ async function upsertCrossMemoryRecord(
     windowStartAt?: number;
     lastProcessedAt: number;
     lastProcessedEventId?: string;
-    expectedVersion?: number;
+    inputSignature: string;
+    expectedVersion?: number | null;
   },
 ): Promise<CrossChannelMemoryRecord> {
   const response = await apiFetch(`/api/memory/cross/${mode}`, {
@@ -248,6 +271,27 @@ function getLastEventId(events: Event[]): string | undefined {
   return events[events.length - 1]?.id;
 }
 
+function isCurrentlyDeliverable(event: Event, now: number): boolean {
+  return !event.deliverAt || event.deliverAt <= now;
+}
+
+/**
+ * Summaries may only claim contiguous createdAt coverage. Skipping a not-yet-due
+ * event and watermarking a later due event would permanently hide the skipped
+ * event from both memory refreshes and prompt "events after coverage" queries.
+ */
+function contiguousDeliverablePrefix(events: Event[], now: number): Event[] {
+  const ordered = events
+    .slice()
+    .sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0));
+  const prefix: Event[] = [];
+  for (const event of ordered) {
+    if (!isCurrentlyDeliverable(event, now)) break;
+    prefix.push(event);
+  }
+  return prefix;
+}
+
 export async function refreshChannelRecentMemory(input: {
   agent: Agent;
   channelId: string;
@@ -276,15 +320,10 @@ export async function refreshChannelRecentMemory(input: {
     input.channelId,
     Math.max(0, windowStartAt - 1, normalizeTimestamp(boundary?.cutoffAt)),
   );
-  const meaningfulEvents = events.filter(isMeaningfulEvent);
-  const meaningfulLastProcessedAt = maxEventTimestamp(meaningfulEvents);
-  const nextLastProcessedAt = Math.max(
-    meaningfulLastProcessedAt,
-    normalizeTimestamp(existing?.lastProcessedAt),
-    normalizeTimestamp(boundary?.cutoffAt),
+  const meaningfulEvents = contiguousDeliverablePrefix(events, now).filter(
+    isMeaningfulEvent,
   );
   if (meaningfulEvents.length === 0) {
-    if (existing) return existing;
     const currentBoundary = await getLatestContextBoundary(
       input.apiFetch,
       input.agent.name,
@@ -303,48 +342,39 @@ export async function refreshChannelRecentMemory(input: {
       channelId: input.channelId,
       summaryText: "",
       windowStartAt,
-      lastProcessedAt: nextLastProcessedAt,
-      ...(boundary?.cutoffEventId || boundary?.eventId
-        ? { lastProcessedEventId: boundary.cutoffEventId ?? boundary.eventId }
-        : {}),
+      lastProcessedAt: 0,
+      expectedVersion: existing?.version ?? null,
     });
     return emptyRecord;
   }
-  if (existing && nextLastProcessedAt <= normalizeTimestamp(existing.lastProcessedAt)) {
-    return existing;
+  let summaryText = "";
+  let processedEvents: Event[] = [];
+  for (const chunk of chunkEvents(meaningfulEvents, MAX_EVENTS_PER_PROMPT)) {
+    const summary = await summarizeText(
+      input.agent,
+      await input.getEnv(),
+      input.apiFetch,
+      input.channelId,
+      "memory.channel.recent",
+      "You summarize only the supplied current 10-minute channel window. Keep it concise, factual, and action-oriented. Return plain text only.",
+      [
+        "Produce a current-window channel summary for agent execution context.",
+        "- Include active tasks, decisions, blockers, and unresolved questions.",
+        "- Do not preserve facts merely because they appeared in an older recent summary.",
+        "",
+        `Agent: ${input.agent.name}`,
+        `Channel: ${input.channelId}`,
+        `WindowStartAt: ${windowStartAt}`,
+        summaryText ? `Current summary built in this pass:\n${summaryText}` : "Current summary: <none>",
+        "",
+        "Next meaningful events (ordered):",
+        JSON.stringify(chunk.map(compactEvent), null, 2),
+      ].join("\n"),
+    );
+    if (!summary) return existing;
+    summaryText = clampSummaryText(summary, MEMORY_SUMMARY_MAX_CHARS);
+    processedEvents = processedEvents.concat(chunk);
   }
-  const summary = await summarizeText(
-    input.agent,
-    await input.getEnv(),
-    input.apiFetch,
-    input.channelId,
-    "memory.channel.recent",
-    "You summarize the last 10 minutes of one channel for execution context. Keep it concise, factual, and action-oriented. Return plain text only.",
-    [
-      "Produce a rolling 10-minute channel summary for agent execution context.",
-      "- Include active tasks, decisions, blockers, and unresolved questions.",
-      "- Avoid fluff, speculation, and secrets.",
-      "- Keep details concrete so the agent can continue work without raw history.",
-      "",
-      `Agent: ${input.agent.name}`,
-      `Channel: ${input.channelId}`,
-      `WindowStartAt: ${windowStartAt}`,
-      existing?.summaryText
-        ? `Previous recent summary:\n${existing.summaryText}`
-        : "Previous recent summary: <none>",
-      "",
-      "Recent meaningful events (ordered):",
-      JSON.stringify(
-        meaningfulEvents.slice(-MAX_EVENTS_PER_PROMPT).map(compactEvent),
-        null,
-        2,
-      ),
-    ].join("\n"),
-  );
-  const summaryText = clampSummaryText(
-    summary || existing?.summaryText || "",
-    MEMORY_SUMMARY_MAX_CHARS,
-  );
   const currentBoundary = await getLatestContextBoundary(
     input.apiFetch,
     input.agent.name,
@@ -365,9 +395,11 @@ export async function refreshChannelRecentMemory(input: {
         channelId: input.channelId,
         summaryText,
         windowStartAt,
-        lastProcessedAt: nextLastProcessedAt,
-        ...(getLastEventId(events) ? { lastProcessedEventId: getLastEventId(events) } : {}),
-        ...(existing?.version !== undefined ? { expectedVersion: existing.version } : {}),
+        lastProcessedAt: maxEventTimestamp(processedEvents),
+        ...(getLastEventId(processedEvents)
+          ? { lastProcessedEventId: getLastEventId(processedEvents) }
+          : {}),
+        expectedVersion: existing?.version ?? null,
       }),
     () =>
       getChannelMemoryRecord(input.apiFetch, "recent", input.agent.name, input.channelId),
@@ -413,7 +445,10 @@ export async function refreshChannelFullMemory(input: {
     input.channelId,
     after > 0 ? after : undefined,
   );
-  const meaningfulNewEvents = newEvents.filter(isMeaningfulEvent);
+  const now = Date.now();
+  const meaningfulNewEvents = contiguousDeliverablePrefix(newEvents, now).filter(
+    isMeaningfulEvent,
+  );
   if (meaningfulNewEvents.length === 0) {
     if (existing) return existing;
     const currentBoundary = await getLatestContextBoundary(
@@ -429,16 +464,27 @@ export async function refreshChannelFullMemory(input: {
         input.channelId,
       );
     }
-    return upsertChannelMemoryRecord(input.apiFetch, "full", {
-      agentName: input.agent.name,
-      channelId: input.channelId,
-      summaryText:
-        boundary?.kind === "compact" ? boundary.summary ?? "" : "",
-      lastProcessedAt: after,
-      ...(boundary?.cutoffEventId || boundary?.eventId
-        ? { lastProcessedEventId: boundary.cutoffEventId ?? boundary.eventId }
-        : {}),
-    });
+    return await upsertOrKeepNewer(
+      () =>
+        upsertChannelMemoryRecord(input.apiFetch, "full", {
+          agentName: input.agent.name,
+          channelId: input.channelId,
+          summaryText:
+            boundary?.kind === "compact" ? boundary.summary ?? "" : "",
+          lastProcessedAt: after,
+          ...(boundary?.cutoffEventId || boundary?.eventId
+            ? { lastProcessedEventId: boundary.cutoffEventId ?? boundary.eventId }
+            : {}),
+          expectedVersion: storedExisting?.version ?? null,
+        }),
+      () =>
+        getChannelMemoryRecord(
+          input.apiFetch,
+          "full",
+          input.agent.name,
+          input.channelId,
+        ),
+    );
   }
   const chunks = chunkEvents(meaningfulNewEvents, MAX_EVENTS_PER_PROMPT);
   let summaryText = clampSummaryText(
@@ -446,6 +492,7 @@ export async function refreshChannelFullMemory(input: {
       (boundary?.kind === "compact" ? boundary.summary ?? "" : ""),
     MEMORY_SUMMARY_MAX_CHARS,
   );
+  const processedEvents: Event[] = [];
   for (const chunk of chunks) {
     const nextSummary = await summarizeText(
       input.agent,
@@ -471,12 +518,13 @@ export async function refreshChannelFullMemory(input: {
         JSON.stringify(chunk.map(compactEvent), null, 2),
       ].join("\n"),
     );
-    if (nextSummary) {
-      summaryText = clampSummaryText(nextSummary, MEMORY_SUMMARY_MAX_CHARS);
-    }
+    if (!nextSummary) break;
+    summaryText = clampSummaryText(nextSummary, MEMORY_SUMMARY_MAX_CHARS);
+    processedEvents.push(...chunk);
   }
+  if (processedEvents.length === 0) return existing;
   const nextLastProcessedAt = Math.max(
-    maxEventTimestamp(newEvents),
+    maxEventTimestamp(processedEvents),
     normalizeTimestamp(existing?.lastProcessedAt),
     normalizeTimestamp(boundary?.cutoffAt),
   );
@@ -500,10 +548,10 @@ export async function refreshChannelFullMemory(input: {
         channelId: input.channelId,
         summaryText,
         lastProcessedAt: nextLastProcessedAt,
-        ...(getLastEventId(newEvents)
-          ? { lastProcessedEventId: getLastEventId(newEvents) }
+        ...(getLastEventId(processedEvents)
+          ? { lastProcessedEventId: getLastEventId(processedEvents) }
           : {}),
-        ...(existing?.version !== undefined ? { expectedVersion: existing.version } : {}),
+        expectedVersion: existing?.version ?? null,
       }),
     () => getChannelMemoryRecord(input.apiFetch, "full", input.agent.name, input.channelId),
   );
@@ -516,6 +564,30 @@ function compactChannelMemoryInput(record: ChannelMemoryRecord) {
     lastProcessedAt: normalizeTimestamp(record.lastProcessedAt),
     updatedAt: normalizeTimestamp(record.updatedAt),
   };
+}
+
+function buildCrossInputSignature(
+  mode: CrossMemoryMode,
+  channelIds: string[],
+  records: ChannelMemoryRecord[],
+  boundarySignature: string,
+): string {
+  const byChannel = new Map(records.map((record) => [record.channelId, record]));
+  const canonical = [...new Set(channelIds)]
+    .sort()
+    .map((channelId) => {
+      const record = byChannel.get(channelId);
+      return {
+        channelId,
+        version: record?.version ?? 0,
+        lastProcessedAt: record?.lastProcessedAt ?? 0,
+        lastProcessedEventId: record?.lastProcessedEventId ?? "",
+        summaryHash: createHash("sha256").update(record?.summaryText ?? "").digest("hex"),
+      };
+    });
+  return createHash("sha256")
+    .update(JSON.stringify({ mode, boundarySignature, channels: canonical }))
+    .digest("hex");
 }
 
 async function getContextBoundarySignature(
@@ -557,6 +629,12 @@ async function refreshCrossChannelMemory(input: {
     input.agent.name,
     input.channelIds,
   );
+  const inputSignature = buildCrossInputSignature(
+    input.mode,
+    input.channelIds,
+    channelMemories,
+    boundarySignature,
+  );
   const usable = channelMemories.filter((record) => trimText(record.summaryText).length > 0);
   const maxProcessedAt = usable.reduce(
     (max, record) => Math.max(max, normalizeTimestamp(record.lastProcessedAt)),
@@ -564,19 +642,29 @@ async function refreshCrossChannelMemory(input: {
   );
   if (
     existing &&
-    maxProcessedAt <= normalizeTimestamp(existing.lastProcessedAt) &&
-    usable.length > 0
+    existing.inputSignature === inputSignature
   ) {
     return existing;
   }
   if (usable.length === 0) {
-    if (existing) return existing;
     const currentBoundarySignature = await getContextBoundarySignature(
       input.apiFetch,
       input.agent.name,
       input.channelIds,
     );
-    if (currentBoundarySignature !== boundarySignature) {
+    const currentChannelMemories = await listChannelMemoryRecords(
+      input.apiFetch,
+      input.mode === "recent" ? "recent" : "full",
+      input.agent.name,
+      input.channelIds,
+    );
+    const currentInputSignature = buildCrossInputSignature(
+      input.mode,
+      input.channelIds,
+      currentChannelMemories,
+      currentBoundarySignature,
+    );
+    if (currentInputSignature !== inputSignature) {
       return getCrossMemoryRecord(input.apiFetch, input.mode, input.agent.name);
     }
     const emptyRecord = await upsertCrossMemoryRecord(input.apiFetch, input.mode, {
@@ -586,50 +674,62 @@ async function refreshCrossChannelMemory(input: {
         ? { windowStartAt: Date.now() - RECENT_MEMORY_WINDOW_MS }
         : {}),
       lastProcessedAt: maxProcessedAt,
+      inputSignature,
+      expectedVersion: existing?.version ?? null,
     });
     return emptyRecord;
   }
-  const summaryText = await summarizeText(
-    input.agent,
-    await input.getEnv(),
-    input.apiFetch,
-    undefined,
-    `memory.cross.${input.mode}`,
-    input.mode === "recent"
-      ? "You summarize recent cross-channel context (last 10 minutes) for agent execution. Return plain text only."
-      : "You maintain full cross-channel memory for agent execution. Return plain text only.",
-    [
+  let finalSummary =
+    input.mode === "full"
+      ? clampSummaryText(existing?.summaryText ?? "", MEMORY_SUMMARY_MAX_CHARS)
+      : "";
+  for (const chunk of chunkEvents(usable, MAX_CROSS_CHANNEL_INPUTS)) {
+    const summaryText = await summarizeText(
+      input.agent,
+      await input.getEnv(),
+      input.apiFetch,
+      undefined,
+      `memory.cross.${input.mode}`,
       input.mode === "recent"
-        ? "Produce a single cross-channel summary for the latest 10-minute context."
-        : "Produce/refresh a full cross-channel memory summary.",
-      "- Synthesize overlaps and dependencies across channels.",
-      "- Highlight blockers, assignments, pending follow-ups, and open decisions.",
-      "- Keep concise but execution-ready.",
-      "",
-      `Agent: ${input.agent.name}`,
-      "",
-      existing?.summaryText
-        ? `Existing cross-channel memory:\n${existing.summaryText}`
-        : "Existing cross-channel memory: <none>",
-      "",
-      "Per-channel memory inputs:",
-      JSON.stringify(
-        usable.slice(0, MAX_CROSS_CHANNEL_INPUTS).map(compactChannelMemoryInput),
-        null,
-        2,
-      ),
-    ].join("\n"),
-  );
-  const finalSummary = clampSummaryText(
-    summaryText || existing?.summaryText || "",
-    MEMORY_SUMMARY_MAX_CHARS,
-  );
+        ? "You summarize only the supplied current cross-channel window. Return plain text only."
+        : "You maintain full cross-channel memory for agent execution. Return plain text only.",
+      [
+        input.mode === "recent"
+          ? "Produce a single cross-channel summary for the latest 10-minute context."
+          : "Produce/refresh a full cross-channel memory summary.",
+        "- Synthesize overlaps and dependencies across channels.",
+        "- Highlight blockers, assignments, pending follow-ups, and open decisions.",
+        "",
+        `Agent: ${input.agent.name}`,
+        finalSummary
+          ? `Summary built so far:\n${finalSummary}`
+          : "Summary built so far: <none>",
+        "",
+        "Next per-channel memory inputs:",
+        JSON.stringify(chunk.map(compactChannelMemoryInput), null, 2),
+      ].join("\n"),
+    );
+    if (!summaryText) return existing;
+    finalSummary = clampSummaryText(summaryText, MEMORY_SUMMARY_MAX_CHARS);
+  }
   const currentBoundarySignature = await getContextBoundarySignature(
     input.apiFetch,
     input.agent.name,
     input.channelIds,
   );
-  if (currentBoundarySignature !== boundarySignature) {
+  const currentChannelMemories = await listChannelMemoryRecords(
+    input.apiFetch,
+    input.mode === "recent" ? "recent" : "full",
+    input.agent.name,
+    input.channelIds,
+  );
+  const currentInputSignature = buildCrossInputSignature(
+    input.mode,
+    input.channelIds,
+    currentChannelMemories,
+    currentBoundarySignature,
+  );
+  if (currentInputSignature !== inputSignature) {
     return getCrossMemoryRecord(input.apiFetch, input.mode, input.agent.name);
   }
   return await upsertOrKeepNewer(
@@ -641,10 +741,11 @@ async function refreshCrossChannelMemory(input: {
           ? { windowStartAt: Date.now() - RECENT_MEMORY_WINDOW_MS }
           : {}),
         lastProcessedAt: maxProcessedAt,
+        inputSignature,
         ...(usable[usable.length - 1]?.lastProcessedEventId
           ? { lastProcessedEventId: usable[usable.length - 1]?.lastProcessedEventId }
           : {}),
-        ...(existing?.version !== undefined ? { expectedVersion: existing.version } : {}),
+        expectedVersion: existing?.version ?? null,
       }),
     () => getCrossMemoryRecord(input.apiFetch, input.mode, input.agent.name),
   );
