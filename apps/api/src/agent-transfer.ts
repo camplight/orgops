@@ -173,6 +173,8 @@ export function createAgentTransfer(deps: {
         context_session_gap_ms: numberOrNull(sourceAgent.contextSessionGapMs),
         emit_audit_events: sourceAgent.emitAuditEvents === false ? 0 : 1,
         llm_style: sourceAgent.llmStyle === "THINK" ? "THINK" : "DO",
+        openai_compatible_reasoning_effort:
+          normalizeReasoningEffort(sourceAgent.openaiCompatibleReasoningEffort),
         memory_context_mode: String(sourceAgent.memoryContextMode ?? "PER_CHANNEL_CROSS_CHANNEL"),
         mode: String(sourceAgent.mode ?? "CLASSIC"),
         wrapped_config_json: JSON.stringify(sourceAgent.wrappedConfig ?? {}),
@@ -550,6 +552,8 @@ function agentRowToBundle(
     contextSessionGapMs: source.context_session_gap_ms ?? null,
     emitAuditEvents: source.emit_audit_events !== 0,
     llmStyle: source.llm_style === "THINK" ? "THINK" : "DO",
+    openaiCompatibleReasoningEffort:
+      normalizeReasoningEffort(source.openai_compatible_reasoning_effort),
     memoryContextMode: source.memory_context_mode ?? "PER_CHANNEL_CROSS_CHANNEL",
     mode: source.mode ?? "CLASSIC",
     wrappedConfig,
@@ -663,6 +667,12 @@ function stringOrNull(value: unknown) {
 
 function numberOrNull(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function normalizeReasoningEffort(value: unknown) {
+  return value === "minimal" || value === "low" || value === "medium" || value === "high"
+    ? value
+    : null;
 }
 
 function toPosixPath(value: string) {

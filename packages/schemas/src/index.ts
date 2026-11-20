@@ -36,6 +36,10 @@ export const AgentSchema = z.object({
   classicMaxModelSteps: z.number().int().positive().optional().nullable(),
   contextSessionGapMs: z.number().int().positive().optional().nullable(),
   llmStyle: z.enum(["DO", "THINK"]).optional(),
+  openaiCompatibleReasoningEffort: z
+    .enum(["minimal", "low", "medium", "high"])
+    .optional()
+    .nullable(),
   memoryContextMode: z
     .enum(["PER_CHANNEL_CROSS_CHANNEL", "FULL_CHANNEL_EVENTS", "OFF"])
     .optional(),

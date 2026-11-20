@@ -23,6 +23,7 @@ import {
   validateEventAgainstShapes,
 } from "@orgops/schemas";
 import { createRunnerTools, executeTool } from "./tools";
+import { hasImageParts, isImageInputRejected, withoutImageParts } from "./image-input";
 import { pullInjectedEventMessages } from "./channel-injection";
 import { shouldHandleEventForAgent } from "./event-routing";
 import { getReservedEventTypeError } from "./event-type-guard";
@@ -978,6 +979,11 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         ? Math.floor(agent.llmCallTimeoutMs)
         : input.llmCallTimeoutMs;
     const classicMaxModelSteps = resolveAgentClassicMaxModelSteps(agent);
+    // Text-only models reject image parts outright; send them a note in place of each image.
+    let imagesUnsupported = agent.modelCapabilities?.imageInput === false;
+    let imageRetryUsed = false;
+    const forModel = (messages: LlmMessage[]) =>
+      imagesUnsupported ? withoutImageParts(messages) : messages;
     let lastResponseText = "";
     let correctionAttempts = 0;
     let lateEventContinuations = 0;
@@ -1060,15 +1066,18 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       postedMessageToChannel = false;
       lastResponseText = "";
       let result: GenerateResult;
+      const attemptMessages = clampMessagesForProviderLimit([...invokeMessages, ...retryMessages]);
       try {
         result = await withTimeout(
           generate(
             agent.modelId,
-            clampMessagesForProviderLimit([...invokeMessages, ...retryMessages]),
+            forModel(attemptMessages),
             {
             tools,
             maxSteps: classicMaxModelSteps,
             llmStyle: resolveTurnLlmStyle(agent, events),
+            openaiCompatibleReasoningEffort:
+              agent.openaiCompatibleReasoningEffort ?? undefined,
             env: injectionEnv,
             pullMessages: async () => {
               const injected = await pullInjectedEventMessages({
@@ -1087,6 +1096,18 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
           `LLM generate (attempt ${attempt})`,
         );
       } catch (error) {
+        if (
+          !imagesUnsupported &&
+          !imageRetryUsed &&
+          isImageInputRejected(error) &&
+          hasImageParts(attemptMessages)
+        ) {
+          // Retry the same attempt once with the images replaced by a note.
+          imagesUnsupported = true;
+          imageRetryUsed = true;
+          attempt -= 1;
+          continue;
+        }
         if (!isRetryableToolArgumentValidationError(error)) throw error;
         correctionAttempts += 1;
         completionProtocolFailed = true;
@@ -1351,7 +1372,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
             const summary = await withTimeout(
               generate(
                 agent.modelId,
-                clampMessagesForProviderLimit([
+                forModel(clampMessagesForProviderLimit([
                   ...invokeMessages,
                   ...retryMessages,
                   ...result.responseMessages,
@@ -1362,11 +1383,13 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
                     content:
                       "[runner] The tool phase has ended. Write a short plain-text reply to the human using only the results above. Explain what was accomplished, what failed, and what remains incomplete. Do not claim completion without evidence. Do not call tools or return a JSON event. Do not reveal credentials or secret tool output.",
                   },
-                ]),
+                ])),
                 {
                   maxSteps: 1,
                   // Thinking models spend part of the budget before they write.
                   maxTokens: FINAL_SUMMARY_MAX_TOKENS,
+                  openaiCompatibleReasoningEffort:
+                    agent.openaiCompatibleReasoningEffort ?? undefined,
                   env: injectionEnv,
                   abortSignal: AbortSignal.timeout(finalSummaryTimeoutMs),
                 },

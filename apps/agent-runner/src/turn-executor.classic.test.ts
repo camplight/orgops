@@ -29,6 +29,7 @@ const trigger: Event = {
 function setup(
   options: {
     pendingEventBatches?: Event[][];
+    fetch?: (path: string, init?: RequestInit) => Response | undefined;
     source?: string;
     agentOverrides?: Partial<Agent>;
     trigger?: Partial<Event>;
@@ -43,6 +44,8 @@ function setup(
   }> = [];
   let pendingEventBatchIndex = 0;
   const apiFetch = vi.fn(async (path: string, init?: RequestInit) => {
+    const custom = options.fetch?.(path, init);
+    if (custom) return custom;
     if (path === "/api/channels") {
       return Response.json([
         {
@@ -434,7 +437,76 @@ describe("CLASSIC empty final output", () => {
   });
 });
 
+describe("CLASSIC image attachments", () => {
+  const imageMessage: Event = {
+    ...trigger,
+    createdAt: 1_000,
+    payload: { text: "what is in this picture?", attachments: [{ fileId: "img-1", mime: "image/png" }] },
+  };
+  const imageTurn = (agentOverrides: Partial<Agent> = {}) =>
+    setup({
+      agentOverrides: { memoryContextMode: "FULL_CHANNEL_EVENTS", ...agentOverrides },
+      events: [imageMessage],
+      pendingEventBatches: [[], [imageMessage], [], [], []],
+      fetch: (path) =>
+        path === "/api/files/img-1"
+          ? new Response(new Uint8Array([137, 80, 78, 71]), { status: 200, headers: { "content-type": "image/png" } })
+          : undefined,
+    });
+  const hasImage = (messages: unknown) => JSON.stringify(messages).includes('"type":"image"');
+
+  it("retries without images when the provider rejects image input, and says why", async () => {
+    const ctx = imageTurn();
+    vi.mocked(generate)
+      .mockImplementationOnce(async (_model, messages) => {
+        expect(hasImage(messages)).toBe(true);
+        throw new Error("AI_APICallError: Invalid image or video input");
+      })
+      .mockImplementationOnce(async (_model, messages) => {
+        expect(hasImage(messages)).toBe(false);
+        expect(JSON.stringify(messages)).toContain("cannot read images");
+        return { text: '{"turnStatus":"WORK_FULLY_COMPLETE","type":"noop","payload":{}}', toolCalls: [], toolResults: [] } as any;
+      });
+    await ctx.run();
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(ctx.emitted.some((event) => event.type === "agent.turn.failed")).toBe(false);
+  });
+
+  it("leaves images out up front for a model declared without image input", async () => {
+    const ctx = imageTurn({ modelCapabilities: { imageInput: false } });
+    vi.mocked(generate).mockImplementationOnce(async (_model, messages) => {
+      expect(hasImage(messages)).toBe(false);
+      return { text: '{"turnStatus":"WORK_FULLY_COMPLETE","type":"noop","payload":{}}', toolCalls: [], toolResults: [] } as any;
+    });
+    await ctx.run();
+    expect(generate).toHaveBeenCalledTimes(1);
+  });
+
+  it("still fails on unrelated provider errors", async () => {
+    const ctx = imageTurn();
+    vi.mocked(generate).mockRejectedValueOnce(new Error("AI_APICallError: rate limited"));
+    await expect(ctx.run()).rejects.toThrow("rate limited");
+    expect(generate).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("CLASSIC turn completion contract", () => {
+  it("passes the agent's OpenAI-compatible reasoning effort to generation", async () => {
+    const ctx = setup({
+      agentOverrides: { openaiCompatibleReasoningEffort: "low" },
+    });
+    vi.mocked(generate).mockImplementationOnce(async (_model, _messages, options) => {
+      expect(options?.openaiCompatibleReasoningEffort).toBe("low");
+      return {
+        text: '{"turnStatus":"WORK_FULLY_COMPLETE","type":"noop","payload":{}}',
+        toolCalls: [],
+        toolResults: [],
+      };
+    });
+
+    await ctx.run();
+  });
+
   it("accepts terminal JSON without exposing a completion tool", async () => {
     const ctx = setup();
     vi.mocked(generate).mockImplementationOnce(async (_model, _messages, options) => {

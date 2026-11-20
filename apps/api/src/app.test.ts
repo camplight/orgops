@@ -2698,6 +2698,7 @@ describe("api app", () => {
         workspacePath: ".orgops-data/workspaces/tuned-agent",
         llmCallTimeoutMs: 180000,
         classicMaxModelSteps: 250,
+        openaiCompatibleReasoningEffort: "low",
         memoryContextMode: "FULL_CHANNEL_EVENTS",
       }),
     });
@@ -2713,10 +2714,12 @@ describe("api app", () => {
     const createdAgent = (await getCreatedRes.json()) as {
       llmCallTimeoutMs?: number | null;
       classicMaxModelSteps?: number | null;
+      openaiCompatibleReasoningEffort?: string | null;
       memoryContextMode?: string;
     };
     expect(createdAgent.llmCallTimeoutMs).toBe(180000);
     expect(createdAgent.classicMaxModelSteps).toBe(250);
+    expect(createdAgent.openaiCompatibleReasoningEffort).toBe("low");
     expect(createdAgent.memoryContextMode).toBe("FULL_CHANNEL_EVENTS");
 
     const patchRes = await app.request(
@@ -2727,6 +2730,7 @@ describe("api app", () => {
         body: JSON.stringify({
           llmCallTimeoutMs: null,
           classicMaxModelSteps: null,
+          openaiCompatibleReasoningEffort: null,
           memoryContextMode: "OFF",
         }),
       },
@@ -2743,10 +2747,12 @@ describe("api app", () => {
     const patchedAgent = (await getPatchedRes.json()) as {
       llmCallTimeoutMs?: number | null;
       classicMaxModelSteps?: number | null;
+      openaiCompatibleReasoningEffort?: string | null;
       memoryContextMode?: string;
     };
     expect(patchedAgent.llmCallTimeoutMs).toBeNull();
     expect(patchedAgent.classicMaxModelSteps).toBeNull();
+    expect(patchedAgent.openaiCompatibleReasoningEffort).toBeNull();
     expect(patchedAgent.memoryContextMode).toBe("OFF");
 
     const invalidPatchRes = await app.request(
@@ -2772,6 +2778,18 @@ describe("api app", () => {
       },
     );
     expect(invalidModePatchRes.status).toBe(400);
+
+    const invalidReasoningEffortRes = await app.request(
+      "http://localhost/api/agents/tuned-agent",
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({
+          openaiCompatibleReasoningEffort: "turbo",
+        }),
+      },
+    );
+    expect(invalidReasoningEffortRes.status).toBe(400);
 
     rmSync(dataDir, { recursive: true, force: true });
   });

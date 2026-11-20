@@ -758,6 +758,8 @@ async function runReplLoop(
     const callGenerate = generateFn ?? generate;
     const response = await callGenerate(agent.modelId, messages, {
       maxSteps: 1,
+      openaiCompatibleReasoningEffort:
+        agent.openaiCompatibleReasoningEffort ?? undefined,
       env: executeCtx.injectionEnv,
     });
     await recordLlmUsage(executeCtx.apiFetch, {

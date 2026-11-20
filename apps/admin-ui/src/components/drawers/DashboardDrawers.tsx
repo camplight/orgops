@@ -29,8 +29,11 @@ type EventFilters = {
 type AgentForm = {
   name: string;
   modelId: string;
+  agentRole: "STANDARD" | "SYSTEM";
   visibility: "PUBLIC" | "PRIVATE";
   mode: "CLASSIC" | "RLM_REPL" | "WRAPPED";
+  llmStyle: "DO" | "THINK";
+  openaiCompatibleReasoningEffort: "" | "minimal" | "low" | "medium" | "high";
   memoryContextMode: "PER_CHANNEL_CROSS_CHANNEL" | "FULL_CHANNEL_EVENTS" | "OFF";
   emitAuditEvents: boolean;
   llmCallTimeoutMs: string;

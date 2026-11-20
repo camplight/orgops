@@ -33,6 +33,7 @@ export type LlmToolContent = Array<{
 export type LlmMessageContent = LlmMessage["content"];
 
 export type LlmStyle = "DO" | "THINK";
+export type OpenAICompatibleReasoningEffort = "minimal" | "low" | "medium" | "high";
 
 export type GenerateOptions = {
   temperature?: number;
@@ -45,6 +46,8 @@ export type GenerateOptions = {
    * THINK = prefer reasoning (may disable tools on OpenAI chat models that forbid tools+reasoning).
    */
   llmStyle?: LlmStyle;
+  /** Per-agent reasoning effort for generic OpenAI-compatible endpoints. */
+  openaiCompatibleReasoningEffort?: OpenAICompatibleReasoningEffort;
   abortSignal?: AbortSignal;
   /** Env vars for API keys etc.; overrides process.env when set. Used by the runner to inject scoped secrets. */
   env?: Record<string, string | undefined>;
@@ -441,6 +444,8 @@ export async function generate(
   } else {
     throw new Error(`Unsupported provider: ${rawProvider}`);
   }
+  const compatibleReasoningEffort =
+    provider === "openai-compatible" ? options.openaiCompatibleReasoningEffort : undefined;
 
   const styleCall = resolveLlmStyleCallOptions({
     provider,
@@ -480,7 +485,9 @@ export async function generate(
     tools: normalizeToolsForSdk(styleCall.tools),
     ...(styleCall.providerOptions
       ? { providerOptions: styleCall.providerOptions }
-      : {}),
+      : compatibleReasoningEffort
+        ? { providerOptions: { openai: { reasoningEffort: compatibleReasoningEffort } } }
+        : {}),
     abortSignal: options.abortSignal,
   });
   return {

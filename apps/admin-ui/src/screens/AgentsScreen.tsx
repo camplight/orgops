@@ -20,6 +20,7 @@ type AgentForm = {
   visibility: "PUBLIC" | "PRIVATE";
   mode: "CLASSIC" | "RLM_REPL" | "WRAPPED";
   llmStyle: "DO" | "THINK";
+  openaiCompatibleReasoningEffort: "" | "minimal" | "low" | "medium" | "high";
   memoryContextMode: "PER_CHANNEL_CROSS_CHANNEL" | "FULL_CHANNEL_EVENTS" | "OFF";
   emitAuditEvents: boolean;
   llmCallTimeoutMs: string;
@@ -58,6 +59,7 @@ const DEFAULT_AGENT_FORM: AgentForm = {
   visibility: "PUBLIC",
   mode: "CLASSIC",
   llmStyle: "DO",
+  openaiCompatibleReasoningEffort: "",
   memoryContextMode: "PER_CHANNEL_CROSS_CHANNEL",
   emitAuditEvents: true,
   llmCallTimeoutMs: "",
@@ -369,6 +371,8 @@ export function AgentsScreen({
       visibility: selectedAgent.visibility === "PRIVATE" ? "PRIVATE" : "PUBLIC",
       mode: selectedAgent.mode ?? "CLASSIC",
       llmStyle: selectedAgent.llmStyle === "THINK" ? "THINK" : "DO",
+      openaiCompatibleReasoningEffort:
+        selectedAgent.openaiCompatibleReasoningEffort ?? "",
       memoryContextMode: selectedAgent.memoryContextMode ?? "PER_CHANNEL_CROSS_CHANNEL",
       emitAuditEvents: selectedAgent.emitAuditEvents !== false,
       llmCallTimeoutMs:
@@ -850,6 +854,8 @@ export function AgentsScreen({
         visibility: form.visibility,
         mode: form.mode,
         llmStyle: form.llmStyle,
+        openaiCompatibleReasoningEffort:
+          form.openaiCompatibleReasoningEffort,
         memoryContextMode,
         emitAuditEvents,
         llmCallTimeoutMs: llmCallTimeoutMs === null ? "" : String(llmCallTimeoutMs),
@@ -1451,6 +1457,35 @@ export function AgentsScreen({
                         }}
                         placeholder="openai:gpt-4o-mini"
                       />
+                    </div>
+                    ) : null}
+                    {!isWrappedMode &&
+                    ["openai-compatible:", "openai_compatible:"].some((prefix) =>
+                      form.modelId.trim().toLowerCase().startsWith(prefix)
+                    ) ? (
+                    <div className="space-y-1">
+                      <div className="text-sm text-slate-400">Reasoning effort</div>
+                      <select
+                        value={form.openaiCompatibleReasoningEffort}
+                        onChange={(e) => {
+                          setIsFormDirty(true);
+                          setSaveStatus(null);
+                          setForm((prev) => ({
+                            ...prev,
+                            openaiCompatibleReasoningEffort: e.target.value as AgentForm["openaiCompatibleReasoningEffort"]
+                          }));
+                        }}
+                        className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+                      >
+                        <option value="">Host default</option>
+                        <option value="minimal">Minimal</option>
+                        <option value="low">Low</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                      </select>
+                      <p className="text-xs text-slate-500">
+                        Sent only for this agent on OpenAI-compatible requests.
+                      </p>
                     </div>
                     ) : null}
                     {!isWrappedMode ? (

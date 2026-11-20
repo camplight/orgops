@@ -220,6 +220,8 @@ async function summarizeText(
     ],
     {
       temperature: 0.2,
+      openaiCompatibleReasoningEffort:
+        agent.openaiCompatibleReasoningEffort ?? undefined,
       env,
     },
   );
