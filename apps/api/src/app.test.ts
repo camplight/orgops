@@ -3664,7 +3664,7 @@ describe("api app", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  it("does not mark agent events delivered for non-runner requests", async () => {
+  it("does not mark agent events delivered while polling", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
     const db = openDb(":memory:");
     const { app } = createApp({
@@ -3753,7 +3753,7 @@ describe("api app", () => {
     expect(runnerListRes.status).toBe(200);
 
     const afterRunnerRes = await app.request(
-      "http://localhost/api/events?agentName=agent-two&status=DELIVERED&limit=10",
+      "http://localhost/api/events?agentName=agent-two&status=PENDING&limit=10",
       { headers: { "x-orgops-runner-token": "test-token" } },
     );
     expect(afterRunnerRes.status).toBe(200);
@@ -3845,6 +3845,17 @@ describe("api app", () => {
     expect(pollAgentARes.status).toBe(200);
     const pollAgentA = (await pollAgentARes.json()) as Array<{ id: string }>;
     expect(pollAgentA.some((row) => row.id === event.id)).toBe(true);
+    const ackAgentARes = await app.request(
+      `http://localhost/api/events/${event.id}/ack`,
+      {
+        method: "POST",
+        headers: {
+          "x-orgops-runner-token": "test-token",
+          "x-orgops-agent-name": "agent-a",
+        },
+      },
+    );
+    expect(ackAgentARes.status).toBe(200);
 
     const afterAgentAStatusRes = await app.request(
       `http://localhost/api/events?channelId=${channel.id}&limit=10`,
@@ -3866,6 +3877,17 @@ describe("api app", () => {
     expect(pollAgentBRes.status).toBe(200);
     const pollAgentB = (await pollAgentBRes.json()) as Array<{ id: string }>;
     expect(pollAgentB.some((row) => row.id === event.id)).toBe(true);
+    const ackAgentBRes = await app.request(
+      `http://localhost/api/events/${event.id}/ack`,
+      {
+        method: "POST",
+        headers: {
+          "x-orgops-runner-token": "test-token",
+          "x-orgops-agent-name": "agent-b",
+        },
+      },
+    );
+    expect(ackAgentBRes.status).toBe(200);
 
     const afterAgentBStatusRes = await app.request(
       `http://localhost/api/events?channelId=${channel.id}&status=DELIVERED&limit=10`,
@@ -4112,6 +4134,48 @@ describe("api app", () => {
     );
     expect(subscribeRes.status).toBe(200);
 
+    const orm = createDrizzleDb(db);
+    const memoryTimestamp = Date.now();
+    orm.insert(schema.channelMemoryFull)
+      .values({
+        agent_name: "agent-one",
+        channel_id: createChannelBody.id,
+        summary_text: "channel memory",
+        last_processed_at: memoryTimestamp,
+        version: 1,
+        created_at: memoryTimestamp,
+        updated_at: memoryTimestamp,
+      })
+      .run();
+    orm.insert(schema.crossChannelMemoryFull)
+      .values({
+        agent_name: "agent-one",
+        summary_text: "cross memory containing deleted channel",
+        last_processed_at: memoryTimestamp,
+        input_signature: "stale",
+        version: 1,
+        created_at: memoryTimestamp,
+        updated_at: memoryTimestamp,
+      })
+      .run();
+    orm.insert(schema.recurringSchedules)
+      .values({
+        id: "deleted-channel-schedule",
+        channel_id: createChannelBody.id,
+        target_agent_name: "agent-one",
+        cron_expression: "0 * * * * *",
+        timezone: "UTC",
+        text: "must be cleaned up",
+        status: "ACTIVE",
+        misfire_policy: "FIRE_ONCE",
+        next_fire_at: memoryTimestamp + 60_000,
+        created_by_type: "HUMAN",
+        version: 1,
+        created_at: memoryTimestamp,
+        updated_at: memoryTimestamp,
+      })
+      .run();
+
     const deleteRes = await app.request(
       `http://localhost/api/channels/${createChannelBody.id}/delete`,
       {
@@ -4137,6 +4201,27 @@ describe("api app", () => {
     );
     const participants = await participantsRes.json();
     expect(participants).toEqual([]);
+    expect(
+      orm
+        .select()
+        .from(schema.channelMemoryFull)
+        .where(eq(schema.channelMemoryFull.channel_id, createChannelBody.id))
+        .all(),
+    ).toHaveLength(0);
+    expect(
+      orm
+        .select()
+        .from(schema.crossChannelMemoryFull)
+        .where(eq(schema.crossChannelMemoryFull.agent_name, "agent-one"))
+        .all(),
+    ).toHaveLength(0);
+    expect(
+      orm
+        .select()
+        .from(schema.recurringSchedules)
+        .where(eq(schema.recurringSchedules.channel_id, createChannelBody.id))
+        .all(),
+    ).toHaveLength(0);
 
     rmSync(dataDir, { recursive: true, force: true });
   });
@@ -6437,6 +6522,12 @@ describe("api app", () => {
       "content-type": "application/json",
       "x-orgops-runner-token": "test-token",
     };
+    db.exec(`
+      INSERT INTO events(id,type,payload_json,source,channel_id,status,created_at)
+      VALUES
+        ('evt-2','message.created','{}','human:admin','chan-1','DELIVERED',2000),
+        ('evt-3','message.created','{}','human:admin','chan-1','DELIVERED',3000)
+    `);
 
     const putRecentRes = await app.request("http://localhost/api/memory/channel/recent", {
       method: "PUT",
@@ -6466,6 +6557,7 @@ describe("api app", () => {
         channelId: "chan-1",
         summaryText: "full summary",
         lastProcessedAt: 3000,
+        lastProcessedEventId: "evt-3",
       }),
     });
     expect(putFullRes.status).toBe(200);
@@ -6521,11 +6613,28 @@ describe("api app", () => {
         agentName: "memory-agent",
         summaryText: "global summary",
         lastProcessedAt: 5000,
+        inputSignature: "signature-v1",
       }),
     });
     expect(putRes.status).toBe(200);
     const putBody = (await putRes.json()) as { record?: { version?: number } };
     expect(putBody.record?.version).toBe(1);
+
+    const createOnlyConflictRes = await app.request(
+      "http://localhost/api/memory/cross/full",
+      {
+        method: "PUT",
+        headers: runnerHeaders,
+        body: JSON.stringify({
+          agentName: "memory-agent",
+          summaryText: "duplicate initial summary",
+          lastProcessedAt: 5500,
+          inputSignature: "signature-v2",
+          expectedVersion: null,
+        }),
+      },
+    );
+    expect(createOnlyConflictRes.status).toBe(409);
 
     const conflictRes = await app.request("http://localhost/api/memory/cross/full", {
       method: "PUT",
@@ -6534,6 +6643,7 @@ describe("api app", () => {
         agentName: "memory-agent",
         summaryText: "stale update",
         lastProcessedAt: 6000,
+        inputSignature: "signature-v2",
         expectedVersion: 0,
       }),
     });

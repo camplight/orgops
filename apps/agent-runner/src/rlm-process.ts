@@ -10,6 +10,7 @@ type RunEventResultMessage = {
   id: string;
   ok: boolean;
   error?: string;
+  handledEventIds?: string[];
 };
 
 type AgentChildState = {
@@ -17,7 +18,7 @@ type AgentChildState = {
   pending: Map<
     string,
     {
-      resolve: () => void;
+      resolve: (handledEventIds: string[]) => void;
       reject: (error: unknown) => void;
       timeout: NodeJS.Timeout;
     }
@@ -51,7 +52,10 @@ function createChild(agent: Agent): AgentChildState {
     clearTimeout(pending.timeout);
     state.pending.delete(parsed.id);
     if (parsed.ok) {
-      pending.resolve();
+      const handledEventIds = Array.isArray(parsed.handledEventIds)
+        ? parsed.handledEventIds.filter((eventId) => typeof eventId === "string")
+        : [];
+      pending.resolve(handledEventIds);
       return;
     }
     pending.reject(new Error(parsed.error ?? "RLM child runEvent failed."));
@@ -101,7 +105,7 @@ export async function runRlmEventInChild(input: {
   const { agent, event, channelId, systemPrompt, baseMessages, executeCtx } = input;
   const state = ensureChild(agent);
   const requestId = `${agent.name}:${state.nextId++}`;
-  await new Promise<void>((resolvePromise, rejectPromise) => {
+  return await new Promise<string[]>((resolvePromise, rejectPromise) => {
     const timeout = setTimeout(() => {
       state.pending.delete(requestId);
       rejectPromise(new Error(`RLM child request timed out (${CHILD_REQUEST_TIMEOUT_MS}ms)`));

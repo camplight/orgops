@@ -23,6 +23,45 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
   const { orm, jsonResponse, access } = deps;
   const DIRECT_CHANNEL_PARTICIPANT_TYPES = new Set(["HUMAN", "AGENT"]);
   const CHANNEL_VIEWER_TYPES = new Set(["HUMAN", "AGENT"]);
+
+  function invalidateAgentMemory(agentName: string, channelId?: string) {
+    if (channelId) {
+      orm.delete(schema.channelMemoryRecent).where(
+        and(
+          eq(schema.channelMemoryRecent.agent_name, agentName),
+          eq(schema.channelMemoryRecent.channel_id, channelId),
+        ),
+      ).run();
+      orm.delete(schema.channelMemoryFull).where(
+        and(
+          eq(schema.channelMemoryFull.agent_name, agentName),
+          eq(schema.channelMemoryFull.channel_id, channelId),
+        ),
+      ).run();
+    }
+    orm.delete(schema.crossChannelMemoryRecent)
+      .where(eq(schema.crossChannelMemoryRecent.agent_name, agentName)).run();
+    orm.delete(schema.crossChannelMemoryFull)
+      .where(eq(schema.crossChannelMemoryFull.agent_name, agentName)).run();
+  }
+
+  function deleteChannelMemories(channelId: string) {
+    const affectedAgents = orm
+      .select({ agentName: schema.channelSubscriptions.subscriber_id })
+      .from(schema.channelSubscriptions)
+      .where(
+        and(
+          eq(schema.channelSubscriptions.channel_id, channelId),
+          eq(schema.channelSubscriptions.subscriber_type, "AGENT"),
+        ),
+      )
+      .all();
+    orm.delete(schema.channelMemoryRecent)
+      .where(eq(schema.channelMemoryRecent.channel_id, channelId)).run();
+    orm.delete(schema.channelMemoryFull)
+      .where(eq(schema.channelMemoryFull.channel_id, channelId)).run();
+    for (const row of affectedAgents) invalidateAgentMemory(row.agentName);
+  }
   const DIRECT_CHANNEL_KIND: Record<
     "humanAgent" | "agentAgent" | "group",
     ChannelKind
@@ -779,6 +818,7 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
       .from(schema.channels)
       .where(eq(schema.channels.id, id))
       .get();
+    deleteChannelMemories(id);
     if (!existing) return jsonResponse(c, { error: "Not found" }, 404);
     const archivedAt = archived ? Date.now() : null;
     orm
@@ -805,6 +845,11 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
       .from(schema.channels)
       .where(eq(schema.channels.id, id))
       .get();
+    if (existing) deleteChannelMemories(id);
+    orm
+      .delete(schema.recurringSchedules)
+      .where(eq(schema.recurringSchedules.channel_id, id))
+      .run();
     orm
       .delete(schema.channelSubscriptions)
       .where(eq(schema.channelSubscriptions.channel_id, id))
@@ -838,6 +883,11 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
       return jsonResponse(c, { ok: true, deletedCount: 0 });
     }
     for (const channelId of channelIds) {
+      deleteChannelMemories(channelId);
+      orm
+        .delete(schema.recurringSchedules)
+        .where(eq(schema.recurringSchedules.channel_id, channelId))
+        .run();
       orm
         .delete(schema.channelSubscriptions)
         .where(eq(schema.channelSubscriptions.channel_id, channelId))
@@ -898,6 +948,7 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
       })
       .onConflictDoNothing()
       .run();
+    if (subscriberType === "AGENT") invalidateAgentMemory(subscriberId);
     return jsonResponse(c, { ok: true });
   });
 
@@ -932,6 +983,7 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
         ),
       )
       .run();
+    if (subscriberType === "AGENT") invalidateAgentMemory(subscriberId, id);
     return jsonResponse(c, { ok: true });
   });
 

@@ -20,6 +20,7 @@ import {
   FederationScreen,
   ProcessesScreen,
   RunnersScreen,
+  SchedulesScreen,
   SkillsScreen,
   SecretsScreen,
   IntegrationKeysScreen,
@@ -1437,6 +1438,10 @@ export default function App() {
             await data.refreshProcesses();
           }}
         />
+      )}
+
+      {activeScreen === "schedules" && (
+        <SchedulesScreen agents={data.agents} channels={data.channels} />
       )}
 
       {activeScreen === "skills" && <SkillsScreen skills={data.skills} />}

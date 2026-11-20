@@ -2,11 +2,14 @@ import { describe, expect, it } from "vitest";
 import { createRunnerTools } from "./tools";
 import { executeTool } from "./tools";
 import {
+  boundCurrentEventMessages,
   reconcileLateInjectedMessages,
   buildModelMessages,
+  filterEventsDueForPrompt,
   resolveAgentClassicMaxModelSteps,
   resolveAgentMemoryContextMode,
   resolveAgentLlmCallTimeoutMs,
+  separateCurrentBatchFromHistory,
   shouldHandleEvent,
 } from "./runner";
 import { computeHistoryBudgetChars } from "./prompt-composer";
@@ -14,6 +17,98 @@ import { stopAllRunningProcesses } from "./tools/shell";
 import type { Agent, Event } from "./types";
 
 describe("agent runner", () => {
+  it("excludes future scheduled events from prompt history", () => {
+    const events = [
+      {
+        id: "due",
+        type: "message.created",
+        source: "human:alice",
+        payload: { text: "due" },
+        deliverAt: 999,
+      },
+      {
+        id: "future",
+        type: "agent.scheduled.trigger",
+        source: "system:scheduler",
+        payload: { text: "future" },
+        deliverAt: 1001,
+      },
+    ];
+    expect(filterEventsDueForPrompt(events, 1000).map((event) => event.id)).toEqual([
+      "due",
+    ]);
+  });
+
+  it("bounds oversized current event batches with payload-read references", () => {
+    const events: Event[] = [
+      {
+        id: "large-1",
+        type: "message.created",
+        source: "human:alice",
+        payload: { text: "x".repeat(10_000) },
+      },
+      {
+        id: "large-2",
+        type: "message.created",
+        source: "human:alice",
+        payload: { text: "y".repeat(10_000) },
+      },
+    ];
+    const bounded = boundCurrentEventMessages(
+      events,
+      events.map((event) => ({
+        role: "user" as const,
+        content: JSON.stringify(event),
+      })),
+      1000,
+    );
+    expect(
+      bounded.reduce((sum, message) => sum + String(message.content).length, 0),
+    ).toBeLessThanOrEqual(1000);
+    expect(String(bounded[0]?.content)).toContain("events_payload_read");
+    expect(String(bounded[1]?.content)).toContain("events_payload_read");
+    const minimum = boundCurrentEventMessages(
+      [events[0]!],
+      [{ role: "user", content: JSON.stringify(events[0]) }],
+      0,
+    );
+    expect(String(minimum[0]?.content)).toContain("events_payload_read");
+    expect(String(minimum[0]?.content)).toContain("large-1");
+  });
+
+  it("keeps the current batch verbatim and exactly once", () => {
+    const current: Event[] = [
+      {
+        id: "current-1",
+        type: "message.created",
+        source: "human:alice",
+        channelId: "channel",
+        payload: { text: "first", nested: { exact: true } },
+        createdAt: 20,
+      },
+      {
+        id: "current-2",
+        type: "domain.task.updated",
+        source: "agent:peer",
+        channelId: "channel",
+        payload: { status: "ready" },
+        createdAt: 21,
+      },
+    ];
+    const older: Event = {
+      id: "older",
+      type: "message.created",
+      source: "human:alice",
+      channelId: "channel",
+      payload: { text: "older" },
+      createdAt: 10,
+    };
+    const separated = separateCurrentBatchFromHistory(current, [older, ...current]);
+    expect(separated.eventHistory).toEqual([older]);
+    const batch = JSON.parse(separated.currentBatchMessage.content);
+    expect(batch.eventIds).toEqual(["current-1", "current-2"]);
+  });
+
   it("exposes runner tools for LLM", () => {
     const tools = createRunnerTools({
       agent: {
@@ -392,7 +487,7 @@ describe("agent runner", () => {
     const large = computeHistoryBudgetChars({ contextWindowTokens: 1_000_000, system: "sys" });
     expect(large).toBe(120_000);
     const tiny = computeHistoryBudgetChars({ contextWindowTokens: 4_000, system: "x".repeat(40_000) });
-    expect(tiny).toBe(8_000);
+    expect(tiny).toBe(0);
   });
 
   it("trims history to a caller-provided char budget", async () => {
@@ -422,6 +517,36 @@ describe("agent runner", () => {
       .slice(2)
       .reduce((sum, message) => sum + String(message.content).length, 0);
     expect(keptChars).toBeLessThanOrEqual(10_000);
+  });
+
+  it("keeps no raw history when the caller-provided budget is zero", async () => {
+    const agent: Agent = {
+      name: "tester",
+      workspacePath: "/tmp",
+      modelId: "openai:gpt-realtime",
+      desiredState: "RUNNING",
+      runtimeState: "RUNNING",
+    };
+    const messages = await buildModelMessages(
+      agent,
+      "system prompt",
+      [
+        {
+          id: "evt-1",
+          type: "message.created",
+          payload: { text: "must not exceed budget" },
+          source: "human:alice",
+          channelId: "chan-1",
+        },
+      ],
+      { historyMaxChars: 0 },
+    );
+    expect(messages).toHaveLength(2);
+    expect(JSON.parse(String(messages[1]?.content))).toMatchObject({
+      type: "system.history.truncated",
+      includedCount: 0,
+      omittedCount: 1,
+    });
   });
 
   it("injects memory summaries as system messages", async () => {
@@ -1085,6 +1210,7 @@ describe("agent runner", () => {
               record: {
                 agentName: "tester",
                 summaryText: "old cross recent",
+                inputSignature: "existing-input-signature",
                 windowStartAt: 50,
                 lastProcessedAt: 900,
                 version: 2,
@@ -1103,6 +1229,7 @@ describe("agent runner", () => {
             record: {
               agentName: "tester",
               summaryText: "new cross recent",
+              inputSignature: "existing-input-signature",
               windowStartAt: 50,
               lastProcessedAt: 900,
               version: 3,
@@ -1132,6 +1259,7 @@ describe("agent runner", () => {
     expect(putRequest?.body.summaryText).toBe("new cross recent");
     expect(putRequest?.body.lastProcessedAt).toBe(900);
     expect(putRequest?.body.expectedVersion).toBe(2);
+    expect(putRequest?.body.inputSignature).toBe("existing-input-signature");
     expect(result.channelIds).toEqual(["chan-1", "chan-2"]);
     expect(result.record?.summaryText).toBe("new cross recent");
   });

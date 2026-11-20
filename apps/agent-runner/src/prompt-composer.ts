@@ -18,7 +18,6 @@ const DEFAULT_MAX_HISTORY_CHARS = 120_000;
 const MAX_HISTORY_IMAGES_PER_EVENT = 3;
 const HISTORY_WINDOW_SHARE = 0.5;
 const CHARS_PER_TOKEN = 4;
-const MIN_HISTORY_CHARS = 8_000;
 const MAX_HISTORY_IMAGE_BYTES = 5 * 1024 * 1024;
 
 function readPositiveIntEnv(value: string | undefined, fallback: number): number {
@@ -330,7 +329,7 @@ export function computeHistoryBudgetChars(input: {
       0,
     );
   const historyTokens = Math.floor(input.contextWindowTokens * HISTORY_WINDOW_SHARE) - fixedTokens;
-  return Math.max(MIN_HISTORY_CHARS, Math.min(HISTORY_MAX_CHARS, historyTokens * CHARS_PER_TOKEN));
+  return Math.max(0, Math.min(HISTORY_MAX_CHARS, historyTokens * CHARS_PER_TOKEN));
 }
 
 export async function buildModelMessages(
@@ -359,9 +358,8 @@ export async function buildModelMessages(
   for (let index = historyMessages.length - 1; index >= 0; index -= 1) {
     const messageChars = contentCharLength(historyMessages[index]?.content ?? "");
     const exceedsMaxEvents = keptMessageCount + 1 > HISTORY_MAX_EVENTS;
-    const exceedsMaxChars =
-      keptMessageCount > 0 && totalHistoryChars + messageChars > historyMaxChars;
-    if ((keptStartIndex < historyMessages.length && exceedsMaxChars) || exceedsMaxEvents) {
+    const exceedsMaxChars = totalHistoryChars + messageChars > historyMaxChars;
+    if (exceedsMaxChars || exceedsMaxEvents) {
       break;
     }
     keptStartIndex = index;

@@ -52,3 +52,31 @@ describe("runner api secrets env", () => {
     );
   });
 });
+
+describe("runner receipt api", () => {
+  it("polls, acknowledges, and fails with the scoped agent identity", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    ) as unknown as typeof fetch;
+    const api = createSubject();
+
+    await api.listPendingEventsForAgentChannel("agent-a", "channel-1");
+    await api.acknowledgeEvent("agent-a", "event-1");
+    await api.failEvent("agent-a", "event-2", new Error("turn failed"));
+
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    for (const [, init] of fetchMock.mock.calls as Array<[string, RequestInit]>) {
+      expect(new Headers(init.headers).get("x-orgops-agent-name")).toBe("agent-a");
+    }
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      "http://localhost:8787/api/events/event-1/ack",
+    );
+    expect(fetchMock.mock.calls[2]?.[0]).toBe(
+      "http://localhost:8787/api/events/event-2/fail",
+    );
+  });
+});

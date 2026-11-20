@@ -11,6 +11,7 @@ export { IntegrationKeysScreen } from "./IntegrationKeysScreen";
 export { ProcessesScreen } from "./ProcessesScreen";
 export { ProfileScreen } from "./ProfileScreen";
 export { RunnersScreen } from "./RunnersScreen";
+export { SchedulesScreen } from "./SchedulesScreen";
 export { SecretsScreen } from "./SecretsScreen";
 export { SkillsScreen } from "./SkillsScreen";
 export { TeamsScreen } from "./TeamsScreen";

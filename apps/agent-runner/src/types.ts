@@ -39,4 +39,5 @@ export type Event = {
   channelId?: string;
   parentEventId?: string;
   createdAt?: number;
+  deliverAt?: number;
 };
