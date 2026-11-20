@@ -164,6 +164,10 @@ function spawnTrackedProcess(
 ) {
   const processId = randomUUID();
   const shell = getShellLaunch(input.cmd);
+  // shell_run returns the output in its tool result, so its lifecycle events are history only.
+  // Recording them as delivered keeps them from waking the agent for another turn, including
+  // after a runner restart. shell_start exits still wake the agent.
+  const deliveredStatus = input.executionMode === "SYNC" ? { status: "DELIVERED" as const } : {};
   const mergedEnv: Record<string, string> = {
     ...(process.env as Record<string, string>),
     ORGOPS_AGENT_NAME: ctx.agent.name,
@@ -216,6 +220,7 @@ function spawnTrackedProcess(
       },
       source: PROCESS_EVENT_SOURCE,
       channelId: ctx.channelId,
+      ...deliveredStatus,
     });
   })();
 
@@ -233,6 +238,7 @@ function spawnTrackedProcess(
         text: chunk.toString("utf-8"),
         ts: Date.now(),
         source: PROCESS_EVENT_SOURCE,
+        ...deliveredStatus,
       }),
     });
   };
@@ -251,6 +257,7 @@ function spawnTrackedProcess(
           state: exitState,
           endedAt: Date.now(),
           source: PROCESS_EVENT_SOURCE,
+          ...deliveredStatus,
         }),
       });
     } finally {

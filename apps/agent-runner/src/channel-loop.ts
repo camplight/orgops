@@ -64,6 +64,9 @@ export function createChannelLoopManager(input: CreateChannelLoopManagerInput) {
 
   return {
     enqueue(agent: Agent, events: Event[]) {
+      // Queue the whole poll before starting workers, so events that arrived together form one
+      // batch instead of a turn for the first event and another for the rest.
+      const touched = new Set<string>();
       for (const event of events) {
         const channelId = event.channelId;
         if (!channelId) continue;
@@ -79,8 +82,9 @@ export function createChannelLoopManager(input: CreateChannelLoopManagerInput) {
         state.agent = agent;
         state.queue.set(event.id, event);
         workers.set(key, state);
-        startWorker(key);
+        touched.add(key);
       }
+      for (const key of touched) startWorker(key);
     },
     activeWorkerCount() {
       return [...workers.values()].filter((worker) => worker.running).length;
