@@ -32,6 +32,7 @@ export const agents = sqliteTable("agents", {
   context_session_gap_ms: integer("context_session_gap_ms"),
   emit_audit_events: integer("emit_audit_events").notNull().default(1),
   llm_style: text("llm_style").notNull().default("DO"),
+  openai_compatible_reasoning_effort: text("openai_compatible_reasoning_effort"),
   memory_context_mode: text("memory_context_mode")
     .notNull()
     .default("PER_CHANNEL_CROSS_CHANNEL"),

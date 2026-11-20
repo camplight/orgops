@@ -1073,6 +1073,8 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
             tools,
             maxSteps: classicMaxModelSteps,
             llmStyle: resolveTurnLlmStyle(agent, events),
+            openaiCompatibleReasoningEffort:
+              agent.openaiCompatibleReasoningEffort ?? undefined,
             env: injectionEnv,
             pullMessages: async () => {
               const injected = await pullInjectedEventMessages({
@@ -1379,6 +1381,8 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
                 {
                   maxSteps: 1,
                   maxTokens: 1200,
+                  openaiCompatibleReasoningEffort:
+                    agent.openaiCompatibleReasoningEffort ?? undefined,
                   env: injectionEnv,
                   abortSignal: AbortSignal.timeout(Math.min(llmCallTimeoutMs, 15_000)),
                 },

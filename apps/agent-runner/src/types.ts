@@ -15,6 +15,7 @@ export type Agent = {
   contextSessionGapMs?: number | null;
   emitAuditEvents?: boolean;
   llmStyle?: "DO" | "THINK";
+  openaiCompatibleReasoningEffort?: "minimal" | "low" | "medium" | "high" | null;
   memoryContextMode?:
     | "PER_CHANNEL_CROSS_CHANNEL"
     | "FULL_CHANNEL_EVENTS"

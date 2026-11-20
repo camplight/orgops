@@ -465,7 +465,7 @@ describe("CLASSIC image attachments", () => {
       .mockImplementationOnce(async (_model, messages) => {
         expect(hasImage(messages)).toBe(false);
         expect(JSON.stringify(messages)).toContain("cannot read images");
-        return { text: '{"turnStatus":"DONE","type":"noop","payload":{}}', toolCalls: [], toolResults: [] } as any;
+        return { text: '{"turnStatus":"WORK_FULLY_COMPLETE","type":"noop","payload":{}}', toolCalls: [], toolResults: [] } as any;
       });
     await ctx.run();
     expect(generate).toHaveBeenCalledTimes(2);
@@ -476,7 +476,7 @@ describe("CLASSIC image attachments", () => {
     const ctx = imageTurn({ modelCapabilities: { imageInput: false } });
     vi.mocked(generate).mockImplementationOnce(async (_model, messages) => {
       expect(hasImage(messages)).toBe(false);
-      return { text: '{"turnStatus":"DONE","type":"noop","payload":{}}', toolCalls: [], toolResults: [] } as any;
+      return { text: '{"turnStatus":"WORK_FULLY_COMPLETE","type":"noop","payload":{}}', toolCalls: [], toolResults: [] } as any;
     });
     await ctx.run();
     expect(generate).toHaveBeenCalledTimes(1);
@@ -491,6 +491,22 @@ describe("CLASSIC image attachments", () => {
 });
 
 describe("CLASSIC turn completion contract", () => {
+  it("passes the agent's OpenAI-compatible reasoning effort to generation", async () => {
+    const ctx = setup({
+      agentOverrides: { openaiCompatibleReasoningEffort: "low" },
+    });
+    vi.mocked(generate).mockImplementationOnce(async (_model, _messages, options) => {
+      expect(options?.openaiCompatibleReasoningEffort).toBe("low");
+      return {
+        text: '{"turnStatus":"WORK_FULLY_COMPLETE","type":"noop","payload":{}}',
+        toolCalls: [],
+        toolResults: [],
+      };
+    });
+
+    await ctx.run();
+  });
+
   it("accepts terminal JSON without exposing a completion tool", async () => {
     const ctx = setup();
     vi.mocked(generate).mockImplementationOnce(async (_model, _messages, options) => {

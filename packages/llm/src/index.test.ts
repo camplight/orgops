@@ -284,21 +284,19 @@ describe("llm", () => {
 
   it("sends the configured reasoning effort to OpenAI-compatible endpoints only when set", async () => {
     process.env.ORGOPS_LLM_STUB = "0";
-    const call = (effort?: string) =>
+    const call = (effort?: "minimal" | "low" | "medium" | "high") =>
       generate("openai-compatible:thinking-model", [{ role: "user", content: "hello" }], {
         env: {
           OPENAI_COMPATIBLE_API_KEY: "local-key",
           OPENAI_COMPATIBLE_BASE_URL: "http://127.0.0.1:8000/v1",
-          ...(effort ? { OPENAI_COMPATIBLE_REASONING_EFFORT: effort } : {}),
         },
+        openaiCompatibleReasoningEffort: effort,
       });
-    await call("LOW");
+    await call("low");
     expect(mocks.generateText.mock.calls.at(-1)?.[0]).toMatchObject({
       providerOptions: { openai: { reasoningEffort: "low" } },
     });
     await call();
-    expect(mocks.generateText.mock.calls.at(-1)?.[0]).not.toHaveProperty("providerOptions");
-    await call("turbo");
     expect(mocks.generateText.mock.calls.at(-1)?.[0]).not.toHaveProperty("providerOptions");
   });
 

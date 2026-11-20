@@ -40,6 +40,12 @@ const AGENT_MEMORY_CONTEXT_MODES = new Set([
   "OFF",
 ] as const);
 const AGENT_ROLES = new Set(["STANDARD", "SYSTEM"] as const);
+const OPENAI_COMPATIBLE_REASONING_EFFORTS = new Set([
+  "minimal",
+  "low",
+  "medium",
+  "high",
+] as const);
 const AGENT_AUTHORITY_FIELDS = [
   "additionalSkillRoots",
   "agentRole",
@@ -305,6 +311,23 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     return row.llm_style === "THINK" ? "THINK" : "DO";
   }
 
+  function parseOpenAICompatibleReasoningEffort(
+    value: unknown,
+  ): { ok: true; value: string | null } | { ok: false; error: string } {
+    if (value === undefined || value === null || String(value).trim() === "") {
+      return { ok: true, value: null };
+    }
+    const normalized = String(value).trim().toLowerCase();
+    if (OPENAI_COMPATIBLE_REASONING_EFFORTS.has(normalized as any)) {
+      return { ok: true, value: normalized };
+    }
+    return {
+      ok: false,
+      error:
+        "openaiCompatibleReasoningEffort must be one of minimal, low, medium, high, or null",
+    };
+  }
+
   function parseJsonRecordSafe(input: string | null | undefined): Record<string, unknown> | null {
     if (!input) return null;
     try {
@@ -450,6 +473,8 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         contextSessionGapMs: row.context_session_gap_ms ?? null,
         emitAuditEvents: Boolean(row.emit_audit_events ?? 1),
         llmStyle: getAgentLlmStyle(row),
+        openaiCompatibleReasoningEffort:
+          row.openai_compatible_reasoning_effort ?? null,
         memoryContextMode: getAgentMemoryContextMode(row),
         mode: row.mode ?? "CLASSIC",
         wrappedConfig: parseJsonRecordSafe(row.wrapped_config_json) ?? {},
@@ -560,6 +585,12 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     if (!llmStyleParsed.ok) {
       return jsonResponse(c, { error: llmStyleParsed.error }, 400);
     }
+    const reasoningEffortParsed = parseOpenAICompatibleReasoningEffort(
+      body.openaiCompatibleReasoningEffort,
+    );
+    if (!reasoningEffortParsed.ok) {
+      return jsonResponse(c, { error: reasoningEffortParsed.error }, 400);
+    }
     const wrappedConfigParsed = parseWrappedConfigInput(body.wrappedConfig);
     if (!wrappedConfigParsed.ok) {
       return jsonResponse(c, { error: wrappedConfigParsed.error }, 400);
@@ -609,6 +640,7 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         context_session_gap_ms: contextSessionGapParsed.value,
         emit_audit_events: emitAuditEvents ? 1 : 0,
         llm_style: llmStyleParsed.value,
+        openai_compatible_reasoning_effort: reasoningEffortParsed.value,
         memory_context_mode: mode === "WRAPPED" ? "OFF" : memoryContextModeParsed.value,
         mode,
         wrapped_config_json: JSON.stringify(wrappedConfigParsed.value),
@@ -657,6 +689,8 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       contextSessionGapMs: row.context_session_gap_ms ?? null,
       emitAuditEvents: Boolean(row.emit_audit_events ?? 1),
       llmStyle: getAgentLlmStyle(row),
+      openaiCompatibleReasoningEffort:
+        row.openai_compatible_reasoning_effort ?? null,
       memoryContextMode: getAgentMemoryContextMode(row),
       mode: row.mode ?? "CLASSIC",
       wrappedConfig: parseJsonRecordSafe(row.wrapped_config_json) ?? {},
@@ -784,6 +818,15 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
     if (llmStyleParsed && !llmStyleParsed.ok) {
       return jsonResponse(c, { error: llmStyleParsed.error }, 400);
     }
+    const reasoningEffortParsed =
+      body.openaiCompatibleReasoningEffort !== undefined
+        ? parseOpenAICompatibleReasoningEffort(
+            body.openaiCompatibleReasoningEffort,
+          )
+        : null;
+    if (reasoningEffortParsed && !reasoningEffortParsed.ok) {
+      return jsonResponse(c, { error: reasoningEffortParsed.error }, 400);
+    }
     const existingWrappedConfig = parseJsonRecordSafe(existing.wrapped_config_json) ?? {};
     const wrappedConfigParsed =
       body.wrappedConfig !== undefined
@@ -879,6 +922,9 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
             : existing.context_session_gap_ms,
         emit_audit_events: emitAuditEvents ?? existing.emit_audit_events,
         llm_style: llmStyleParsed ? llmStyleParsed.value : getAgentLlmStyle(existing),
+        openai_compatible_reasoning_effort: reasoningEffortParsed
+          ? reasoningEffortParsed.value
+          : existing.openai_compatible_reasoning_effort,
         memory_context_mode:
           mode === "WRAPPED"
             ? "OFF"
@@ -1153,6 +1199,8 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
         context_session_gap_ms: source.context_session_gap_ms ?? null,
         emit_audit_events: source.emit_audit_events ?? 1,
         llm_style: source.llm_style === "THINK" ? "THINK" : "DO",
+        openai_compatible_reasoning_effort:
+          source.openai_compatible_reasoning_effort ?? null,
         memory_context_mode: source.memory_context_mode ?? "PER_CHANNEL_CROSS_CHANNEL",
         mode: source.mode ?? "CLASSIC",
         wrapped_config_json: source.wrapped_config_json ?? "{}",

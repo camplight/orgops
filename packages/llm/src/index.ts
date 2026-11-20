@@ -33,6 +33,7 @@ export type LlmToolContent = Array<{
 export type LlmMessageContent = LlmMessage["content"];
 
 export type LlmStyle = "DO" | "THINK";
+export type OpenAICompatibleReasoningEffort = "minimal" | "low" | "medium" | "high";
 
 export type GenerateOptions = {
   temperature?: number;
@@ -45,6 +46,8 @@ export type GenerateOptions = {
    * THINK = prefer reasoning (may disable tools on OpenAI chat models that forbid tools+reasoning).
    */
   llmStyle?: LlmStyle;
+  /** Per-agent reasoning effort for generic OpenAI-compatible endpoints. */
+  openaiCompatibleReasoningEffort?: OpenAICompatibleReasoningEffort;
   abortSignal?: AbortSignal;
   /** Env vars for API keys etc.; overrides process.env when set. Used by the runner to inject scoped secrets. */
   env?: Record<string, string | undefined>;
@@ -190,22 +193,6 @@ export function resolveLlmStyleCallOptions(input: {
     providerOptions: { openai: { reasoningEffort: "medium" } },
     toolsDisabledForReasoning: mustStripTools,
   };
-}
-
-const COMPATIBLE_REASONING_EFFORTS = ["minimal", "low", "medium", "high"] as const;
-type CompatibleReasoningEffort = (typeof COMPATIBLE_REASONING_EFFORTS)[number];
-
-/**
- * OpenAI-compatible hosts run thinking models at their own default effort, often the highest.
- * OPENAI_COMPATIBLE_REASONING_EFFORT sends `reasoning_effort` with every call; unset sends none.
- */
-export function resolveCompatibleReasoningEffort(
-  env: Record<string, string | undefined>,
-): CompatibleReasoningEffort | undefined {
-  const value = String(env.OPENAI_COMPATIBLE_REASONING_EFFORT ?? "").trim().toLowerCase();
-  return (COMPATIBLE_REASONING_EFFORTS as readonly string[]).includes(value)
-    ? (value as CompatibleReasoningEffort)
-    : undefined;
 }
 
 function normalizeProvider(provider: string) {
@@ -458,7 +445,7 @@ export async function generate(
     throw new Error(`Unsupported provider: ${rawProvider}`);
   }
   const compatibleReasoningEffort =
-    provider === "openai-compatible" ? resolveCompatibleReasoningEffort(env) : undefined;
+    provider === "openai-compatible" ? options.openaiCompatibleReasoningEffort : undefined;
 
   const styleCall = resolveLlmStyleCallOptions({
     provider,

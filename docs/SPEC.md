@@ -62,7 +62,7 @@ Stored in `agents`:
 - identity/config: `id`, `name`, `icon`, `description`, `model_id`
 - prompting/runtime config: `soul_contents`
 - workspace/safety: `workspace_path`, `allow_outside_workspace`
-- per-agent runtime tuning: `llm_call_timeout_ms`, `classic_max_model_steps`, `context_session_gap_ms`, `emit_audit_events`, `llm_style` (`DO` | `THINK`), `memory_context_mode`
+- per-agent runtime tuning: `llm_call_timeout_ms`, `classic_max_model_steps`, `context_session_gap_ms`, `emit_audit_events`, `llm_style` (`DO` | `THINK`), nullable `openai_compatible_reasoning_effort` (`minimal` | `low` | `medium` | `high`), `memory_context_mode`
 - mode/state: `mode` (`CLASSIC` | `RLM_REPL` | `WRAPPED`), `desired_state`, `runtime_state`, `last_heartbeat_at`
 - host assignment: `assigned_runner_id` (nullable; when set, only matching runner executes the agent)
 - skills: `enabled_skills_json`, `always_preloaded_skills_json`
@@ -630,6 +630,11 @@ model can still reason and emit a final JSON/plain-text event. OpenAI
 realtime-2 text/voice sessions map `DO`→`reasoning.effort=low` and
 `THINK`→`medium` while keeping tools.
 
+Generic OpenAI-compatible agents can additionally set
+`openai_compatible_reasoning_effort` per agent. The runner sends it as
+`reasoning_effort` on that agent's CLASSIC, RLM, and memory calls. A null value sends
+nothing and preserves the host default.
+
 Runner guidance names the agent (``You are the agent `name` ``) and its own
 `agent:<name>` source, so agents can tell their messages from other
 participants'.
@@ -1047,7 +1052,6 @@ Security note: wrapped `source`, `setup.command`, and `runtime.command` are host
 - `OPENROUTER_BASE_URL`, `OPENROUTER_HTTP_REFERER`, `OPENROUTER_APP_TITLE`
 - `LIQUID_BASE_URL` (optional; defaults to `https://labs.liquid.ai/api/v1`; store with `LIQUID_API_KEY` as OrgOps secrets)
 - `OPENAI_COMPATIBLE_API_KEY`, `OPENAI_COMPATIBLE_BASE_URL` (for local/OpenAI-compatible runtimes)
-- `OPENAI_COMPATIBLE_REASONING_EFFORT` (optional `minimal` | `low` | `medium` | `high`; sent as `reasoning_effort` on every OpenAI-compatible call. Unset sends nothing, so the host's default applies, which for some thinking models is the highest effort)
 - `ORGOPS_VOICE_BROKER` (`direct-openai-calls` default, or `livekit`)
 - `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `LIVEKIT_TOKEN_TTL_SECONDS`
 - `ORGOPS_GIT_BASH_PATH`
