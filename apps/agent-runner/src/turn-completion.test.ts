@@ -1,43 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
-  calledTurnFinish,
   clampCompletionRetrySeconds,
   completionFromJson,
   completionFromPlainText,
-  completionFromToolCalls,
   scheduledCompletionAttempt,
 } from "./turn-completion";
 
 describe("turn completion parsing", () => {
-  it("parses terminal tool arguments from object and JSON-string transports", () => {
-    expect(
-      completionFromToolCalls({
-        toolCalls: [
-          {
-            toolName: "turn_finish",
-            input: { status: "DONE", message: "done" },
-          },
-        ],
-      }),
-    ).toMatchObject({ status: "DONE", message: "done", source: "tool" });
-    const realtimeResult = {
-      toolCalls: [
-        {
-          toolName: "turn_finish",
-          input: JSON.stringify({
-            status: "WAITING_USER",
-            message: "Which sheet should I use?",
-          }),
-        },
-      ],
-    };
-    expect(calledTurnFinish(realtimeResult)).toBe(true);
-    expect(completionFromToolCalls(realtimeResult)).toMatchObject({
-      status: "WAITING_USER",
-      source: "tool",
-    });
-  });
-
   it("parses and strips the plain-text fallback trailer", () => {
     expect(
       completionFromPlainText(
@@ -55,13 +24,13 @@ describe("turn completion parsing", () => {
     expect(
       completionFromJson(
         JSON.stringify({
-          turnStatus: "DONE",
+          turnStatus: "WORK_FULLY_COMPLETE",
           type: "message.created",
           payload: { text: "done" },
         }),
       ),
     ).toEqual({
-      status: "DONE",
+      status: "WORK_FULLY_COMPLETE",
       event: {
         type: "message.created",
         payload: { text: "done" },

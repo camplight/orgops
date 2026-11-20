@@ -258,6 +258,17 @@ chmod +x ./opscli-macos
 npm test
 ```
 
+The turn-completion regression is an opt-in live GPT-5.5 test and is not part
+of `npm test`. Set `TEST_OPENAI_API_KEY` in `.env`, then run:
+
+```bash
+npm run test:manual:turn-completion
+```
+
+The test uses a synthetic approval-and-file-creation scenario and does not
+contain production conversation data. Override its model with
+`ORGOPS_MANUAL_COMPLETION_MODEL` when needed.
+
 Scenario e2e checks against running services:
 
 ```bash

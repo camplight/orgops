@@ -28,8 +28,9 @@ describe("buildRunnerGuidance", () => {
     expect(guidance).toContain(
       "SKILL.md` must start with YAML frontmatter at the very first line (`---` as the first bytes in the file).",
     );
-    expect(guidance).toContain("call `turn_finish`");
+    expect(guidance).toContain("WORK_FULLY_COMPLETE");
     expect(guidance).toContain("MUST be JSON with `turnStatus`");
+    expect(guidance).not.toContain("turn_finish");
   });
 
   it("swaps the JSON event contract for plain-text replies", () => {

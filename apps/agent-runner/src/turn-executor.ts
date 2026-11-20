@@ -52,14 +52,10 @@ import type { RunnerApi } from "./runner/api";
 import {
   MAX_SCHEDULED_COMPLETION_ATTEMPTS,
   MAX_TURN_COMPLETION_CONTINUATIONS,
-  TURN_FINISH_TOOL_NAME,
-  calledTurnFinish,
   clampCompletionRetrySeconds,
   completionFromJson,
   completionFromPlainText,
-  completionFromToolCalls,
   scheduledCompletionAttempt,
-  turnFinishTool,
   type TurnCompletionOutcome,
 } from "./turn-completion";
 
@@ -947,7 +943,6 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
     });
     const tools = {
       ...runnerTools,
-      [TURN_FINISH_TOOL_NAME]: turnFinishTool,
       ...(plainTextReplies
         ? {
             // No execute: the model loop stops on this call and the runner ends the turn silently.
@@ -1055,7 +1050,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         content: [
           `New channel events arrived after your previous response was already posted on model attempt ${attempt}.`,
           `Continue the same turn using those events. If no follow-up is needed, ${plainTextReplies ? `call ${NOOP_TOOL_NAME}` : "finish with a noop event"}.`,
-          `Otherwise close the follow-up with ${TURN_FINISH_TOOL_NAME} or the documented fallback completion contract.`,
+          "Otherwise close the follow-up with the documented completion contract.",
         ].join("\n"),
       });
       return true;
@@ -1102,7 +1097,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
             `Your tool call arguments were invalid on correction attempt ${correctionAttempts}/${MAX_EVENT_DISPATCH_ATTEMPTS}.`,
             `Error: ${String(error)}`,
             "Retry with corrected tool arguments. For optional string filters, omit the field instead of sending an empty string.",
-            `Close the turn with ${TURN_FINISH_TOOL_NAME} or the documented fallback completion contract.`,
+            "Close the turn with the documented completion contract.",
           ].join("\n"),
         });
         continue;
@@ -1134,15 +1129,13 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       const responseText = result.text ?? "";
       lastResponseText = responseText;
       let appendedAttemptTranscript = false;
-      const appendAttemptTranscript = (stripTerminalToolCall = false) => {
+      const appendAttemptTranscript = () => {
         if (appendedAttemptTranscript) return;
         appendedAttemptTranscript = true;
-        const responseMessages = stripTerminalToolCall
-          ? result.responseMessages?.slice(0, -1)
-          : result.responseMessages;
+        const responseMessages = result.responseMessages;
         if (responseMessages?.length) {
           retryMessages.push(...responseMessages);
-        } else if (!stripTerminalToolCall && responseText.trim()) {
+        } else if (responseText.trim()) {
           retryMessages.push({ role: "assistant", content: responseText.trim() });
         }
       };
@@ -1156,13 +1149,11 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         return;
       }
 
-      let completion: TurnCompletionOutcome | null = completionFromToolCalls(result);
-      const malformedTurnFinish = calledTurnFinish(result) && !completion;
-      if (!completion && responseText.trim()) {
-        completion = plainTextReplies
+      const completion: TurnCompletionOutcome | null = responseText.trim()
+        ? plainTextReplies
           ? completionFromPlainText(responseText)
-          : completionFromJson(responseText);
-      }
+          : completionFromJson(responseText)
+        : null;
 
       if (completion?.status === "CONTINUE") {
         completionContinuations += 1;
@@ -1177,7 +1168,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
           content: [
             `You requested CONTINUE on completion continuation ${completionContinuations}/${MAX_TURN_COMPLETION_CONTINUATIONS}.`,
             "Continue the unfinished work now using tools. Do not repeat the withheld progress message.",
-            `When the turn can end, call ${TURN_FINISH_TOOL_NAME} with a terminal status.`,
+            "When the turn can end, return a final response using the documented completion contract.",
           ].join("\n"),
         });
         continue;
@@ -1201,13 +1192,13 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
           correctionAttempts += 1;
           completionProtocolFailed = true;
           if (correctionAttempts >= MAX_EVENT_DISPATCH_ATTEMPTS) break;
-          appendAttemptTranscript(completion.source === "tool");
+          appendAttemptTranscript();
           retryMessages.push({
             role: "system",
             content: [
-              `Your ${TURN_FINISH_TOOL_NAME} event was invalid on correction attempt ${correctionAttempts}/${MAX_EVENT_DISPATCH_ATTEMPTS}.`,
+              `Your completion event was invalid on correction attempt ${correctionAttempts}/${MAX_EVENT_DISPATCH_ATTEMPTS}.`,
               `Error: ${String(error)}`,
-              `Call ${TURN_FINISH_TOOL_NAME} again with a corrected terminal outcome.`,
+              "Return a corrected terminal outcome using the documented completion contract.",
             ].join("\n"),
           });
           continue;
@@ -1217,12 +1208,12 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
           correctionAttempts += 1;
           completionProtocolFailed = true;
           if (correctionAttempts >= MAX_EVENT_DISPATCH_ATTEMPTS) break;
-          appendAttemptTranscript(completion.source === "tool");
+          appendAttemptTranscript();
           retryMessages.push({
             role: "system",
             content: [
               `Your completion outcome omitted its user-facing message or event on correction attempt ${correctionAttempts}/${MAX_EVENT_DISPATCH_ATTEMPTS}.`,
-              `Call ${TURN_FINISH_TOOL_NAME} with a corrected terminal outcome.`,
+              "Return a corrected terminal outcome using the documented completion contract.",
             ].join("\n"),
           });
           continue;
@@ -1250,13 +1241,13 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
             correctionAttempts += 1;
             completionProtocolFailed = true;
             if (correctionAttempts >= MAX_EVENT_DISPATCH_ATTEMPTS) break;
-            appendAttemptTranscript(completion.source === "tool");
+            appendAttemptTranscript();
             retryMessages.push({
               role: "system",
               content: [
                 `Your completion event failed validation on correction attempt ${correctionAttempts}/${MAX_EVENT_DISPATCH_ATTEMPTS}.`,
                 validationError,
-                `Call ${TURN_FINISH_TOOL_NAME} again with a corrected terminal outcome.`,
+                "Return a corrected terminal outcome using the documented completion contract.",
               ].join("\n"),
             });
             continue;
@@ -1339,7 +1330,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
           role: "system",
           content: [
             `You posted a channel message but did not close the turn on correction attempt ${correctionAttempts}/${MAX_EVENT_DISPATCH_ATTEMPTS}.`,
-            `Do not repeat that message. Continue unfinished work or call ${TURN_FINISH_TOOL_NAME} with the actual terminal outcome.`,
+            "Do not repeat that message. Continue unfinished work or return the actual terminal outcome using the documented completion contract.",
           ].join("\n"),
         });
         continue;
@@ -1348,8 +1339,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       if (
         !responseText.trim() &&
         humanRequest &&
-        generateUsedTools(result) &&
-        !malformedTurnFinish
+        generateUsedTools(result)
       ) {
         // A tool loop that exhausted its model-step budget cannot reliably
         // self-classify. Summarize its real transcript once, without tools.
@@ -1428,16 +1418,14 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
 
       completionProtocolFailed = true;
       correctionAttempts += 1;
-      appendAttemptTranscript(malformedTurnFinish);
+      appendAttemptTranscript();
       if (correctionAttempts >= MAX_EVENT_DISPATCH_ATTEMPTS) break;
       retryMessages.push({
         role: "system",
         content: [
-          malformedTurnFinish
-            ? `Your ${TURN_FINISH_TOOL_NAME} call was invalid.`
-            : "Your previous response did not include a valid turn completion outcome.",
+          "Your previous response did not include a valid turn completion outcome.",
           `This is correction attempt ${correctionAttempts}/${MAX_EVENT_DISPATCH_ATTEMPTS}.`,
-          `Continue unfinished work now, or call ${TURN_FINISH_TOOL_NAME} with DONE, BLOCKED, WAITING_USER, or RETRY_LATER.`,
+          "Continue unfinished work now, or return WORK_FULLY_COMPLETE, BLOCKED, WAITING_USER, or RETRY_LATER using the documented completion contract.",
           plainTextReplies
             ? "If function tools are unavailable, use the ORGOPS_TURN_STATUS trailer."
             : "If function tools are unavailable, return fallback JSON with turnStatus.",
