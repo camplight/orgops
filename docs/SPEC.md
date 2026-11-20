@@ -764,6 +764,8 @@ Presence events (bookkeeping only):
 
 Schedule mutations require channel post permission; reads require channel view
 permission. Scoped runners can only manage schedules targeting their own agent.
+The admin UI Schedules page lists these rows and can create, pause, resume, and
+delete them.
 Cron parsing and DST behavior come from `cron-parser` using the stored IANA
 timezone. The API materializes ordinary `agent.scheduled.trigger` events with
 idempotency keys `schedule:<scheduleId>:<scheduledFor>`.
