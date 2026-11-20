@@ -168,6 +168,8 @@ function spawnTrackedProcess(
     ...(process.env as Record<string, string>),
     ORGOPS_AGENT_NAME: ctx.agent.name,
     ORGOPS_AGENT_WORKSPACE: resolveAgentPath(ctx.agent, ctx.agent.workspacePath, ctx.extraAllowedRoots ?? []),
+    // Lets tools such as connected-app helpers attribute their work to the turn's chat.
+    ...(ctx.channelId ? { ORGOPS_CHANNEL_ID: ctx.channelId } : {}),
     ...ctx.injectionEnv,
     ...input.env,
   };

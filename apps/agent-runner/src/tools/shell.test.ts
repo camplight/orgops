@@ -53,6 +53,30 @@ describe("shell tool", () => {
     expect(result.stdout.trim()).toBe("__missing__");
   });
 
+  it("shell_run exposes the turn's channel as ORGOPS_CHANNEL_ID", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "orgops-shell-test-"));
+    createdDirs.push(workspace);
+    const ctx = createTestContext(workspace, {});
+    const result = (await execute(ctx, "shell_run", {
+      cmd: 'node -e "process.stdout.write(process.env.ORGOPS_CHANNEL_ID || \\"__missing__\\")"',
+      cwd: workspace,
+    })) as { stdout: string; exitCode: number };
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe("chan-1");
+  });
+
+  it("shell_run without a channel sets no ORGOPS_CHANNEL_ID", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "orgops-shell-test-"));
+    createdDirs.push(workspace);
+    const ctx = { ...createTestContext(workspace, {}), channelId: undefined };
+    const result = (await execute(ctx, "shell_run", {
+      cmd: 'node -e "process.stdout.write(process.env.ORGOPS_CHANNEL_ID || \\"__missing__\\")"',
+      cwd: workspace,
+    })) as { stdout: string; exitCode: number };
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe("__missing__");
+  });
+
   it("passes provider keys from injected env", async () => {
     process.env.OPENAI_API_KEY = "host-key";
     const workspace = mkdtempSync(join(tmpdir(), "orgops-shell-test-"));
