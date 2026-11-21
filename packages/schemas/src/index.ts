@@ -54,7 +54,7 @@ export const ModelSchema = z.object({
   provider: z.string(),
   modelName: z.string(),
   enabled: z.boolean(),
-  defaults: z.record(z.unknown()).default({}),
+  defaults: z.record(z.string(), z.unknown()).default({}),
   capabilities: ModelCapabilitiesSchema.default({}),
 });
 
