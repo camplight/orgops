@@ -1059,6 +1059,11 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       return !cancel.signal.aborted;
     };
     const lateEventExclusion = cancel ? { excludeTypePrefix: TURN_CANCEL_EVENT_TYPE } : {};
+    // Posts a reply or follow-up the turn decided on, unless the turn was stopped meanwhile.
+    const emitUnlessStopped = async (draft: ModelEventDraft) => {
+      abortSignal?.throwIfAborted();
+      await input.api.emitEvent(draft);
+    };
     const continueForLateEvents = async (
       postedEvents: ModelEventDraft[],
       attempt: number,
@@ -1323,7 +1328,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
               parentEventId: triggerEvent.id,
               idempotencyKey: `turn:${agent.name}:${triggerEvent.id}:continuation-exhausted`,
             };
-            await input.api.emitEvent(exhausted);
+            await emitUnlessStopped(exhausted);
             await emitTurnEvent("agent.turn.completed", {
               completedWithFallback: true,
               turnStatus: "RETRY_EXHAUSTED",
@@ -1335,7 +1340,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
           );
           const postedEvents = await flushMessages();
           if (eventDraft) {
-            await input.api.emitEvent(eventDraft);
+            await emitUnlessStopped(eventDraft);
             postedEvents.push(eventDraft);
             completionEventSequence += 1;
           }
@@ -1355,7 +1360,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
             },
             idempotencyKey: `turn:${agent.name}:${triggerEvent.id}:scheduled-continuation`,
           };
-          await input.api.emitEvent(scheduledEvent);
+          await emitUnlessStopped(scheduledEvent);
           await emitTurnEvent("agent.turn.completed", {
             scheduledContinuation: true,
             retryAfterSeconds,
@@ -1366,7 +1371,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
 
         const postedEvents = await flushMessages();
         if (eventDraft) {
-          await input.api.emitEvent(eventDraft);
+          await emitUnlessStopped(eventDraft);
           postedEvents.push(eventDraft);
           completionEventSequence += 1;
         }
@@ -1426,7 +1431,9 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
                   openaiCompatibleReasoningEffort:
                     agent.openaiCompatibleReasoningEffort ?? undefined,
                   env: injectionEnv,
-                  abortSignal: AbortSignal.timeout(finalSummaryTimeoutMs),
+                  abortSignal: abortSignal
+                    ? AbortSignal.any([abortSignal, AbortSignal.timeout(finalSummaryTimeoutMs)])
+                    : AbortSignal.timeout(finalSummaryTimeoutMs),
                 },
               ),
               finalSummaryTimeoutMs,
@@ -1463,7 +1470,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
           parentEventId: triggerEvent.id,
           idempotencyKey: `turn:${agent.name}:${triggerEvent.id}:final-summary:${attempt}`,
         };
-        await input.api.emitEvent(notice);
+        await emitUnlessStopped(notice);
         if (await continueForLateEvents([notice], attempt)) continue;
         await emitTurnEvent("agent.turn.completed", { completedWithFallback: true });
         return;
@@ -1500,7 +1507,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         responsePreview: truncateOversizedText(lastResponseText.trim(), 500),
       });
       if (humanRequest || currentScheduledCompletionAttempt > 0) {
-        await input.api.emitEvent({
+        await emitUnlessStopped({
           type: "message.created",
           source: `agent:${agent.name}`,
           channelId,

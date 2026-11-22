@@ -250,6 +250,48 @@ describe("CLASSIC turn cancellation from the late-event pull", () => {
   });
 });
 
+describe("CLASSIC turn cancellation before fallback replies", () => {
+  it("aborts the final summary and posts nothing when Stop arrives during it", async () => {
+    const ctx = setup();
+    const exhausted = {
+      text: "",
+      finishReason: "tool-calls",
+      toolCalls: [{ toolName: "shell_run" }],
+      responseMessages: [{ role: "assistant" as const, content: "Started the job." }],
+    };
+    let summarySignal: AbortSignal | undefined;
+    vi.mocked(generate)
+      .mockResolvedValueOnce(exhausted as any)
+      .mockImplementationOnce(async (_model, _messages, options) => {
+        summarySignal = options?.abortSignal;
+        ctx.turnCancellations.request(stopEvent());
+        return new Promise((_resolve, reject) => {
+          if (summarySignal?.aborted) reject(summarySignal.reason);
+          summarySignal?.addEventListener("abort", () => reject(summarySignal!.reason), { once: true });
+        });
+      });
+    const started = Date.now();
+    await ctx.run();
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(summarySignal?.aborted).toBe(true);
+    expect(ctx.emitted.filter((event) => event.type === "message.created")).toHaveLength(0);
+    expect(ctx.emitted.at(-1)).toMatchObject({ type: "agent.turn.completed", payload: { cancelled: true } });
+  });
+
+  it("posts no completion fallback when Stop arrives during the last attempt", async () => {
+    const ctx = setup();
+    let calls = 0;
+    vi.mocked(generate).mockImplementation(async () => {
+      calls += 1;
+      if (calls === 3) ctx.turnCancellations.request(stopEvent());
+      return { text: "not json", toolCalls: [], toolResults: [], finishReason: "stop" } as any;
+    });
+    await ctx.run();
+    expect(ctx.emitted.filter((event) => event.type === "message.created")).toHaveLength(0);
+    expect(ctx.emitted.at(-1)).toMatchObject({ type: "agent.turn.completed", payload: { cancelled: true } });
+  });
+});
+
 describe("CLASSIC empty final output", () => {
   it("posts an incomplete-work notice for a human tool-only turn without a transcript", async () => {
     const ctx = setup();
