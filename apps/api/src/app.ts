@@ -962,6 +962,7 @@ const DEFAULT_MODEL_NAME_BY_PROVIDER = {
   openrouter: "openai/gpt-4o-mini",
   mistral: "mistral-small-latest",
   liquid: "lfm3",
+  google: "gemini-4-neon",
 } as const;
 
 const PROVIDER_API_KEY_ENV = {
@@ -970,6 +971,7 @@ const PROVIDER_API_KEY_ENV = {
   openrouter: "OPENROUTER_API_KEY",
   mistral: "MISTRAL_API_KEY",
   liquid: "LIQUID_API_KEY",
+  google: "GOOGLE_API_KEY",
 } as const;
 
 type SystemAgentProvider = keyof typeof DEFAULT_MODEL_NAME_BY_PROVIDER;
@@ -981,7 +983,15 @@ function normalizeSystemAgentProvider(raw: string): SystemAgentProvider | null {
   if (normalized === "openrouter" || normalized === "or") return "openrouter";
   if (normalized === "mistral" || normalized === "mistralai") return "mistral";
   if (normalized === "liquid" || normalized === "liquidai") return "liquid";
+  if (normalized === "google" || normalized === "gemini") return "google";
   return null;
+}
+
+function readSeedProviderApiKey(secretName: string) {
+  const primary = (process.env[secretName] ?? "").trim();
+  if (primary) return primary;
+  if (secretName === "GOOGLE_API_KEY") return (process.env.GEMINI_API_KEY ?? "").trim();
+  return "";
 }
 
 function resolveSystemAgentModel(raw: string) {
@@ -1030,7 +1040,7 @@ function seedDefaultSystemAgent(
     return;
   }
 
-  const apiKey = (process.env[resolved.secretName] ?? "").trim();
+  const apiKey = readSeedProviderApiKey(resolved.secretName);
   if (!apiKey) {
     console.warn(
       `ORGOPS_SYSTEM_AGENT_MODEL is set but ${resolved.secretName} is empty. Skipping default system agent.`,

@@ -2,6 +2,7 @@ import { asSchema, experimental_transcribe, generateText, stepCountIs } from "ai
 import { createOpenAI } from "@ai-sdk/openai";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createMistral } from "@ai-sdk/mistral";
+import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import type { ImagePart, ModelMessage, TextPart } from "ai";
 import {
   generateWithOpenAIRealtime,
@@ -34,6 +35,7 @@ export type LlmMessageContent = LlmMessage["content"];
 
 export type LlmStyle = "DO" | "THINK";
 export type OpenAICompatibleReasoningEffort = "minimal" | "low" | "medium" | "high";
+export type GoogleThinkingLevel = "high" | "xhigh";
 
 export type GenerateOptions = {
   temperature?: number;
@@ -193,6 +195,22 @@ export function resolveLlmStyleCallOptions(input: {
     providerOptions: { openai: { reasoningEffort: "medium" } },
     toolsDisabledForReasoning: mustStripTools,
   };
+}
+
+/** Gemini 4 Neon: Do uses the default `high` level; Think requests `xhigh`. */
+export function resolveGoogleThinkingLevel(
+  modelName: string,
+  llmStyle?: LlmStyle,
+): GoogleThinkingLevel | undefined {
+  const normalized = modelName.trim().toLowerCase();
+  if (normalized !== "gemini-4-neon" && !normalized.startsWith("gemini-4-neon-")) {
+    return undefined;
+  }
+  return normalizeLlmStyle(llmStyle) === "THINK" ? "xhigh" : "high";
+}
+
+function googleApiKey(env: Record<string, string | undefined>) {
+  return env.GOOGLE_API_KEY?.trim() || env.GEMINI_API_KEY?.trim();
 }
 
 function normalizeProvider(provider: string) {
@@ -431,6 +449,9 @@ export async function generate(
       baseURL: env.LIQUID_BASE_URL || "https://labs.liquid.ai/api/v1",
     });
     model = liquid.chat(modelName);
+  } else if (provider === "google") {
+    const google = createGoogleGenerativeAI({ apiKey: googleApiKey(env) });
+    model = google(modelName);
   } else if (provider === "openai-compatible") {
     const baseURL = env.OPENAI_COMPATIBLE_BASE_URL?.trim();
     if (!baseURL) {
@@ -446,6 +467,8 @@ export async function generate(
   }
   const compatibleReasoningEffort =
     provider === "openai-compatible" ? options.openaiCompatibleReasoningEffort : undefined;
+  const googleThinkingLevel =
+    provider === "google" ? resolveGoogleThinkingLevel(modelName, options.llmStyle) : undefined;
 
   const styleCall = resolveLlmStyleCallOptions({
     provider,
@@ -485,9 +508,15 @@ export async function generate(
     tools: normalizeToolsForSdk(styleCall.tools),
     ...(styleCall.providerOptions
       ? { providerOptions: styleCall.providerOptions }
-      : compatibleReasoningEffort
-        ? { providerOptions: { openai: { reasoningEffort: compatibleReasoningEffort } } }
-        : {}),
+      : googleThinkingLevel
+        ? {
+            providerOptions: {
+              google: { thinkingConfig: { thinkingLevel: googleThinkingLevel } },
+            },
+          }
+        : compatibleReasoningEffort
+          ? { providerOptions: { openai: { reasoningEffort: compatibleReasoningEffort } } }
+          : {}),
     abortSignal: options.abortSignal,
   });
   return {

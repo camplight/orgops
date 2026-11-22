@@ -4,6 +4,7 @@ import { join } from "node:path";
 import {
   DEFAULT_ANTHROPIC_MODEL_ID,
   DEFAULT_API_URL,
+  DEFAULT_GOOGLE_MODEL_ID,
   DEFAULT_LIQUID_MODEL_ID,
   DEFAULT_MISTRAL_MODEL_ID,
   DEFAULT_OPENAI_MODEL_ID,
@@ -131,6 +132,7 @@ export function normalizeProvider(provider: string): ModelProvider | null {
   if (normalized === "openrouter" || normalized === "or") return "openrouter";
   if (normalized === "mistral" || normalized === "mistralai") return "mistral";
   if (normalized === "liquid" || normalized === "liquidai") return "liquid";
+  if (normalized === "google" || normalized === "gemini") return "google";
   return null;
 }
 
@@ -144,6 +146,7 @@ function getProviderLabel(provider: ModelProvider) {
   if (provider === "anthropic") return "Claude (Anthropic)";
   if (provider === "mistral") return "Mistral";
   if (provider === "liquid") return "Liquid AI";
+  if (provider === "google") return "Gemini";
   return "OpenRouter";
 }
 
@@ -152,7 +155,15 @@ function getProviderApiKeyEnvKey(provider: ModelProvider) {
   if (provider === "anthropic") return "ANTHROPIC_API_KEY";
   if (provider === "mistral") return "MISTRAL_API_KEY";
   if (provider === "liquid") return "LIQUID_API_KEY";
+  if (provider === "google") return "GOOGLE_API_KEY";
   return "OPENROUTER_API_KEY";
+}
+
+function hasProviderApiKey(provider: ModelProvider) {
+  if (provider === "google") {
+    return Boolean(process.env.GOOGLE_API_KEY?.trim() || process.env.GEMINI_API_KEY?.trim());
+  }
+  return Boolean(process.env[getProviderApiKeyEnvKey(provider)]?.trim());
 }
 
 function getDefaultModelIdForProvider(provider: ModelProvider) {
@@ -160,18 +171,21 @@ function getDefaultModelIdForProvider(provider: ModelProvider) {
   if (provider === "anthropic") return DEFAULT_ANTHROPIC_MODEL_ID;
   if (provider === "mistral") return DEFAULT_MISTRAL_MODEL_ID;
   if (provider === "liquid") return DEFAULT_LIQUID_MODEL_ID;
+  if (provider === "google") return DEFAULT_GOOGLE_MODEL_ID;
   return DEFAULT_OPENROUTER_MODEL_ID;
 }
 
 function getAlternateProviders(provider: ModelProvider): ModelProvider[] {
-  return (["openai", "anthropic", "openrouter", "mistral", "liquid"] as const).filter((x) => x !== provider);
+  return (["openai", "anthropic", "openrouter", "mistral", "liquid", "google"] as const).filter(
+    (x) => x !== provider,
+  );
 }
 
 async function askProviderChoice(ask: (prompt: string) => Promise<string>): Promise<ModelProvider> {
   while (true) {
     const answer = (
       await ask(
-        "No model API key found. Choose provider: [1] OpenAI, [2] Claude (Anthropic), [3] OpenRouter, [4] Mistral, [5] Liquid AI: "
+        "No model API key found. Choose provider: [1] OpenAI, [2] Claude (Anthropic), [3] OpenRouter, [4] Mistral, [5] Liquid AI, [6] Gemini: "
       )
     )
       .trim()
@@ -181,7 +195,8 @@ async function askProviderChoice(ask: (prompt: string) => Promise<string>): Prom
     if (answer === "3" || answer === "openrouter" || answer === "or") return "openrouter";
     if (answer === "4" || answer === "mistral" || answer === "mistralai") return "mistral";
     if (answer === "5" || answer === "liquid" || answer === "liquidai") return "liquid";
-    writeRoleMessage("opscli", "Please choose 1, 2, 3, 4, or 5.");
+    if (answer === "6" || answer === "google" || answer === "gemini") return "google";
+    writeRoleMessage("opscli", "Please choose 1, 2, 3, 4, 5, or 6.");
   }
 }
 
@@ -197,7 +212,9 @@ export async function ensureModelCredentials(input: {
   const hasOpenRouterKey = Boolean(process.env.OPENROUTER_API_KEY?.trim());
   const hasMistralKey = Boolean(process.env.MISTRAL_API_KEY?.trim());
   const hasLiquidKey = Boolean(process.env.LIQUID_API_KEY?.trim());
-  const hasAnyKey = hasOpenAiKey || hasAnthropicKey || hasOpenRouterKey || hasMistralKey || hasLiquidKey;
+  const hasGoogleKey = hasProviderApiKey("google");
+  const hasAnyKey =
+    hasOpenAiKey || hasAnthropicKey || hasOpenRouterKey || hasMistralKey || hasLiquidKey || hasGoogleKey;
 
   if (!hasAnyKey) {
     provider = await askProviderChoice(ask);
@@ -208,10 +225,8 @@ export async function ensureModelCredentials(input: {
   }
 
   let requiredApiKeyEnv = getProviderApiKeyEnvKey(provider);
-  if (!process.env[requiredApiKeyEnv]?.trim()) {
-    const alternate = getAlternateProviders(provider).find((candidate) =>
-      Boolean(process.env[getProviderApiKeyEnvKey(candidate)]?.trim())
-    );
+  if (!hasProviderApiKey(provider)) {
+    const alternate = getAlternateProviders(provider).find((candidate) => hasProviderApiKey(candidate));
     if (alternate) {
       const answer = (
         await ask(
@@ -231,7 +246,7 @@ export async function ensureModelCredentials(input: {
     }
   }
 
-  if (!process.env[requiredApiKeyEnv]?.trim()) {
+  if (!hasProviderApiKey(provider)) {
     const answer = (await ask(`${requiredApiKeyEnv} not found. Enter key: `)).trim();
     if (!answer) return false;
     process.env[requiredApiKeyEnv] = answer;

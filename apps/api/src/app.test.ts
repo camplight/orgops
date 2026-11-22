@@ -259,6 +259,59 @@ describe("api app", () => {
     }
   });
 
+  it("seeds a Gemini 4 Neon system agent from GEMINI_API_KEY", async () => {
+    const masterKey = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
+    const previousMasterKey = process.env.ORGOPS_MASTER_KEY;
+    const previousGoogleKey = process.env.GOOGLE_API_KEY;
+    const previousGeminiKey = process.env.GEMINI_API_KEY;
+    process.env.ORGOPS_MASTER_KEY = masterKey;
+    delete process.env.GOOGLE_API_KEY;
+    process.env.GEMINI_API_KEY = "gemini-test-key";
+    const dataDir = mkdtempSync(join(tmpdir(), "orgops-api-"));
+    try {
+      const db = openDb(":memory:");
+      createApp({
+        db,
+        dataDir,
+        adminUser: "admin",
+        adminPass: "admin",
+        systemAgentModel: "gemini",
+      });
+      const orm = createDrizzleDb(db);
+      const agent = orm
+        .select({ modelId: schema.agents.model_id })
+        .from(schema.agents)
+        .where(eq(schema.agents.name, "system"))
+        .get() as { modelId: string } | undefined;
+      expect(agent?.modelId).toBe("google:gemini-4-neon");
+      const secret = orm
+        .select({ ciphertext: schema.secrets.ciphertext_b64 })
+        .from(schema.secrets)
+        .where(eq(schema.secrets.name, "GOOGLE_API_KEY"))
+        .get() as { ciphertext: string } | undefined;
+      expect(decryptSecret(parseMasterKey(masterKey), secret?.ciphertext ?? "")).toBe(
+        "gemini-test-key",
+      );
+      const model = orm
+        .select({ defaultsJson: schema.models.defaults_json })
+        .from(schema.models)
+        .where(eq(schema.models.id, "google:gemini-4-neon"))
+        .get() as { defaultsJson: string } | undefined;
+      expect(JSON.parse(model?.defaultsJson ?? "{}").capabilities).toMatchObject({
+        contextWindowTokens: 1_000_000,
+        toolCalling: true,
+      });
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+      if (previousMasterKey === undefined) delete process.env.ORGOPS_MASTER_KEY;
+      else process.env.ORGOPS_MASTER_KEY = previousMasterKey;
+      if (previousGoogleKey === undefined) delete process.env.GOOGLE_API_KEY;
+      else process.env.GOOGLE_API_KEY = previousGoogleKey;
+      if (previousGeminiKey === undefined) delete process.env.GEMINI_API_KEY;
+      else process.env.GEMINI_API_KEY = previousGeminiKey;
+    }
+  });
+
   it("does not seed a system agent when any agent already exists", async () => {
     const masterKey = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
     const previousMasterKey = process.env.ORGOPS_MASTER_KEY;

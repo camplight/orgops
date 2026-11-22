@@ -97,6 +97,13 @@ export function inferModelCapabilities(providerInput: string, modelNameInput: st
 
   if (
     (provider === "google" || provider === "gemini") &&
+    (modelName === "gemini-4-neon" || modelName.startsWith("gemini-4-neon-"))
+  ) {
+    capabilities.contextWindowTokens = 1_000_000;
+  }
+
+  if (
+    (provider === "google" || provider === "gemini") &&
     (modelName.includes("live") || modelName.includes("native-audio"))
   ) {
     capabilities.audioInput = true;
