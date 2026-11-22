@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -153,6 +153,70 @@ describe("shell tool", () => {
       const childPid = await readPid(pidFile);
       await stopAllRunningProcesses(500);
       await waitFor(() => !alive(childPid));
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "stops a command whose shell already exited while its child still runs",
+    async () => {
+      const workspace = mkdtempSync(join(tmpdir(), "orgops-shell-test-"));
+      createdDirs.push(workspace);
+      const turn = cancellableTurn(createTestContext(workspace, {}));
+      const pidFile = join(workspace, "child.pid");
+      const started = Date.now();
+      const running = execute(turn.ctx, "shell_run", {
+        cmd: `node -e "setInterval(() => {}, 1000)" & echo $! > ${pidFile}; echo started`,
+        cwd: workspace,
+        timeoutMs: 20000,
+      }) as Promise<{ exitCode: number | null }>;
+      const childPid = await readPid(pidFile);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      await turn.cancel();
+      const result = await running;
+      expect(Date.now() - started).toBeLessThan(5000);
+      expect(result.exitCode).toBe(130);
+      await waitFor(() => !alive(childPid));
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "kills a child that ignores SIGTERM after its shell died on SIGTERM",
+    async () => {
+      const workspace = mkdtempSync(join(tmpdir(), "orgops-shell-test-"));
+      createdDirs.push(workspace);
+      writeFileSync(join(workspace, "stubborn.js"), "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);\n");
+      const pidFile = join(workspace, "child.pid");
+      const started = (await execute(createTestContext(workspace, {}), "shell_start", {
+        cmd: `node stubborn.js & echo $! > ${pidFile}; wait`,
+        cwd: workspace,
+      })) as { processId: string };
+      const childPid = await readPid(pidFile);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      await stopProcessTree(started.processId, 300);
+      await waitFor(() => !alive(childPid), 1000);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "runner shutdown stops every process at once",
+    async () => {
+      const workspace = mkdtempSync(join(tmpdir(), "orgops-shell-test-"));
+      createdDirs.push(workspace);
+      writeFileSync(join(workspace, "stubborn.js"), "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);\n");
+      const pids: number[] = [];
+      for (let index = 0; index < 3; index += 1) {
+        const started = (await execute(createTestContext(workspace, {}), "shell_start", {
+          cmd: "node stubborn.js",
+          cwd: workspace,
+        })) as { pid: number };
+        pids.push(started.pid);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const stopStarted = Date.now();
+      await stopAllRunningProcesses(400);
+      // One at a time would take at least 3 × 400 ms.
+      expect(Date.now() - stopStarted).toBeLessThan(1000);
+      for (const pid of pids) await waitFor(() => !alive(pid), 1000);
     },
   );
 
