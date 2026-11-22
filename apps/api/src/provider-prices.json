@@ -163,6 +163,15 @@
       "effectiveAt": "2026-11-07T00:00:00.000Z"
     },
     {
+      "modelId": "google:gemini-4-neon",
+      "inputPricePerMillion": 3,
+      "outputPricePerMillion": 15,
+      "cachedInputPricePerMillion": 0.15,
+      "source": "google-docs",
+      "sourceUrl": "https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-gemini-4-neon/",
+      "effectiveAt": "2026-11-18T00:00:00.000Z"
+    },
+    {
       "modelId": "anthropic:claude-3-5-sonnet-latest",
       "inputPricePerMillion": 3,
       "outputPricePerMillion": 15,

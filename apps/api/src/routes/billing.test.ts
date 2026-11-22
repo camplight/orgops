@@ -34,6 +34,12 @@ describe("billing routes", () => {
           expect.objectContaining({ modelId: "openai:gpt-5.5" }),
           expect.objectContaining({ modelId: "openai:gpt-5.6" }),
           expect.objectContaining({ modelId: "openai:gpt-realtime" }),
+          expect.objectContaining({
+            modelId: "google:gemini-4-neon",
+            inputPricePerMillion: "3",
+            outputPricePerMillion: "15",
+            cachedInputPricePerMillion: "0.15",
+          }),
         ]),
       );
 
@@ -55,6 +61,13 @@ describe("billing routes", () => {
           inputTokens: 1_000_000,
           outputTokens: 500_000,
           expectedCost: 12_000_000,
+        },
+        {
+          modelId: "google:gemini-4-neon",
+          inputTokens: 1_000_000,
+          cachedInputTokens: 200_000,
+          outputTokens: 10_000,
+          expectedCost: 2_580_000,
         },
       ]) {
         const response = await engine.app.request("http://localhost/api/billing/usage", {

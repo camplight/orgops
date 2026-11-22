@@ -1525,8 +1525,8 @@ export function AgentsScreen({
                       </div>
                       <p className="text-xs text-slate-500">
                         {form.llmStyle === "THINK"
-                          ? "Think: enable model reasoning. On GPT-5.4+/5.6/6 Chat Completions, host tools are disabled for that turn. Realtime-2 uses higher reasoning effort."
-                          : "Do: keep host tools and disable/minimize OpenAI reasoning effort (required for GPT-5.6 tool use on Chat Completions)."}
+                          ? "Think: enable model reasoning. On GPT-5.4+/5.6/6 Chat Completions, host tools are disabled for that turn. Realtime-2 uses higher reasoning effort. Gemini 4 Neon uses the xhigh thinking level and keeps host tools."
+                          : "Do: keep host tools and disable/minimize OpenAI reasoning effort (required for GPT-5.6 tool use on Chat Completions). Gemini 4 Neon uses its default high thinking level and keeps host tools."}
                       </p>
                     </div>
                     ) : null}

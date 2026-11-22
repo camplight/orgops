@@ -35,6 +35,9 @@ const mocks = vi.hoisted(() => ({
     language: "en",
     durationInSeconds: 1.5,
   })),
+  createGoogleGenerativeAI: vi.fn(() =>
+    vi.fn((modelName: string) => ({ provider: "google", modelName })),
+  ),
 }));
 
 vi.mock("ai", () => ({
@@ -55,6 +58,10 @@ vi.mock("@ai-sdk/mistral", () => ({
   createMistral: mocks.createMistral,
 }));
 
+vi.mock("@ai-sdk/google", () => ({
+  createGoogleGenerativeAI: mocks.createGoogleGenerativeAI,
+}));
+
 import {
   generate,
   isOpenAICompletionModel,
@@ -62,6 +69,7 @@ import {
   normalizeLlmStyle,
   openaiChatForbidsToolsWithReasoning,
   resolveLlmStyleCallOptions,
+  resolveGoogleThinkingLevel,
   resolveTranscriptionModelId,
   transcribe,
 } from "./index";
@@ -73,6 +81,7 @@ describe("llm", () => {
     mocks.createOpenAI.mockClear();
     mocks.createAnthropic.mockClear();
     mocks.createMistral.mockClear();
+    mocks.createGoogleGenerativeAI.mockClear();
     delete process.env.ORGOPS_LLM_STUB;
     delete process.env.OPENAI_API_KEY;
     delete process.env.ANTHROPIC_API_KEY;
@@ -82,6 +91,8 @@ describe("llm", () => {
     delete process.env.LIQUID_BASE_URL;
     delete process.env.OPENAI_COMPATIBLE_API_KEY;
     delete process.env.OPENAI_COMPATIBLE_BASE_URL;
+    delete process.env.GOOGLE_API_KEY;
+    delete process.env.GEMINI_API_KEY;
   });
 
   it("preserves SDK response history for tool-free finalization", async () => {
@@ -297,6 +308,47 @@ describe("llm", () => {
       providerOptions: { openai: { reasoningEffort: "low" } },
     });
     await call();
+    expect(mocks.generateText.mock.calls.at(-1)?.[0]).not.toHaveProperty("providerOptions");
+  });
+
+  it("calls Gemini 4 Neon with high thinking by default and xhigh in Think style", async () => {
+    process.env.ORGOPS_LLM_STUB = "0";
+    const tools = {
+      shell_run: { description: "run", parameters: { type: "object" } },
+    };
+    await generate(
+      "google:gemini-4-neon",
+      [{ role: "user", content: "hello" }],
+      { env: { GOOGLE_API_KEY: "google-key" }, tools },
+    );
+    expect(mocks.createGoogleGenerativeAI).toHaveBeenCalledWith({ apiKey: "google-key" });
+    expect(mocks.createGoogleGenerativeAI.mock.results[0]?.value).toHaveBeenCalledWith("gemini-4-neon");
+    expect(mocks.generateText.mock.calls.at(-1)?.[0]).toMatchObject({
+      tools: expect.objectContaining({ shell_run: expect.anything() }),
+      providerOptions: { google: { thinkingConfig: { thinkingLevel: "high" } } },
+    });
+
+    await generate(
+      "gemini:gemini-4-neon",
+      [{ role: "user", content: "hello" }],
+      { env: { GEMINI_API_KEY: "alias-key" }, llmStyle: "THINK", tools },
+    );
+    expect(mocks.createGoogleGenerativeAI).toHaveBeenLastCalledWith({ apiKey: "alias-key" });
+    expect(mocks.generateText.mock.calls.at(-1)?.[0]).toMatchObject({
+      tools: expect.objectContaining({ shell_run: expect.anything() }),
+      providerOptions: { google: { thinkingConfig: { thinkingLevel: "xhigh" } } },
+    });
+  });
+
+  it("prefers GOOGLE_API_KEY over GEMINI_API_KEY and leaves other Gemini models at the provider default", async () => {
+    process.env.ORGOPS_LLM_STUB = "0";
+    expect(resolveGoogleThinkingLevel("gemini-2.5-pro", "THINK")).toBeUndefined();
+    await generate(
+      "google:gemini-2.5-pro",
+      [{ role: "user", content: "hello" }],
+      { env: { GOOGLE_API_KEY: "google-key", GEMINI_API_KEY: "alias-key" }, llmStyle: "THINK" },
+    );
+    expect(mocks.createGoogleGenerativeAI).toHaveBeenCalledWith({ apiKey: "google-key" });
     expect(mocks.generateText.mock.calls.at(-1)?.[0]).not.toHaveProperty("providerOptions");
   });
 

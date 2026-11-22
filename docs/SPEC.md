@@ -70,7 +70,7 @@ Stored in `agents`:
 - secret delegation toggle: `allow_owner_human_secrets` (when enabled and owner exists, user-scoped secrets are injected for native turns)
 - wrapped runtime config: `wrapped_config_json` (JSON object; used only by `WRAPPED` mode)
 
-On API startup, when `agents` is empty, OrgOps seeds one public agent named `system` if `ORGOPS_SYSTEM_AGENT_MODEL` is set. The value is a provider (`openai`, `anthropic`/`claude`, `openrouter`/`or`, `mistral`/`mistralai`, `liquid`/`liquidai`) or `provider:model`. A bare provider uses `openai:gpt-5.2`, `anthropic:claude-3-5-sonnet-latest`, `openrouter:openai/gpt-4o-mini`, `mistral:mistral-small-latest`, or `liquid:lfm3`. Seeding also stores the matching provider API key (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `MISTRAL_API_KEY`, or `LIQUID_API_KEY`) as a public secret and inserts an enabled `models` row with inferred capability metadata. The agent is skipped when the model is unset, the provider is unsupported, the API key is empty, `ORGOPS_MASTER_KEY` cannot encrypt the secret, or any agent row already exists. The seeded agent is unassigned; a runner executes it after `assigned_runner_id` is set.
+On API startup, when `agents` is empty, OrgOps seeds one public agent named `system` if `ORGOPS_SYSTEM_AGENT_MODEL` is set. The value is a provider (`openai`, `anthropic`/`claude`, `openrouter`/`or`, `mistral`/`mistralai`, `liquid`/`liquidai`, `google`/`gemini`) or `provider:model`. A bare provider uses `openai:gpt-5.2`, `anthropic:claude-3-5-sonnet-latest`, `openrouter:openai/gpt-4o-mini`, `mistral:mistral-small-latest`, `liquid:lfm3`, or `google:gemini-4-neon`. Seeding also stores the matching provider API key (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `MISTRAL_API_KEY`, `LIQUID_API_KEY`, or `GOOGLE_API_KEY`) as a public secret and inserts an enabled `models` row with inferred capability metadata. A Google seed accepts `GEMINI_API_KEY` when `GOOGLE_API_KEY` is empty and stores the value under `GOOGLE_API_KEY`. The agent is skipped when the model is unset, the provider is unsupported, the API key is empty, `ORGOPS_MASTER_KEY` cannot encrypt the secret, or any agent row already exists. The seeded agent is unassigned; a runner executes it after `assigned_runner_id` is set.
 
 `WRAPPED` agents are orgops-owned lifecycle records whose turns are delegated to an external runtime. They do not use orgops memory summaries, prompt composition, skills, model calls, or `allow_outside_workspace` for turn handling. The wrapped runtime owns its own session/memory/tool state and filesystem policy. The runner still injects `ORGOPS_API_URL` and `ORGOPS_RUNNER_TOKEN` into setup/runtime/sidecar processes so the wrapped agent can call the OrgOps HTTP API with `x-orgops-runner-token` (scoped tokens stay limited to that agent and invite-approved channels). `soul_contents` may still be stored on the agent row for humans, opscli, and native management agents; the wrapper runner does not automatically inject it. The creator of the wrapped agent should translate it into the selected harness configuration/setup/runtime behavior when that harness needs a soul or prompt seed.
 
@@ -638,7 +638,9 @@ models on Chat Completions, `DO` keeps tools and sets
 reject tools+reasoning together, disables host tools for that turn so the
 model can still reason and emit a final JSON/plain-text event. OpenAI
 realtime-2 text/voice sessions map `DO`→`reasoning.effort=low` and
-`THINK`→`medium` while keeping tools.
+`THINK`→`medium` while keeping tools. Gemini 4 Neon (`google:gemini-4-neon`)
+keeps tools at both styles: `DO` sends thinking level `high` (the model
+default) and `THINK` sends `xhigh`. Its context window is 1,000,000 tokens.
 
 Generic OpenAI-compatible agents can additionally set
 `openai_compatible_reasoning_effort` per agent. The runner sends it as
@@ -1103,7 +1105,7 @@ Security note: wrapped `source`, `setup.command`, and `runtime.command` are host
 - `ORGOPS_AGENT_INTENT_TIMEOUT_MS`
 - `ORGOPS_AGENT_INTENT_MAX_TIMEOUTS`
 - `ORGOPS_WORKSPACE_PUBLICATION_SYNC_INTERVAL_MS`
-- `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `MISTRAL_API_KEY`, `LIQUID_API_KEY`
+- `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `MISTRAL_API_KEY`, `LIQUID_API_KEY`, `GOOGLE_API_KEY` (`GEMINI_API_KEY` is an alias for Gemini text and Gemini Live)
   - for native/wrapped runtime execution with injected env, provider keys are loaded from resolved secrets and do not fall back to host process env
   - realtime voice runtimes and realtime-model memory maintenance use resolved secrets first, then fall back to runner/API process env provider keys
   - when the default `system` agent is seeded, the matching key is copied into a public secret so the runner can inject it

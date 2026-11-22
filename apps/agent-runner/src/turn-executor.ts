@@ -438,6 +438,7 @@ function resolveFallbackModelContextWindowTokens(modelId: string): number {
   if (normalized.includes("gpt-4.1-mini")) return 1_000_000;
   if (normalized.includes("gpt-4.1")) return 1_000_000;
   if (normalized.includes("gpt-5")) return 1_000_000;
+  if (normalized.includes("gemini-4-neon")) return 1_000_000;
   if (normalized.includes("claude")) return 200_000;
   return FALLBACK_MODEL_CONTEXT_WINDOW_TOKENS;
 }

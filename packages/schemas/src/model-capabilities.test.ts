@@ -34,4 +34,17 @@ describe("replyContract capability", () => {
     });
     expect(resolveModelCapabilities("openai-compatible", "LFM3-Omni-2B").realtimeAudioInput).toBe(true);
   });
+
+  it("gives Gemini 4 Neon a 1M text context and keeps classic turns", () => {
+    expect(resolveModelCapabilities("google", "gemini-4-neon")).toMatchObject({
+      textInput: true,
+      textOutput: true,
+      imageInput: true,
+      toolCalling: true,
+      contextWindowTokens: 1_000_000,
+    });
+    expect(resolveModelCapabilities("gemini", "gemini-4-neon-001").contextWindowTokens).toBe(1_000_000);
+    expect(resolveModelCapabilities("google", "gemini-4-neon").realtimeAudioInput).toBeUndefined();
+    expect(resolveModelCapabilities("google", "gemini-4-neon").classicTurns).toBeUndefined();
+  });
 });
