@@ -93,6 +93,22 @@ const processes = new Map<
 
 const PROCESS_EVENT_SOURCE = "system:process-runner";
 const PROCESS_SHUTDOWN_TIMEOUT_MS = 5000;
+/** How long a cancelled turn's processes get to exit after SIGTERM before SIGKILL. */
+export const TURN_CANCEL_KILL_GRACE_MS = 2000;
+// Each command runs as its own process group, so signals reach the processes it started too.
+const USE_PROCESS_GROUPS = process.platform !== "win32";
+
+function signalTree(child: ReturnType<typeof spawn>, signal: NodeJS.Signals): boolean {
+  if (USE_PROCESS_GROUPS && child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+      return true;
+    } catch {
+      // The group is gone or was never created; fall back to the direct child.
+    }
+  }
+  return child.kill(signal);
+}
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -118,11 +134,20 @@ async function signalAndWaitForExit(
     return waitForFinalization(entry.finalized, timeoutMs);
   }
   try {
-    entry.proc.kill(signal);
+    signalTree(entry.proc, signal);
   } catch {
     // Process may already be gone.
   }
   return waitForFinalization(entry.finalized, timeoutMs);
+}
+
+/** Stops a tracked process and the processes it started: SIGTERM, then SIGKILL after `graceMs`. */
+export async function stopProcessTree(
+  processId: string,
+  graceMs = TURN_CANCEL_KILL_GRACE_MS,
+): Promise<void> {
+  if (await signalAndWaitForExit(processId, "SIGTERM", graceMs)) return;
+  await signalAndWaitForExit(processId, "SIGKILL", graceMs);
 }
 
 export async function stopAllRunningProcesses(
@@ -186,6 +211,7 @@ function spawnTrackedProcess(
     cwd: input.cwd,
     env: mergedEnv,
     stdio: ["ignore", "pipe", "pipe"],
+    detached: USE_PROCESS_GROUPS,
   });
 
   let finalize = () => {};
@@ -193,6 +219,8 @@ function spawnTrackedProcess(
     finalize = resolve;
   });
   processes.set(processId, { proc: child, seq: 0, finalized });
+  // Stopping the turn stops what it started; processes from earlier turns keep running.
+  ctx.onTurnCancel?.(() => stopProcessTree(processId));
   const registrationPromise = (async () => {
     await ctx.apiFetch("/api/processes", {
       method: "POST",
@@ -268,7 +296,7 @@ function spawnTrackedProcess(
 
   const ready = registrationPromise.catch((error) => {
     try {
-      child.kill("SIGKILL");
+      signalTree(child, "SIGKILL");
     } catch {
       // no-op
     }
@@ -312,7 +340,7 @@ export async function execute(
     const entry = processes.get(processId);
     if (!entry) return { error: "Process not found" };
     try {
-      entry.proc.kill("SIGTERM");
+      signalTree(entry.proc, "SIGTERM");
     } catch {
       // no-op
     }
@@ -405,7 +433,7 @@ export async function execute(
     }
     targetChunks.push(normalized.subarray(0, remaining));
     bufferExceeded = true;
-    child.kill("SIGKILL");
+    signalTree(child, "SIGKILL");
     return DEFAULT_MAX_BUFFER;
   };
   child.stdout?.on("data", (chunk: Buffer | string) => {
@@ -429,7 +457,7 @@ export async function execute(
   const timer = setTimeout(() => {
     timedOut = true;
     try {
-      const killSent = child.kill("SIGKILL");
+      const killSent = signalTree(child, "SIGKILL");
       timeoutKillFailed = !killSent;
       if (!killSent) {
         timeoutKillError =
@@ -469,21 +497,8 @@ export async function execute(
     child.once("error", (error) => settle({ code: null, signal: null, error }));
     child.once("close", (code, signal) => settle({ code, signal }));
   });
-  // A cancelled turn stops its running command right away instead of waiting for the timeout.
-  let cancelled = false;
-  const onAbort = () => {
-    cancelled = true;
-    try {
-      child.kill("SIGKILL");
-    } catch {
-      // Already gone.
-    }
-  };
-  if (ctx.abortSignal?.aborted) onAbort();
-  else ctx.abortSignal?.addEventListener("abort", onAbort, { once: true });
   await ready;
   const result = await Promise.race([closePromise, killGracePromise]);
-  ctx.abortSignal?.removeEventListener("abort", onAbort);
   clearTimeout(timer);
   if (killGraceTimer) clearTimeout(killGraceTimer);
   const stdout = Buffer.concat(stdoutChunks).toString("utf-8");
@@ -495,7 +510,8 @@ export async function execute(
       exitCode: 1,
     };
   }
-  if (cancelled) {
+  // The turn's cancellation stopped the command (see onTurnCancel in spawnTrackedProcess).
+  if (ctx.abortSignal?.aborted) {
     return {
       stdout,
       stderr: `${stderr}\nCommand stopped because the turn was cancelled.`,

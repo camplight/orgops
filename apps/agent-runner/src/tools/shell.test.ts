@@ -1,9 +1,48 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { execute } from "./shell";
+import { execute, stopAllRunningProcesses, stopProcessTree } from "./shell";
 import type { ExecuteContext } from "./types";
+
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+async function waitFor(check: () => boolean, timeoutMs = 3000) {
+  const started = Date.now();
+  while (!check()) {
+    if (Date.now() - started > timeoutMs) throw new Error("timed out waiting");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
+const readPid = async (file: string) => {
+  await waitFor(() => existsSync(file) && readFileSync(file, "utf8").trim().length > 0);
+  return Number(readFileSync(file, "utf8").trim());
+};
+
+// A turn the test can cancel: the shell tool registers its processes through onTurnCancel.
+function cancellableTurn(ctx: ExecuteContext) {
+  const controller = new AbortController();
+  const stops: Array<() => Promise<unknown>> = [];
+  return {
+    ctx: { ...ctx, abortSignal: controller.signal, onTurnCancel: (stop: () => Promise<unknown>) => void stops.push(stop) },
+    cancel: async () => {
+      controller.abort();
+      await Promise.all(stops.map((stop) => stop()));
+    },
+  };
+}
+
+// Starts a parent shell that runs a sleeping child and writes the child's pid.
+const parentWithChild = (pidFile: string) =>
+  `sh -c 'node -e "setInterval(() => {}, 1000)" & echo $! > ${pidFile}; wait'`;
 
 function createTestContext(workspacePath: string, injectionEnv: Record<string, string>): ExecuteContext {
   return {
@@ -40,22 +79,82 @@ describe("shell tool", () => {
     delete process.env.ORGOPS_SHELL_TIMEOUT_KILL_GRACE_MS;
   });
 
-  it("stops a running command when the turn is cancelled", async () => {
+  it.skipIf(process.platform === "win32")(
+    "stops a running command and its children when the turn is cancelled",
+    async () => {
+      const workspace = mkdtempSync(join(tmpdir(), "orgops-shell-test-"));
+      createdDirs.push(workspace);
+      const turn = cancellableTurn(createTestContext(workspace, {}));
+      const pidFile = join(workspace, "child.pid");
+      const started = Date.now();
+      const running = execute(turn.ctx, "shell_run", {
+        cmd: parentWithChild(pidFile),
+        cwd: workspace,
+        timeoutMs: 30000,
+      }) as Promise<{ exitCode: number | null; stderr: string }>;
+      const childPid = await readPid(pidFile);
+      await turn.cancel();
+      const result = await running;
+      expect(Date.now() - started).toBeLessThan(5000);
+      expect(result.exitCode).toBe(130);
+      expect(result.stderr).toContain("the turn was cancelled");
+      await waitFor(() => !alive(childPid));
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "stops background processes started in this turn and leaves older ones running",
+    async () => {
+      const workspace = mkdtempSync(join(tmpdir(), "orgops-shell-test-"));
+      createdDirs.push(workspace);
+      const earlier = cancellableTurn(createTestContext(workspace, {}));
+      const current = cancellableTurn(createTestContext(workspace, {}));
+      const older = (await execute(earlier.ctx, "shell_start", {
+        cmd: 'node -e "setInterval(() => {}, 1000)"',
+        cwd: workspace,
+      })) as { pid: number };
+      const fresh = (await execute(current.ctx, "shell_start", {
+        cmd: 'node -e "setInterval(() => {}, 1000)"',
+        cwd: workspace,
+      })) as { pid: number };
+      await current.cancel();
+      await waitFor(() => !alive(fresh.pid));
+      expect(alive(older.pid)).toBe(true);
+      await stopAllRunningProcesses(1000);
+      await waitFor(() => !alive(older.pid));
+    },
+  );
+
+  it.skipIf(process.platform === "win32")("kills a process that ignores SIGTERM", async () => {
     const workspace = mkdtempSync(join(tmpdir(), "orgops-shell-test-"));
     createdDirs.push(workspace);
-    const controller = new AbortController();
-    const ctx = { ...createTestContext(workspace, {}), abortSignal: controller.signal };
-    const started = Date.now();
-    setTimeout(() => controller.abort(), 200);
-    const result = (await execute(ctx, "shell_run", {
-      cmd: 'node -e "setTimeout(() => {}, 20000)"',
+    const started = (await execute(createTestContext(workspace, {}), "shell_start", {
+      cmd: `node -e "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"`,
       cwd: workspace,
-      timeoutMs: 30000,
-    })) as { exitCode: number | null; stderr: string };
-    expect(Date.now() - started).toBeLessThan(5000);
-    expect(result.exitCode).toBe(130);
-    expect(result.stderr).toContain("the turn was cancelled");
+    })) as { processId: string; pid: number };
+    // Give node a moment to install its SIGTERM handler.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const stopStarted = Date.now();
+    await stopProcessTree(started.processId, 200);
+    expect(Date.now() - stopStarted).toBeLessThan(1500);
+    await waitFor(() => !alive(started.pid), 1000);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "runner shutdown stops a background command's children",
+    async () => {
+      const workspace = mkdtempSync(join(tmpdir(), "orgops-shell-test-"));
+      createdDirs.push(workspace);
+      const pidFile = join(workspace, "child.pid");
+      await execute(createTestContext(workspace, {}), "shell_start", {
+        cmd: parentWithChild(pidFile),
+        cwd: workspace,
+      });
+      const childPid = await readPid(pidFile);
+      await stopAllRunningProcesses(500);
+      await waitFor(() => !alive(childPid));
+    },
+  );
 
   it("does not leak host provider keys without injected secret", async () => {
     process.env.OPENAI_API_KEY = "host-key";
