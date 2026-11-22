@@ -111,6 +111,19 @@ type CrossChannelMemoryRecord = {
 type ChannelMemoryMode = "recent" | "full";
 type CrossMemoryMode = "recent" | "full";
 
+async function channelIsOpenForMaintenance(
+  apiFetch: ApiFetch,
+  channelId: string,
+): Promise<boolean> {
+  const response = await apiFetch(`/api/channels/${encodeURIComponent(channelId)}`);
+  if (response.status === 404) return false;
+  if (!response.ok) {
+    throw new Error(`Unable to read channel ${channelId} (${response.status})`);
+  }
+  const channel = (await response.json()) as { archivedAt?: number | null };
+  return channel.archivedAt == null;
+}
+
 async function getChannelMemoryRecord(
   apiFetch: ApiFetch,
   mode: ChannelMemoryMode,
@@ -298,6 +311,7 @@ export async function refreshChannelRecentMemory(input: {
   apiFetch: ApiFetch;
   getEnv: () => Promise<Record<string, string>>;
 }): Promise<ChannelMemoryRecord | null> {
+  if (!(await channelIsOpenForMaintenance(input.apiFetch, input.channelId))) return null;
   const now = Date.now();
   const windowStartAt = now - RECENT_MEMORY_WINDOW_MS;
   const [storedExisting, boundary] = await Promise.all([
@@ -421,6 +435,7 @@ export async function refreshChannelFullMemory(input: {
   apiFetch: ApiFetch;
   getEnv: () => Promise<Record<string, string>>;
 }): Promise<ChannelMemoryRecord | null> {
+  if (!(await channelIsOpenForMaintenance(input.apiFetch, input.channelId))) return null;
   const [storedExisting, boundary] = await Promise.all([
     getChannelMemoryRecord(
       input.apiFetch,

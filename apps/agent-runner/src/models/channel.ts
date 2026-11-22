@@ -10,6 +10,7 @@ export type ChannelRecord = {
   description?: string;
   metadata?: Record<string, unknown> | null;
   participants?: ChannelParticipant[];
+  archivedAt?: number | null;
 };
 
 export function isAgentSubscribed(channel: ChannelRecord, agentName: string): boolean {

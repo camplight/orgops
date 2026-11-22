@@ -125,4 +125,42 @@ describe("maintenance loop", () => {
     expect(refreshMocks.refreshChannelRecentMemory).toHaveBeenCalledTimes(1);
     expect(refreshMocks.refreshChannelFullMemory).toHaveBeenCalledTimes(1);
   });
+
+  it("skips archived channels", async () => {
+    refreshMocks.refreshChannelRecentMemory.mockResolvedValue(null);
+    refreshMocks.refreshChannelFullMemory.mockResolvedValue(null);
+    const loop = createMaintenanceLoop({
+      listChannels: async () => [
+        {
+          id: "gone",
+          name: "archived",
+          archivedAt: Date.now(),
+          participants: [{ subscriberType: "AGENT", subscriberId: "worker" }],
+        },
+        {
+          id: "live",
+          name: "chat",
+          archivedAt: null,
+          participants: [{ subscriberType: "AGENT", subscriberId: "worker" }],
+        },
+      ],
+      getPackageSecretsEnv: vi.fn(async () => ({})),
+      apiFetch: vi.fn(),
+      channelRecentMemoryIntervalMs: 60_000,
+      channelFullMemoryIntervalMs: 60_000,
+      crossRecentMemoryIntervalMs: Number.MAX_SAFE_INTEGER,
+      crossFullMemoryIntervalMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    loop.schedule({ name: "worker" } as Agent);
+    await loop.awaitInFlight();
+
+    expect(refreshMocks.refreshChannelRecentMemory).toHaveBeenCalledTimes(1);
+    expect(refreshMocks.refreshChannelRecentMemory.mock.calls[0]?.[0]).toMatchObject({
+      channelId: "live",
+    });
+    expect(refreshMocks.refreshChannelFullMemory.mock.calls[0]?.[0]).toMatchObject({
+      channelId: "live",
+    });
+  });
 });

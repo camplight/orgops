@@ -49,6 +49,29 @@ describe("context-boundary memory maintenance", () => {
     ]);
   });
 
+  it("does not read events for a deleted channel", async () => {
+    const apiFetch = vi.fn(async (path: string) => {
+      if (path.startsWith("/api/channels/")) {
+        return new Response(JSON.stringify({ error: "Not found" }), { status: 404 });
+      }
+      throw new Error(`Unexpected API call GET ${path}`);
+    });
+
+    await expect(refreshChannelRecentMemory({
+      agent,
+      channelId: "deleted-channel",
+      apiFetch,
+      getEnv: async () => ({}),
+    })).resolves.toBeNull();
+    await expect(refreshChannelFullMemory({
+      agent,
+      channelId: "deleted-channel",
+      apiFetch,
+      getEnv: async () => ({}),
+    })).resolves.toBeNull();
+    expect(apiFetch).toHaveBeenCalledTimes(2);
+  });
+
   it("chunks the entire current recent window and excludes future delivery", async () => {
     const now = Date.now();
     const events: Event[] = Array.from({ length: 121 }, (_, index) => ({
@@ -73,6 +96,9 @@ describe("context-boundary memory maintenance", () => {
       .mockResolvedValueOnce({ text: "complete current window" });
     let writtenBody: Record<string, unknown> | null = null;
     const apiFetch = vi.fn(async (path: string, init?: RequestInit) => {
+      if (path.startsWith("/api/channels/")) {
+        return Response.json({ id: "channel", archivedAt: null });
+      }
       if (path.startsWith("/api/memory/channel/recent?")) {
         return Response.json({ record: null });
       }
@@ -108,6 +134,9 @@ describe("context-boundary memory maintenance", () => {
     generateMock.mockResolvedValue({ text: "   " });
     let wrote = false;
     const apiFetch = vi.fn(async (path: string, init?: RequestInit) => {
+      if (path.startsWith("/api/channels/")) {
+        return Response.json({ id: "channel", archivedAt: null });
+      }
       if (path.startsWith("/api/memory/channel/full?")) return Response.json({ record: null });
       if (path.includes("typePrefix=agent.context.")) return Response.json([]);
       if (path.startsWith("/api/events?")) {
@@ -146,6 +175,9 @@ describe("context-boundary memory maintenance", () => {
     });
     let writtenBody: Record<string, unknown> | null = null;
     const apiFetch = vi.fn(async (path: string, init?: RequestInit) => {
+      if (path.startsWith("/api/channels/")) {
+        return Response.json({ id: "channel", archivedAt: null });
+      }
       if (path.startsWith("/api/memory/channel/full?")) {
         return Response.json({ record: null });
       }
@@ -212,6 +244,9 @@ describe("context-boundary memory maintenance", () => {
     let channelReadCount = 0;
     let wrote = false;
     const apiFetch = vi.fn(async (path: string, init?: RequestInit) => {
+      if (path.startsWith("/api/channels/")) {
+        return Response.json({ id: "channel", archivedAt: null });
+      }
       if (path.startsWith("/api/memory/cross/full?")) {
         return Response.json({ record: null });
       }
@@ -258,6 +293,9 @@ describe("context-boundary memory maintenance", () => {
     generateMock.mockResolvedValue({ text: "summarized due prefix" });
     let writtenBody: Record<string, unknown> | null = null;
     const apiFetch = vi.fn(async (path: string, init?: RequestInit) => {
+      if (path.startsWith("/api/channels/")) {
+        return Response.json({ id: "channel", archivedAt: null });
+      }
       if (path.startsWith("/api/memory/channel/full?")) return Response.json({ record: null });
       if (path.includes("typePrefix=agent.context.")) return Response.json([]);
       if (path.startsWith("/api/events?")) {
@@ -319,6 +357,9 @@ describe("context-boundary memory maintenance", () => {
   it("uses CAS expectedVersion when seeding empty full memory", async () => {
     let writtenBody: Record<string, unknown> | null = null;
     const apiFetch = vi.fn(async (path: string, init?: RequestInit) => {
+      if (path.startsWith("/api/channels/")) {
+        return Response.json({ id: "channel", archivedAt: null });
+      }
       if (path.startsWith("/api/memory/channel/full?")) {
         return Response.json({
           record: {

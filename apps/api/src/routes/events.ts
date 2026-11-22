@@ -1100,14 +1100,17 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       .select({
         totalChars: sql<number>`length(${schema.events.payload_json})`,
         chunk: sql<string>`substr(${schema.events.payload_json}, ${offset + 1}, ${limit})`,
+        // SQLite length/substr count Unicode code points. JavaScript string
+        // length counts UTF-16 units, so an emoji would make the next read skip.
+        chunkChars: sql<number>`length(substr(${schema.events.payload_json}, ${offset + 1}, ${limit}))`,
       })
       .from(schema.events)
       .where(eq(schema.events.id, id))
-      .get() as { totalChars: number; chunk: string } | undefined;
+      .get() as { totalChars: number; chunk: string; chunkChars: number } | undefined;
     if (!chunkRow) return jsonResponse(c, { error: "Not found" }, 404);
     const totalChars = Number(chunkRow.totalChars ?? 0);
     const chunk = chunkRow.chunk ?? "";
-    const nextOffset = offset + chunk.length;
+    const nextOffset = offset + Number(chunkRow.chunkChars ?? 0);
     return jsonResponse(c, {
       eventId: id,
       storage: "db",
