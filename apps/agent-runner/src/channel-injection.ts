@@ -8,8 +8,8 @@ type PullInjectedEventsInput = {
   seenEventIds: Set<string>;
   shouldInclude: (agent: Agent, event: Event) => boolean;
   shouldSuppress?: (agent: Agent, event: Event) => boolean;
-  // Sees every fetched event, including ones not injected (fetching marks them delivered).
-  onFetched?: (event: Event) => void;
+  // Leaves these events pending; fetching marks events delivered.
+  excludeTypePrefix?: string;
 };
 
 function roleForEvent(event: Event): "user" | "system" {
@@ -29,11 +29,12 @@ export async function pullInjectedEventMessages(
 > {
   const query =
     `agentName=${encodeURIComponent(input.agent.name)}` +
-    `&status=PENDING&channelId=${encodeURIComponent(input.channelId)}&limit=50`;
+    `&status=PENDING&channelId=${encodeURIComponent(input.channelId)}` +
+    (input.excludeTypePrefix ? `&excludeTypePrefix=${encodeURIComponent(input.excludeTypePrefix)}` : "") +
+    `&limit=50`;
   const res = await input.apiFetch(`/api/events?${query}`);
   const raw = await res.json();
   const events = Array.isArray(raw) ? (raw as Event[]) : [];
-  for (const event of events) input.onFetched?.(event);
   const fresh: Event[] = [];
   for (const event of [...events].sort(
     (left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0),

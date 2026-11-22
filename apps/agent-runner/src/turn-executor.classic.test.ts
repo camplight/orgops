@@ -30,6 +30,8 @@ const trigger: Event = {
 function setup(
   options: {
     pendingEventBatches?: Event[][];
+    // Served to the turn's Stop-first late pull (typePrefix=agent.turn.cancel_requested).
+    pendingStops?: Event[][];
     fetch?: (path: string, init?: RequestInit) => Response | undefined;
     source?: string;
     agentOverrides?: Partial<Agent>;
@@ -59,6 +61,9 @@ function setup(
           participants: [{ subscriberType: "AGENT", subscriberId: "tester" }],
         },
       ]);
+    }
+    if (path.startsWith("/api/events?") && path.includes(`typePrefix=${TURN_CANCEL_EVENT_TYPE}`)) {
+      return Response.json(options.pendingStops?.shift() ?? []);
     }
     if (path.startsWith("/api/events?")) {
       return Response.json(options.pendingEventBatches?.[pendingEventBatchIndex++] ?? []);
@@ -191,16 +196,19 @@ describe("CLASSIC turn cancellation", () => {
 });
 
 describe("CLASSIC turn cancellation from the late-event pull", () => {
-  it("stops when the turn's own late-event pull picks up the Stop", async () => {
+  it("stops when the turn's own late-event pull picks up the Stop, leaving other late events pending", async () => {
     const lateMessage: Event = {
       id: "late-human",
       type: "message.created",
       source: "human:test",
       channelId: "chat",
-      payload: { text: "also answer this" },
+      payload: { text: "do this instead" },
       createdAt: 3,
     };
-    const ctx = setup({ pendingEventBatches: [[{ ...stopEvent(), createdAt: 2 }, lateMessage], []] });
+    const ctx = setup({
+      pendingStops: [[{ ...stopEvent(), createdAt: 2 }]],
+      pendingEventBatches: [[lateMessage], []],
+    });
     vi.mocked(generate).mockResolvedValue({
       toolCalls: [] as never[],
       toolResults: [] as never[],
@@ -210,8 +218,35 @@ describe("CLASSIC turn cancellation from the late-event pull", () => {
     expect(generate).toHaveBeenCalledTimes(1);
     expect(ctx.emitted.at(-1)).toMatchObject({
       type: "agent.turn.completed",
-      payload: { triggerEventId: "trigger", cancelled: true, noReply: true },
+      payload: { triggerEventId: "trigger", cancelled: true },
     });
+    // The late message was never fetched (and so never marked delivered); the next turn gets it.
+    const pulls = ctx.apiFetch.mock.calls.map(([path]) => String(path)).filter((path) => path.startsWith("/api/events?"));
+    expect(pulls.every((path) => path.includes(`typePrefix=${TURN_CANCEL_EVENT_TYPE}`))).toBe(true);
+  });
+
+  it("leaves Stop events out of the general late-event pull", async () => {
+    const lateEvent: Event = {
+      id: "late-human",
+      type: "message.created",
+      source: "human:test",
+      channelId: "chat",
+      payload: { text: "also answer this" },
+      createdAt: 2,
+    };
+    const ctx = setup({ pendingEventBatches: [[lateEvent], []] });
+    vi.mocked(generate).mockResolvedValue({
+      toolCalls: [] as never[],
+      toolResults: [] as never[],
+      text: '{"turnStatus":"WORK_FULLY_COMPLETE","type":"message.created","payload":{"text":"answer"}}',
+    } as any);
+    await ctx.run();
+    expect(generate).toHaveBeenCalledTimes(2);
+    const general = ctx.apiFetch.mock.calls
+      .map(([path]) => String(path))
+      .filter((path) => path.startsWith("/api/events?") && !path.includes("typePrefix="));
+    expect(general.length).toBeGreaterThan(0);
+    expect(general.every((path) => path.includes(`excludeTypePrefix=${TURN_CANCEL_EVENT_TYPE}`))).toBe(true);
   });
 });
 

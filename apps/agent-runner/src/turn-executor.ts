@@ -48,7 +48,7 @@ import {
 } from "./prompt-composer";
 import { recordLlmUsage } from "./billing";
 import { getLatestContextBoundary } from "./context-boundary";
-import type { ActiveTurnCancel, TurnCancellations } from "./turn-cancel";
+import { TURN_CANCEL_EVENT_TYPE, type ActiveTurnCancel, type TurnCancellations } from "./turn-cancel";
 import type { Agent, Event } from "./types";
 import type { RunnerApi } from "./runner/api";
 import {
@@ -1042,15 +1042,30 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         ),
       });
     };
-    // Fetching claims events, so a Stop fetched here never reaches the runner's own fetch.
-    const handleFetchedStop = (event: Event) => {
-      input.turnCancellations?.request(event);
+    // A turn that can be stopped reads pending Stops before other late events: fetching marks
+    // events delivered, so late messages fetched together with a Stop would be lost with the turn.
+    // Returns false when a Stop ended the turn.
+    const honorLateStops = async (): Promise<boolean> => {
+      if (!cancel || !input.turnCancellations) return true;
+      const res = await input.api.apiFetch(
+        `/api/events?agentName=${encodeURIComponent(agent.name)}&status=PENDING` +
+          `&channelId=${encodeURIComponent(channelId)}` +
+          `&typePrefix=${encodeURIComponent(TURN_CANCEL_EVENT_TYPE)}&limit=50`,
+      );
+      const stops = await res.json().catch(() => []);
+      for (const event of Array.isArray(stops) ? (stops as Event[]) : []) {
+        input.turnCancellations.request(event);
+      }
+      return !cancel.signal.aborted;
     };
+    const lateEventExclusion = cancel ? { excludeTypePrefix: TURN_CANCEL_EVENT_TYPE } : {};
     const continueForLateEvents = async (
       postedEvents: ModelEventDraft[],
       attempt: number,
     ): Promise<boolean> => {
       if (lateEventContinuations >= MAX_LATE_EVENT_CONTINUATIONS) return false;
+      // A Stop among the late events ends the turn here instead of continuing it.
+      if (!(await honorLateStops())) abortSignal?.throwIfAborted();
       const injected = await pullInjectedEventMessages({
         apiFetch: input.api.apiFetch,
         agent,
@@ -1058,10 +1073,8 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         seenEventIds,
         shouldInclude: shouldHandleEventForAgent,
         shouldSuppress: shouldSuppressInjectedEvent,
-        onFetched: handleFetchedStop,
+        ...lateEventExclusion,
       });
-      // A Stop among the late events ends the turn here instead of continuing it.
-      abortSignal?.throwIfAborted();
       if (!injected || injected.messages.length === 0) return false;
       lateEventContinuations += 1;
       appendPostedEventsForContinuation(postedEvents);
@@ -1097,6 +1110,8 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
             env: injectionEnv,
             ...(abortSignal ? { abortSignal } : {}),
             pullMessages: async () => {
+              // A Stop aborts the model call through abortSignal; nothing more to inject.
+              if (!(await honorLateStops())) return [];
               const injected = await pullInjectedEventMessages({
                 apiFetch: input.api.apiFetch,
                 agent,
@@ -1104,7 +1119,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
                 seenEventIds,
                 shouldInclude: shouldHandleEventForAgent,
                 shouldSuppress: shouldSuppressInjectedEvent,
-                onFetched: handleFetchedStop,
+                ...lateEventExclusion,
               });
               return injected?.messages ?? [];
             },
