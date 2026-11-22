@@ -6818,15 +6818,23 @@ describe("api app", () => {
     });
     // A second click on Stop returns the same request.
     expect(((await (await cancel()).json()) as { id: string }).id).toBe(requested.id);
-    const status = async (trigger: string) => {
-      const response = await app.request(
-        `http://localhost/api/agents/cancel-agent/turns/cancel?channelId=${encodeURIComponent(channel.id)}&triggerEventId=${trigger}`,
+    // The agent gets a pending receipt, which is what the runner socket wakes its runner for.
+    const pendingStops = (await (
+      await app.request(
+        `http://localhost/api/events?agentName=cancel-agent&status=PENDING&channelId=${encodeURIComponent(channel.id)}&typePrefix=agent.turn.cancel_requested`,
         { headers: runnerHeaders },
-      );
-      return response.json();
-    };
-    expect(await status("trigger-1")).toEqual({ cancelRequested: true });
-    expect(await status("trigger-2")).toEqual({ cancelRequested: false });
+      )
+    ).json()) as Array<{ id: string }>;
+    expect(pendingStops.map((event) => event.id)).toEqual([requested.id]);
+    // The runner no longer polls for Stop requests.
+    expect(
+      (
+        await app.request(
+          `http://localhost/api/agents/cancel-agent/turns/cancel?channelId=${encodeURIComponent(channel.id)}&triggerEventId=trigger-1`,
+          { headers: runnerHeaders },
+        )
+      ).status,
+    ).not.toBe(200);
     expect((await lifecycle("agent.turn.completed")).status).toBe(201);
     expect((await cancel()).status).toBe(409);
     expect(

@@ -689,9 +689,8 @@ Presence events (bookkeeping only):
     (409 when there is none). It records `agent.turn.cancel_requested` from the caller with
     `targetAgentName`, the turn's `triggerEventId` and `requestedBy`, and answers 202; repeated
     requests for the same turn return the first one. Like other `agent.turn.*` events it never
-    wakes an agent.
-  - `GET /api/agents/:name/turns/cancel?channelId=&triggerEventId=` returns
-    `{ cancelRequested }` for the runner, which manages the agent.
+    wakes an agent; the agent's pending receipt makes the runner socket wake its runner, which
+    stops the turn (runner step 11).
 - debug endpoint:
   - `GET /api/agents/:name/debug/system-prompt`
 - workspace browser endpoints:
@@ -908,12 +907,18 @@ Runner loop:
    - `WRAPPED`: skip orgops memory/prompt/skills/model calls and run the configured external runtime recipe.
 9. For native modes, build context from runner guidance + bounded channel history + skills + `soul_contents`, plus a synthetic merged-trigger message when a batch contains multiple events. The latest per-agent/channel context lifecycle marker is applied before history composition: compact seeds context with its private whole-channel summary and includes only later events, while clear includes only later events. Existing channel/cross-channel summaries are invalidated and rebuilt from that boundary. Human message attachments (except voice-note audio) are downloaded once into `<workspace>/.orgops-attachments/<fileId>/<name>` and exposed as `payload.attachments[].localPath`; image attachments are also inlined as image parts. When the agent's `modelCapabilities.imageInput` is `false`, or the provider rejects image input for a CLASSIC turn (for example `Invalid image or video input`), each image part is replaced by a short note that the model cannot read images and the attempt is retried once, so the agent can tell the person instead of the turn failing.
 10. For native modes, run model generation in step mode (single-step/attempt calls) and poll pending events for the same `(agent, channel)` between model steps; newly arrived events are merged into subsequent model context. Once a CLASSIC model emits a valid terminal event, the runner posts it before checking for additional late events. If meaningful late events are present, they extend the same turn as follow-up context rather than invalidating the already-posted response; this continuation is capped. A fallback `CONTINUE` outcome withholds its provisional message, preserves the available response transcript, and extends generation up to three times. Current-turn `SYNC` `process.*` lifecycle events from the agent's own `shell_run` are suppressed from mid-turn injection because the synchronous tool result already reached the model, while `ASYNC` process output/exit can still provide follow-up context. During CLASSIC turns, unscheduled `events_emit` calls for `message.created` post immediately by default to allow mid-turn collaboration. Callers can opt into retry-safe staging by passing `stageUntilTurnSettled=true`, which returns `delivery.status = staged_until_turn_settled`; validation/completion retries discard staged drafts and only an accepted terminal outcome flushes them.
-11. While a CLASSIC turn runs, the runner checks `GET /api/agents/:name/turns/cancel` once a
-    second (`turnCancelPollMs`). When the turn was cancelled it aborts the model call, kills a
-    running `shell_run` (which reports exit code 130), posts no reply it was still holding back,
-    and emits `agent.turn.completed` with `cancelled: true` and `noReply: true`. Events and tool
-    results already posted stay; background processes from `shell_start` keep running. The
-    batch counts as handled, so it is not retried. RLM and WRAPPED turns are not cancellable yet.
+11. A participant's Stop reaches the runner as the `agent.turn.cancel_requested` event, through
+    the runner socket wakeup like any channel event; the runner does not poll for it. While a
+    channel's turn is running, the runner fetches only `voice.*` and `agent.turn.cancel_requested`
+    events there, and the turn's own late-event pulls also honor a Stop. A Stop ends the running
+    CLASSIC turn whose trigger matches its `triggerEventId`; a Stop for an earlier turn is ignored.
+    The runner aborts the model call, posts no reply it was still holding back, and stops the
+    process group of the running `shell_run` (which reports exit code 130) and of every
+    `shell_start` process started during this turn: SIGTERM, then SIGKILL after 2 s. Background
+    processes from earlier turns keep running. Once those processes exit (at most 5 s) it emits
+    `agent.turn.completed` with `cancelled: true` and `noReply: true`, so their exits fall inside
+    the turn and do not wake the agent. Events and tool results already posted stay. The batch
+    counts as handled, so it is not retried. RLM and WRAPPED turns are not cancellable yet.
 12. On handler failure, call `/api/events/:id/fail` for each event in the failed channel batch. Tool errors during a turn are returned to the model and recorded as `tool.failed` / `tool.executed`; they do not increment the triggering event's failure count.
 
 Wrapped lifecycle:

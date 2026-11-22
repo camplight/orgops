@@ -37,43 +37,9 @@ function triggerEventId(row: { payload_json?: unknown }): string | null {
 export function registerTurnRoutes(app: Hono<any>, deps: TurnDeps) {
   const { orm, jsonResponse, eventRowToApi, insertEvent, access } = deps;
 
-  // The runner asks this while a CLASSIC turn runs: has anyone asked to stop it?
-  app.get("/api/agents/:name/turns/cancel", (c) => {
-    const agentName = c.req.param("name").trim();
-    const channelId = (c.req.query("channelId") ?? "").trim();
-    const trigger = (c.req.query("triggerEventId") ?? "").trim();
-    if (!agentName || !channelId || !trigger) {
-      return jsonResponse(c, { error: "channelId and triggerEventId are required" }, 400);
-    }
-    const user = c.get("user") as RequestUser | undefined;
-    if (!access.canManageAgent(user, agentName) || !access.canPostToChannel(user, channelId)) {
-      return jsonResponse(c, { error: "Forbidden" }, 403);
-    }
-    const requests = orm
-      .select({ payload_json: schema.events.payload_json })
-      .from(schema.events)
-      .where(
-        and(
-          eq(schema.events.channel_id, channelId),
-          eq(schema.events.type, "agent.turn.cancel_requested"),
-        ),
-      )
-      .orderBy(desc(schema.events.created_at))
-      .limit(50)
-      .all();
-    const cancelRequested = requests.some((row) => {
-      try {
-        const payload = JSON.parse(String(row.payload_json ?? "{}"));
-        return payload?.targetAgentName === agentName && payload?.triggerEventId === trigger;
-      } catch {
-        return false;
-      }
-    });
-    return jsonResponse(c, { cancelRequested });
-  });
-
-  // Records a request to stop the agent's running CLASSIC turn in one channel. The runner
-  // watches for it while the turn runs; the event itself never wakes an agent.
+  // Records a request to stop the agent's running CLASSIC turn in one channel. The event gives
+  // the agent a pending receipt, so the runner socket wakes the agent's runner, which ends the
+  // turn the event names. The event itself never wakes an agent.
   app.post("/api/agents/:name/turns/cancel", async (c) => {
     const agentName = c.req.param("name").trim();
     let body: Record<string, unknown> | null = null;
