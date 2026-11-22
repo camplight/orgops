@@ -229,7 +229,8 @@ of truth for ordering and policy.
   window; it is cleared when that window is empty and never carries an older
   recent summary forward. Full and recent maintenance advance only through
   successfully summarized, complete event payloads. Both exclude future
-  `deliverAt` events and runner bookkeeping.
+  `deliverAt` events and runner bookkeeping. A deleted or archived channel is
+  not maintained, and its leftover events are not read.
 - Cross-channel rows store a deterministic `input_signature` over the complete
   subscribed-channel membership and every per-channel memory version. Membership
   changes invalidate cross memory; agent unsubscribe and channel deletion also
@@ -1247,7 +1248,10 @@ the prefix that fits. Later inputs stay pending; an omitted individual payload
 cannot trigger work or broaden target selection. Historical DB/file content stays
 unchanged. File payloads are read into bounded buffers; the existing payload
 chunk endpoint, references, single-event/scheduled-event responses, voice events
-and explicit SQLite export remain available. Invalid/negative page limits fall
+and explicit SQLite export remain available. Database payload chunks are indexed
+by Unicode code points, the same unit SQLite `substr`/`length` use, so a chunk
+containing a character outside the basic multilingual plane still rejoins into
+the original JSON. Invalid/negative page limits fall
 back to 100 rather than uncapping SQL reads. Successful void tool results remain
 successful while persisted output is bounded. This forwards the deployed #78
 recovery protections onto the current voice/blob-storage implementation.

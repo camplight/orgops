@@ -5462,6 +5462,44 @@ describe("api app", () => {
     expect(chunk.nextOffset).toBe(35);
     expect(chunk.done).toBe(false);
 
+    const emojiPayloadJson = JSON.stringify({
+      note: `${"🦞".repeat(12)}tail`,
+    });
+    db.prepare(
+      "INSERT INTO events (id, type, payload_json, source, channel_id, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    ).run(
+      "emoji-1",
+      "process.output",
+      emojiPayloadJson,
+      "system:process-runner",
+      null,
+      2,
+      "DELIVERED",
+    );
+    let emojiOffset = 0;
+    let emojiJoined = "";
+    for (let step = 0; step < 20 && emojiOffset < emojiPayloadJson.length; step += 1) {
+      const emojiChunkRes = await app.request(
+        `http://localhost/api/events/emoji-1/payload?offset=${emojiOffset}&limit=8`,
+        { headers: { cookie } },
+      );
+      expect(emojiChunkRes.status).toBe(200);
+      const emojiChunk = (await emojiChunkRes.json()) as {
+        chunk?: string;
+        nextOffset?: number;
+        done?: boolean;
+      };
+      emojiJoined += emojiChunk.chunk ?? "";
+      expect(emojiChunk.nextOffset).toBeGreaterThan(emojiOffset);
+      if ([...(emojiChunk.chunk ?? "")].some((character) => (character.codePointAt(0) ?? 0) > 0xffff)) {
+        expect(emojiChunk.nextOffset).toBeLessThan(emojiOffset + (emojiChunk.chunk ?? "").length);
+      }
+      emojiOffset = emojiChunk.nextOffset ?? emojiOffset;
+      if (emojiChunk.done) break;
+    }
+    expect(emojiJoined).toBe(emojiPayloadJson);
+    expect(JSON.parse(emojiJoined)).toEqual(JSON.parse(emojiPayloadJson));
+
     const postedPayload = { tool: "probe", output: "x".repeat(300_000) };
     const postRes = await app.request("http://localhost/api/events", {
       method: "POST",

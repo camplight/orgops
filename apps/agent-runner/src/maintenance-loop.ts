@@ -53,8 +53,11 @@ export function createMaintenanceLoop(deps: Dependencies) {
       injectionEnvByChannel.set(channelId, env);
       return env;
     };
-    const subscribedChannels = channels.filter((channel) =>
-      isAgentSubscribed(channel, agent.name),
+    const subscribedChannels = channels.filter(
+      (channel) =>
+        Boolean(channel.id) &&
+        !channel.archivedAt &&
+        isAgentSubscribed(channel, agent.name),
     );
     const subscribedChannelIds = subscribedChannels
       .map((channel) => channel.id)

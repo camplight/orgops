@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { listLatestChannelEvents } from "./channel-events";
+import { hydrateEventPayload, listLatestChannelEvents } from "./channel-events";
 import type { Event } from "./types";
 
 describe("listLatestChannelEvents", () => {
@@ -65,5 +65,36 @@ describe("listLatestChannelEvents", () => {
     });
 
     expect(events.map((event) => event.id)).toEqual(["msg-2", "msg-1"]);
+  });
+
+  it("rejoins payload chunks using code-point offsets", async () => {
+    const payload = { text: `before ${"🦞".repeat(8)} after` };
+    const json = JSON.stringify(payload);
+    const codePoints = [...json];
+    const apiFetch = vi.fn(async (path: string) => {
+      const offset = Number(new URL(path, "http://localhost").searchParams.get("offset") ?? "0");
+      const limit = 6;
+      const slice = codePoints.slice(offset, offset + limit).join("");
+      const nextOffset = offset + [...slice].length;
+      return Response.json({
+        chunk: slice,
+        nextOffset,
+        done: nextOffset >= codePoints.length,
+      });
+    });
+
+    const event = await hydrateEventPayload(apiFetch, {
+      id: "emoji-event",
+      type: "process.output",
+      source: "system:process-runner",
+      channelId: "channel",
+      payload: { truncated: true },
+      payloadTruncated: true,
+      createdAt: 1,
+    });
+
+    expect(event.payload).toEqual(payload);
+    expect(event.payloadTruncated).toBe(false);
+    expect(apiFetch.mock.calls.length).toBeGreaterThan(1);
   });
 });

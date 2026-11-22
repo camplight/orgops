@@ -556,6 +556,28 @@ export function registerCollabRoutes(app: Hono<any>, deps: CollabDeps) {
     return jsonResponse(c, data.filter(Boolean));
   });
 
+  app.get("/api/channels/:id", (c) => {
+    const id = c.req.param("id");
+    const user = c.get("user") as RequestUser | undefined;
+    const channel = orm
+      .select({
+        id: schema.channels.id,
+        name: schema.channels.name,
+        archivedAt: schema.channels.archived_at,
+      })
+      .from(schema.channels)
+      .where(eq(schema.channels.id, id))
+      .get();
+    if (!channel || !access.canViewChannel(user, id)) {
+      return jsonResponse(c, { error: "Not found" }, 404);
+    }
+    return jsonResponse(c, {
+      id: channel.id,
+      name: channel.name,
+      archivedAt: channel.archivedAt ?? null,
+    });
+  });
+
   app.post("/api/channels", async (c) => {
     const forbidden = forbidScopedRunnerMutations(c);
     if (forbidden) return forbidden;
