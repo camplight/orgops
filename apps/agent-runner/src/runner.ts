@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import { resolveSkillRoots } from "@orgops/skills";
 import { stopAllRunningProcesses } from "./tools/shell";
 import { createChannelLoopManager } from "./channel-loop";
+import { createTurnCancellations, listBusyChannelEvents } from "./turn-cancel";
 import { shouldHandleEventForAgent } from "./event-routing";
 import { createMaintenanceLoop } from "./maintenance-loop";
 import { stopAllRlmChildren } from "./rlm-process";
@@ -155,8 +156,11 @@ const runnerSocket = createRunnerSocketClient({
   getRunnerId: () => state.registeredRunnerId,
   onWakeup: enqueueSocketWakeups,
 });
+// Stop events reach the running turn they name; see turn-cancel.ts.
+const turnCancellations = createTurnCancellations();
 const handleTurn = createTurnExecutor({
   projectRoot: PROJECT_ROOT,
+  turnCancellations,
   skillRoots: SKILL_ROOTS,
   llmCallTimeoutMs: LLM_CALL_TIMEOUT_MS,
   runtimeAuth: {
@@ -345,15 +349,16 @@ async function pollAgent(
   const pendingBuckets = await Promise.all(
     subscribedChannelIds.map(async (channelId) => {
       if (channelLoopManager.isChannelBusy(agent.name, channelId)) {
-        // Call setup must not wait for a running text turn to finish.
-        return api.listPendingEventsForAgentChannel(agent.name, channelId, {
-          typePrefix: "voice.",
-        });
+        // Call setup and Stop requests must not wait for a running text turn to finish.
+        return listBusyChannelEvents(api.listPendingEventsForAgentChannel, agent.name, channelId);
       }
       return api.listPendingEventsForAgentChannel(agent.name, channelId);
     }),
   );
-  const events = realtimeVoice.consume(agent, pendingBuckets.flat());
+  const fetched = pendingBuckets.flat();
+  // A Stop ends the turn it names; it never starts a turn (agent.turn.* events do not wake agents).
+  for (const event of fetched) turnCancellations.request(event);
+  const events = realtimeVoice.consume(agent, fetched);
   ingestIntentEvents({
     intents: state.intentWatch,
     agentName: agent.name,

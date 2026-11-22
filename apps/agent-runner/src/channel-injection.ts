@@ -8,6 +8,8 @@ type PullInjectedEventsInput = {
   seenEventIds: Set<string>;
   shouldInclude: (agent: Agent, event: Event) => boolean;
   shouldSuppress?: (agent: Agent, event: Event) => boolean;
+  // Sees every fetched event, including ones not injected (fetching marks them delivered).
+  onFetched?: (event: Event) => void;
 };
 
 function roleForEvent(event: Event): "user" | "system" {
@@ -31,6 +33,7 @@ export async function pullInjectedEventMessages(
   const res = await input.apiFetch(`/api/events?${query}`);
   const raw = await res.json();
   const events = Array.isArray(raw) ? (raw as Event[]) : [];
+  for (const event of events) input.onFetched?.(event);
   const fresh: Event[] = [];
   for (const event of [...events].sort(
     (left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0),

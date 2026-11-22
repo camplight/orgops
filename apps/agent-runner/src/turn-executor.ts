@@ -1042,6 +1042,10 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         ),
       });
     };
+    // Fetching claims events, so a Stop fetched here never reaches the runner's own fetch.
+    const handleFetchedStop = (event: Event) => {
+      input.turnCancellations?.request(event);
+    };
     const continueForLateEvents = async (
       postedEvents: ModelEventDraft[],
       attempt: number,
@@ -1054,7 +1058,10 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         seenEventIds,
         shouldInclude: shouldHandleEventForAgent,
         shouldSuppress: shouldSuppressInjectedEvent,
+        onFetched: handleFetchedStop,
       });
+      // A Stop among the late events ends the turn here instead of continuing it.
+      abortSignal?.throwIfAborted();
       if (!injected || injected.messages.length === 0) return false;
       lateEventContinuations += 1;
       appendPostedEventsForContinuation(postedEvents);
@@ -1097,6 +1104,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
                 seenEventIds,
                 shouldInclude: shouldHandleEventForAgent,
                 shouldSuppress: shouldSuppressInjectedEvent,
+                onFetched: handleFetchedStop,
               });
               return injected?.messages ?? [];
             },

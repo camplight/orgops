@@ -190,6 +190,31 @@ describe("CLASSIC turn cancellation", () => {
   });
 });
 
+describe("CLASSIC turn cancellation from the late-event pull", () => {
+  it("stops when the turn's own late-event pull picks up the Stop", async () => {
+    const lateMessage: Event = {
+      id: "late-human",
+      type: "message.created",
+      source: "human:test",
+      channelId: "chat",
+      payload: { text: "also answer this" },
+      createdAt: 3,
+    };
+    const ctx = setup({ pendingEventBatches: [[{ ...stopEvent(), createdAt: 2 }, lateMessage], []] });
+    vi.mocked(generate).mockResolvedValue({
+      toolCalls: [] as never[],
+      toolResults: [] as never[],
+      text: '{"turnStatus":"WORK_FULLY_COMPLETE","type":"message.created","payload":{"text":"first answer"}}',
+    } as any);
+    await ctx.run();
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(ctx.emitted.at(-1)).toMatchObject({
+      type: "agent.turn.completed",
+      payload: { triggerEventId: "trigger", cancelled: true, noReply: true },
+    });
+  });
+});
+
 describe("CLASSIC empty final output", () => {
   it("posts an incomplete-work notice for a human tool-only turn without a transcript", async () => {
     const ctx = setup();

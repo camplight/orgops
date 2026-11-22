@@ -3,6 +3,7 @@ import {
   TURN_CANCEL_EVENT_TYPE,
   TurnCancelledError,
   createTurnCancellations,
+  listBusyChannelEvents,
 } from "./turn-cancel";
 import type { Event } from "./types";
 
@@ -72,5 +73,29 @@ describe("turn cancellations", () => {
     first.end();
     expect(turns.request(stop("pip", "c", "t2"))).toBe(true);
     expect(second.signal.aborted).toBe(true);
+  });
+});
+
+describe("busy channel fetch", () => {
+  it("a busy channel fetches voice and Stop events only", async () => {
+    const calls: Array<{ agentName: string; channelId: string; options: { typePrefix?: string } }> = [];
+    const byPrefix: Record<string, Event> = {
+      "voice.": { id: "voice", type: "voice.call.requested", source: "human:ana", channelId: "c", payload: {}, createdAt: 5 },
+      "agent.turn.cancel_requested": { id: "stop", type: "agent.turn.cancel_requested", source: "human:ana", channelId: "c", payload: {}, createdAt: 2 },
+    };
+    const events = await listBusyChannelEvents(
+      async (agentName, channelId, options) => {
+        calls.push({ agentName, channelId, options });
+        return [byPrefix[options.typePrefix ?? ""]!];
+      },
+      "pip",
+      "c",
+    );
+    expect(calls.map((call) => call.options)).toEqual([
+      { typePrefix: "voice." },
+      { typePrefix: "agent.turn.cancel_requested" },
+    ]);
+    expect(calls.every((call) => call.agentName === "pip" && call.channelId === "c")).toBe(true);
+    expect(events.map((event) => event.id)).toEqual(["stop", "voice"]);
   });
 });

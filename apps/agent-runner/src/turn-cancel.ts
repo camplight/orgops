@@ -103,3 +103,24 @@ export function createTurnCancellations(): TurnCancellations {
 
   return { begin, request };
 }
+
+type ListPendingEvents = (
+  agentName: string,
+  channelId: string,
+  options: { typePrefix?: string },
+) => Promise<Event[]>;
+
+/**
+ * What the runner fetches for a channel whose turn is still running: voice call setup, which
+ * must not wait for the turn, and Stop requests, which end it. Other events wait for the turn.
+ */
+export async function listBusyChannelEvents(
+  list: ListPendingEvents,
+  agentName: string,
+  channelId: string,
+): Promise<Event[]> {
+  const buckets = await Promise.all(
+    ["voice.", TURN_CANCEL_EVENT_TYPE].map((typePrefix) => list(agentName, channelId, { typePrefix })),
+  );
+  return buckets.flat().sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0));
+}
