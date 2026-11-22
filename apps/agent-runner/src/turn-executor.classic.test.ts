@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { generate, type LlmTool } from "@orgops/llm";
 import { createTurnExecutor } from "./turn-executor";
+import { TURN_CANCEL_EVENT_TYPE, createTurnCancellations, type ActiveTurnCancel } from "./turn-cancel";
 import type { Agent, Event } from "./types";
 
 vi.mock("@orgops/llm", async (importOriginal) => ({
@@ -34,7 +35,6 @@ function setup(
     agentOverrides?: Partial<Agent>;
     trigger?: Partial<Event>;
     events?: Event[];
-    cancelRequested?: () => boolean;
   } = {},
 ) {
   const emitted: Array<{
@@ -44,6 +44,11 @@ function setup(
     deliverAt?: number;
   }> = [];
   let pendingEventBatchIndex = 0;
+  const turnCancellations = createTurnCancellations();
+  // Tests reach the running turn's cancel handle through `active`.
+  const handles: { active?: ActiveTurnCancel } = {};
+  const begin = turnCancellations.begin;
+  turnCancellations.begin = (input) => (handles.active = begin(input));
   const apiFetch = vi.fn(async (path: string, init?: RequestInit) => {
     const custom = options.fetch?.(path, init);
     if (custom) return custom;
@@ -58,9 +63,6 @@ function setup(
     if (path.startsWith("/api/events?")) {
       return Response.json(options.pendingEventBatches?.[pendingEventBatchIndex++] ?? []);
     }
-    if (path.startsWith("/api/agents/tester/turns/cancel?")) {
-      return Response.json({ cancelRequested: options.cancelRequested?.() ?? false });
-    }
     if (path === "/api/events" && init?.method === "POST") {
       const body = JSON.parse(String(init.body ?? "{}")) as Record<string, unknown>;
       return Response.json({ id: "evt-posted", status: "DELIVERED", ...body });
@@ -71,7 +73,7 @@ function setup(
     projectRoot: "/tmp",
     skillRoots: [],
     llmCallTimeoutMs: 10_000,
-    turnCancelPollMs: 10,
+    turnCancellations,
     api: {
       apiFetch,
       emitEvent: async (event) => {
@@ -90,6 +92,8 @@ function setup(
   return {
     emitted,
     apiFetch,
+    turnCancellations,
+    handles,
     run: () =>
       execute(
         { ...agent, ...options.agentOverrides },
@@ -120,15 +124,23 @@ beforeEach(() => {
   vi.mocked(generate).mockReset();
 });
 
+const stopEvent = (triggerEventId = "trigger"): Event => ({
+  id: `stop-${triggerEventId}`,
+  type: TURN_CANCEL_EVENT_TYPE,
+  source: "human:ana",
+  channelId: "chat",
+  payload: { targetAgentName: "tester", triggerEventId, requestedBy: "human:ana" },
+});
+
 describe("CLASSIC turn cancellation", () => {
   it("stops the model call, posts nothing held back, and completes the turn as cancelled", async () => {
-    let cancelled = false;
-    const ctx = setup({ cancelRequested: () => cancelled });
+    const ctx = setup();
     vi.mocked(generate).mockImplementation(async (_model, _messages, options) => {
       // The model stages a reply, then keeps working until the turn is aborted.
       await emit(options?.tools, "half-finished answer", { stageUntilTurnSettled: true });
-      cancelled = true;
+      expect(ctx.turnCancellations.request(stopEvent())).toBe(true);
       return new Promise((_resolve, reject) => {
+        if (options?.abortSignal?.aborted) reject(options.abortSignal.reason);
         options?.abortSignal?.addEventListener("abort", () => reject(options.abortSignal!.reason), { once: true });
       });
     });
@@ -141,7 +153,7 @@ describe("CLASSIC turn cancellation", () => {
     });
   });
 
-  it("asks for cancellation by this agent and trigger only", async () => {
+  it("never polls the API for a Stop", async () => {
     const ctx = setup();
     vi.mocked(generate).mockImplementation(async (_model, _messages, options) => {
       await new Promise((resolve) => setTimeout(resolve, 40));
@@ -149,10 +161,32 @@ describe("CLASSIC turn cancellation", () => {
       return { text: "", toolCalls: [{ toolName: "turn_finish", input: { outcome: "completed" } }], finishReason: "tool-calls" } as any;
     });
     await ctx.run();
-    const polls = ctx.apiFetch.mock.calls.map(([path]) => String(path)).filter((path) => path.includes("/turns/cancel?"));
-    expect(polls.length).toBeGreaterThan(0);
-    expect(polls[0]).toBe("/api/agents/tester/turns/cancel?channelId=chat&triggerEventId=trigger");
+    const paths = ctx.apiFetch.mock.calls.map(([path]) => String(path));
+    expect(paths.some((path) => path.includes("/turns/cancel"))).toBe(false);
     expect(ctx.emitted.some((event) => event.type === "agent.turn.completed" && event.payload?.cancelled)).toBe(false);
+  });
+
+  it("reports the cancelled turn only after its processes stopped", async () => {
+    const ctx = setup();
+    let stoppedAt = 0;
+    let completedAt = 0;
+    const emitted = ctx.emitted;
+    const push = emitted.push.bind(emitted);
+    emitted.push = (...items) => {
+      if (items.some((item) => item.type === "agent.turn.completed")) completedAt = Date.now();
+      return push(...items);
+    };
+    vi.mocked(generate).mockImplementation(async (_model, _messages, options) => {
+      ctx.handles.active!.onCancel(
+        () => new Promise((resolve) => setTimeout(() => resolve((stoppedAt = Date.now())), 50)),
+      );
+      ctx.turnCancellations.request(stopEvent());
+      throw options?.abortSignal?.reason;
+    });
+    await ctx.run();
+    expect(stoppedAt).toBeGreaterThan(0);
+    expect(completedAt).toBeGreaterThanOrEqual(stoppedAt);
+    expect(ctx.emitted.at(-1)).toMatchObject({ type: "agent.turn.completed", payload: { cancelled: true } });
   });
 });
 

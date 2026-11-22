@@ -21,6 +21,8 @@ export type ExecuteContext = {
   injectionEnv: Record<string, string>;
   // Aborted when a participant cancels the running turn; long tools stop early.
   abortSignal?: AbortSignal;
+  // Registers how to stop something this turn started (a process) if the turn is cancelled.
+  onTurnCancel?: (stop: () => Promise<unknown>) => void;
   listEventTypes?: (input?: {
     source?: string;
     typePrefix?: string;

@@ -48,7 +48,7 @@ import {
 } from "./prompt-composer";
 import { recordLlmUsage } from "./billing";
 import { getLatestContextBoundary } from "./context-boundary";
-import { watchTurnCancel } from "./turn-cancel";
+import type { ActiveTurnCancel, TurnCancellations } from "./turn-cancel";
 import type { Agent, Event } from "./types";
 import type { RunnerApi } from "./runner/api";
 import {
@@ -91,8 +91,8 @@ type CreateTurnExecutorInput = {
   projectRoot: string;
   skillRoots: Array<{ path: string }>;
   llmCallTimeoutMs: number;
-  // How often a running CLASSIC turn checks for a cancel request (default 1s).
-  turnCancelPollMs?: number;
+  // Running CLASSIC turns; a Stop event the runner fetches cancels the turn it names.
+  turnCancellations?: TurnCancellations;
   runtimeAuth?: {
     apiBaseUrl?: string;
     runnerToken?: string;
@@ -547,8 +547,9 @@ export async function reconcileLateInjectedMessages(input: {
 }
 
 export function createTurnExecutor(input: CreateTurnExecutorInput) {
-  // `abortSignal` fires when a participant cancels a CLASSIC turn; see executeTurn below.
-  const runTurn = async (agent: Agent, events: Event[], abortSignal?: AbortSignal) => {
+  // `cancel` is set for CLASSIC turns a participant may stop; see executeTurn below.
+  const runTurn = async (agent: Agent, events: Event[], cancel?: ActiveTurnCancel) => {
+    const abortSignal = cancel?.signal;
     if (events.length === 0) return;
     const triggerEvent = events[events.length - 1]!;
     const channelId = triggerEvent?.channelId;
@@ -888,7 +889,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       agent,
       triggerEvent,
       channelId,
-      ...(abortSignal ? { abortSignal } : {}),
+      ...(cancel ? { abortSignal: cancel.signal, onTurnCancel: cancel.onCancel } : {}),
       ...((agent.mode ?? "CLASSIC") === "CLASSIC"
         ? {
             deferMessage: (draft: ModelEventDraft) => {
@@ -1521,19 +1522,21 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
     if (!triggerEvent || !channelId || (agent.mode ?? "CLASSIC") !== "CLASSIC") {
       return runTurn(agent, events);
     }
-    // A participant may stop a CLASSIC turn (POST /api/agents/:name/turns/cancel). The model call
-    // and any running shell_run are aborted, held-back replies are dropped, and the batch is done.
-    const cancel = watchTurnCancel({
-      apiFetch: input.api.apiFetch,
+    if (!input.turnCancellations) return runTurn(agent, events);
+    // A participant may stop a CLASSIC turn (POST /api/agents/:name/turns/cancel records a Stop
+    // event; the runner hands it to turnCancellations). The model call is aborted, held-back
+    // replies are dropped, the turn's processes are stopped, and the batch counts as handled.
+    const cancel = input.turnCancellations.begin({
       agentName: agent.name,
       channelId,
       triggerEventId: triggerEvent.id,
-      intervalMs: input.turnCancelPollMs,
     });
     try {
-      await runTurn(agent, events, cancel.signal);
+      await runTurn(agent, events, cancel);
     } catch (error) {
       if (!cancel.signal.aborted) throw error;
+      // Processes exit before the turn ends, so their exits do not wake the agent again.
+      await cancel.settle();
       try {
         await input.api.emitEvent({
           type: "agent.turn.completed",
@@ -1550,7 +1553,8 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         console.warn("runner.turn.telemetry_failed", emitError);
       }
     } finally {
-      cancel.stop();
+      if (cancel.signal.aborted) await cancel.settle();
+      cancel.end();
     }
   };
 }
