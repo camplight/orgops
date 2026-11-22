@@ -914,7 +914,8 @@ Runner loop:
     CLASSIC turn whose trigger matches its `triggerEventId`; a Stop for an earlier turn is ignored.
     The runner aborts the model call, posts no reply it was still holding back, and stops the
     process group of the running `shell_run` (which reports exit code 130) and of every
-    `shell_start` process started during this turn: SIGTERM, then SIGKILL after 2 s. Background
+    `shell_start` process started during this turn: SIGTERM, then SIGKILL after 2 s (on Windows,
+    where groups are not used, only the shell process). Background
     processes from earlier turns keep running. Once those processes exit (at most 5 s) it emits
     `agent.turn.completed` with `cancelled: true` and `noReply: true`, so their exits fall inside
     the turn and do not wake the agent. Events and tool results already posted stay. The batch
@@ -934,7 +935,9 @@ Wrapped lifecycle:
 Shutdown behavior:
 
 - stops RLM children
-- terminates tracked long-running processes
+- terminates tracked long-running processes: each runs as its own process group (POSIX), and all
+  groups get SIGTERM, then SIGKILL after 1.5 s, at once, including children left running after
+  their shell exited
 
 ## Runner Tooling
 
