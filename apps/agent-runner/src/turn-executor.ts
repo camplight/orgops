@@ -1,5 +1,5 @@
 import { automaticTaskModel } from "./automatic-model";
-import { resolveTaskModel, taskModelRequest } from "./task-model";
+import { resolveTaskModel, taskModelRequest, taskRoutingRequest } from "./task-model";
 import { arch, hostname, release } from "node:os";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
@@ -650,7 +650,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
     }
     const injectionEnv = await input.api.getPackageSecretsEnv(agent.name, channelId);
     const taskOverride = taskModelRequest(agent, triggerEvent);
-    const automatic = !taskOverride ? automaticTaskModel(agent, channelId) : undefined;
+    let automatic = !taskOverride ? automaticTaskModel(agent, channelId, process.env, taskRoutingRequest(triggerEvent)) : undefined;
     if (automatic) {
       const savedModelId = agent.modelId;
       agent = automatic.agent;
@@ -940,6 +940,16 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       ...currentEventMessages,
     ];
 
+    // Capability routing is independent of the classifier, including images in history.
+    if (!automatic && !taskOverride && hasImageParts(invokeMessages) && agent.modelCapabilities?.imageInput !== true) {
+      automatic = automaticTaskModel(agent, channelId, process.env, taskRoutingRequest(triggerEvent), true);
+      if (automatic) {
+        agent = automatic.agent;
+        await emitTurnEvent('agent.turn.phase', {phase:'task-model-routing', modelId:agent.modelId,
+          detail:'Image-capable routing for this task'});
+      }
+    }
+
     if (shouldEmitAuditEvents(agent)) {
       await bestEffort("runner.prompt.telemetry_failed", async () => {
         await input.api.emitEvent({
@@ -1124,7 +1134,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       args: Parameters<typeof pullInjectedEventMessages>[0],
     ) => {
       // An overridden task cannot absorb a later human request under its temporary model.
-      if (taskOverride) return null;
+      if (taskOverride || taskRoutingRequest(triggerEvent)) return null;
       const injected = await pullInjectedEventMessages(args);
       if (injected) rememberInjected(injected.events);
       return injected;

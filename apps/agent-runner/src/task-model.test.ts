@@ -50,3 +50,9 @@ it('ends an unresolved override visibly without calling the model or changing it
  expect(emitted.find(e=>e.type==='message.created')?.payload.text).toContain('saved default was not changed');
  expect(agent.modelId).toBe('openrouter:z-ai/glm-5.3');
 });
+it('keeps each classified human task separate for every participant',()=>{
+ const routed={...event('routed'),payload:{text:'Plan',taskRouting:{tier:'complex',reason:'classified'}}};
+ expect(firstTaskBatch(agent,[event('before'),routed,event('after')]).map(x=>x.id)).toEqual(['before']);
+ expect(firstTaskBatch(agent,[routed,event('after')]).map(x=>x.id)).toEqual(['routed']);
+ expect(firstTaskBatch(agent,[{...routed,source:'agent:Other'},event('after')])).toHaveLength(2);
+});

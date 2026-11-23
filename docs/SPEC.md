@@ -1357,3 +1357,19 @@ Research: [Auto Router](https://openrouter.ai/docs/guides/routing/routers/auto-r
 Auto Router's hard allowed-model policy is preferred over Jev Router's documented
 include-preference fallback. No new TypeSafe key or decision-service deployment is
 required. Provider performance claims have not been independently benchmarked here.
+
+
+#### Product task-complexity hints
+
+`message.created.payload.taskRouting` accepts a bounded tier (`routine`, `standard`,
+`complex`, `default`), reason and optional confidence. The runner honors only human
+message hints and only within its enabled automatic OpenRouter policy. It is not a
+model ID, credential, grant or spending authorization. Explicit owner-authorized
+`taskModel` still takes precedence. Each hinted task is a batching/injection boundary.
+Routine/default text tasks retain the saved model; standard tasks use the configured
+Auto Router tier, complex tasks use `ORGOPS_TASK_MODEL_COMPLEX_COST_TIER` (high by
+default). Images in the composed context still trigger capability routing when the
+saved model does not declare vision. Classifier failure must be represented as
+`default`, not a failed turn. Existing `ORGOPS_TASK_MODEL_ALLOWED_MODELS` remains a
+hard restriction across tiers. No hint rewrites agent state or replays tool calls.
+The classification service itself belongs to the consuming product, not OrgOps.

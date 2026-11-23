@@ -1,4 +1,4 @@
-import { taskModelRequest } from "./task-model";
+import { isTaskBoundary } from "./task-model";
 import type { LlmMessage } from "@orgops/llm";
 import { hydrateEventPayload } from "./channel-events";
 import { toHistoryMessage } from "./prompt-composer";
@@ -41,7 +41,7 @@ export async function pullInjectedEventMessages(
     const hydrated = await hydrateEventPayload(input.apiFetch, event);
     if (!input.shouldInclude(input.agent, hydrated)) { input.seenEventIds.add(event.id); continue; }
     // Leave this and later events pending for a separate task/model boundary.
-    if (taskModelRequest(input.agent, hydrated)) break;
+    if (isTaskBoundary(input.agent, hydrated)) break;
     fresh.push(hydrated);
   }
   for (const event of fresh) {

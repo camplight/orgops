@@ -22,3 +22,11 @@ it('reads server policy, validates malformed policy, and keeps tool grants uncha
  expect(()=>automaticTaskModel(saved,'room',{...env,ORGOPS_TASK_MODEL_COST_TIER:'free'})).toThrow();
  expect(()=>automaticTaskModel(saved,'room',{...env,ORGOPS_TASK_MODEL_ALLOWED_MODELS:' , '})).toThrow();
 });
+it('uses task complexity independently of availability and retains the saved model on classifier failure',()=>{
+ expect(automaticTaskModel(saved,'room',env,{tier:'routine',reason:'classified'})).toBeUndefined();
+ expect(automaticTaskModel(saved,'room',env,{tier:'default',reason:'unavailable'})).toBeUndefined();
+ expect(automaticTaskModel(saved,'room',env,{tier:'complex',reason:'classified'})?.routing.costTier).toBe('high');
+ expect(automaticTaskModel(saved,'room',env,{tier:'standard',reason:'classified'})?.routing.costTier).toBe('medium');
+ expect(automaticTaskModel(saved,'room',env,{tier:'default',reason:'unavailable'},true)?.agent.modelCapabilities?.imageInput).toBe(true);
+ expect(saved.modelId).toBe('openrouter:z-ai/glm-5.3');
+});

@@ -67,4 +67,4 @@ export type EventInput = z.infer<typeof EventSchema>;
 export type AgentInput = z.infer<typeof AgentSchema>;
 export type ModelInput = z.infer<typeof ModelSchema>;
 
-export { TaskModelSchema, type TaskModel } from "./task-model";
+export { TaskModelSchema, TaskRoutingSchema, type TaskRouting, type TaskModel } from "./task-model";

@@ -12,3 +12,11 @@ export const TaskModelSchema = z.discriminatedUnion("mode", [
   }).strict(),
 ]);
 export type TaskModel = z.infer<typeof TaskModelSchema>;
+
+/** A bounded task hint, not permission to choose arbitrary models or credentials. */
+export const TaskRoutingSchema = z.object({
+  tier: z.enum(['routine', 'standard', 'complex', 'default']),
+  reason: z.enum(['classified', 'unavailable', 'uncertain']),
+  confidence: z.number().finite().min(0).max(1).optional(),
+}).strict();
+export type TaskRouting = z.infer<typeof TaskRoutingSchema>;

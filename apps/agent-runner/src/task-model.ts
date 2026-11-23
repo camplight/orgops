@@ -1,4 +1,4 @@
-import { TaskModelSchema, type TaskModel } from "@orgops/schemas";
+import { TaskModelSchema, TaskRoutingSchema, type TaskModel } from "@orgops/schemas";
 import type { Agent, Event } from "./types";
 
 export function taskModelRequest(agent: Agent, event: Event): TaskModel | undefined {
@@ -7,9 +7,18 @@ export function taskModelRequest(agent: Agent, event: Event): TaskModel | undefi
   if (result.success && result.data.agentName === agent.name) return result.data;
 }
 
+export function taskRoutingRequest(event: Event) {
+  if (event.type !== 'message.created' || !event.source.startsWith('human:')) return;
+  const parsed = TaskRoutingSchema.safeParse((event.payload as any)?.taskRouting);
+  return parsed.success ? parsed.data : undefined;
+}
+export function isTaskBoundary(agent: Agent, event: Event) {
+  return Boolean(taskModelRequest(agent, event) || taskRoutingRequest(event));
+}
+
 /** Each override is its own task; ordinary messages retain the existing burst batching. */
 export function firstTaskBatch(agent: Agent, events: Event[]): Event[] {
-  const boundary = events.findIndex(event => taskModelRequest(agent, event));
+  const boundary = events.findIndex(event => isTaskBoundary(agent, event));
   return boundary < 0 ? events : events.slice(0, boundary === 0 ? 1 : boundary);
 }
 
