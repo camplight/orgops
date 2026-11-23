@@ -1270,3 +1270,49 @@ must configure their own compatible policy at their deployment boundary; see
 `docs/DEPLOYMENT_SECURITY.md`. An API middleware cannot fix a host nginx rule that
 routes `/health` to the SPA, and shipping a controller source file does not install
 it on a host.
+
+### Task-scoped OpenRouter model requests
+
+A human `message.created` may include `payload.taskModel` for a CLASSIC agent:
+
+```json
+{"agentName":"PuffVitaliy","mode":"manual","modelId":"openrouter:vendor/model"}
+```
+
+Or request deterministic cost/intelligence routing:
+
+```json
+{"agentName":"PuffVitaliy","mode":"economy","minIntelligence":70,"maxPricePerMillion":2,"minContextTokens":32000}
+```
+
+The requesting human must be allowed to manage that agent. Scoped runner tokens
+cannot create these requests; a global integration acting for a human is checked
+against that human's authority. Scheduled edits receive the same checks. WRAPPED
+and RLM_REPL modes are explicitly unsupported. Existing messages are unchanged.
+
+The runner isolates each override message as its own turn and applies a local
+agent copy. Later pending messages wait for a new turn; ordinary burst batching
+continues on either side. Mid-turn injection also stops at an override boundary.
+No agent model row is updated, so concurrent channels and later chats retain the
+saved default without a revert race. An event retry re-evaluates routing against
+current provider metadata; it does not preserve a historical price quote.
+
+Routing fetches OpenRouter's model catalog and (for economy requests) its
+Artificial Analysis intelligence benchmarks, with eight-second request deadlines.
+It first filters tool support, image input when the triggering message attaches an
+image, and minimum context. Economy then removes dominated cost/intelligence
+points and selects the cheapest remaining point satisfying the supplied quality
+floor and price ceiling, breaking ties by intelligence then ID. Price means an
+explicit 3:1 input/output blend in USD per million tokens, **not a total task
+spending cap**. This is benchmark-based selection, not a claim to predict a task's
+actual reasoning quality or latency. Unknown prices/scores and ambiguous scores
+are excluded from economy selection. Manual requests still require capabilities.
+Only ordinary OpenRouter slugs are accepted; dynamic variants are not supported.
+
+An unavailable provider, incompatible model, missing credentials, or empty frontier
+ends the request with a clear message; it does not silently run another model.
+Selected model/score/estimated price are recorded in `agent.turn.phase` with
+`phase=task-model-selected`. Saved model capability and reasoning overrides are
+not inherited by a different task model. No additional credentials are granted.
+Provider metadata is advisory: a provider can still reject a request after selection.
+Older/history images are subject to the existing image-rejection recovery behavior.

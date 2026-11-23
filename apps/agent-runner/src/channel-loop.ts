@@ -1,3 +1,4 @@
+import { firstTaskBatch } from "./task-model";
 import type { Agent, Event } from "./types";
 
 type WorkerState = {
@@ -35,12 +36,13 @@ export function createChannelLoopManager(input: CreateChannelLoopManagerInput) {
     workerStartCounts.set(key, (workerStartCounts.get(key) ?? 0) + 1);
     void (async () => {
       while (true) {
-        const batch = [...state.queue.values()].sort((left, right) => {
+        const ordered = [...state.queue.values()].sort((left, right) => {
           const leftTs = left.createdAt ?? 0;
           const rightTs = right.createdAt ?? 0;
           return leftTs - rightTs;
         });
-        state.queue.clear();
+        const batch = firstTaskBatch(state.agent, ordered);
+        for (const event of batch) state.queue.delete(event.id);
         if (batch.length === 0) break;
         try {
           await input.processBatch(state.agent, state.channelId, batch);

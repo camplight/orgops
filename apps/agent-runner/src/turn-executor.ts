@@ -1,3 +1,4 @@
+import { resolveTaskModel, taskModelRequest } from "./task-model";
 import { arch, hostname, release } from "node:os";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
@@ -647,6 +648,20 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       return done();
     }
     const injectionEnv = await input.api.getPackageSecretsEnv(agent.name, channelId);
+    const taskOverride = taskModelRequest(agent, triggerEvent);
+    if (taskOverride) {
+      try {
+        const resolved = await resolveTaskModel(agent, triggerEvent, injectionEnv);
+        agent = resolved.agent;
+        await emitTurnEvent("agent.turn.phase", { phase: "task-model-selected", detail: `Using ${agent.modelId} for this task only`, modelId: agent.modelId,
+          intelligence: resolved.selected.intelligence, estimatedPricePerMillion: resolved.selected.price });
+      } catch {
+        await input.api.emitEvent({ type: "message.created", source: `agent:${agent.name}`, channelId,
+          payload: { text: "This task's model override could not be resolved. Check its model, capability requirements, intelligence/price limits and OpenRouter connection. The saved default was not changed.", inReplyTo: triggerEvent.id } });
+        await emitTurnEvent("agent.turn.completed", { reason: "task-model-unavailable" });
+        return done();
+      }
+    }
     const channelRecord = await input.api.getChannelRecord(channelId);
     const soul = typeof agent.soulContents === "string" ? agent.soulContents : "";
     const resolvedSkillRoots = (() => {
@@ -1100,6 +1115,8 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
     const pullInjected = async (
       args: Parameters<typeof pullInjectedEventMessages>[0],
     ) => {
+      // An overridden task cannot absorb a later human request under its temporary model.
+      if (taskOverride) return null;
       const injected = await pullInjectedEventMessages(args);
       if (injected) rememberInjected(injected.events);
       return injected;
