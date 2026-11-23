@@ -455,6 +455,34 @@ describe("CLASSIC image attachments", () => {
     });
   const hasImage = (messages: unknown) => JSON.stringify(messages).includes('"type":"image"');
 
+  it("automatically routes an ordinary image message despite a text-only saved default", async () => {
+    const previous=process.env.ORGOPS_TASK_MODEL_ROUTING;
+    process.env.ORGOPS_TASK_MODEL_ROUTING='openrouter-auto';
+    try {
+      const ctx=imageTurn({modelId:'openrouter:z-ai/glm-5.3',modelCapabilities:{imageInput:false}});
+      vi.mocked(generate).mockImplementationOnce(async(model,messages,options)=>{
+        expect(model).toBe('openrouter:openrouter/auto');
+        expect(hasImage(messages)).toBe(true);
+        expect(options?.openrouterRouting).toMatchObject({costTier:'medium',sessionId:JSON.stringify(['tester','chat'])});
+        return {text:JSON.stringify({turnStatus:'WORK_FULLY_COMPLETE',type:'message.created',payload:{text:'The image contains a diagram.'}}),modelId:'openrouter:test/vision',toolCalls:[],toolResults:[]};
+      });
+      await ctx.run();
+      expect(generate).toHaveBeenCalledTimes(1);
+      expect(ctx.emitted.some(event=>event.payload?.phase==='task-model-selected' && event.payload.modelId==='openrouter:test/vision')).toBe(true);
+    } finally {if(previous===undefined)delete process.env.ORGOPS_TASK_MODEL_ROUTING;else process.env.ORGOPS_TASK_MODEL_ROUTING=previous;}
+  });
+
+  it("never strips an image and retries when automatic routing rejects it", async()=>{
+    const previous=process.env.ORGOPS_TASK_MODEL_ROUTING;
+    process.env.ORGOPS_TASK_MODEL_ROUTING='openrouter-auto';
+    try {
+      const ctx=imageTurn({modelId:'openrouter:z-ai/glm-5.3',modelCapabilities:{imageInput:false}});
+      vi.mocked(generate).mockRejectedValueOnce(new Error('No endpoints found that support image input'));
+      await expect(ctx.run()).rejects.toThrow('image input');
+      expect(generate).toHaveBeenCalledTimes(1);
+    } finally {if(previous===undefined)delete process.env.ORGOPS_TASK_MODEL_ROUTING;else process.env.ORGOPS_TASK_MODEL_ROUTING=previous;}
+  });
+
   it("retries without images when the provider rejects image input, and says why", async () => {
     const ctx = imageTurn();
     vi.mocked(generate)
