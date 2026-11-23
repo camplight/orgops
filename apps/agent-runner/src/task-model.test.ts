@@ -40,3 +40,13 @@ describe('task model routing',()=>{
    expect(agent.modelId).toBe('openrouter:z-ai/glm-5.3');
  });
 });
+
+it('ends an unresolved override visibly without calling the model or changing its default',async()=>{
+ const {createTurnExecutor}=await import('./turn-executor');
+ const emitted:any[]=[];
+ const execute=createTurnExecutor({api:{emitEvent:async(e:any)=>{emitted.push(e);},getPackageSecretsEnv:async()=>({})}} as any);
+ const result=await execute(agent,[event('override',true)]);
+ expect(result.handledEventIds).toEqual(['override']);
+ expect(emitted.find(e=>e.type==='message.created')?.payload.text).toContain('saved default was not changed');
+ expect(agent.modelId).toBe('openrouter:z-ai/glm-5.3');
+});
