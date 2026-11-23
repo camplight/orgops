@@ -446,7 +446,7 @@ describe("CLASSIC image attachments", () => {
   const imageTurn = (agentOverrides: Partial<Agent> = {}, taskRouting?: {tier:string;reason:string}) =>
     setup({
       agentOverrides: { memoryContextMode: "FULL_CHANNEL_EVENTS", ...agentOverrides },
-      events: [{...imageMessage,payload:{...imageMessage.payload,...(taskRouting?{taskRouting}:{})}}],
+      events: [{...imageMessage,payload:{...(imageMessage.payload as Record<string,unknown>),...(taskRouting?{taskRouting}:{})}}],
       pendingEventBatches: [[], [imageMessage], [], [], []],
       fetch: (path) =>
         path === "/api/files/img-1"
