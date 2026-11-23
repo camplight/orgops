@@ -172,3 +172,16 @@ describe("channel loop manager", () => {
     expect(manager.isChannelBusy("zoro", "chan-1")).toBe(false);
   });
 });
+
+it('runs an override separately from messages before and after it', async()=>{
+  const agent: Agent={name:'Puff',workspacePath:'/tmp',modelId:'openrouter:z-ai/glm-5.3',desiredState:'RUNNING',runtimeState:'RUNNING'};
+  const batches:string[][]=[];
+  const manager=createChannelLoopManager({processBatch:async(_agent,_channel,events)=>{batches.push(events.map(e=>e.id));}});
+  manager.enqueue(agent,[
+    {id:'before',type:'message.created',source:'human:owner',channelId:'room',createdAt:1,payload:{text:'before'}},
+    {id:'override',type:'message.created',source:'human:owner',channelId:'room',createdAt:2,payload:{text:'override',taskModel:{agentName:'Puff',mode:'manual',modelId:'openrouter:a/vision'}}},
+    {id:'after',type:'message.created',source:'human:owner',channelId:'room',createdAt:3,payload:{text:'after'}},
+  ]);
+  await sleep(10);
+  expect(batches).toEqual([['before'],['override'],['after']]);
+});

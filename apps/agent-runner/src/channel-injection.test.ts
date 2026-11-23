@@ -107,3 +107,18 @@ describe("channel injection", () => {
     expect(String(injected?.messages[0]?.content)).toContain("full hydrated text");
   });
 });
+
+
+it("leaves an override and all later events pending across repeated mid-turn polls", async () => {
+  const agent: Agent = {name:"Puff",workspacePath:"/tmp",modelId:"openrouter:z-ai/glm-5.3",desiredState:"RUNNING",runtimeState:"RUNNING"};
+  const events: Event[] = [
+    {id:"before",type:"message.created",source:"human:owner",channelId:"room",payload:{text:"before"},createdAt:1},
+    {id:"override",type:"message.created",source:"human:owner",channelId:"room",payload:{text:"image",taskModel:{agentName:"Puff",mode:"manual",modelId:"openrouter:a/vision"}},createdAt:2},
+    {id:"after",type:"message.created",source:"human:owner",channelId:"room",payload:{text:"after"},createdAt:3},
+  ];
+  const seenEventIds = new Set<string>();
+  const args = {apiFetch:async()=>Response.json(events),agent,channelId:"room",seenEventIds,shouldInclude:()=>true};
+  expect((await pullInjectedEventMessages(args))?.events.map(e=>e.id)).toEqual(["before"]);
+  expect(await pullInjectedEventMessages(args)).toBeNull();
+  expect([...seenEventIds]).toEqual(["before"]);
+});

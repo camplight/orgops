@@ -1,3 +1,4 @@
+import { TaskModelSchema } from "@orgops/schemas";
 import type { Hono } from "hono";
 import {federationFetch} from '../federation-transport';
 import { openDb, schema, type OrgOpsDrizzleDb } from "@orgops/db";
@@ -144,6 +145,23 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       throw new Error("Sensitive messages require ORGOPS_MASTER_KEY to be configured.");
     }
     return parseMasterKey(raw);
+  }
+
+  function taskModelError(user: RequestUser | undefined, type: string, source: string, payload: any) {
+    if (payload?.taskModel === undefined) return null;
+    const parsed = TaskModelSchema.safeParse(payload.taskModel);
+    if (!parsed.success || type !== "message.created" || !source.startsWith("human:"))
+      return "Invalid task model request: only human messages support taskModel.";
+    if (user?.runnerScope?.mode === "SCOPED") return "Scoped agents cannot select task models.";
+    const requester = user?.username === "runner"
+      ? orm.select({ id: schema.humans.id, username: schema.humans.username }).from(schema.humans)
+          .where(eq(schema.humans.username, source.slice("human:".length))).get()
+      : user;
+    if (!access.canManageAgent(requester, parsed.data.agentName)) return "Only the agent owner can select a task model.";
+    const agent = orm.select({ mode: schema.agents.mode }).from(schema.agents)
+      .where(eq(schema.agents.name, parsed.data.agentName)).get();
+    if (!agent || agent.mode !== "CLASSIC") return "Task model overrides require a CLASSIC agent.";
+    return null;
   }
 
   function normalizeSensitiveMessagePayload(type: string, payload: unknown) {
@@ -937,6 +955,8 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
       type,
       parsed.data.payload ?? {},
     );
+    const modelError = taskModelError(user, type, source, normalizedPayload);
+    if (modelError) return jsonResponse(c, { error: modelError }, 400);
     const eventShapes = await getEventShapes();
     const validationResult = validateEventAgainstShapes(
       {
@@ -1204,6 +1224,8 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
         : (existing.parent_event_id ?? undefined);
     const nextDeliverAt = parsed.data.deliverAt ?? existing.deliver_at;
 
+    const modelError = taskModelError(user, nextType, existing.source, nextPayload);
+    if (modelError) return jsonResponse(c, { error: modelError }, 400);
     const eventShapes = await getEventShapes();
     const validationResult = validateEventAgainstShapes(
       {

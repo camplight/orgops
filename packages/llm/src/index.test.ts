@@ -387,3 +387,16 @@ describe("llm", () => {
     ).rejects.toThrow("does not support transcription");
   });
 });
+
+it('sends router policy alongside original image/tool inputs and never retries the request itself',async()=>{
+ const {routingFetch}=await import('./index');
+ const transport=vi.fn(async()=>new Response('unavailable',{status:503}));
+ const request=routingFetch({sessionId:'puff-room',costTier:'medium',allowedModels:['google/*']},transport as typeof fetch);
+ const messages=[{role:'user',content:[{type:'image_url',image_url:{url:'https://example.com/image.png'}}]}];
+ const tools=[{type:'function',function:{name:'read_file'}}];
+ const response=await request('https://openrouter.ai/api/v1/chat/completions',{method:'POST',body:JSON.stringify({model:'openrouter/auto',messages,tools}),headers:{'content-type':'application/json'}});
+ expect(response.status).toBe(503);
+ expect(transport).toHaveBeenCalledTimes(1);
+ const init=(transport.mock.calls as any)[0][1];
+ expect(JSON.parse(init.body)).toEqual({model:'openrouter/auto',messages,tools,session_id:'puff-room',provider:{require_parameters:true},plugins:[{id:'auto-router',cost_tier:'medium',allowed_models:['google/*']}]});
+});

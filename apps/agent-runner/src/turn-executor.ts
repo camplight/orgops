@@ -1,3 +1,5 @@
+import { automaticTaskModel } from "./automatic-model";
+import { resolveTaskModel, taskModelRequest, taskRoutingRequest } from "./task-model";
 import { arch, hostname, release } from "node:os";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
@@ -647,6 +649,27 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       return done();
     }
     const injectionEnv = await input.api.getPackageSecretsEnv(agent.name, channelId);
+    const taskOverride = taskModelRequest(agent, triggerEvent);
+    let automatic = !taskOverride ? automaticTaskModel(agent, channelId, process.env, taskRoutingRequest(triggerEvent)) : undefined;
+    if (automatic) {
+      const savedModelId = agent.modelId;
+      agent = automatic.agent;
+      await emitTurnEvent("agent.turn.phase", {phase:"task-model-routing",modelId:agent.modelId,
+        savedModelId,detail:"Automatic model selection for this run"});
+    }
+    if (taskOverride) {
+      try {
+        const resolved = await resolveTaskModel(agent, triggerEvent, injectionEnv);
+        agent = resolved.agent;
+        await emitTurnEvent("agent.turn.phase", { phase: "task-model-selected", detail: `Using ${agent.modelId} for this task only`, modelId: agent.modelId,
+          intelligence: resolved.selected.intelligence, estimatedPricePerMillion: resolved.selected.price });
+      } catch {
+        await input.api.emitEvent({ type: "message.created", source: `agent:${agent.name}`, channelId,
+          payload: { text: "This task's model override could not be resolved. Check its model, capability requirements, intelligence/price limits and OpenRouter connection. The saved default was not changed.", inReplyTo: triggerEvent.id } });
+        await emitTurnEvent("agent.turn.completed", { reason: "task-model-unavailable" });
+        return done();
+      }
+    }
     const channelRecord = await input.api.getChannelRecord(channelId);
     const soul = typeof agent.soulContents === "string" ? agent.soulContents : "";
     const resolvedSkillRoots = (() => {
@@ -917,6 +940,16 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       ...currentEventMessages,
     ];
 
+    // Capability routing is independent of the classifier, including images in history.
+    if (!automatic && !taskOverride && hasImageParts(invokeMessages) && agent.modelCapabilities?.imageInput !== true) {
+      automatic = automaticTaskModel(agent, channelId, process.env, taskRoutingRequest(triggerEvent), true);
+      if (automatic) {
+        agent = automatic.agent;
+        await emitTurnEvent('agent.turn.phase', {phase:'task-model-routing', modelId:agent.modelId,
+          detail:'Image-capable routing for this task'});
+      }
+    }
+
     if (shouldEmitAuditEvents(agent)) {
       await bestEffort("runner.prompt.telemetry_failed", async () => {
         await input.api.emitEvent({
@@ -1100,6 +1133,8 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
     const pullInjected = async (
       args: Parameters<typeof pullInjectedEventMessages>[0],
     ) => {
+      // An overridden task cannot absorb a later human request under its temporary model.
+      if (taskOverride || taskRoutingRequest(triggerEvent)) return null;
       const injected = await pullInjectedEventMessages(args);
       if (injected) rememberInjected(injected.events);
       return injected;
@@ -1214,6 +1249,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
             openaiCompatibleReasoningEffort:
               agent.openaiCompatibleReasoningEffort ?? undefined,
             env: injectionEnv,
+            openrouterRouting: automatic?.routing,
             pullMessages: async () => {
               const injected = await pullInjected({
                 apiFetch: input.api.apiFetch,
@@ -1232,6 +1268,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         );
       } catch (error) {
         if (
+          !automatic &&
           !imagesUnsupported &&
           !imageRetryUsed &&
           isImageInputRejected(error) &&
@@ -1258,11 +1295,15 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         });
         continue;
       }
+      if (automatic && result.modelId) {
+        await emitTurnEvent("agent.turn.phase", {phase:"task-model-selected",modelId:result.modelId,
+          detail:`Automatic routing used ${result.modelId}`,attempt});
+      }
       if (result.usage) {
         await recordLlmUsage(input.api.apiFetch, {
           channelId,
           agentName: agent.name,
-          modelId: agent.modelId,
+          modelId: result.modelId ?? agent.modelId,
           runtime: "classic",
           purpose: "turn",
           triggerEventId: triggerEvent.id,
@@ -1526,6 +1567,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
                   openaiCompatibleReasoningEffort:
                     agent.openaiCompatibleReasoningEffort ?? undefined,
                   env: injectionEnv,
+                  openrouterRouting: automatic?.routing,
                   abortSignal: AbortSignal.timeout(finalSummaryTimeoutMs),
                 },
               ),
@@ -1536,7 +1578,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
               await recordLlmUsage(input.api.apiFetch, {
                 channelId,
                 agentName: agent.name,
-                modelId: agent.modelId,
+                modelId: summary.modelId ?? agent.modelId,
                 runtime: "classic",
                 purpose: "turn",
                 triggerEventId: triggerEvent.id,

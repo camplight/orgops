@@ -443,10 +443,10 @@ describe("CLASSIC image attachments", () => {
     createdAt: 1_000,
     payload: { text: "what is in this picture?", attachments: [{ fileId: "img-1", mime: "image/png" }] },
   };
-  const imageTurn = (agentOverrides: Partial<Agent> = {}) =>
+  const imageTurn = (agentOverrides: Partial<Agent> = {}, taskRouting?: {tier:string;reason:string}) =>
     setup({
       agentOverrides: { memoryContextMode: "FULL_CHANNEL_EVENTS", ...agentOverrides },
-      events: [imageMessage],
+      events: [{...imageMessage,payload:{...(imageMessage.payload as Record<string,unknown>),...(taskRouting?{taskRouting}:{})}}],
       pendingEventBatches: [[], [imageMessage], [], [], []],
       fetch: (path) =>
         path === "/api/files/img-1"
@@ -454,6 +454,34 @@ describe("CLASSIC image attachments", () => {
           : undefined,
     });
   const hasImage = (messages: unknown) => JSON.stringify(messages).includes('"type":"image"');
+
+  it.each([undefined, {tier:"routine",reason:"classified"}, {tier:"default",reason:"unavailable"}])("routes images independently of classification: %j", async (taskRouting) => {
+    const previous=process.env.ORGOPS_TASK_MODEL_ROUTING;
+    process.env.ORGOPS_TASK_MODEL_ROUTING='openrouter-auto';
+    try {
+      const ctx=imageTurn({modelId:'openrouter:z-ai/glm-5.3',modelCapabilities:{imageInput:false}},taskRouting);
+      vi.mocked(generate).mockImplementationOnce(async(model,messages,options)=>{
+        expect(model).toBe('openrouter:openrouter/auto');
+        expect(hasImage(messages)).toBe(true);
+        expect(options?.openrouterRouting).toMatchObject({costTier:'medium',sessionId:JSON.stringify(['tester','chat'])});
+        return {text:JSON.stringify({turnStatus:'WORK_FULLY_COMPLETE',type:'message.created',payload:{text:'The image contains a diagram.'}}),modelId:'openrouter:test/vision',toolCalls:[],toolResults:[]};
+      });
+      await ctx.run();
+      expect(generate).toHaveBeenCalledTimes(1);
+      expect(ctx.emitted.some(event=>event.payload?.phase==='task-model-selected' && event.payload.modelId==='openrouter:test/vision')).toBe(true);
+    } finally {if(previous===undefined)delete process.env.ORGOPS_TASK_MODEL_ROUTING;else process.env.ORGOPS_TASK_MODEL_ROUTING=previous;}
+  });
+
+  it("never strips an image and retries when automatic routing rejects it", async()=>{
+    const previous=process.env.ORGOPS_TASK_MODEL_ROUTING;
+    process.env.ORGOPS_TASK_MODEL_ROUTING='openrouter-auto';
+    try {
+      const ctx=imageTurn({modelId:'openrouter:z-ai/glm-5.3',modelCapabilities:{imageInput:false}});
+      vi.mocked(generate).mockRejectedValueOnce(new Error('No endpoints found that support image input'));
+      await expect(ctx.run()).rejects.toThrow('image input');
+      expect(generate).toHaveBeenCalledTimes(1);
+    } finally {if(previous===undefined)delete process.env.ORGOPS_TASK_MODEL_ROUTING;else process.env.ORGOPS_TASK_MODEL_ROUTING=previous;}
+  });
 
   it("retries without images when the provider rejects image input, and says why", async () => {
     const ctx = imageTurn();

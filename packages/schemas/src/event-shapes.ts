@@ -1,3 +1,4 @@
+import { TaskModelSchema, TaskRoutingSchema } from "./task-model";
 import { z } from "zod";
 
 export type EventDraft = {
@@ -114,6 +115,8 @@ const coreEventShapes: EventShapeDefinition[] = [
       payload: z
         .object({
           text: z.string().min(1),
+          taskModel: TaskModelSchema.optional(),
+          taskRouting: TaskRoutingSchema.optional(),
           eventType: z.string().min(1).optional(),
           targetAgentNames: targetAgentNamesSchema,
           sensitive: z

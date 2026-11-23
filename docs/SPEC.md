@@ -1270,3 +1270,106 @@ must configure their own compatible policy at their deployment boundary; see
 `docs/DEPLOYMENT_SECURITY.md`. An API middleware cannot fix a host nginx rule that
 routes `/health` to the SPA, and shipping a controller source file does not install
 it on a host.
+
+### Task-scoped OpenRouter model requests
+
+A human `message.created` may include `payload.taskModel` for a CLASSIC agent:
+
+```json
+{"agentName":"PuffVitaliy","mode":"manual","modelId":"openrouter:vendor/model"}
+```
+
+Or request deterministic cost/intelligence routing:
+
+```json
+{"agentName":"PuffVitaliy","mode":"economy","minIntelligence":70,"maxPricePerMillion":2,"minContextTokens":32000}
+```
+
+The requesting human must be allowed to manage that agent. Scoped runner tokens
+cannot create these requests; a global integration acting for a human is checked
+against that human's authority. Scheduled edits receive the same checks. WRAPPED
+and RLM_REPL modes are explicitly unsupported. Existing messages are unchanged.
+
+The runner isolates each override message as its own turn and applies a local
+agent copy. Later pending messages wait for a new turn; ordinary burst batching
+continues on either side. Mid-turn injection also stops at an override boundary.
+No agent model row is updated, so concurrent channels and later chats retain the
+saved default without a revert race. An event retry re-evaluates routing against
+current provider metadata; it does not preserve a historical price quote.
+
+Routing fetches OpenRouter's model catalog and (for economy requests) its
+Artificial Analysis intelligence benchmarks, with eight-second request deadlines.
+It first filters tool support, image input when the triggering message attaches an
+image, and minimum context. Economy then removes dominated cost/intelligence
+points and selects the cheapest remaining point satisfying the supplied quality
+floor and price ceiling, breaking ties by intelligence then ID. Price means an
+explicit 3:1 input/output blend in USD per million tokens, **not a total task
+spending cap**. This is benchmark-based selection, not a claim to predict a task's
+actual reasoning quality or latency. Unknown prices/scores and ambiguous scores
+are excluded from economy selection. Manual requests still require capabilities.
+Only ordinary OpenRouter slugs are accepted; dynamic variants are not supported.
+
+An unavailable provider, incompatible model, missing credentials, or empty frontier
+ends the request with a clear message; it does not silently run another model.
+Selected model/score/estimated price are recorded in `agent.turn.phase` with
+`phase=task-model-selected`. Saved model capability and reasoning overrides are
+not inherited by a different task model. No additional credentials are granted.
+Provider metadata is advisory: a provider can still reject a request after selection.
+Older/history images are subject to the existing image-rejection recovery behavior.
+
+#### Automatic routing for ordinary turns
+
+Set `ORGOPS_TASK_MODEL_ROUTING=openrouter-auto` on the runner to route native
+CLASSIC OpenRouter turns automatically. No message field or command is required.
+The runner creates a local agent copy targeting `openrouter:openrouter/auto`,
+with image/tool input enabled and the existing context budget. Saved defaults,
+skills and credentials are unchanged. Explicit taskModel requests take precedence;
+WRAPPED, RLM_REPL and non-OpenRouter models are unaffected. The host can disable
+this with `ORGOPS_TASK_MODEL_ROUTING=off`.
+
+OpenRouter's managed router evaluates capabilities, task difficulty and progress
+before selecting a model/effort. OrgOps sends the full supported image/tool input,
+a session key scoped to agent and channel, and `require_parameters=true`.
+`ORGOPS_TASK_MODEL_COST_TIER` defaults to `medium` (low/medium/high/xhigh/max);
+`ORGOPS_TASK_MODEL_ALLOWED_MODELS` optionally supplies comma-separated hard model
+restrictions. Account provider/privacy/budget restrictions still apply. A cost tier
+is not a task budget, quality guarantee or proof of mathematical Pareto optimality.
+These are server settings, never accepted as instructions from message content.
+
+Routing is delegated per provider request, including tool-loop steps, rather than
+pinning a concrete model for a whole task. Session stickiness is provider-managed;
+a retry can select a different endpoint. Native turn budgets remain bounded; no
+new retry/replay loop is added. Automatic turns do not retry an unsupported image
+as text-only, because that would discard the user's requested input. Provider
+errors follow normal runner failure handling. Audio/video/document support remains
+limited by the runner's existing attachment ingestion; enabling a router does not
+add new media transports.
+
+`agent.turn.phase` records automatic routing activation and the concrete serving
+model when returned by the SDK; usage uses that model ID. Multi-step SDK accounting
+retains the existing last-step usage behavior. This implementation does not create
+a separate planning/execution scheduler or prove cost/latency savings; the managed
+router can adapt effort/models across requests, not create OrgOps child tasks.
+
+Research: [Auto Router](https://openrouter.ai/docs/guides/routing/routers/auto-router),
+[Jev Router](https://openrouter.ai/docs/guides/routing/routers/jev-router), and
+[TypeSafe](https://docs.typesafe.ai/introduction), reviewed 2026-11-23.
+Auto Router's hard allowed-model policy is preferred over Jev Router's documented
+include-preference fallback. No new TypeSafe key or decision-service deployment is
+required. Provider performance claims have not been independently benchmarked here.
+
+
+#### Product task-complexity hints
+
+`message.created.payload.taskRouting` accepts a bounded tier (`routine`, `standard`,
+`complex`, `default`), reason and optional confidence. The runner honors only human
+message hints and only within its enabled automatic OpenRouter policy. It is not a
+model ID, credential, grant or spending authorization. Explicit owner-authorized
+`taskModel` still takes precedence. Each hinted task is a batching/injection boundary.
+Routine/default text tasks retain the saved model; standard tasks use the configured
+Auto Router tier, complex tasks use `ORGOPS_TASK_MODEL_COMPLEX_COST_TIER` (high by
+default). Images in the composed context still trigger capability routing when the
+saved model does not declare vision. Classifier failure must be represented as
+`default`, not a failed turn. Existing `ORGOPS_TASK_MODEL_ALLOWED_MODELS` remains a
+hard restriction across tiers. No hint rewrites agent state or replays tool calls.
+The classification service itself belongs to the consuming product, not OrgOps.

@@ -66,3 +66,5 @@ export const AuthLoginSchema = z.object({
 export type EventInput = z.infer<typeof EventSchema>;
 export type AgentInput = z.infer<typeof AgentSchema>;
 export type ModelInput = z.infer<typeof ModelSchema>;
+
+export { TaskModelSchema, TaskRoutingSchema, type TaskRouting, type TaskModel } from "./task-model";
