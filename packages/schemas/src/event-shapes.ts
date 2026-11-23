@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 export type EventDraft = {
   type: string;
@@ -961,7 +960,7 @@ export function getCoreEventShapes(): EventShapeDefinition[] {
   return coreEventShapes;
 }
 
-function formatIssues(prefix: string, result: z.SafeParseError<unknown>): string[] {
+function formatIssues(prefix: string, result: z.ZodSafeParseError<unknown>): string[] {
   return result.error.issues.map((issue) => {
     const path = issue.path.length > 0 ? issue.path.join(".") : "<root>";
     return `${prefix}${path}: ${issue.message}`;
@@ -1020,15 +1019,11 @@ export function validateEventAgainstShapes(
 export function serializeEventShapes(
   definitions: EventShapeDefinition[],
 ): EventTypeSummary[] {
-  const schemaName = (type: string, kind: "event" | "payload") =>
-    `${type.replace(/[^a-zA-Z0-9_]/g, "_")}_${kind}`;
-  const schemaToJson = (
-    schema: z.ZodTypeAny,
-    type: string,
-    kind: "event" | "payload",
-  ): unknown => {
+  // Agents read these schemas to know what to send, so describe the input side
+  // (fields with defaults are optional) and degrade unrepresentable parts to {}.
+  const schemaToJson = (schema: z.ZodTypeAny): unknown => {
     try {
-      return zodToJsonSchema(schema, schemaName(type, kind));
+      return z.toJSONSchema(schema, { io: "input", unrepresentable: "any" });
     } catch {
       return { error: "schema_serialization_failed" };
     }
@@ -1041,13 +1036,13 @@ export function serializeEventShapes(
     ...(definition.eventSchema
       ? {
           schemaKind: "event" as const,
-          schema: schemaToJson(definition.eventSchema, definition.type, "event"),
+          schema: schemaToJson(definition.eventSchema),
         }
       : {}),
     ...(definition.payloadSchema
       ? {
           schemaKind: "payload" as const,
-          schema: schemaToJson(definition.payloadSchema, definition.type, "payload"),
+          schema: schemaToJson(definition.payloadSchema),
         }
       : {}),
   }));
