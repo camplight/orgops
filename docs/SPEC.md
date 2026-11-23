@@ -1316,3 +1316,26 @@ Selected model/score/estimated price are recorded in `agent.turn.phase` with
 not inherited by a different task model. No additional credentials are granted.
 Provider metadata is advisory: a provider can still reject a request after selection.
 Older/history images are subject to the existing image-rejection recovery behavior.
+
+#### Product problem and automatic routing follow-up
+
+The motivating failure is a personal agent receiving an image while its saved
+model only supports text. Provider rejection stops the task; changing the saved
+model to recover also affects unrelated chats. The task-scoped API above prevents
+that global switch/revert race, but does not itself make routing automatic.
+
+[Nest #97](https://github.com/camplight/nest/pull/97) now proposes an ordinary-chat
+experience with no model command. Automatic decisions should belong to OrgOps:
+capability requirements first, retain a suitable default, then apply task/stage
+quality floors and owner-controlled cost/model policy before Pareto selection.
+Image, audio, video and document requirements must be distinguished. A complex
+planning stage may use a stronger model and hand validated work to cheaper
+execution stages; that stage router and quality-based escalation are not yet
+implemented here.
+
+The explicit API's agent-management check is not a complete automatic-routing
+policy for teammate-triggered turns. That follow-up must preserve ordinary chat
+access and existing grants while enforcing the owner's routing policy server-side.
+It also needs stable run decisions across retries, bounded escalation without
+replaying external tool writes, cache freshness rules and correlated actual usage.
+Use existing decision/usage events before introducing a separate audit table.
