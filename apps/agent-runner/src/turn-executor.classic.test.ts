@@ -443,10 +443,10 @@ describe("CLASSIC image attachments", () => {
     createdAt: 1_000,
     payload: { text: "what is in this picture?", attachments: [{ fileId: "img-1", mime: "image/png" }] },
   };
-  const imageTurn = (agentOverrides: Partial<Agent> = {}) =>
+  const imageTurn = (agentOverrides: Partial<Agent> = {}, taskRouting?: {tier:string;reason:string}) =>
     setup({
       agentOverrides: { memoryContextMode: "FULL_CHANNEL_EVENTS", ...agentOverrides },
-      events: [imageMessage],
+      events: [{...imageMessage,payload:{...imageMessage.payload,...(taskRouting?{taskRouting}:{})}}],
       pendingEventBatches: [[], [imageMessage], [], [], []],
       fetch: (path) =>
         path === "/api/files/img-1"
@@ -455,11 +455,11 @@ describe("CLASSIC image attachments", () => {
     });
   const hasImage = (messages: unknown) => JSON.stringify(messages).includes('"type":"image"');
 
-  it("automatically routes an ordinary image message despite a text-only saved default", async () => {
+  it.each([undefined, {tier:"routine",reason:"classified"}, {tier:"default",reason:"unavailable"}])("routes images independently of classification: %j", async (taskRouting) => {
     const previous=process.env.ORGOPS_TASK_MODEL_ROUTING;
     process.env.ORGOPS_TASK_MODEL_ROUTING='openrouter-auto';
     try {
-      const ctx=imageTurn({modelId:'openrouter:z-ai/glm-5.3',modelCapabilities:{imageInput:false}});
+      const ctx=imageTurn({modelId:'openrouter:z-ai/glm-5.3',modelCapabilities:{imageInput:false}},taskRouting);
       vi.mocked(generate).mockImplementationOnce(async(model,messages,options)=>{
         expect(model).toBe('openrouter:openrouter/auto');
         expect(hasImage(messages)).toBe(true);
