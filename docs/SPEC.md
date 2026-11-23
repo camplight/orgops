@@ -1317,25 +1317,43 @@ not inherited by a different task model. No additional credentials are granted.
 Provider metadata is advisory: a provider can still reject a request after selection.
 Older/history images are subject to the existing image-rejection recovery behavior.
 
-#### Product problem and automatic routing follow-up
+#### Automatic routing for ordinary turns
 
-The motivating failure is a personal agent receiving an image while its saved
-model only supports text. Provider rejection stops the task; changing the saved
-model to recover also affects unrelated chats. The task-scoped API above prevents
-that global switch/revert race, but does not itself make routing automatic.
+Set `ORGOPS_TASK_MODEL_ROUTING=openrouter-auto` on the runner to route native
+CLASSIC OpenRouter turns automatically. No message field or command is required.
+The runner creates a local agent copy targeting `openrouter:openrouter/auto`,
+with image/tool input enabled and the existing context budget. Saved defaults,
+skills and credentials are unchanged. Explicit taskModel requests take precedence;
+WRAPPED, RLM_REPL and non-OpenRouter models are unaffected. The host can disable
+this with `ORGOPS_TASK_MODEL_ROUTING=off`.
 
-[Nest #97](https://github.com/camplight/nest/pull/97) now proposes an ordinary-chat
-experience with no model command. Automatic decisions should belong to OrgOps:
-capability requirements first, retain a suitable default, then apply task/stage
-quality floors and owner-controlled cost/model policy before Pareto selection.
-Image, audio, video and document requirements must be distinguished. A complex
-planning stage may use a stronger model and hand validated work to cheaper
-execution stages; that stage router and quality-based escalation are not yet
-implemented here.
+OpenRouter's managed router evaluates capabilities, task difficulty and progress
+before selecting a model/effort. OrgOps sends the full supported image/tool input,
+a session key scoped to agent and channel, and `require_parameters=true`.
+`ORGOPS_TASK_MODEL_COST_TIER` defaults to `medium` (low/medium/high/xhigh/max);
+`ORGOPS_TASK_MODEL_ALLOWED_MODELS` optionally supplies comma-separated hard model
+restrictions. Account provider/privacy/budget restrictions still apply. A cost tier
+is not a task budget, quality guarantee or proof of mathematical Pareto optimality.
+These are server settings, never accepted as instructions from message content.
 
-The explicit API's agent-management check is not a complete automatic-routing
-policy for teammate-triggered turns. That follow-up must preserve ordinary chat
-access and existing grants while enforcing the owner's routing policy server-side.
-It also needs stable run decisions across retries, bounded escalation without
-replaying external tool writes, cache freshness rules and correlated actual usage.
-Use existing decision/usage events before introducing a separate audit table.
+Routing is delegated per provider request, including tool-loop steps, rather than
+pinning a concrete model for a whole task. Session stickiness is provider-managed;
+a retry can select a different endpoint. Native turn budgets remain bounded; no
+new retry/replay loop is added. Automatic turns do not retry an unsupported image
+as text-only, because that would discard the user's requested input. Provider
+errors follow normal runner failure handling. Audio/video/document support remains
+limited by the runner's existing attachment ingestion; enabling a router does not
+add new media transports.
+
+`agent.turn.phase` records automatic routing activation and the concrete serving
+model when returned by the SDK; usage uses that model ID. Multi-step SDK accounting
+retains the existing last-step usage behavior. This implementation does not create
+a separate planning/execution scheduler or prove cost/latency savings; the managed
+router can adapt effort/models across requests, not create OrgOps child tasks.
+
+Research: [Auto Router](https://openrouter.ai/docs/guides/routing/routers/auto-router),
+[Jev Router](https://openrouter.ai/docs/guides/routing/routers/jev-router), and
+[TypeSafe](https://docs.typesafe.ai/introduction), reviewed 2026-11-23.
+Auto Router's hard allowed-model policy is preferred over Jev Router's documented
+include-preference fallback. No new TypeSafe key or decision-service deployment is
+required. Provider performance claims have not been independently benchmarked here.

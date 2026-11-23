@@ -35,7 +35,29 @@ export type LlmMessageContent = LlmMessage["content"];
 export type LlmStyle = "DO" | "THINK";
 export type OpenAICompatibleReasoningEffort = "minimal" | "low" | "medium" | "high";
 
+export type OpenRouterRouting = {
+  sessionId: string;
+  costTier: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  allowedModels?: string[];
+};
+
+/** Add provider routing controls after the OpenAI SDK has serialized the request. */
+export function routingFetch(routing: OpenRouterRouting, transport: typeof fetch = fetch): typeof fetch {
+  return async (url, init) => {
+    if (typeof init?.body !== 'string') throw Error('Expected a serialized OpenRouter request.');
+    const body = JSON.parse(init.body);
+    if (body.model !== 'openrouter/auto') throw Error('Automatic routing requires openrouter/auto.');
+    body.plugins = [{id:'auto-router',cost_tier:routing.costTier,
+      ...(routing.allowedModels ? {allowed_models:routing.allowedModels} : {})}];
+    body.session_id = routing.sessionId;
+    // Do not accept an endpoint that ignores tool or other required parameters.
+    body.provider = {...body.provider,require_parameters:true};
+    return transport(url,{...init,body:JSON.stringify(body)});
+  };
+}
+
 export type GenerateOptions = {
+  openrouterRouting?: OpenRouterRouting;
   temperature?: number;
   maxTokens?: number;
   /** Maximum tool-loop steps for AI SDK generateText. */
@@ -65,6 +87,8 @@ export type LlmUsage = {
 };
 
 export type GenerateResult = {
+  /** Concrete serving model, when reported by the provider. */
+  modelId?: string;
   text: string;
   /** Assistant/tool history for a bounded, tool-free final summary. */
   responseMessages?: LlmMessage[];
@@ -413,6 +437,7 @@ export async function generate(
     const openrouter = createOpenAI({
       apiKey: env.OPENROUTER_API_KEY,
       baseURL: env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1",
+      ...(options.openrouterRouting ? {fetch:routingFetch(options.openrouterRouting)} : {}),
       headers: {
         ...(env.OPENROUTER_HTTP_REFERER ? { "HTTP-Referer": env.OPENROUTER_HTTP_REFERER } : {}),
         ...(env.OPENROUTER_APP_TITLE ? { "X-Title": env.OPENROUTER_APP_TITLE } : {}),
@@ -492,6 +517,7 @@ export async function generate(
   });
   return {
     text: result.text,
+    modelId: result.response?.modelId ? `${provider}:${result.response.modelId}` : undefined,
     responseMessages: result.response?.messages,
     toolCalls: (result as { toolCalls?: unknown[] }).toolCalls,
     toolResults: (result as { toolResults?: unknown[] }).toolResults,

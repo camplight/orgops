@@ -1,3 +1,4 @@
+import { automaticTaskModel } from "./automatic-model";
 import { resolveTaskModel, taskModelRequest } from "./task-model";
 import { arch, hostname, release } from "node:os";
 import { join } from "node:path";
@@ -649,6 +650,13 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
     }
     const injectionEnv = await input.api.getPackageSecretsEnv(agent.name, channelId);
     const taskOverride = taskModelRequest(agent, triggerEvent);
+    const automatic = !taskOverride ? automaticTaskModel(agent, channelId) : undefined;
+    if (automatic) {
+      const savedModelId = agent.modelId;
+      agent = automatic.agent;
+      await emitTurnEvent("agent.turn.phase", {phase:"task-model-routing",modelId:agent.modelId,
+        savedModelId,detail:"Automatic model selection for this run"});
+    }
     if (taskOverride) {
       try {
         const resolved = await resolveTaskModel(agent, triggerEvent, injectionEnv);
@@ -1231,6 +1239,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
             openaiCompatibleReasoningEffort:
               agent.openaiCompatibleReasoningEffort ?? undefined,
             env: injectionEnv,
+            openrouterRouting: automatic?.routing,
             pullMessages: async () => {
               const injected = await pullInjected({
                 apiFetch: input.api.apiFetch,
@@ -1249,6 +1258,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         );
       } catch (error) {
         if (
+          !automatic &&
           !imagesUnsupported &&
           !imageRetryUsed &&
           isImageInputRejected(error) &&
@@ -1275,11 +1285,15 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         });
         continue;
       }
+      if (automatic && result.modelId) {
+        await emitTurnEvent("agent.turn.phase", {phase:"task-model-selected",modelId:result.modelId,
+          detail:`Automatic routing used ${result.modelId}`,attempt});
+      }
       if (result.usage) {
         await recordLlmUsage(input.api.apiFetch, {
           channelId,
           agentName: agent.name,
-          modelId: agent.modelId,
+          modelId: result.modelId ?? agent.modelId,
           runtime: "classic",
           purpose: "turn",
           triggerEventId: triggerEvent.id,
@@ -1543,6 +1557,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
                   openaiCompatibleReasoningEffort:
                     agent.openaiCompatibleReasoningEffort ?? undefined,
                   env: injectionEnv,
+                  openrouterRouting: automatic?.routing,
                   abortSignal: AbortSignal.timeout(finalSummaryTimeoutMs),
                 },
               ),
@@ -1553,7 +1568,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
               await recordLlmUsage(input.api.apiFetch, {
                 channelId,
                 agentName: agent.name,
-                modelId: agent.modelId,
+                modelId: summary.modelId ?? agent.modelId,
                 runtime: "classic",
                 purpose: "turn",
                 triggerEventId: triggerEvent.id,
