@@ -38,9 +38,10 @@ Every agent has a workspace directory on its runner host, managed under
 
 Paths are canonicalized and symlink escapes are rejected.
 
-!!! warning "Not a sandbox"
-    These checks restrict OrgOps' file tools. Shell commands still run with the runner's
-    OS user. Use separate runners, containers or VMs when you need real isolation.
+::: warning Not a sandbox
+These checks restrict OrgOps' file tools. Shell commands still run with the runner's
+OS user. Use separate runners, containers or VMs when you need real isolation.
+:::
 
 ## Tools available to native agents
 

@@ -1,6 +1,6 @@
 # HTTP and WebSocket API
 
-This page summarizes the API surface. The [implementation spec](../SPEC.md#http-api-surface)
+This page summarizes the API surface. The [implementation spec](https://github.com/camplight/orgops/blob/main/docs/SPEC.md#http-api-surface)
 lists every endpoint with its exact behaviour.
 
 ## Authentication

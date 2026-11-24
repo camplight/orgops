@@ -10,5 +10,4 @@ memory/
 .release-tmp
 .agent-runner-id
 .opscli-output.log
-.venv
-/site
+**/.vitepress/cache

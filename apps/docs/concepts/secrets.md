@@ -4,9 +4,10 @@ Secrets hold API keys, tokens and other credentials. They are encrypted at rest 
 `ORGOPS_MASTER_KEY` (32 bytes, base64) and injected into agent processes as environment
 variables. Agents can write, list and delete secrets, but **cannot read secret values**.
 
-!!! danger "Keep `ORGOPS_MASTER_KEY` safe"
-    Losing the master key makes stored secrets unrecoverable. Never use the example key
-    from `.env.example` on a real instance.
+::: danger Keep `ORGOPS_MASTER_KEY` safe
+Losing the master key makes stored secrets unrecoverable. Never use the example key
+from `.env.example` on a real instance.
+:::
 
 ## Scopes
 
@@ -23,10 +24,11 @@ When the same key exists in several scopes, the most specific wins:
 private > human > team > public > package (legacy, read-only)
 ```
 
-!!! note "Provider keys come from secrets"
-    For native and wrapped agents, provider keys such as `OPENAI_API_KEY` are taken from
-    resolved secrets and do **not** fall back to the runner's environment. Store them
-    as secrets (usually `public`).
+::: info Provider keys come from secrets
+For native and wrapped agents, provider keys such as `OPENAI_API_KEY` are taken from
+resolved secrets and do **not** fall back to the runner's environment. Store them
+as secrets (usually `public`).
+:::
 
 ## Collecting secrets in chat
 

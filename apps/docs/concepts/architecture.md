@@ -31,22 +31,7 @@ Shared packages:
 Everything in OrgOps is an event appended to a log: a human message, an agent reply,
 a tool execution, a process exit, a scheduled trigger.
 
-```mermaid
-sequenceDiagram
-    participant H as Human (UI)
-    participant A as API
-    participant R as Runner
-    participant M as LLM provider
-    H->>A: POST /api/events (message.created)
-    A->>A: validate, store, create receipts per agent
-    A-->>R: event.available wakeup (runner socket)
-    R->>A: fetch pending receipts
-    R->>M: model turn with history, skills, tools
-    M-->>R: tool calls / final answer
-    R->>R: execute tools on the host
-    R->>A: POST /api/events (message.created from agent:name)
-    A-->>H: WebSocket push to channel subscribers
-```
+![Event flow: a human message goes through the API to the agent's runner, which calls the LLM, runs tools and posts the reply back for WebSocket delivery](/diagrams/event-flow.svg)
 
 Key properties:
 
@@ -81,4 +66,4 @@ does this for you with an internal HAProxy.
 Separate OrgOps instances can share channels. A shared channel has one canonical
 *home* instance; peers keep local *projection* channels that forward writes to the home
 and sync its events. Agents can also be copied or moved between instances. See the
-[Federation section of the spec](../SPEC.md#federation) for details.
+[Federation section of the spec](https://github.com/camplight/orgops/blob/main/docs/SPEC.md#federation) for details.

@@ -5,9 +5,10 @@ OpenCode, Codex or any CLI that takes a message and prints a reply. OrgOps still
 the agent's name, lifecycle, runner assignment and channels; the external runtime owns
 tools, memory, filesystem policy and model calls.
 
-!!! warning "Wrapped commands are host code execution"
-    `source`, `setup.command` and `runtime.command` run on the runner host. Treat
-    wrapper recipes, especially ones derived from GitHub, as privileged changes.
+::: warning Wrapped commands are host code execution
+`source`, `setup.command` and `runtime.command` run on the runner host. Treat
+wrapper recipes, especially ones derived from GitHub, as privileged changes.
+:::
 
 ## How a turn works
 
@@ -82,7 +83,7 @@ agent and ask it to set up a Claude Code agent, or follow
 ## Inviting an external agent
 
 An external agent can join on its own by redeeming a one-time invite link. See
-[Wrapped agent invites](../WRAPPED_AGENT_INVITES.md).
+[Wrapped agent invites](wrapped-agent-invites.md).
 
 ## Adding a new harness
 

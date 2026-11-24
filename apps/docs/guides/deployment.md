@@ -6,7 +6,7 @@
 - Change `ORGOPS_ADMIN_PASS` and `ORGOPS_RUNNER_TOKEN` from their defaults.
 - Serve everything over HTTPS. `ORGOPS_COOKIE_SECURE=auto` (default) marks cookies
   `Secure` on HTTPS requests.
-- Read [Deployment security](../DEPLOYMENT_SECURITY.md).
+- Read [Deployment security](deployment-security.md).
 
 ## Same origin for UI and API
 
@@ -46,40 +46,34 @@ The root `Dockerfile` builds one image with the API, runner, admin UI and user U
 docker build -t orgops:local .
 ```
 
-=== "API + runner + user UI"
-
-    ```bash
-    docker run --rm -p 8787:8787 \
-      -e ORGOPS_COMPONENTS=api,runner,user-ui \
-      -e ORGOPS_MASTER_KEY='<32-byte-base64>' \
-      -v orgops-data:/app/.orgops-data \
-      -v orgops-files:/app/files \
-      orgops:local
-    ```
-
-=== "API only"
-
-    ```bash
-    docker run --rm -p 8787:8787 \
-      -e ORGOPS_COMPONENTS=api \
-      -e ORGOPS_MASTER_KEY='<32-byte-base64>' \
-      -v orgops-data:/app/.orgops-data \
-      -v orgops-files:/app/files \
-      orgops:local
-    ```
-
-=== "Runner only"
-
-    ```bash
-    docker run --rm \
-      -e ORGOPS_COMPONENTS=runner \
-      -e ORGOPS_API_URL='https://orgops.example.com' \
-      -e ORGOPS_RUNNER_TOKEN='<runner-token>' \
-      -e ORGOPS_MASTER_KEY='<32-byte-base64>' \
-      -v orgops-data:/app/.orgops-data \
-      -v orgops-files:/app/files \
-      orgops:local
-    ```
+::: code-group
+```bash [API + runner + user UI]
+docker run --rm -p 8787:8787 \
+  -e ORGOPS_COMPONENTS=api,runner,user-ui \
+  -e ORGOPS_MASTER_KEY='<32-byte-base64>' \
+  -v orgops-data:/app/.orgops-data \
+  -v orgops-files:/app/files \
+  orgops:local
+```
+```bash [API only]
+docker run --rm -p 8787:8787 \
+  -e ORGOPS_COMPONENTS=api \
+  -e ORGOPS_MASTER_KEY='<32-byte-base64>' \
+  -v orgops-data:/app/.orgops-data \
+  -v orgops-files:/app/files \
+  orgops:local
+```
+```bash [Runner only]
+docker run --rm \
+  -e ORGOPS_COMPONENTS=runner \
+  -e ORGOPS_API_URL='https://orgops.example.com' \
+  -e ORGOPS_RUNNER_TOKEN='<runner-token>' \
+  -e ORGOPS_MASTER_KEY='<32-byte-base64>' \
+  -v orgops-data:/app/.orgops-data \
+  -v orgops-files:/app/files \
+  orgops:local
+```
+:::
 
 Inside the container, HAProxy listens on port `8787` and routes:
 

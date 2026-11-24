@@ -26,9 +26,10 @@ npm install
 cp .env.example .env
 ```
 
-!!! warning "Do not overwrite an existing `.env`"
-    Nearly every script loads `.env`. If you already have one, keep it and only add
-    the keys you are missing. Use `.env.example` as a reference.
+::: warning Do not overwrite an existing `.env`
+Nearly every script loads `.env`. If you already have one, keep it and only add
+the keys you are missing. Use `.env.example` as a reference.
+:::
 
 The example `.env` contains a development `ORGOPS_MASTER_KEY`. Generate your own for any
 instance that stores real secrets:
@@ -53,9 +54,10 @@ Sign in with `admin` / `admin`. These values come from `ORGOPS_ADMIN_USER` and
 `ORGOPS_ADMIN_PASS`, and the admin account is created only when the database has no
 humans yet.
 
-!!! tip "Working without API keys"
-    Set `ORGOPS_LLM_STUB=1` in `.env` to stub all LLM calls. This is useful for UI work
-    and tests.
+::: tip Working without API keys
+Set `ORGOPS_LLM_STUB=1` in `.env` to stub all LLM calls. This is useful for UI work
+and tests.
+:::
 
 ### Useful scripts
 

@@ -60,6 +60,8 @@ Backend apps run TypeScript directly via `tsx` (`node --import tsx`). There is n
 
 `apps/site` is a separate Astro marketing site, unrelated to the runtime.
 
+`apps/docs` is the user-facing VitePress documentation site (`@orgops/docs`). It is follow-up documentation for people, not the spec: `docs/` (`SPEC.md`, `WRAPPED_AGENT_INVITES.md`, …) stays the source of truth, and its paths are referenced by code, so do not move those files.
+
 ### Event flow
 
 Everything is an event. `insertEvent()` in `apps/api/src/app.ts` is the single write path: it assigns a strictly-monotonic `created_at`, writes the `events` row, creates a `PENDING` row in `event_receipts` for **every agent subscribed to the channel**, then publishes to WebSocket topics (`org:events`, `channel:<id>`, and `agent:<name>` for agent-sourced events).

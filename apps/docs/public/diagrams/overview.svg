@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1020 340" width="1020" height="340" role="img" aria-label="OrgOps components: browser UIs and agent runners on separate hosts talk to one central API backed by SQLite; runners call LLM providers" font-family="Inter, ui-sans-serif, system-ui, -apple-system, sans-serif">
+<title>OrgOps components: browser UIs and agent runners on separate hosts talk to one central API backed by SQLite; runners call LLM providers</title>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#67676c"/></marker></defs>
+<rect width="1020" height="340" rx="12" fill="#f6f6f7"/>
+<rect x="20" y="30" width="190" height="280" rx="10" fill="none" stroke="#c2c2c4" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="198" y="50" font-size="12" font-weight="600" text-anchor="end" fill="#67676c">Browser</text>
+<rect x="45" y="90" width="140" height="50" rx="8" fill="#ffffff" stroke="#3451b2" stroke-width="1.5"/>
+<text x="115.0" y="120.0" font-size="14" font-weight="600" text-anchor="middle" fill="#3c3c43">Admin UI</text>
+<rect x="45" y="200" width="140" height="50" rx="8" fill="#ffffff" stroke="#3451b2" stroke-width="1.5"/>
+<text x="115.0" y="230.0" font-size="14" font-weight="600" text-anchor="middle" fill="#3c3c43">User UI</text>
+<rect x="270" y="30" width="230" height="280" rx="10" fill="none" stroke="#c2c2c4" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="488" y="50" font-size="12" font-weight="600" text-anchor="end" fill="#67676c">Central</text>
+<rect x="305" y="80" width="160" height="60" rx="8" fill="#ffffff" stroke="#3451b2" stroke-width="1.5"/>
+<text x="385.0" y="106.0" font-size="14" font-weight="600" text-anchor="middle" fill="#3c3c43">API</text>
+<text x="385.0" y="124.0" font-size="12" font-weight="400" text-anchor="middle" fill="#67676c">HTTP + WebSocket</text>
+<path d="M320,199 a65.0,9 0 0,1 130,0 v56 a65.0,9 0 0,1 -130,0 z" fill="#ffffff" stroke="#3451b2" stroke-width="1.5"/>
+<path d="M320,199 a65.0,9 0 0,0 130,0" fill="none" stroke="#3451b2" stroke-width="1.5"/>
+<text x="385.0" y="227.5" font-size="14" font-weight="600" text-anchor="middle" fill="#3c3c43">SQLite</text>
+<text x="385.0" y="245.5" font-size="12" font-weight="400" text-anchor="middle" fill="#67676c">event log</text>
+<line x1="385" y1="140" x2="385" y2="190" stroke="#67676c" stroke-width="1.5"/>
+<rect x="560" y="30" width="200" height="125" rx="10" fill="none" stroke="#c2c2c4" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="748" y="50" font-size="12" font-weight="600" text-anchor="end" fill="#67676c">Host A</text>
+<rect x="590" y="75" width="140" height="50" rx="8" fill="#ffffff" stroke="#3451b2" stroke-width="1.5"/>
+<text x="660.0" y="105.0" font-size="14" font-weight="600" text-anchor="middle" fill="#3c3c43">agent-runner</text>
+<rect x="560" y="185" width="200" height="125" rx="10" fill="none" stroke="#c2c2c4" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="748" y="205" font-size="12" font-weight="600" text-anchor="end" fill="#67676c">Host B</text>
+<rect x="590" y="230" width="140" height="50" rx="8" fill="#ffffff" stroke="#3451b2" stroke-width="1.5"/>
+<text x="660.0" y="260.0" font-size="14" font-weight="600" text-anchor="middle" fill="#3c3c43">agent-runner</text>
+<path d="M830,141 a82.5,9 0 0,1 165,0 v58 a82.5,9 0 0,1 -165,0 z" fill="#ffffff" stroke="#3451b2" stroke-width="1.5"/>
+<path d="M830,141 a82.5,9 0 0,0 165,0" fill="none" stroke="#3451b2" stroke-width="1.5"/>
+<text x="912.5" y="179.5" font-size="14" font-weight="600" text-anchor="middle" fill="#3c3c43">LLM providers</text>
+<line x1="187" y1="115" x2="303" y2="104" stroke="#67676c" stroke-width="1.5" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+<line x1="187" y1="225" x2="303" y2="124" stroke="#67676c" stroke-width="1.5" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+<line x1="588" y1="100" x2="467" y2="104" stroke="#67676c" stroke-width="1.5" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+<line x1="588" y1="255" x2="467" y2="126" stroke="#67676c" stroke-width="1.5" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+<line x1="732" y1="100" x2="828" y2="158" stroke="#67676c" stroke-width="1.5" marker-end="url(#arrow)"/>
+<line x1="732" y1="255" x2="828" y2="184" stroke="#67676c" stroke-width="1.5" marker-end="url(#arrow)"/>
+</svg>

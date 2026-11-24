@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1020 602" width="1020" height="602" role="img" aria-label="Event flow: a human message goes through the API to the agent's runner, which calls the LLM, runs tools and posts the reply back for WebSocket delivery" font-family="Inter, ui-sans-serif, system-ui, -apple-system, sans-serif">
+<title>Event flow: a human message goes through the API to the agent's runner, which calls the LLM, runs tools and posts the reply back for WebSocket delivery</title>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#67676c"/></marker></defs>
+<rect width="1020" height="602" rx="12" fill="#f6f6f7"/>
+<line x1="120" y1="64" x2="120" y2="586" stroke="#c2c2c4" stroke-width="1.5" stroke-dasharray="4 4"/>
+<rect x="45" y="20" width="150" height="44" rx="8" fill="#ffffff" stroke="#3451b2" stroke-width="1.5"/>
+<text x="120.0" y="47.0" font-size="14" font-weight="600" text-anchor="middle" fill="#3c3c43">Human (UI)</text>
+<line x1="380" y1="64" x2="380" y2="586" stroke="#c2c2c4" stroke-width="1.5" stroke-dasharray="4 4"/>
+<rect x="305" y="20" width="150" height="44" rx="8" fill="#ffffff" stroke="#3451b2" stroke-width="1.5"/>
+<text x="380.0" y="47.0" font-size="14" font-weight="600" text-anchor="middle" fill="#3c3c43">API</text>
+<line x1="640" y1="64" x2="640" y2="586" stroke="#c2c2c4" stroke-width="1.5" stroke-dasharray="4 4"/>
+<rect x="565" y="20" width="150" height="44" rx="8" fill="#ffffff" stroke="#3451b2" stroke-width="1.5"/>
+<text x="640.0" y="47.0" font-size="14" font-weight="600" text-anchor="middle" fill="#3c3c43">Runner</text>
+<line x1="900" y1="64" x2="900" y2="586" stroke="#c2c2c4" stroke-width="1.5" stroke-dasharray="4 4"/>
+<rect x="825" y="20" width="150" height="44" rx="8" fill="#ffffff" stroke="#3451b2" stroke-width="1.5"/>
+<text x="900.0" y="47.0" font-size="14" font-weight="600" text-anchor="middle" fill="#3c3c43">LLM provider</text>
+<line x1="120" y1="118" x2="377" y2="118" stroke="#67676c" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="250.0" y="109" font-size="13" font-weight="400" text-anchor="middle" fill="#3c3c43" paint-order="stroke" stroke="#f6f6f7" stroke-width="5" stroke-linejoin="round">POST /api/events (message.created)</text>
+<path d="M380,168 h40 v18 h-38" fill="none" stroke="#67676c" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="428" y="182" font-size="13" font-weight="400" text-anchor="start" fill="#3c3c43" paint-order="stroke" stroke="#f6f6f7" stroke-width="5" stroke-linejoin="round">validate, store, create receipts per agent</text>
+<line x1="380" y1="240" x2="637" y2="240" stroke="#67676c" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arrow)"/>
+<text x="510.0" y="231" font-size="13" font-weight="400" text-anchor="middle" fill="#3c3c43" paint-order="stroke" stroke="#f6f6f7" stroke-width="5" stroke-linejoin="round">event.available wakeup (runner socket)</text>
+<line x1="640" y1="290" x2="383" y2="290" stroke="#67676c" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="510.0" y="281" font-size="13" font-weight="400" text-anchor="middle" fill="#3c3c43" paint-order="stroke" stroke="#f6f6f7" stroke-width="5" stroke-linejoin="round">fetch pending receipts</text>
+<line x1="640" y1="340" x2="897" y2="340" stroke="#67676c" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="770.0" y="331" font-size="13" font-weight="400" text-anchor="middle" fill="#3c3c43" paint-order="stroke" stroke="#f6f6f7" stroke-width="5" stroke-linejoin="round">model turn with history, skills, tools</text>
+<line x1="900" y1="390" x2="643" y2="390" stroke="#67676c" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arrow)"/>
+<text x="770.0" y="381" font-size="13" font-weight="400" text-anchor="middle" fill="#3c3c43" paint-order="stroke" stroke="#f6f6f7" stroke-width="5" stroke-linejoin="round">tool calls / final answer</text>
+<path d="M640,440 h40 v18 h-38" fill="none" stroke="#67676c" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="688" y="454" font-size="13" font-weight="400" text-anchor="start" fill="#3c3c43" paint-order="stroke" stroke="#f6f6f7" stroke-width="5" stroke-linejoin="round">execute tools on the host</text>
+<line x1="640" y1="512" x2="383" y2="512" stroke="#67676c" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="510.0" y="503" font-size="13" font-weight="400" text-anchor="middle" fill="#3c3c43" paint-order="stroke" stroke="#f6f6f7" stroke-width="5" stroke-linejoin="round">POST /api/events (message.created from agent:name)</text>
+<line x1="380" y1="562" x2="123" y2="562" stroke="#67676c" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arrow)"/>
+<text x="250.0" y="553" font-size="13" font-weight="400" text-anchor="middle" fill="#3c3c43" paint-order="stroke" stroke="#f6f6f7" stroke-width="5" stroke-linejoin="round">WebSocket push to channel subscribers</text>
+</svg>

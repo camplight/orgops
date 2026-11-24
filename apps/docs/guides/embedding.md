@@ -8,9 +8,10 @@ integration key is bound to one agent.
 In the admin UI open **API keys**, create a key for the agent you want to expose and copy
 the token. It is shown **only once**.
 
-!!! tip "Copy prompt"
-    The **Copy prompt** button produces a compact API description with your base URL and
-    agent name. Paste it into the coding agent that builds your integration.
+::: tip Copy prompt
+The **Copy prompt** button produces a compact API description with your base URL and
+agent name. Paste it into the coding agent that builds your integration.
+:::
 
 ## 2. Create a conversation
 

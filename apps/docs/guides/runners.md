@@ -62,7 +62,7 @@ npm run start:runner:env
 | Scoped (minted by redeeming an invite) | One runner ID and, for wrapped agent invites, one agent and approved channels |
 
 Scoped wrapped-agent invites can later be promoted to global or allowed to follow new
-channels. See [Wrapped agent invites](../WRAPPED_AGENT_INVITES.md).
+channels. See [Wrapped agent invites](wrapped-agent-invites.md).
 
 ## Moving agents between runners
 
@@ -70,6 +70,7 @@ Use **Agents → Move** (or the `agents_move` tool) to reassign an agent. Local 
 the workspace path and stop the agent's running processes. Removing a runner unassigns
 all agents pinned to it.
 
-!!! warning "Isolation"
-    Agents run shell commands as the runner's OS user. Run untrusted or experimental
-    agents on dedicated runners, containers or VMs.
+::: warning Isolation
+Agents run shell commands as the runner's OS user. Run untrusted or experimental
+agents on dedicated runners, containers or VMs.
+:::

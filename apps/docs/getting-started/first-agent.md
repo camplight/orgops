@@ -35,9 +35,10 @@ Open **Agents → New agent** and fill in:
   managed under `.orgops-data/workspaces/`.
 - **Runner**: pick the runner from step 2.
 
-!!! important "Assign a runner"
-    Runners only execute agents assigned to their own runner ID. An agent with no
-    runner assigned never starts, even if you press **Start**.
+::: warning Assign a runner
+Runners only execute agents assigned to their own runner ID. An agent with no
+runner assigned never starts, even if you press **Start**.
+:::
 
 Optionally fill in **SOUL contents**: free-form instructions that shape the agent's personality
 and responsibilities. You can also enable [skills](../concepts/skills.md).

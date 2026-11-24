@@ -35,7 +35,7 @@ packages/
   js-runtime/     node:vm sessions for RLM_REPL mode
   events-scenario-tests/  JSON-driven end-to-end scenarios
 skills/           Built-in skills
-docs/             This documentation
+docs/             Implementation spec and other docs agents rely on
 ```
 
 Backend apps run TypeScript directly through `tsx`. There is no backend build step, so
@@ -64,7 +64,7 @@ npm run scenario:test:countdown
 
 ## Guidelines
 
-- [`docs/SPEC.md`](SPEC.md) describes the current implementation. Read it before
+- [`docs/SPEC.md`](https://github.com/camplight/orgops/blob/main/docs/SPEC.md) describes the current implementation. Read it before
   architectural changes and **update it** when you change the API surface, the event
   contract or runtime behaviour.
 - Database changes go into a new numbered migration in `packages/db/migrations/`.
@@ -75,26 +75,21 @@ npm run scenario:test:countdown
 
 ## Working on the docs
 
-The site is built with [Zensical](https://zensical.org/), which reads the existing
-`mkdocs.yml`.
-
-Requires Python 3. Install Zensical into a virtual environment in the repository root
-(`.venv/` is gitignored):
+The documentation site is a [VitePress](https://vitepress.dev/) app in the
+`@orgops/docs` workspace. It needs nothing beyond the repository's Node.js setup:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install "zensical>=0.1.2,<0.2"
-
-zensical serve                     # preview at http://localhost:8000
-zensical build --clean --strict    # the same check CI runs
+npm run --workspace @orgops/docs dev       # preview at http://localhost:5173/orgops/
+npm run --workspace @orgops/docs build     # the same check CI runs
 ```
 
-`--strict` fails the build on links to missing pages or anchors. Stop the preview with
-`Ctrl+C`; run `deactivate` to leave the virtual environment.
+The build fails on links to missing pages.
 
-Pages live in `docs/`, navigation in `mkdocs.yml`. The site is published to GitHub Pages
-by `.github/workflows/docs.yml` on every push to `main` that touches the docs.
+Pages live in `apps/docs/`, navigation in `apps/docs/.vitepress/config.mts`. The
+implementation spec and other files in `docs/` stay where they are, because agents,
+`opscli` and invite responses reference those paths; the site links to them on GitHub.
+The site is published to GitHub Pages by `.github/workflows/docs.yml` on every push to
+`main` that touches it.
 
 ## Releases
 
