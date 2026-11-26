@@ -229,7 +229,7 @@ async function upsertChannelMemoryRecord(
     windowStartAt?: number;
     lastProcessedAt: number;
     lastProcessedEventId?: string;
-    expectedVersion?: number;
+    expectedVersion?: number | null;
   },
 ) {
   const response = await ctx.apiFetch(`/api/memory/channel/${mode}`, {
@@ -250,7 +250,8 @@ async function upsertCrossMemoryRecord(
     windowStartAt?: number;
     lastProcessedAt: number;
     lastProcessedEventId?: string;
-    expectedVersion?: number;
+    inputSignature: string;
+    expectedVersion?: number | null;
   },
 ) {
   const response = await ctx.apiFetch(`/api/memory/cross/${mode}`, {
@@ -424,17 +425,13 @@ export async function execute(
         existing?.windowStartAt ??
         Math.max(0, now - RECENT_MEMORY_WINDOW_MS),
       lastProcessedAt:
-        parsed.lastProcessedAt ?? existing?.lastProcessedAt ?? Math.max(0, now - 1),
+        parsed.lastProcessedAt ?? existing?.lastProcessedAt ?? 0,
       ...(parsed.lastProcessedEventId
         ? { lastProcessedEventId: parsed.lastProcessedEventId }
         : existing?.lastProcessedEventId
           ? { lastProcessedEventId: existing.lastProcessedEventId }
           : {}),
-      ...(parsed.expectedVersion !== undefined
-        ? { expectedVersion: parsed.expectedVersion }
-        : existing?.version !== undefined
-          ? { expectedVersion: existing.version }
-          : {}),
+      expectedVersion: parsed.expectedVersion ?? existing?.version ?? null,
     });
     await emitMemoryAudit(
       ctx,
@@ -461,23 +458,18 @@ export async function execute(
       ctx.agent.name,
       resolved.channelId,
     );
-    const now = Date.now();
     const record = await upsertChannelMemoryRecord(ctx, "full", {
       agentName: ctx.agent.name,
       channelId: resolved.channelId,
       summaryText: parsed.summaryText,
       lastProcessedAt:
-        parsed.lastProcessedAt ?? existing?.lastProcessedAt ?? Math.max(0, now - 1),
+        parsed.lastProcessedAt ?? existing?.lastProcessedAt ?? 0,
       ...(parsed.lastProcessedEventId
         ? { lastProcessedEventId: parsed.lastProcessedEventId }
         : existing?.lastProcessedEventId
           ? { lastProcessedEventId: existing.lastProcessedEventId }
           : {}),
-      ...(parsed.expectedVersion !== undefined
-        ? { expectedVersion: parsed.expectedVersion }
-        : existing?.version !== undefined
-          ? { expectedVersion: existing.version }
-          : {}),
+      expectedVersion: parsed.expectedVersion ?? existing?.version ?? null,
     });
     await emitMemoryAudit(
       ctx,
@@ -583,6 +575,12 @@ export async function execute(
     const resolved = await resolveCrossChannelIds(ctx, parsed.channelIds);
     if (!resolved.ok) return { error: resolved.error };
     const existing = await getCrossRecentMemoryRecord(ctx.apiFetch, ctx.agent.name);
+    if (!existing?.inputSignature) {
+      return { error: "Refresh cross-channel recent memory before updating its text." };
+    }
+    if (parsed.lastProcessedAt !== undefined || parsed.lastProcessedEventId !== undefined) {
+      return { error: "Cross-channel progress is maintained by refresh and cannot be set manually." };
+    }
     const now = Date.now();
     const record = await upsertCrossMemoryRecord(ctx, "recent", {
       agentName: ctx.agent.name,
@@ -591,18 +589,12 @@ export async function execute(
         parsed.windowStartAt ??
         existing?.windowStartAt ??
         Math.max(0, now - RECENT_MEMORY_WINDOW_MS),
-      lastProcessedAt:
-        parsed.lastProcessedAt ?? existing?.lastProcessedAt ?? Math.max(0, now - 1),
-      ...(parsed.lastProcessedEventId
-        ? { lastProcessedEventId: parsed.lastProcessedEventId }
-        : existing?.lastProcessedEventId
-          ? { lastProcessedEventId: existing.lastProcessedEventId }
-          : {}),
-      ...(parsed.expectedVersion !== undefined
-        ? { expectedVersion: parsed.expectedVersion }
-        : existing?.version !== undefined
-          ? { expectedVersion: existing.version }
-          : {}),
+      lastProcessedAt: existing.lastProcessedAt,
+      ...(existing.lastProcessedEventId
+        ? { lastProcessedEventId: existing.lastProcessedEventId }
+        : {}),
+      inputSignature: existing.inputSignature,
+      expectedVersion: parsed.expectedVersion ?? existing.version,
     });
     await emitMemoryAudit(ctx, "audit.memory.cross.recent.tool_update", {
       agentName: ctx.agent.name,
@@ -620,22 +612,21 @@ export async function execute(
     const resolved = await resolveCrossChannelIds(ctx, parsed.channelIds);
     if (!resolved.ok) return { error: resolved.error };
     const existing = await getCrossFullMemoryRecord(ctx.apiFetch, ctx.agent.name);
-    const now = Date.now();
+    if (!existing?.inputSignature) {
+      return { error: "Refresh cross-channel full memory before updating its text." };
+    }
+    if (parsed.lastProcessedAt !== undefined || parsed.lastProcessedEventId !== undefined) {
+      return { error: "Cross-channel progress is maintained by refresh and cannot be set manually." };
+    }
     const record = await upsertCrossMemoryRecord(ctx, "full", {
       agentName: ctx.agent.name,
       summaryText: parsed.summaryText,
-      lastProcessedAt:
-        parsed.lastProcessedAt ?? existing?.lastProcessedAt ?? Math.max(0, now - 1),
-      ...(parsed.lastProcessedEventId
-        ? { lastProcessedEventId: parsed.lastProcessedEventId }
-        : existing?.lastProcessedEventId
-          ? { lastProcessedEventId: existing.lastProcessedEventId }
-          : {}),
-      ...(parsed.expectedVersion !== undefined
-        ? { expectedVersion: parsed.expectedVersion }
-        : existing?.version !== undefined
-          ? { expectedVersion: existing.version }
-          : {}),
+      lastProcessedAt: existing.lastProcessedAt,
+      ...(existing.lastProcessedEventId
+        ? { lastProcessedEventId: existing.lastProcessedEventId }
+        : {}),
+      inputSignature: existing.inputSignature,
+      expectedVersion: parsed.expectedVersion ?? existing.version,
     });
     await emitMemoryAudit(ctx, "audit.memory.cross.full.tool_update", {
       agentName: ctx.agent.name,

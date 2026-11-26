@@ -85,6 +85,7 @@ export function registerMemoryRoutes(app: Hono<any>, deps: MemoryDeps) {
       ...(asNonEmptyString(row.last_processed_event_id)
         ? { lastProcessedEventId: row.last_processed_event_id }
         : {}),
+      inputSignature: row.input_signature ?? "",
       version: asInt(row.version, 0),
       createdAt: asInt(row.created_at, 0),
       updatedAt: asInt(row.updated_at, 0),
@@ -118,6 +119,11 @@ export function registerMemoryRoutes(app: Hono<any>, deps: MemoryDeps) {
       const channelIds = channelIdsRaw
         ? channelIdsRaw.split(",").map((entry) => entry.trim()).filter(Boolean)
         : [];
+      for (const requestedChannelId of channelIds) {
+        if (!access.canViewChannel(user, requestedChannelId)) {
+          return jsonResponse(c, { error: "Forbidden" }, 403);
+        }
+      }
       const records =
         channelIds.length > 0
           ? orm
@@ -132,7 +138,11 @@ export function registerMemoryRoutes(app: Hono<any>, deps: MemoryDeps) {
               .where(eq(table.agent_name, agentName))
               .orderBy(desc(table.updated_at))
               .all();
-      return jsonResponse(c, { records: records.map((record) => mapChannelRecord(record, mode)) });
+      return jsonResponse(c, {
+        records: records
+          .filter((record) => access.canViewChannel(user, record.channel_id))
+          .map((record) => mapChannelRecord(record, mode)),
+      });
     });
 
     app.put(path, async (c) => {
@@ -153,13 +163,23 @@ export function registerMemoryRoutes(app: Hono<any>, deps: MemoryDeps) {
         .from(table)
         .where(and(eq(table.agent_name, agentName), eq(table.channel_id, channelId)))
         .get() as any;
+      const hasExpectedVersion = Object.prototype.hasOwnProperty.call(
+        body,
+        "expectedVersion",
+      );
       const expectedVersion =
-        typeof body.expectedVersion === "number" && Number.isFinite(body.expectedVersion)
-          ? Math.floor(body.expectedVersion)
-          : undefined;
+        body.expectedVersion === null
+          ? null
+          : typeof body.expectedVersion === "number" &&
+              Number.isFinite(body.expectedVersion)
+            ? Math.floor(body.expectedVersion)
+            : undefined;
       if (
-        expectedVersion !== undefined &&
-        (!existing || asInt(existing.version, 0) !== expectedVersion)
+        hasExpectedVersion &&
+        (expectedVersion === undefined ||
+          (expectedVersion === null
+            ? Boolean(existing)
+            : !existing || asInt(existing.version, 0) !== expectedVersion))
       ) {
         return jsonResponse(
           c,
@@ -171,13 +191,44 @@ export function registerMemoryRoutes(app: Hono<any>, deps: MemoryDeps) {
           409,
         );
       }
-
+      const nextProcessedAt = asInt(body.lastProcessedAt, 0);
+      const nextProcessedEventId = asNonEmptyString(body.lastProcessedEventId);
+      if ((nextProcessedAt > 0) !== Boolean(nextProcessedEventId)) {
+        return jsonResponse(c, { error: "A channel watermark requires both lastProcessedAt and lastProcessedEventId" }, 400);
+      }
+      if (
+        existing &&
+        nextProcessedAt < asInt(existing.last_processed_at, 0) &&
+        !(mode === "recent" && nextProcessedAt === 0 && !asNonEmptyString(body.summaryText))
+      ) {
+        return jsonResponse(c, { error: "Memory watermark cannot regress" }, 409);
+      }
+      if (nextProcessedEventId) {
+        const watermarkEvent = orm
+          .select({
+            channelId: schema.events.channel_id,
+            createdAt: schema.events.created_at,
+            deliverAt: schema.events.deliver_at,
+          })
+          .from(schema.events)
+          .where(eq(schema.events.id, nextProcessedEventId))
+          .get();
+        if (
+          !watermarkEvent ||
+          watermarkEvent.channelId !== channelId ||
+          watermarkEvent.createdAt !== nextProcessedAt ||
+          nextProcessedAt > Date.now() ||
+          (watermarkEvent.deliverAt !== null && watermarkEvent.deliverAt > Date.now())
+        ) {
+          return jsonResponse(c, { error: "Memory watermark does not match an eligible channel event" }, 400);
+        }
+      }
       const now = Date.now();
       const patch = {
         summary_text: clampSummaryText(body.summaryText),
         ...(mode === "recent" ? { window_start_at: asInt(body.windowStartAt, 0) } : {}),
-        last_processed_at: asInt(body.lastProcessedAt, 0),
-        last_processed_event_id: asNonEmptyString(body.lastProcessedEventId),
+        last_processed_at: nextProcessedAt,
+        last_processed_event_id: nextProcessedEventId,
         version: asInt(existing?.version, 0) + 1,
         updated_at: now,
       };
@@ -215,7 +266,7 @@ export function registerMemoryRoutes(app: Hono<any>, deps: MemoryDeps) {
       const agentName = asNonEmptyString(c.req.query("agentName"));
       if (!agentName) return jsonResponse(c, { error: "agentName is required" }, 400);
       const user = c.get("user") as RequestUser | undefined;
-      if (!access.canViewAgent(user, agentName)) {
+      if (!access.canManageAgent(user, agentName)) {
         return jsonResponse(c, { error: "Not found" }, 404);
       }
       const record = orm
@@ -235,18 +286,32 @@ export function registerMemoryRoutes(app: Hono<any>, deps: MemoryDeps) {
       if (!access.canManageAgent(user, agentName)) {
         return jsonResponse(c, { error: "Forbidden" }, 403);
       }
+      const inputSignature = asNonEmptyString(body.inputSignature);
+      if (!inputSignature) {
+        return jsonResponse(c, { error: "inputSignature is required for cross-channel memory" }, 400);
+      }
       const existing = orm
         .select()
         .from(table)
         .where(eq(table.agent_name, agentName))
         .get() as any;
+      const hasExpectedVersion = Object.prototype.hasOwnProperty.call(
+        body,
+        "expectedVersion",
+      );
       const expectedVersion =
-        typeof body.expectedVersion === "number" && Number.isFinite(body.expectedVersion)
-          ? Math.floor(body.expectedVersion)
-          : undefined;
+        body.expectedVersion === null
+          ? null
+          : typeof body.expectedVersion === "number" &&
+              Number.isFinite(body.expectedVersion)
+            ? Math.floor(body.expectedVersion)
+            : undefined;
       if (
-        expectedVersion !== undefined &&
-        (!existing || asInt(existing.version, 0) !== expectedVersion)
+        hasExpectedVersion &&
+        (expectedVersion === undefined ||
+          (expectedVersion === null
+            ? Boolean(existing)
+            : !existing || asInt(existing.version, 0) !== expectedVersion))
       ) {
         return jsonResponse(
           c,
@@ -264,6 +329,7 @@ export function registerMemoryRoutes(app: Hono<any>, deps: MemoryDeps) {
         ...(mode === "recent" ? { window_start_at: asInt(body.windowStartAt, 0) } : {}),
         last_processed_at: asInt(body.lastProcessedAt, 0),
         last_processed_event_id: asNonEmptyString(body.lastProcessedEventId),
+        input_signature: inputSignature,
         version: asInt(existing?.version, 0) + 1,
         updated_at: now,
       };

@@ -98,3 +98,52 @@ describe("events_payload_read", () => {
     }
   });
 });
+
+describe("recurring schedule tools", () => {
+  it("maps create/list/update/delete requests to schedule endpoints", async () => {
+    const workspace = realpathSync(mkdtempSync(join(tmpdir(), "orgops-agent-")));
+    const requests: Array<{ path: string; init?: RequestInit }> = [];
+    const apiFetch = vi.fn(async (path: string, init?: RequestInit) => {
+      requests.push({ path, init });
+      return new Response(JSON.stringify({ id: "schedule-1", ok: true }));
+    });
+    const ctx = {
+      ...createContext(workspace, apiFetch),
+      channelId: "channel-1",
+    };
+    try {
+      await execute(ctx, "events_recurring_create", {
+        cronExpression: "0 9 * * *",
+        timezone: "Europe/Sofia",
+        text: "daily check",
+      });
+      await execute(ctx, "events_recurring_list", { channelId: "channel-1" });
+      await execute(ctx, "events_recurring_update", {
+        scheduleId: "schedule-1",
+        status: "PAUSED",
+        version: 1,
+      });
+      await execute(ctx, "events_recurring_delete", { scheduleId: "schedule-1" });
+
+      expect(requests.map((request) => request.path)).toEqual([
+        "/api/schedules",
+        "/api/schedules?channelId=channel-1",
+        "/api/schedules/schedule-1",
+        "/api/schedules/schedule-1",
+      ]);
+      expect(JSON.parse(String(requests[0]?.init?.body))).toMatchObject({
+        channelId: "channel-1",
+        targetAgentName: "PayloadAgent",
+        cronExpression: "0 9 * * *",
+        timezone: "Europe/Sofia",
+      });
+      expect(requests[2]?.init?.method).toBe("PATCH");
+      expect(requests[3]?.init?.method).toBe("DELETE");
+      expect(new Headers(requests[0]?.init?.headers).get("x-orgops-agent-name")).toBe(
+        "PayloadAgent",
+      );
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+});

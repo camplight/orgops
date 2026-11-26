@@ -1,5 +1,8 @@
+import type { LlmMessage } from "@orgops/llm";
+import { hydrateEventPayload } from "./channel-events";
+import { toHistoryMessage } from "./prompt-composer";
+import { boundCurrentEventMessages } from "./current-event-budget";
 import type { Agent, Event } from "./types";
-import { buildPromptEventRecord } from "./prompt-event-compact";
 
 type PullInjectedEventsInput = {
   apiFetch: (path: string, init?: RequestInit) => Promise<Response>;
@@ -8,22 +11,17 @@ type PullInjectedEventsInput = {
   seenEventIds: Set<string>;
   shouldInclude: (agent: Agent, event: Event) => boolean;
   shouldSuppress?: (agent: Agent, event: Event) => boolean;
-  // Leaves these events pending; fetching marks events delivered.
+  // Leaves these events out of this pull (and out of the turn's handled events); a separate read takes them.
   excludeTypePrefix?: string;
+  maxChars?: number;
 };
-
-function roleForEvent(event: Event): "user" | "system" {
-  if (event.type !== "message.created") return "system";
-  const source = String(event.source ?? "").toLowerCase();
-  return !source.startsWith("agent:") && !source.startsWith("system:") ? "user" : "system";
-}
 
 export async function pullInjectedEventMessages(
   input: PullInjectedEventsInput,
 ): Promise<
   | {
       events: Event[];
-      messages: Array<{ role: "user" | "system"; content: string }>;
+      messages: LlmMessage[];
     }
   | null
 > {
@@ -41,18 +39,28 @@ export async function pullInjectedEventMessages(
   )) {
     if (input.seenEventIds.has(event.id)) continue;
     if (input.shouldSuppress?.(input.agent, event)) continue;
-    if (!input.shouldInclude(input.agent, event)) continue;
-    fresh.push(event);
+    // Hydrate before include checks: truncated payloads are intentionally
+    // excluded by routing until their complete body is available.
+    const hydrated = await hydrateEventPayload(input.apiFetch, event);
+    if (!input.shouldInclude(input.agent, hydrated)) continue;
+    fresh.push(hydrated);
   }
   for (const event of events) {
     input.seenEventIds.add(event.id);
   }
   if (fresh.length === 0) return null;
+  const unbounded = await Promise.all(
+    fresh.map((event) =>
+      toHistoryMessage(input.agent, event, { apiFetch: input.apiFetch }),
+    ),
+  );
+  const messages = boundCurrentEventMessages(
+    fresh,
+    unbounded,
+    Math.max(0, input.maxChars ?? 32_000),
+  );
   return {
     events: fresh,
-    messages: fresh.map((event) => ({
-      role: roleForEvent(event),
-      content: JSON.stringify(buildPromptEventRecord(event), null, 2),
-    })),
+    messages,
   };
 }

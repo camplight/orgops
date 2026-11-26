@@ -298,6 +298,7 @@ export type Screen =
   | "events"
   | "billing"
   | "processes"
+  | "schedules"
   | "skills"
   | "secrets"
   | "api-keys"

@@ -55,6 +55,11 @@ for(let page=0;page<10;page++) {
    assert.equal(event.payload.omittedChars,hugeChars-1024*1024);
   }
   if(event.id==='huge-message'||event.id==='other-target') assert.equal(shouldHandleEventForAgent(agent,event),false,'Omission must not broaden targeting');
+  const ack=await app.request(`http://localhost/api/events/${event.id}/ack`,{
+   method:'POST',
+   headers:{...headers,'x-orgops-agent-name':'tester'},
+  });
+  assert.equal(ack.status,200);
  }
  const pending=(db.prepare("SELECT count(*) AS n FROM event_receipts WHERE status='PENDING'").get() as {n:number}).n;
  assert.equal(pending,43-delivered.size,'Only returned receipts may be acknowledged');

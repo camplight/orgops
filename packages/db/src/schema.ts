@@ -387,7 +387,11 @@ export const eventReceipts = sqliteTable(
     event_id: text("event_id").notNull(),
     agent_name: text("agent_name").notNull(),
     status: text("status").notNull().default("PENDING"),
-    delivered_at: integer("delivered_at")
+    delivered_at: integer("delivered_at"),
+    attempt_count: integer("attempt_count").notNull().default(0),
+    last_error: text("last_error"),
+    retry_at: integer("retry_at"),
+    acked_at: integer("acked_at")
   },
   (table) => ({
     pk: primaryKey({ columns: [table.event_id, table.agent_name] }),
@@ -399,6 +403,47 @@ export const eventReceipts = sqliteTable(
     idxEventReceiptsEventStatus: index("idx_event_receipts_event_status").on(
       table.event_id,
       table.status
+    ),
+    idxEventReceiptsAgentPendingRetry: index(
+      "idx_event_receipts_agent_pending_retry"
+    ).on(
+      table.agent_name,
+      table.status,
+      table.retry_at
+    )
+  })
+);
+
+export const recurringSchedules = sqliteTable(
+  "recurring_schedules",
+  {
+    id: text("id").primaryKey(),
+    name: text("name"),
+    channel_id: text("channel_id").notNull(),
+    target_agent_name: text("target_agent_name").notNull(),
+    cron_expression: text("cron_expression").notNull(),
+    timezone: text("timezone").notNull(),
+    text: text("text").notNull(),
+    payload_json: text("payload_json").notNull().default("{}"),
+    status: text("status").notNull().default("ACTIVE"),
+    misfire_policy: text("misfire_policy").notNull().default("FIRE_ONCE"),
+    next_fire_at: integer("next_fire_at").notNull(),
+    last_occurrence_at: integer("last_occurrence_at"),
+    last_error: text("last_error"),
+    created_by_type: text("created_by_type").notNull(),
+    created_by_id: text("created_by_id"),
+    version: integer("version").notNull().default(1),
+    created_at: integer("created_at").notNull(),
+    updated_at: integer("updated_at").notNull()
+  },
+  (table) => ({
+    idxRecurringSchedulesDue: index("idx_recurring_schedules_due").on(
+      table.status,
+      table.next_fire_at
+    ),
+    idxRecurringSchedulesChannel: index("idx_recurring_schedules_channel").on(
+      table.channel_id,
+      table.created_at
     )
   })
 );
@@ -670,6 +715,7 @@ export const crossChannelMemoryRecent = sqliteTable(
     window_start_at: integer("window_start_at").notNull().default(0),
     last_processed_at: integer("last_processed_at").notNull().default(0),
     last_processed_event_id: text("last_processed_event_id"),
+    input_signature: text("input_signature").notNull().default(""),
     version: integer("version").notNull().default(0),
     created_at: integer("created_at").notNull(),
     updated_at: integer("updated_at").notNull()
@@ -688,6 +734,7 @@ export const crossChannelMemoryFull = sqliteTable(
     summary_text: text("summary_text").notNull().default(""),
     last_processed_at: integer("last_processed_at").notNull().default(0),
     last_processed_event_id: text("last_processed_event_id"),
+    input_signature: text("input_signature").notNull().default(""),
     version: integer("version").notNull().default(0),
     created_at: integer("created_at").notNull(),
     updated_at: integer("updated_at").notNull()
@@ -743,6 +790,7 @@ export const schema = {
   threads,
   events,
   eventReceipts,
+  recurringSchedules,
   eventPayloadBlobs,
   processes,
   processOutput,

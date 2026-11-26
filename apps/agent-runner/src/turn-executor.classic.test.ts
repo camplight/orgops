@@ -149,7 +149,8 @@ describe("CLASSIC turn cancellation", () => {
         options?.abortSignal?.addEventListener("abort", () => reject(options.abortSignal!.reason), { once: true });
       });
     });
-    await expect(ctx.run()).resolves.toBeUndefined();
+    // The stopped turn's batch is acknowledged, so it is not retried.
+    await expect(ctx.run()).resolves.toEqual({ handledEventIds: ["trigger"] });
     expect(generate).toHaveBeenCalledTimes(1);
     expect(ctx.emitted.filter((event) => event.type === "message.created")).toHaveLength(0);
     expect(ctx.emitted.at(-1)).toMatchObject({
@@ -247,6 +248,32 @@ describe("CLASSIC turn cancellation from the late-event pull", () => {
       .filter((path) => path.startsWith("/api/events?") && !path.includes("typePrefix="));
     expect(general.length).toBeGreaterThan(0);
     expect(general.every((path) => path.includes(`excludeTypePrefix=${TURN_CANCEL_EVENT_TYPE}`))).toBe(true);
+  });
+
+  it("reports late events the stopped turn already read as handled, so they are not retried", async () => {
+    const lateEvent: Event = {
+      id: "late-human",
+      type: "message.created",
+      source: "human:test",
+      channelId: "chat",
+      payload: { text: "also answer this" },
+      createdAt: 2,
+    };
+    const ctx = setup({
+      pendingStops: [[], [{ ...stopEvent(), createdAt: 3 }]],
+      pendingEventBatches: [[lateEvent], []],
+    });
+    vi.mocked(generate).mockResolvedValue({
+      toolCalls: [] as never[],
+      toolResults: [] as never[],
+      text: '{"turnStatus":"WORK_FULLY_COMPLETE","type":"message.created","payload":{"text":"answer"}}',
+    } as any);
+    const result = await ctx.run();
+    expect(ctx.emitted.at(-1)).toMatchObject({
+      type: "agent.turn.completed",
+      payload: { triggerEventId: "trigger", cancelled: true },
+    });
+    expect(result?.handledEventIds).toEqual(expect.arrayContaining(["trigger", "late-human"]));
   });
 });
 

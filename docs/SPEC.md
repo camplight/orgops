@@ -218,12 +218,22 @@ of truth for ordering and policy.
 
 - `events`: append-only event log (`type`, `payload_json`, `source`, `channel_id`, `deliver_at`, `status`, failure counters, idempotency key)
 - `event_payload_blobs`: file-backed storage metadata for oversized event payload JSON spilled out of SQLite
-- `event_receipts`: per-agent delivery state (`PENDING`/`DELIVERED`) used by runner socket wakeups and HTTP catch-up polling
+- `event_receipts`: per-agent delivery state (`PENDING`/`DELIVERED`/`DEAD`) with durable attempt count, last error, bounded exponential `retry_at`, and acknowledgement timestamps. Polling is non-destructive; successful handling acknowledges after the turn.
+- `recurring_schedules`: API-owned cron schedules with channel/target, IANA timezone, payload, active/paused state, misfire policy, next fire, last occurrence/error, creator metadata, and optimistic version/timestamps
 
 ### Memory Summaries
 
 - `channel_memory_recent`, `channel_memory_full`
 - `cross_channel_memory_recent`, `cross_channel_memory_full`
+- Recent channel memory is rebuilt only from the currently deliverable 10-minute
+  window; it is cleared when that window is empty and never carries an older
+  recent summary forward. Full and recent maintenance advance only through
+  successfully summarized, complete event payloads. Both exclude future
+  `deliverAt` events and runner bookkeeping.
+- Cross-channel rows store a deterministic `input_signature` over the complete
+  subscribed-channel membership and every per-channel memory version. Membership
+  changes invalidate cross memory; agent unsubscribe and channel deletion also
+  remove channel memory so revoked private context cannot remain injectable.
 
 ### Processes / Files / Secrets / Models
 
@@ -755,6 +765,21 @@ Presence events (bookkeeping only):
 - `DELETE /api/channels/:channelId/messages`
 - `GET /api/event-types`
 
+### Recurring Schedules
+
+- `POST /api/schedules`
+- `GET /api/schedules` (optional `channelId`)
+- `PATCH /api/schedules/:id` (including `status: ACTIVE|PAUSED`; optional version conflict check)
+- `DELETE /api/schedules/:id`
+
+Schedule mutations require channel post permission; reads require channel view
+permission. Scoped runners can only manage schedules targeting their own agent.
+The admin UI Schedules page lists these rows and can create, pause, resume, and
+delete them.
+Cron parsing and DST behavior come from `cron-parser` using the stored IANA
+timezone. The API materializes ordinary `agent.scheduled.trigger` events with
+idempotency keys `schedule:<scheduleId>:<scheduledFor>`.
+
 ### Memory
 
 - agent context lifecycle:
@@ -773,6 +798,11 @@ Presence events (bookkeeping only):
   - `PUT /api/memory/cross/recent`
   - `GET /api/memory/cross/full`
   - `PUT /api/memory/cross/full`
+  - cross reads require management access to the agent; public agent visibility
+    alone does not reveal aggregate private-channel memory
+  - cross writes require `inputSignature`; scalar progress alone is rejected
+- channel write watermarks must identify an existing event in that channel with
+  the exact timestamp, cannot regress, and cannot point to a future/scheduled event
 - maintenance:
   - `DELETE /api/memory`
 
@@ -898,14 +928,18 @@ Runner loop:
    - heartbeat runtime state to API
    - emit one-time lifecycle bootstrap event (`agent.lifecycle.started`) for native modes, or run wrapped lifecycle setup for `WRAPPED`
    - if the API marks the agent `runtime_state=STARTING`, clear the runner bootstrap marker and re-run startup/setup; wrapped runtimes are stopped first so refreshed secret env is injected into new sidecars/setup
-5. Pull pending events with per-agent receipt semantics.
-6. Filter control/audit/self-authored/agent-authored events.
+5. Pull due pending events with per-agent receipt semantics. Polling does not
+   mutate the receipt, so a runner crash before acknowledgement leaves the event
+   replayable.
+6. Filter control/audit/self-authored/agent-authored events and acknowledge
+   bookkeeping events once consumed (realtime events are acknowledged once handed
+   to the realtime manager).
 7. Group remaining pending events by channel and process each channel as a single handling batch. Events returned by one poll are queued together before a channel worker starts, so they form one batch.
 8. Execute by agent mode:
    - `CLASSIC`: call the LLM with a runner-owned turn-completion contract and no completion tool. JSON-event models return a top-level `turnStatus`; plain-text models append a stripped `ORGOPS_TURN_STATUS` trailer. Terminal statuses are `WORK_FULLY_COMPLETE`, `BLOCKED`, `WAITING_USER`, and `RETRY_LATER`; `CONTINUE` extends the same turn. `WORK_FULLY_COMPLETE` deliberately names completion of the requested work rather than completion of the current message. Missing or invalid completion state receives up to three corrective attempts, after which human-triggered turns publish a deterministic incomplete-work notice and emit `agent.turn.phase` with `phase: "turn.completion_error"`. `RETRY_LATER` first reconciles late channel events, then schedules an internal `agent.scheduled.trigger` after a clamped 5-second to 1-hour delay, with at most three scheduled continuations across the chain. Continuation counts are derived only from targeted `system:scheduler` triggers anywhere in the current batch, so newer batched messages cannot reset or spoof the bound. Empty final text after ordinary tool calls in a human message batch, without a valid completion response or `noop`, still triggers one tool-free summary using the SDK response transcript (maximum 4,000 output tokens, so a thinking model has room to write after reasoning, and 45 seconds, or the lower agent timeout). The closing instruction is sent as the last user message, after the transcript, because system messages are hoisted above it and models then keep calling tools. Missing transcripts, summary errors, timeouts or unusable output (including serialized tool-call markup, even embedded in prose) produce a visible incomplete-work notice. This finalization never re-executes tools. Summary, completion, scheduled-continuation and fallback messages/events use deterministic idempotency keys; multiple accepted outputs from late-event continuations use stable per-turn sequence suffixes.
    - `RLM_REPL`: run recursive REPL loop in child process with explicit `done(result)`.
    - `WRAPPED`: skip orgops memory/prompt/skills/model calls and run the configured external runtime recipe.
-9. For native modes, build context from runner guidance + bounded channel history + skills + `soul_contents`, plus a synthetic merged-trigger message when a batch contains multiple events. The latest per-agent/channel context lifecycle marker is applied before history composition: compact seeds context with its private whole-channel summary and includes only later events, while clear includes only later events. Existing channel/cross-channel summaries are invalidated and rebuilt from that boundary. Human message attachments (except voice-note audio) are downloaded once into `<workspace>/.orgops-attachments/<fileId>/<name>` and exposed as `payload.attachments[].localPath`; image attachments are also inlined as image parts. When the agent's `modelCapabilities.imageInput` is `false`, or the provider rejects image input for a CLASSIC turn (for example `Invalid image or video input`), each image part is replaced by a short note that the model cannot read images and the attempt is retried once, so the agent can tell the person instead of the turn failing.
+9. For native modes, build context from runner guidance + a total-budget-bounded combination of memory and channel history + skills + `soul_contents`. Every current batch is appended exactly once, independent of memory watermarks: an IDs-only `system.current.events` marker identifies the batch, followed by the events as native role/content messages so attachment and image handling is preserved. Future `deliverAt` events are excluded until due. Current-batch text is bounded against the model context; oversized events become compact records with an `events_payload_read` reference instead of displacing the whole prompt. After summaries, the runner preserves a count-bounded latest raw tail of meaningful due events (paging past bookkeeping/future rows as needed) and also includes every event not proven covered by contiguous full/recent summary coverage, so there is no unsummarized gap. Mid-turn late-event injection and pending-event polling hydrate truncated payloads before routing filters, then use the same native history message path (attachments/images + budget compaction) as the current batch. Successfully handled late-injected events are acknowledged with the turn that consumed them. The latest per-agent/channel context lifecycle marker is applied before history composition: compact seeds context with its private whole-channel summary and includes only later events, while clear includes only later events. Existing channel/cross-channel summaries are invalidated and rebuilt from that boundary. Human message attachments (except voice-note audio) are downloaded once into `<workspace>/.orgops-attachments/<fileId>/<name>` and exposed as `payload.attachments[].localPath`; image attachments are also inlined as image parts. When the agent's `modelCapabilities.imageInput` is `false`, or the provider rejects image input for a CLASSIC turn (for example `Invalid image or video input`), each image part is replaced by a short note that the model cannot read images and the attempt is retried once, so the agent can tell the person instead of the turn failing.
 10. For native modes, run model generation in step mode (single-step/attempt calls) and poll pending events for the same `(agent, channel)` between model steps; newly arrived events are merged into subsequent model context. Once a CLASSIC model emits a valid terminal event, the runner posts it before checking for additional late events. If meaningful late events are present, they extend the same turn as follow-up context rather than invalidating the already-posted response; this continuation is capped. A fallback `CONTINUE` outcome withholds its provisional message, preserves the available response transcript, and extends generation up to three times. Current-turn `SYNC` `process.*` lifecycle events from the agent's own `shell_run` are suppressed from mid-turn injection because the synchronous tool result already reached the model, while `ASYNC` process output/exit can still provide follow-up context. During CLASSIC turns, unscheduled `events_emit` calls for `message.created` post immediately by default to allow mid-turn collaboration. Callers can opt into retry-safe staging by passing `stageUntilTurnSettled=true`, which returns `delivery.status = staged_until_turn_settled`; validation/completion retries discard staged drafts and only an accepted terminal outcome flushes them.
 11. A participant's Stop reaches the runner as the `agent.turn.cancel_requested` event, through
     the runner socket wakeup like any channel event; the runner does not poll for it. While a
@@ -919,8 +953,15 @@ Runner loop:
     processes from earlier turns keep running. Once those processes exit (at most 5 s) it emits
     `agent.turn.completed` with `cancelled: true` and `noReply: true`, so their exits fall inside
     the turn and do not wake the agent. Events and tool results already posted stay. The batch
-    counts as handled, so it is not retried. RLM and WRAPPED turns are not cancellable yet.
-12. On handler failure, call `/api/events/:id/fail` for each event in the failed channel batch. Tool errors during a turn are returned to the model and recorded as `tool.failed` / `tool.executed`; they do not increment the triggering event's failure count.
+    and any late events the turn read are acknowledged, so none is retried or starts a new turn. RLM and WRAPPED turns are not cancellable yet.
+12. After a successful handler batch, acknowledge every triggering receipt. On
+    handler failure, call `/api/events/:id/fail` for each event in the failed
+    channel batch. Failure increments the receipt attempt count and requeues it
+    with bounded exponential backoff. At `ORGOPS_EVENT_MAX_FAILURES`, that
+    agent's receipt becomes `DEAD` and one idempotent `event.deadlettered` is
+    emitted. Tool errors during a turn are returned to the model and recorded as
+    `tool.failed` / `tool.executed`; they do not increment the triggering event's
+    failure count.
 
 Wrapped lifecycle:
 
@@ -953,6 +994,7 @@ Current tool families exposed to models:
   - `events_channel_create`, `events_channel_update`, `events_channel_delete`
   - `events_channel_participants`, `events_channel_participant_add`, `events_channel_participant_remove` (participant add/remove supports `AGENT` and `HUMAN`; legacy `agentName` alias still maps to `AGENT`)
   - `events_channels_list`, `events_event_types`, `events_scheduled_create`, `events_schedule_self`
+  - `events_recurring_create`, `events_recurring_list`, `events_recurring_update`, `events_recurring_delete`
 - agent management helpers:
   - `agents_search`, `agents_create`
   - `agents_publish_workspace`, `agents_unpublish_workspace`, `agents_list_publications`
@@ -1026,11 +1068,23 @@ Security note: wrapped `source`, `setup.command`, and `runtime.command` are host
 
 ## Delivery and Failure Semantics
 
-- at-least-once delivery model
-- per-agent delivery tracking through `event_receipts`
+- at-least-once delivery model; receipt polling never acknowledges
+- per-agent delivery tracking through `event_receipts`, acknowledged only after
+  successful handling (or bookkeeping/realtime consumption)
 - idempotency supported with `idempotencyKey`
 - scheduled delivery via `deliverAt`
-- failure escalation via `/api/events/:id/fail` until dead-letter (`event.deadlettered`) at configured threshold
+- failed receipts are durably requeued with bounded exponential retry; failure
+  escalation via `/api/events/:id/fail` dead-letters at the configured threshold
+- receipt transitions are monotonic: duplicate failures during backoff are
+  ignored, and `DELIVERED`/`DEAD` receipts cannot be resurrected
+- provider credit, quota, billing, and payment failures remain retryable
+  indefinitely, capped at one attempt every 15 minutes, so restoring credits
+  resumes delivery without operator repair
+- targeted `agent.scheduled.trigger` events create only the target agent's receipt
+- API-owned recurring schedules advance independently of turn success. Misfire
+  policies are `FIRE_ONCE` (default), `SKIP` after a grace window, and bounded
+  `CATCH_UP`; event idempotency makes a crash between materialization and schedule
+  advancement safe.
 
 ## Container Runtime (Single Image)
 
@@ -1055,6 +1109,9 @@ Security note: wrapped `source`, `setup.command`, and `runtime.command` are host
 - `ORGOPS_MASTER_KEY`
 - `ORGOPS_COOKIE_SECURE`
 - `ORGOPS_EVENT_MAX_FAILURES`
+- `ORGOPS_SCHEDULE_TICK_INTERVAL_MS` (default `1000`; `0` disables materialization)
+- `ORGOPS_SCHEDULE_MISFIRE_GRACE_MS` (default `60000`)
+- `ORGOPS_SCHEDULE_CATCH_UP_LIMIT` (default `10`)
 - `ORGOPS_EVENT_SHAPES_CACHE_TTL_MS`
 - `ORGOPS_FEDERATION_SYNC_INTERVAL_MS`
 - `ORGOPS_RUNNER_ONLINE_THRESHOLD_MS`
@@ -1062,7 +1119,8 @@ Security note: wrapped `source`, `setup.command`, and `runtime.command` are host
 - `ORGOPS_SKILL_ROOTS` (optional comma-separated additional skill roots; repo `skills/` remains first)
 - `ORGOPS_LLM_STUB`
 - `ORGOPS_LLM_CALL_TIMEOUT_MS`
-- `ORGOPS_HISTORY_MAX_EVENTS`, `ORGOPS_HISTORY_MAX_CHARS` (ceilings; the per-turn history char budget is half the model context window minus the system prompt and memory context, ~4 chars/token, floored at 8k chars)
+- `ORGOPS_HISTORY_MAX_EVENTS`, `ORGOPS_HISTORY_MAX_CHARS` (ceilings; the per-turn history char budget is half the model context window minus system, memory, and current-batch context, ~4 chars/token; it may reach zero rather than forcing an overrun)
+- `ORGOPS_MEMORY_RAW_TAIL_EVENTS` (latest raw channel events retained after memory summaries; default `20`)
 - `ORGOPS_CHANNEL_RECENT_MEMORY_INTERVAL_MS`
 - `ORGOPS_CHANNEL_FULL_MEMORY_INTERVAL_MS`
 - `ORGOPS_CROSS_RECENT_MEMORY_INTERVAL_MS`

@@ -1064,6 +1064,10 @@ export function registerAgentsRoutes(app: Hono<any>, deps: AgentsDeps) {
       )
       .run();
     orm.delete(schema.eventReceipts).where(eq(schema.eventReceipts.agent_name, name)).run();
+    orm
+      .delete(schema.recurringSchedules)
+      .where(eq(schema.recurringSchedules.target_agent_name, name))
+      .run();
     orm.delete(schema.channelMemoryRecent).where(eq(schema.channelMemoryRecent.agent_name, name)).run();
     orm.delete(schema.channelMemoryFull).where(eq(schema.channelMemoryFull.agent_name, name)).run();
     orm

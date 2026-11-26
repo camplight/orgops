@@ -381,7 +381,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
   function selectEventRows(
     query: ReturnType<typeof readEventQuery>,
     user: RequestUser | undefined,
-    options: { includeAll: boolean; markRunnerDelivered: boolean },
+    options: { includeAll: boolean },
   ): any[] {
     const {
       channelId,
@@ -482,6 +482,14 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
         }
         if (status) {
           receiptClauses.push(eq(schema.eventReceipts.status, status));
+          if (status === "PENDING") {
+            receiptClauses.push(
+              or(
+                isNull(schema.eventReceipts.retry_at),
+                lte(schema.eventReceipts.retry_at, now),
+              ),
+            );
+          }
         } else if (scheduledOnly && !includeConsumedScheduled) {
           receiptClauses.push(eq(schema.eventReceipts.status, "PENDING"));
         }
@@ -544,56 +552,6 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
             count += 1;
           }
           joinedRows = joinedRows.slice(0,count);
-        }
-
-        if (options.markRunnerDelivered && !scheduledOnly) {
-          const pendingDeliveredIds = joinedRows
-            .filter((row) => row.receiptStatus === "PENDING")
-            .map((row) => row.event.id);
-          if (pendingDeliveredIds.length > 0) {
-            orm
-              .update(schema.eventReceipts)
-              .set({ status: "DELIVERED", delivered_at: now })
-              .where(
-                and(
-                  eq(schema.eventReceipts.agent_name, agentName),
-                  eq(schema.eventReceipts.status, "PENDING"),
-                  inArray(schema.eventReceipts.event_id, pendingDeliveredIds),
-                ),
-              )
-              .run();
-
-            const uniqueEventIds = [...new Set(pendingDeliveredIds)];
-            for (const eventId of uniqueEventIds) {
-              const pendingCountRow = orm
-                .select({
-                  count: sql<number>`count(*)`,
-                })
-                .from(schema.eventReceipts)
-                .where(
-                  and(
-                    eq(schema.eventReceipts.event_id, eventId),
-                    eq(schema.eventReceipts.status, "PENDING"),
-                  ),
-                )
-                .get() as { count: number } | undefined;
-              if ((pendingCountRow?.count ?? 0) === 0) {
-                orm
-                  .update(schema.events)
-                  .set({ status: "DELIVERED" })
-                  .where(eq(schema.events.id, eventId))
-                  .run();
-                const updated = orm
-                  .select(selectFields)
-                  .from(schema.events)
-                  .where(eq(schema.events.id, eventId))
-                  .get() as any | undefined;
-                if (updated) {
-                  publishEventRow(hydrateEventRows([updated])[0]);
-                }
-              }
-            }
-          }
         }
 
         return joinedRows.map((row) => row.event);
@@ -1044,7 +1002,6 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     const user = c.get("user") as RequestUser | undefined;
     const rows = selectEventRows(query, user, {
       includeAll: true,
-      markRunnerDelivered: false,
     });
     const { bytes, filename } = createEventExportSqlite(query, rows);
     return new Response(bytes, {
@@ -1129,6 +1086,7 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
           offset,
           limit,
           chunk: buffer.subarray(0, bytesRead).toString("utf8"),
+          chunkBase64: buffer.subarray(0, bytesRead).toString("base64"),
           nextOffset,
           done: nextOffset >= byteLength,
           sha256: row.payload_blob_sha256 ?? undefined,
@@ -1373,7 +1331,6 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     const user = c.get("user") as RequestUser | undefined;
     const rows = selectEventRows(query, user, {
       includeAll: false,
-      markRunnerDelivered: true,
     });
     const pollingRunner = user?.username === "runner" && Boolean(query.agentName);
     return jsonResponse(c, hydrateEventRows(rows, pollingRunner ? MAX_EVENT_PAGE_PAYLOAD_BYTES : MAX_EVENT_PAYLOAD_BYTES).map(eventRowToApi));
@@ -1527,64 +1484,186 @@ export function registerEventsRoutes(app: Hono<any>, deps: EventsDeps) {
     return jsonResponse(c, { ok: true, channelId, deletedCount });
   });
 
-  app.post("/api/events/:id/ack", (c) => {
-    const id = c.req.param("id");
+  function receiptAgentForRequest(c: any): string | null {
+    const user = c.get("user") as RequestUser | undefined;
+    if (user?.username !== "runner") return null;
+    const requested = String(
+      c.req.header("x-orgops-agent-name") ?? "",
+    ).trim();
+    if (!requested || !access.canViewAgent(user, requested)) return null;
+    return requested;
+  }
+
+  function refreshAggregateEventStatus(eventId: string) {
+    const receipts = orm
+      .select({
+        status: schema.eventReceipts.status,
+        attemptCount: schema.eventReceipts.attempt_count,
+        lastError: schema.eventReceipts.last_error,
+      })
+      .from(schema.eventReceipts)
+      .where(eq(schema.eventReceipts.event_id, eventId))
+      .all();
+    if (receipts.length === 0) return;
+    const pending = receipts.some((receipt) => receipt.status === "PENDING");
+    const dead = receipts.some((receipt) => receipt.status === "DEAD");
+    const status = pending ? "PENDING" : dead ? "DEAD" : "DELIVERED";
+    const failCount = receipts.reduce(
+      (maximum, receipt) => Math.max(maximum, receipt.attemptCount ?? 0),
+      0,
+    );
+    const lastError =
+      [...receipts].reverse().find((receipt) => receipt.lastError)?.lastError ??
+      null;
     orm
       .update(schema.events)
-      .set({ status: "ACKED" })
-      .where(eq(schema.events.id, id))
+      .set({ status, fail_count: failCount, last_error: lastError })
+      .where(eq(schema.events.id, eventId))
       .run();
     const updated = orm
       .select()
       .from(schema.events)
-      .where(eq(schema.events.id, id))
-      .get() as any | undefined;
-    if (updated) {
-      publishEventRow(updated);
+      .where(eq(schema.events.id, eventId))
+      .get();
+    if (updated) publishEventRow(updated);
+  }
+
+  app.post("/api/events/:id/ack", (c) => {
+    const id = c.req.param("id");
+    const agentName = receiptAgentForRequest(c);
+    if (!agentName) return jsonResponse(c, { error: "Runner agent identity required" }, 403);
+    const receipt = orm
+      .select()
+      .from(schema.eventReceipts)
+      .where(
+        and(
+          eq(schema.eventReceipts.event_id, id),
+          eq(schema.eventReceipts.agent_name, agentName),
+        ),
+      )
+      .get();
+    if (!receipt) return jsonResponse(c, { error: "Receipt not found" }, 404);
+    if (receipt.status !== "PENDING") {
+      return jsonResponse(c, {
+        ok: true,
+        status: receipt.status,
+        failCount: receipt.attempt_count,
+      });
     }
-    return jsonResponse(c, { ok: true });
+    const now = Date.now();
+    orm
+      .update(schema.eventReceipts)
+      .set({
+        status: "DELIVERED",
+        delivered_at: now,
+        acked_at: now,
+        retry_at: null,
+        last_error: null,
+      })
+      .where(
+        and(
+          eq(schema.eventReceipts.event_id, id),
+          eq(schema.eventReceipts.agent_name, agentName),
+          eq(schema.eventReceipts.status, "PENDING"),
+        ),
+      )
+      .run();
+    refreshAggregateEventStatus(id);
+    return jsonResponse(c, { ok: true, status: "DELIVERED" });
   });
 
   app.post("/api/events/:id/fail", async (c) => {
     const id = c.req.param("id");
+    const agentName = receiptAgentForRequest(c);
+    if (!agentName) return jsonResponse(c, { error: "Runner agent identity required" }, 403);
     const body = await c.req.json().catch(() => ({}));
-    const maxFailures = Number(process.env.ORGOPS_EVENT_MAX_FAILURES ?? 25);
-    const row = orm
-      .select({ failCount: schema.events.fail_count })
-      .from(schema.events)
-      .where(eq(schema.events.id, id))
-      .get() as { failCount: number } | undefined;
-    if (!row) return jsonResponse(c, { error: "Not found" }, 404);
-    const nextCount = row.failCount + 1;
-    const nextStatus = nextCount >= maxFailures ? "DEAD" : "FAILED";
+    const configuredMax = Number(process.env.ORGOPS_EVENT_MAX_FAILURES ?? 25);
+    const maxFailures = Number.isFinite(configuredMax) && configuredMax > 0
+      ? Math.floor(configuredMax)
+      : 25;
+    const receipt = orm
+      .select()
+      .from(schema.eventReceipts)
+      .where(
+        and(
+          eq(schema.eventReceipts.event_id, id),
+          eq(schema.eventReceipts.agent_name, agentName),
+        ),
+      )
+      .get();
+    if (!receipt) return jsonResponse(c, { error: "Receipt not found" }, 404);
+    if (receipt.status !== "PENDING") {
+      return jsonResponse(c, {
+        ok: true,
+        status: receipt.status,
+        failCount: receipt.attempt_count,
+      });
+    }
+    const now = Date.now();
+    if (receipt.retry_at !== null && receipt.retry_at > now) {
+      return jsonResponse(c, {
+        ok: true,
+        status: "PENDING",
+        failCount: receipt.attempt_count,
+        retryAt: receipt.retry_at,
+        ignored: true,
+      });
+    }
+    const errorText = String(body.error ?? "Turn failed").slice(0, 8192);
+    const providerBlocked =
+      /no credits remaining|insufficient[_ ](?:credits|quota)|credit balance(?: is too low)?|billing quota|payment required|\b402\b|payment_required/i.test(
+        errorText,
+      );
+    const nextCount = receipt.attempt_count + 1;
+    const nextStatus =
+      !providerBlocked && nextCount >= maxFailures ? "DEAD" : "PENDING";
+    const baseMs = 1000;
+    const maxRetryMs = 15 * 60 * 1000;
+    const retryAt =
+      nextStatus === "PENDING"
+        ? now +
+          (providerBlocked
+            ? maxRetryMs
+            : Math.min(
+                maxRetryMs,
+                baseMs * 2 ** Math.min(nextCount - 1, 20),
+              ))
+        : null;
     orm
-      .update(schema.events)
+      .update(schema.eventReceipts)
       .set({
         status: nextStatus,
-        fail_count: nextCount,
-        last_error: body.error ?? null,
+        attempt_count: nextCount,
+        last_error: errorText,
+        retry_at: retryAt,
       })
-      .where(eq(schema.events.id, id))
+      .where(
+        and(
+          eq(schema.eventReceipts.event_id, id),
+          eq(schema.eventReceipts.agent_name, agentName),
+          eq(schema.eventReceipts.status, "PENDING"),
+          or(
+            isNull(schema.eventReceipts.retry_at),
+            lte(schema.eventReceipts.retry_at, now),
+          ),
+        ),
+      )
       .run();
-    const updated = orm
-      .select()
-      .from(schema.events)
-      .where(eq(schema.events.id, id))
-      .get() as any | undefined;
-    if (updated) {
-      publishEventRow(updated);
-    }
+    refreshAggregateEventStatus(id);
     if (nextStatus === "DEAD") {
       insertEvent({
         type: "event.deadlettered",
-        payload: { eventId: id, failCount: nextCount },
+        payload: { eventId: id, failCount: nextCount, agentName },
         source: "system",
+        idempotencyKey: `deadletter:${id}:${agentName}`,
+        status: "DELIVERED",
       });
     }
     return jsonResponse(c, {
       ok: true,
       status: nextStatus,
       failCount: nextCount,
+      retryAt: retryAt ?? undefined,
     });
   });
 

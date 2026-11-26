@@ -45,12 +45,56 @@ import {
   contentCharLength,
   contentForTelemetry,
   estimateContextUsage,
+  toHistoryMessage,
 } from "./prompt-composer";
 import { recordLlmUsage } from "./billing";
 import { getLatestContextBoundary } from "./context-boundary";
 import { TURN_CANCEL_EVENT_TYPE, type ActiveTurnCancel, type TurnCancellations } from "./turn-cancel";
+import { listLatestChannelEvents } from "./channel-events";
+import { boundCurrentEventMessages, compactCurrentEvent, truncateToBudget } from "./current-event-budget";
+export { boundCurrentEventMessages };
 import type { Agent, Event } from "./types";
 import type { RunnerApi } from "./runner/api";
+
+const RAW_HISTORY_TAIL_EVENTS = (() => {
+  const parsed = Number(process.env.ORGOPS_MEMORY_RAW_TAIL_EVENTS);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 20;
+})();
+
+function isMeaningfulForRawTail(event: Event): boolean {
+  return getMeaningfulEvents([event]).length > 0;
+}
+
+export function separateCurrentBatchFromHistory(
+  events: Event[],
+  eventHistory: Event[],
+) {
+  const currentEventIds = new Set(events.map((event) => event.id));
+  return {
+    eventHistory: eventHistory.filter((event) => !currentEventIds.has(event.id)),
+    currentBatchMessage: {
+      role: "system" as const,
+      content: JSON.stringify(
+        {
+          type: "system.current.events",
+          eventCount: events.length,
+          eventIds: events.map((event) => event.id),
+          note: "The following messages are the current actionable batch and are not historical context.",
+        },
+        null,
+        2,
+      ),
+    },
+  };
+}
+
+export function filterEventsDueForPrompt(events: Event[], now: number): Event[] {
+  return events.filter(
+    (event) =>
+      event.deliverAt === undefined || event.deliverAt === null || event.deliverAt <= now,
+  );
+}
+
 import {
   MAX_SCHEDULED_COMPLETION_ATTEMPTS,
   MAX_TURN_COMPLETION_CONTINUATIONS,
@@ -521,10 +565,12 @@ export async function reconcileLateInjectedMessages(input: {
   agent: Agent;
   channelId: string;
   seenEventIds: Set<string>;
-  retryMessages: Array<{ role: "system" | "user"; content: string }>;
+  retryMessages: LlmMessage[];
   attempt: number;
   maxAttempts: number;
   shouldSuppress?: (agent: Agent, event: Event) => boolean;
+  maxChars?: number;
+  onInjected?: (events: Event[]) => void;
 }) {
   const injected = await pullInjectedEventMessages({
     apiFetch: input.apiFetch,
@@ -533,8 +579,10 @@ export async function reconcileLateInjectedMessages(input: {
     seenEventIds: input.seenEventIds,
     shouldInclude: shouldHandleEventForAgent,
     shouldSuppress: input.shouldSuppress,
+    maxChars: input.maxChars,
   });
   if (!injected || injected.messages.length === 0) return false;
+  input.onInjected?.(injected.events);
   input.retryMessages.push(...injected.messages);
   input.retryMessages.push({
     role: "system",
@@ -547,13 +595,24 @@ export async function reconcileLateInjectedMessages(input: {
 }
 
 export function createTurnExecutor(input: CreateTurnExecutorInput) {
-  // `cancel` is set for CLASSIC turns a participant may stop; see executeTurn below.
-  const runTurn = async (agent: Agent, events: Event[], cancel?: ActiveTurnCancel) => {
+  // `cancel` is set for CLASSIC turns a participant may stop; see executeTurn below. The caller may
+  // pass the set that collects handled events, so a stopped turn still reports the ones it read.
+  const runTurn = async (
+    agent: Agent,
+    events: Event[],
+    cancel?: ActiveTurnCancel,
+    handledEventIds: Set<string> = new Set(),
+  ): Promise<{ handledEventIds: string[] }> => {
     const abortSignal = cancel?.signal;
-    if (events.length === 0) return;
+    for (const event of events) handledEventIds.add(event.id);
+    const rememberInjected = (injectedEvents: Event[]) => {
+      for (const event of injectedEvents) handledEventIds.add(event.id);
+    };
+    const done = () => ({ handledEventIds: [...handledEventIds] });
+    if (events.length === 0) return done();
     const triggerEvent = events[events.length - 1]!;
     const channelId = triggerEvent?.channelId;
-    if (!channelId) return;
+    if (!channelId) return done();
     const bestEffort = async (label: string, fn: () => Promise<void>) => {
       try {
         await fn();
@@ -593,7 +652,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         events,
       );
       await emitTurnEvent("agent.turn.completed", { runtime: "wrapped" });
-      return;
+      return done();
     }
     const injectionEnv = await input.api.getPackageSecretsEnv(agent.name, channelId);
     const channelRecord = await input.api.getChannelRecord(channelId);
@@ -683,23 +742,48 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         ]);
       const cutoffAt = contextBoundary?.cutoffAt ?? 0;
       const validChannelRecentMemory =
-        channelRecentMemory && channelRecentMemory.lastProcessedAt >= cutoffAt
+        channelRecentMemory &&
+        channelRecentMemory.lastProcessedAt >= cutoffAt &&
+        (channelRecentMemory.windowStartAt ?? 0) >= nowMs - 600_000
           ? channelRecentMemory
           : null;
       const validChannelFullMemory =
         channelFullMemory && channelFullMemory.lastProcessedAt >= cutoffAt
           ? channelFullMemory
           : null;
-      const recentSummaryWatermark = validChannelRecentMemory?.lastProcessedAt;
-      const rawDeltaEvents = await listEventsAfterTimestamp(
-        input.api.apiFetch,
-        channelId,
-        Math.max(
-          cutoffAt,
-          typeof recentSummaryWatermark === "number" ? recentSummaryWatermark : 0,
-        ) || undefined,
+      const fullCoverageAt = Math.max(
+        cutoffAt,
+        validChannelFullMemory?.lastProcessedAt ?? 0,
       );
-      eventHistory = getMeaningfulEvents(rawDeltaEvents);
+      const [eventsAfterFullCoverage, latestRawTail] = await Promise.all([
+        listEventsAfterTimestamp(
+          input.api.apiFetch,
+          channelId,
+          fullCoverageAt || undefined,
+        ),
+        listLatestChannelEvents(
+          input.api.apiFetch,
+          channelId,
+          RAW_HISTORY_TAIL_EVENTS,
+          { now: nowMs, isMeaningful: isMeaningfulForRawTail },
+        ),
+      ]);
+      const currentEventIds = new Set(events.map((event) => event.id));
+      const rawById = new Map<string, Event>();
+      for (const event of filterEventsDueForPrompt(eventsAfterFullCoverage, nowMs)) {
+        const createdAt = event.createdAt ?? 0;
+        const coveredByRecent =
+          Boolean(validChannelRecentMemory?.summaryText) &&
+          createdAt >= (validChannelRecentMemory?.windowStartAt ?? 0) &&
+          createdAt <= (validChannelRecentMemory?.lastProcessedAt ?? 0);
+        if (!coveredByRecent) rawById.set(event.id, event);
+      }
+      for (const event of filterEventsDueForPrompt(latestRawTail, nowMs)) {
+        rawById.set(event.id, event);
+      }
+      eventHistory = getMeaningfulEvents([...rawById.values()])
+        .filter((event) => !currentEventIds.has(event.id))
+        .sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0));
       systemContextMessages = [
         validChannelRecentMemory?.summaryText
           ? buildSystemMemoryMessage(
@@ -732,7 +816,9 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         channelId,
         contextBoundary?.cutoffAt,
       );
-      eventHistory = getMeaningfulEvents(fullChannelHistory);
+      eventHistory = getMeaningfulEvents(
+        filterEventsDueForPrompt(fullChannelHistory, nowMs),
+      );
       if (contextBoundary?.kind === "compact" && contextBoundary.summary) {
         systemContextMessages = [
           buildSystemMemoryMessage(
@@ -759,43 +845,85 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
     ]
       .filter(Boolean)
       .join("\n\n");
+    const separatedBatch = separateCurrentBatchFromHistory(events, eventHistory);
+    eventHistory = separatedBatch.eventHistory;
+    let currentBatchMessage = separatedBatch.currentBatchMessage;
     const contextWindowTokens = await resolveModelContextWindowTokens(agent);
+    const minimumBatchMarker = JSON.stringify({
+      type: "system.current.events",
+      eventCount: events.length,
+    });
+    const minimumCurrentBatchChars =
+      minimumBatchMarker.length +
+      events.reduce((sum, event) => sum + compactCurrentEvent(event, 0).length, 0);
+    const maxCurrentBatchChars = Math.max(
+      minimumCurrentBatchChars,
+      Math.floor(contextWindowTokens * 0.75) * 4 - system.length,
+    );
+    if (currentBatchMessage.content.length > Math.floor(maxCurrentBatchChars / 4)) {
+      currentBatchMessage = {
+        ...currentBatchMessage,
+        content: truncateToBudget(
+          JSON.stringify({
+            type: "system.current.events",
+            eventCount: events.length,
+            note: "The following messages are the current actionable batch and are not historical context.",
+          }),
+          Math.max(minimumBatchMarker.length, Math.floor(maxCurrentBatchChars / 4)),
+        ),
+      };
+    }
+    const unboundedCurrentEventMessages = await Promise.all(
+      events.map((event) =>
+        toHistoryMessage(agent, event, { apiFetch: input.api.apiFetch }),
+      ),
+    );
+    const currentEventMessages = boundCurrentEventMessages(
+      events,
+      unboundedCurrentEventMessages,
+      Math.max(0, maxCurrentBatchChars - currentBatchMessage.content.length),
+    );
+    const currentBatchChars =
+      currentBatchMessage.content.length +
+      currentEventMessages.reduce(
+        (sum, message) => sum + contentCharLength(message.content),
+        0,
+      );
+    let remainingMemoryChars = Math.max(
+      0,
+      Math.floor(contextWindowTokens * 0.5) * 4 -
+        system.length -
+        currentBatchChars,
+    );
+    systemContextMessages = systemContextMessages
+      .map((message) => {
+        if (remainingMemoryChars <= 0) return "";
+        const bounded = message.slice(0, remainingMemoryChars);
+        remainingMemoryChars -= bounded.length;
+        return bounded;
+      })
+      .filter(Boolean);
     const historyMaxChars = computeHistoryBudgetChars({
       contextWindowTokens,
       system,
-      systemContextMessages,
+      systemContextMessages: [
+        ...systemContextMessages,
+        currentBatchMessage.content,
+        ...currentEventMessages.map((message) =>
+          contentForTelemetry(message.content),
+        ),
+      ],
     });
     const baseMessages = await buildModelMessages(agent, system, eventHistory, {
       systemContextMessages,
       apiFetch: input.api.apiFetch,
       historyMaxChars,
     });
-    const mergedTriggerMessage =
-      events.length > 1
-        ? {
-            role: "system" as const,
-            content: JSON.stringify(
-              {
-                type: "system.pending.events.merged",
-                mergedCount: events.length,
-                newestEventId: events[events.length - 1]?.id,
-                events: events.map((event) => ({
-                  eventId: event.id,
-                  type: event.type,
-                  source: event.source,
-                  channelId: event.channelId,
-                  payload: event.payload ?? {},
-                  createdAt: event.createdAt,
-                })),
-              },
-              null,
-              2,
-            ),
-          }
-        : null;
-    const invokeMessages = mergedTriggerMessage
-      ? [...baseMessages, mergedTriggerMessage]
-      : baseMessages;
+    const invokeMessages = [
+      ...baseMessages,
+      currentBatchMessage,
+      ...currentEventMessages,
+    ];
 
     if (shouldEmitAuditEvents(agent)) {
       await bestEffort("runner.prompt.telemetry_failed", async () => {
@@ -963,7 +1091,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         : {}),
     };
     if ((agent.mode ?? "CLASSIC") === "RLM_REPL") {
-      await runRlmEventInChild({
+      const injectedEventIds = await runRlmEventInChild({
         agent,
         event: triggerEvent,
         channelId,
@@ -973,10 +1101,20 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         apiFetch: input.api.apiFetch,
         emitEvent: input.api.emitEvent,
       });
+      rememberInjected(
+        injectedEventIds.map((id) => ({ id }) as Event),
+      );
       await emitTurnEvent("agent.turn.completed", {});
-      return;
+      return done();
     }
     const seenEventIds = new Set(events.map((event) => event.id));
+    const pullInjected = async (
+      args: Parameters<typeof pullInjectedEventMessages>[0],
+    ) => {
+      const injected = await pullInjectedEventMessages(args);
+      if (injected) rememberInjected(injected.events);
+      return injected;
+    };
     const retryMessages: LlmMessage[] = [];
     const shouldSuppressInjectedEvent = createSyncProcessInjectionSuppressor();
     const channelPostingValidationCache = new Map<string, string | null>();
@@ -1042,8 +1180,9 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         ),
       });
     };
-    // A turn that can be stopped reads pending Stops before other late events: fetching marks
-    // events delivered, so late messages fetched together with a Stop would be lost with the turn.
+    // A turn that can be stopped reads pending Stops before other late events: late messages
+    // pulled into a turn count as handled by it, so ones that arrive with a Stop would be lost
+    // with the stopped turn. Read first, they stay pending and start the next turn.
     // Returns false when a Stop ended the turn.
     const honorLateStops = async (): Promise<boolean> => {
       if (!cancel || !input.turnCancellations) return true;
@@ -1071,7 +1210,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       if (lateEventContinuations >= MAX_LATE_EVENT_CONTINUATIONS) return false;
       // A Stop among the late events ends the turn here instead of continuing it.
       if (!(await honorLateStops())) abortSignal?.throwIfAborted();
-      const injected = await pullInjectedEventMessages({
+      const injected = await pullInjected({
         apiFetch: input.api.apiFetch,
         agent,
         channelId,
@@ -1117,7 +1256,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
             pullMessages: async () => {
               // A Stop aborts the model call through abortSignal; nothing more to inject.
               if (!(await honorLateStops())) return [];
-              const injected = await pullInjectedEventMessages({
+              const injected = await pullInjected({
                 apiFetch: input.api.apiFetch,
                 agent,
                 channelId,
@@ -1207,7 +1346,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         const postedEvents = await flushMessages();
         if (await continueForLateEvents(postedEvents, attempt)) continue;
         await emitTurnEvent("agent.turn.completed", { noReply: postedEvents.length === 0 });
-        return;
+        return done();
       }
 
       const completion: TurnCompletionOutcome | null = responseText.trim()
@@ -1333,7 +1472,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
               completedWithFallback: true,
               turnStatus: "RETRY_EXHAUSTED",
             });
-            return;
+            return done();
           }
           const retryAfterSeconds = clampCompletionRetrySeconds(
             completion.retryAfterSeconds,
@@ -1366,7 +1505,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
             retryAfterSeconds,
             turnStatus: completion.status,
           });
-          return;
+          return done();
         }
 
         const postedEvents = await flushMessages();
@@ -1379,7 +1518,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         await emitTurnEvent("agent.turn.completed", {
           turnStatus: completion.status,
         });
-        return;
+        return done();
       }
 
       if (!responseText.trim() && postedMessageToChannel) {
@@ -1473,12 +1612,12 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         await emitUnlessStopped(notice);
         if (await continueForLateEvents([notice], attempt)) continue;
         await emitTurnEvent("agent.turn.completed", { completedWithFallback: true });
-        return;
+        return done();
       }
 
       if (!humanRequest && !responseText.trim() && generateUsedTools(result)) {
         await emitTurnEvent("agent.turn.completed", { noReply: true });
-        return;
+        return done();
       }
 
       completionProtocolFailed = true;
@@ -1521,17 +1660,17 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         noReply: !humanRequest && currentScheduledCompletionAttempt === 0,
         turnCompletionError: true,
       });
-      return;
+      return done();
     }
     const flushedAtEnd = await flushMessages();
     const hasAnswer = flushedAtEnd.some((draft) => draft.channelId === channelId);
     if (hasAnswer) {
       await emitTurnEvent("agent.turn.completed", { completedWithFallback: true });
-      return;
+      return done();
     }
     if (!lastResponseText.trim()) {
       await emitTurnEvent("agent.turn.completed", { noReply: true });
-      return;
+      return done();
     }
     await emitTurnEvent("agent.turn.phase", {
       phase: "response.format_error",
@@ -1544,6 +1683,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       noReply: true,
       responseFormatError: true,
     });
+    return done();
   };
 
   return async function executeTurn(agent: Agent, events: Event[]) {
@@ -1561,8 +1701,9 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       channelId,
       triggerEventId: triggerEvent.id,
     });
+    const handledEventIds = new Set<string>();
     try {
-      await runTurn(agent, events, cancel);
+      return await runTurn(agent, events, cancel, handledEventIds);
     } catch (error) {
       if (!cancel.signal.aborted) throw error;
       // Processes exit before the turn ends, so their exits do not wake the agent again.
@@ -1582,6 +1723,8 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       } catch (emitError) {
         console.warn("runner.turn.telemetry_failed", emitError);
       }
+      // The stopped turn handled its batch and any late events it read; none starts a new turn.
+      return { handledEventIds: [...handledEventIds] };
     } finally {
       if (cancel.signal.aborted) await cancel.settle();
       cancel.end();

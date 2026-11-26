@@ -52,5 +52,17 @@
   "allowScripts": {
     "esbuild": true,
     "better-sqlite3": true
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": "^22",
+      "onFail": "warn"
+    },
+    "packageManager": {
+      "name": "npm",
+      "version": "^10",
+      "onFail": "warn"
+    }
   }
 }

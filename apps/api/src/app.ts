@@ -65,6 +65,8 @@ import { createVoiceBroker } from "./voice-broker";
 import type { transcribe as TranscribeFn } from "@orgops/llm";
 import { registerFederationRoutes } from "./routes/federation";
 import { registerWorkspacePublicationRoutes } from "./routes/workspace-publications";
+import { registerSchedulesRoutes } from "./routes/schedules";
+import { createRecurringScheduler } from "./recurring-scheduler";
 import { createRunnerSocketHub } from "./runner-socket";
 import {
   findActiveRunnerTokenByToken,
@@ -143,7 +145,12 @@ export function createApp(config: AppConfig = {}) {
   const FILES_DIR = join(PROJECT_ROOT, "files");
   const EVENT_PAYLOAD_BLOBS_DIR = join(DATA_DIR, "event-payloads");
   const SKILL_ROOTS = resolveSkillRoots(PROJECT_ROOT);
-  let lastEventCreatedAt = 0;
+  let lastEventCreatedAt =
+    (
+      db.prepare("SELECT COALESCE(MAX(created_at), 0) AS max_created_at FROM events").get() as
+        | { max_created_at?: number }
+        | undefined
+    )?.max_created_at ?? 0;
 
   mkdirSync(FILES_DIR, { recursive: true });
   mkdirSync(EVENT_PAYLOAD_BLOBS_DIR, { recursive: true });
@@ -548,6 +555,13 @@ export function createApp(config: AppConfig = {}) {
 
       const channelId =
         typeof input.channelId === "string" ? input.channelId : "";
+      const targetAgentName =
+        input.type === "agent.scheduled.trigger" &&
+        input.payload &&
+        typeof input.payload === "object" &&
+        typeof input.payload.targetAgentName === "string"
+          ? input.payload.targetAgentName.trim()
+          : "";
       if (channelId) {
         const channelAgentSubscribers = orm
           .select({ subscriberId: schema.channelSubscriptions.subscriber_id })
@@ -559,8 +573,11 @@ export function createApp(config: AppConfig = {}) {
             ),
           )
           .all();
-        for (const subscriber of channelAgentSubscribers)
-          recipients.add(subscriber.subscriberId);
+        for (const subscriber of channelAgentSubscribers) {
+          if (!targetAgentName || subscriber.subscriberId === targetAgentName) {
+            recipients.add(subscriber.subscriberId);
+          }
+        }
       }
       return [...recipients];
     };
@@ -657,6 +674,7 @@ export function createApp(config: AppConfig = {}) {
                 agent_name: agentName,
                 status: row.status === "DELIVERED" ? "DELIVERED" : "PENDING",
                 delivered_at: row.status === "DELIVERED" ? row.created_at : null,
+                acked_at: row.status === "DELIVERED" ? row.created_at : null,
               })),
             )
             .onConflictDoNothing()
@@ -819,6 +837,9 @@ export function createApp(config: AppConfig = {}) {
     verifyPassword:verifyPasswordAsync,
     dataDir: DATA_DIR,
   });
+  registerSchedulesRoutes(app as any, { orm, jsonResponse, access });
+  const recurringScheduler = createRecurringScheduler({ orm, insertEvent });
+  recurringScheduler.start();
 
   registerMemoryRoutes(app as any, { orm, jsonResponse, access });
   registerContextRoutes(app as any, {
@@ -938,7 +959,7 @@ export function createApp(config: AppConfig = {}) {
     requireRunnerAuth,
   });
 
-  return { app, db, bus, injectWebSocket, voiceTranscriber };
+  return { app, db, bus, injectWebSocket, voiceTranscriber, recurringScheduler };
 }
 
 const SYSTEM_AGENT_NAME = "system";
