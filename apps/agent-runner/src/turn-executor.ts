@@ -49,6 +49,7 @@ import {
 } from "./prompt-composer";
 import { recordLlmUsage } from "./billing";
 import { getLatestContextBoundary } from "./context-boundary";
+import { TURN_CANCEL_EVENT_TYPE, type ActiveTurnCancel, type TurnCancellations } from "./turn-cancel";
 import { listLatestChannelEvents } from "./channel-events";
 import { boundCurrentEventMessages, compactCurrentEvent, truncateToBudget } from "./current-event-budget";
 export { boundCurrentEventMessages };
@@ -134,6 +135,8 @@ type CreateTurnExecutorInput = {
   projectRoot: string;
   skillRoots: Array<{ path: string }>;
   llmCallTimeoutMs: number;
+  // Running CLASSIC turns; a Stop event the runner fetches cancels the turn it names.
+  turnCancellations?: TurnCancellations;
   runtimeAuth?: {
     apiBaseUrl?: string;
     runnerToken?: string;
@@ -592,11 +595,16 @@ export async function reconcileLateInjectedMessages(input: {
 }
 
 export function createTurnExecutor(input: CreateTurnExecutorInput) {
-  return async function executeTurn(
+  // `cancel` is set for CLASSIC turns a participant may stop; see executeTurn below. The caller may
+  // pass the set that collects handled events, so a stopped turn still reports the ones it read.
+  const runTurn = async (
     agent: Agent,
     events: Event[],
-  ): Promise<{ handledEventIds: string[] }> {
-    const handledEventIds = new Set(events.map((event) => event.id));
+    cancel?: ActiveTurnCancel,
+    handledEventIds: Set<string> = new Set(),
+  ): Promise<{ handledEventIds: string[] }> => {
+    const abortSignal = cancel?.signal;
+    for (const event of events) handledEventIds.add(event.id);
     const rememberInjected = (injectedEvents: Event[]) => {
       for (const event of injectedEvents) handledEventIds.add(event.id);
     };
@@ -989,6 +997,8 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
     let pendingMessages: ModelEventDraft[] = [];
     let stagedMessageSequence = 0;
     const flushMessages = async () => {
+      // A cancelled turn posts nothing it was still holding back.
+      abortSignal?.throwIfAborted();
       const flushed = [...pendingMessages];
       for (const [index, draft] of pendingMessages.entries()) {
         await input.api.emitEvent({
@@ -1007,6 +1017,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       agent,
       triggerEvent,
       channelId,
+      ...(cancel ? { abortSignal: cancel.signal, onTurnCancel: cancel.onCancel } : {}),
       ...((agent.mode ?? "CLASSIC") === "CLASSIC"
         ? {
             deferMessage: (draft: ModelEventDraft) => {
@@ -1169,11 +1180,36 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         ),
       });
     };
+    // A turn that can be stopped reads pending Stops before other late events: late messages
+    // pulled into a turn count as handled by it, so ones that arrive with a Stop would be lost
+    // with the stopped turn. Read first, they stay pending and start the next turn.
+    // Returns false when a Stop ended the turn.
+    const honorLateStops = async (): Promise<boolean> => {
+      if (!cancel || !input.turnCancellations) return true;
+      const res = await input.api.apiFetch(
+        `/api/events?agentName=${encodeURIComponent(agent.name)}&status=PENDING` +
+          `&channelId=${encodeURIComponent(channelId)}` +
+          `&typePrefix=${encodeURIComponent(TURN_CANCEL_EVENT_TYPE)}&limit=50`,
+      );
+      const stops = await res.json().catch(() => []);
+      for (const event of Array.isArray(stops) ? (stops as Event[]) : []) {
+        input.turnCancellations.request(event);
+      }
+      return !cancel.signal.aborted;
+    };
+    const lateEventExclusion = cancel ? { excludeTypePrefix: TURN_CANCEL_EVENT_TYPE } : {};
+    // Posts a reply or follow-up the turn decided on, unless the turn was stopped meanwhile.
+    const emitUnlessStopped = async (draft: ModelEventDraft) => {
+      abortSignal?.throwIfAborted();
+      await input.api.emitEvent(draft);
+    };
     const continueForLateEvents = async (
       postedEvents: ModelEventDraft[],
       attempt: number,
     ): Promise<boolean> => {
       if (lateEventContinuations >= MAX_LATE_EVENT_CONTINUATIONS) return false;
+      // A Stop among the late events ends the turn here instead of continuing it.
+      if (!(await honorLateStops())) abortSignal?.throwIfAborted();
       const injected = await pullInjected({
         apiFetch: input.api.apiFetch,
         agent,
@@ -1181,6 +1217,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         seenEventIds,
         shouldInclude: shouldHandleEventForAgent,
         shouldSuppress: shouldSuppressInjectedEvent,
+        ...lateEventExclusion,
       });
       if (!injected || injected.messages.length === 0) return false;
       lateEventContinuations += 1;
@@ -1197,6 +1234,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       return true;
     };
     for (let attempt = 1; attempt <= maxModelAttempts; attempt += 1) {
+      abortSignal?.throwIfAborted();
       pendingMessages = [];
       postedMessageToChannel = false;
       lastResponseText = "";
@@ -1214,7 +1252,10 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
             openaiCompatibleReasoningEffort:
               agent.openaiCompatibleReasoningEffort ?? undefined,
             env: injectionEnv,
+            ...(abortSignal ? { abortSignal } : {}),
             pullMessages: async () => {
+              // A Stop aborts the model call through abortSignal; nothing more to inject.
+              if (!(await honorLateStops())) return [];
               const injected = await pullInjected({
                 apiFetch: input.api.apiFetch,
                 agent,
@@ -1222,6 +1263,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
                 seenEventIds,
                 shouldInclude: shouldHandleEventForAgent,
                 shouldSuppress: shouldSuppressInjectedEvent,
+                ...lateEventExclusion,
               });
               return injected?.messages ?? [];
             },
@@ -1231,6 +1273,8 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
           `LLM generate (attempt ${attempt})`,
         );
       } catch (error) {
+        // A cancelled turn is not retried.
+        if (abortSignal?.aborted) throw error;
         if (
           !imagesUnsupported &&
           !imageRetryUsed &&
@@ -1423,7 +1467,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
               parentEventId: triggerEvent.id,
               idempotencyKey: `turn:${agent.name}:${triggerEvent.id}:continuation-exhausted`,
             };
-            await input.api.emitEvent(exhausted);
+            await emitUnlessStopped(exhausted);
             await emitTurnEvent("agent.turn.completed", {
               completedWithFallback: true,
               turnStatus: "RETRY_EXHAUSTED",
@@ -1435,7 +1479,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
           );
           const postedEvents = await flushMessages();
           if (eventDraft) {
-            await input.api.emitEvent(eventDraft);
+            await emitUnlessStopped(eventDraft);
             postedEvents.push(eventDraft);
             completionEventSequence += 1;
           }
@@ -1455,7 +1499,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
             },
             idempotencyKey: `turn:${agent.name}:${triggerEvent.id}:scheduled-continuation`,
           };
-          await input.api.emitEvent(scheduledEvent);
+          await emitUnlessStopped(scheduledEvent);
           await emitTurnEvent("agent.turn.completed", {
             scheduledContinuation: true,
             retryAfterSeconds,
@@ -1466,7 +1510,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
 
         const postedEvents = await flushMessages();
         if (eventDraft) {
-          await input.api.emitEvent(eventDraft);
+          await emitUnlessStopped(eventDraft);
           postedEvents.push(eventDraft);
           completionEventSequence += 1;
         }
@@ -1526,7 +1570,9 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
                   openaiCompatibleReasoningEffort:
                     agent.openaiCompatibleReasoningEffort ?? undefined,
                   env: injectionEnv,
-                  abortSignal: AbortSignal.timeout(finalSummaryTimeoutMs),
+                  abortSignal: abortSignal
+                    ? AbortSignal.any([abortSignal, AbortSignal.timeout(finalSummaryTimeoutMs)])
+                    : AbortSignal.timeout(finalSummaryTimeoutMs),
                 },
               ),
               finalSummaryTimeoutMs,
@@ -1563,7 +1609,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
           parentEventId: triggerEvent.id,
           idempotencyKey: `turn:${agent.name}:${triggerEvent.id}:final-summary:${attempt}`,
         };
-        await input.api.emitEvent(notice);
+        await emitUnlessStopped(notice);
         if (await continueForLateEvents([notice], attempt)) continue;
         await emitTurnEvent("agent.turn.completed", { completedWithFallback: true });
         return done();
@@ -1600,7 +1646,7 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
         responsePreview: truncateOversizedText(lastResponseText.trim(), 500),
       });
       if (humanRequest || currentScheduledCompletionAttempt > 0) {
-        await input.api.emitEvent({
+        await emitUnlessStopped({
           type: "message.created",
           source: `agent:${agent.name}`,
           channelId,
@@ -1638,5 +1684,50 @@ export function createTurnExecutor(input: CreateTurnExecutorInput) {
       responseFormatError: true,
     });
     return done();
+  };
+
+  return async function executeTurn(agent: Agent, events: Event[]) {
+    const triggerEvent = events[events.length - 1];
+    const channelId = triggerEvent?.channelId;
+    if (!triggerEvent || !channelId || (agent.mode ?? "CLASSIC") !== "CLASSIC") {
+      return runTurn(agent, events);
+    }
+    if (!input.turnCancellations) return runTurn(agent, events);
+    // A participant may stop a CLASSIC turn (POST /api/agents/:name/turns/cancel records a Stop
+    // event; the runner hands it to turnCancellations). The model call is aborted, held-back
+    // replies are dropped, the turn's processes are stopped, and the batch counts as handled.
+    const cancel = input.turnCancellations.begin({
+      agentName: agent.name,
+      channelId,
+      triggerEventId: triggerEvent.id,
+    });
+    const handledEventIds = new Set<string>();
+    try {
+      return await runTurn(agent, events, cancel, handledEventIds);
+    } catch (error) {
+      if (!cancel.signal.aborted) throw error;
+      // Processes exit before the turn ends, so their exits do not wake the agent again.
+      await cancel.settle();
+      try {
+        await input.api.emitEvent({
+          type: "agent.turn.completed",
+          source: `agent:${agent.name}`,
+          channelId,
+          payload: {
+            triggerEventId: triggerEvent.id,
+            eventCount: events.length,
+            cancelled: true,
+            noReply: true,
+          },
+        });
+      } catch (emitError) {
+        console.warn("runner.turn.telemetry_failed", emitError);
+      }
+      // The stopped turn handled its batch and any late events it read; none starts a new turn.
+      return { handledEventIds: [...handledEventIds] };
+    } finally {
+      if (cancel.signal.aborted) await cancel.settle();
+      cancel.end();
+    }
   };
 }

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { generate, type LlmTool } from "@orgops/llm";
 import { createTurnExecutor } from "./turn-executor";
+import { TURN_CANCEL_EVENT_TYPE, createTurnCancellations, type ActiveTurnCancel } from "./turn-cancel";
 import type { Agent, Event } from "./types";
 
 vi.mock("@orgops/llm", async (importOriginal) => ({
@@ -29,6 +30,8 @@ const trigger: Event = {
 function setup(
   options: {
     pendingEventBatches?: Event[][];
+    // Served to the turn's Stop-first late pull (typePrefix=agent.turn.cancel_requested).
+    pendingStops?: Event[][];
     fetch?: (path: string, init?: RequestInit) => Response | undefined;
     source?: string;
     agentOverrides?: Partial<Agent>;
@@ -43,6 +46,11 @@ function setup(
     deliverAt?: number;
   }> = [];
   let pendingEventBatchIndex = 0;
+  const turnCancellations = createTurnCancellations();
+  // Tests reach the running turn's cancel handle through `active`.
+  const handles: { active?: ActiveTurnCancel } = {};
+  const begin = turnCancellations.begin;
+  turnCancellations.begin = (input) => (handles.active = begin(input));
   const apiFetch = vi.fn(async (path: string, init?: RequestInit) => {
     const custom = options.fetch?.(path, init);
     if (custom) return custom;
@@ -53,6 +61,9 @@ function setup(
           participants: [{ subscriberType: "AGENT", subscriberId: "tester" }],
         },
       ]);
+    }
+    if (path.startsWith("/api/events?") && path.includes(`typePrefix=${TURN_CANCEL_EVENT_TYPE}`)) {
+      return Response.json(options.pendingStops?.shift() ?? []);
     }
     if (path.startsWith("/api/events?")) {
       return Response.json(options.pendingEventBatches?.[pendingEventBatchIndex++] ?? []);
@@ -67,6 +78,7 @@ function setup(
     projectRoot: "/tmp",
     skillRoots: [],
     llmCallTimeoutMs: 10_000,
+    turnCancellations,
     api: {
       apiFetch,
       emitEvent: async (event) => {
@@ -85,6 +97,8 @@ function setup(
   return {
     emitted,
     apiFetch,
+    turnCancellations,
+    handles,
     run: () =>
       execute(
         { ...agent, ...options.agentOverrides },
@@ -113,6 +127,196 @@ async function emit(
 
 beforeEach(() => {
   vi.mocked(generate).mockReset();
+});
+
+const stopEvent = (triggerEventId = "trigger"): Event => ({
+  id: `stop-${triggerEventId}`,
+  type: TURN_CANCEL_EVENT_TYPE,
+  source: "human:ana",
+  channelId: "chat",
+  payload: { targetAgentName: "tester", triggerEventId, requestedBy: "human:ana" },
+});
+
+describe("CLASSIC turn cancellation", () => {
+  it("stops the model call, posts nothing held back, and completes the turn as cancelled", async () => {
+    const ctx = setup();
+    vi.mocked(generate).mockImplementation(async (_model, _messages, options) => {
+      // The model stages a reply, then keeps working until the turn is aborted.
+      await emit(options?.tools, "half-finished answer", { stageUntilTurnSettled: true });
+      expect(ctx.turnCancellations.request(stopEvent())).toBe(true);
+      return new Promise((_resolve, reject) => {
+        if (options?.abortSignal?.aborted) reject(options.abortSignal.reason);
+        options?.abortSignal?.addEventListener("abort", () => reject(options.abortSignal!.reason), { once: true });
+      });
+    });
+    // The stopped turn's batch is acknowledged, so it is not retried.
+    await expect(ctx.run()).resolves.toEqual({ handledEventIds: ["trigger"] });
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(ctx.emitted.filter((event) => event.type === "message.created")).toHaveLength(0);
+    expect(ctx.emitted.at(-1)).toMatchObject({
+      type: "agent.turn.completed",
+      payload: { triggerEventId: "trigger", cancelled: true, noReply: true },
+    });
+  });
+
+  it("never polls the API for a Stop", async () => {
+    const ctx = setup();
+    vi.mocked(generate).mockImplementation(async (_model, _messages, options) => {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      await emit(options?.tools, "answer");
+      return { text: "", toolCalls: [{ toolName: "turn_finish", input: { outcome: "completed" } }], finishReason: "tool-calls" } as any;
+    });
+    await ctx.run();
+    const paths = ctx.apiFetch.mock.calls.map(([path]) => String(path));
+    expect(paths.some((path) => path.includes("/turns/cancel"))).toBe(false);
+    expect(ctx.emitted.some((event) => event.type === "agent.turn.completed" && event.payload?.cancelled)).toBe(false);
+  });
+
+  it("reports the cancelled turn only after its processes stopped", async () => {
+    const ctx = setup();
+    let stoppedAt = 0;
+    let completedAt = 0;
+    const emitted = ctx.emitted;
+    const push = emitted.push.bind(emitted);
+    emitted.push = (...items) => {
+      if (items.some((item) => item.type === "agent.turn.completed")) completedAt = Date.now();
+      return push(...items);
+    };
+    vi.mocked(generate).mockImplementation(async (_model, _messages, options) => {
+      ctx.handles.active!.onCancel(
+        () => new Promise((resolve) => setTimeout(() => resolve((stoppedAt = Date.now())), 50)),
+      );
+      ctx.turnCancellations.request(stopEvent());
+      throw options?.abortSignal?.reason;
+    });
+    await ctx.run();
+    expect(stoppedAt).toBeGreaterThan(0);
+    expect(completedAt).toBeGreaterThanOrEqual(stoppedAt);
+    expect(ctx.emitted.at(-1)).toMatchObject({ type: "agent.turn.completed", payload: { cancelled: true } });
+  });
+});
+
+describe("CLASSIC turn cancellation from the late-event pull", () => {
+  it("stops when the turn's own late-event pull picks up the Stop, leaving other late events pending", async () => {
+    const lateMessage: Event = {
+      id: "late-human",
+      type: "message.created",
+      source: "human:test",
+      channelId: "chat",
+      payload: { text: "do this instead" },
+      createdAt: 3,
+    };
+    const ctx = setup({
+      pendingStops: [[{ ...stopEvent(), createdAt: 2 }]],
+      pendingEventBatches: [[lateMessage], []],
+    });
+    vi.mocked(generate).mockResolvedValue({
+      toolCalls: [] as never[],
+      toolResults: [] as never[],
+      text: '{"turnStatus":"WORK_FULLY_COMPLETE","type":"message.created","payload":{"text":"first answer"}}',
+    } as any);
+    await ctx.run();
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(ctx.emitted.at(-1)).toMatchObject({
+      type: "agent.turn.completed",
+      payload: { triggerEventId: "trigger", cancelled: true },
+    });
+    // The late message was never fetched (and so never marked delivered); the next turn gets it.
+    const pulls = ctx.apiFetch.mock.calls.map(([path]) => String(path)).filter((path) => path.startsWith("/api/events?"));
+    expect(pulls.every((path) => path.includes(`typePrefix=${TURN_CANCEL_EVENT_TYPE}`))).toBe(true);
+  });
+
+  it("leaves Stop events out of the general late-event pull", async () => {
+    const lateEvent: Event = {
+      id: "late-human",
+      type: "message.created",
+      source: "human:test",
+      channelId: "chat",
+      payload: { text: "also answer this" },
+      createdAt: 2,
+    };
+    const ctx = setup({ pendingEventBatches: [[lateEvent], []] });
+    vi.mocked(generate).mockResolvedValue({
+      toolCalls: [] as never[],
+      toolResults: [] as never[],
+      text: '{"turnStatus":"WORK_FULLY_COMPLETE","type":"message.created","payload":{"text":"answer"}}',
+    } as any);
+    await ctx.run();
+    expect(generate).toHaveBeenCalledTimes(2);
+    const general = ctx.apiFetch.mock.calls
+      .map(([path]) => String(path))
+      .filter((path) => path.startsWith("/api/events?") && !path.includes("typePrefix="));
+    expect(general.length).toBeGreaterThan(0);
+    expect(general.every((path) => path.includes(`excludeTypePrefix=${TURN_CANCEL_EVENT_TYPE}`))).toBe(true);
+  });
+
+  it("reports late events the stopped turn already read as handled, so they are not retried", async () => {
+    const lateEvent: Event = {
+      id: "late-human",
+      type: "message.created",
+      source: "human:test",
+      channelId: "chat",
+      payload: { text: "also answer this" },
+      createdAt: 2,
+    };
+    const ctx = setup({
+      pendingStops: [[], [{ ...stopEvent(), createdAt: 3 }]],
+      pendingEventBatches: [[lateEvent], []],
+    });
+    vi.mocked(generate).mockResolvedValue({
+      toolCalls: [] as never[],
+      toolResults: [] as never[],
+      text: '{"turnStatus":"WORK_FULLY_COMPLETE","type":"message.created","payload":{"text":"answer"}}',
+    } as any);
+    const result = await ctx.run();
+    expect(ctx.emitted.at(-1)).toMatchObject({
+      type: "agent.turn.completed",
+      payload: { triggerEventId: "trigger", cancelled: true },
+    });
+    expect(result?.handledEventIds).toEqual(expect.arrayContaining(["trigger", "late-human"]));
+  });
+});
+
+describe("CLASSIC turn cancellation before fallback replies", () => {
+  it("aborts the final summary and posts nothing when Stop arrives during it", async () => {
+    const ctx = setup();
+    const exhausted = {
+      text: "",
+      finishReason: "tool-calls",
+      toolCalls: [{ toolName: "shell_run" }],
+      responseMessages: [{ role: "assistant" as const, content: "Started the job." }],
+    };
+    let summarySignal: AbortSignal | undefined;
+    vi.mocked(generate)
+      .mockResolvedValueOnce(exhausted as any)
+      .mockImplementationOnce(async (_model, _messages, options) => {
+        summarySignal = options?.abortSignal;
+        ctx.turnCancellations.request(stopEvent());
+        return new Promise((_resolve, reject) => {
+          if (summarySignal?.aborted) reject(summarySignal.reason);
+          summarySignal?.addEventListener("abort", () => reject(summarySignal!.reason), { once: true });
+        });
+      });
+    const started = Date.now();
+    await ctx.run();
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(summarySignal?.aborted).toBe(true);
+    expect(ctx.emitted.filter((event) => event.type === "message.created")).toHaveLength(0);
+    expect(ctx.emitted.at(-1)).toMatchObject({ type: "agent.turn.completed", payload: { cancelled: true } });
+  });
+
+  it("posts no completion fallback when Stop arrives during the last attempt", async () => {
+    const ctx = setup();
+    let calls = 0;
+    vi.mocked(generate).mockImplementation(async () => {
+      calls += 1;
+      if (calls === 3) ctx.turnCancellations.request(stopEvent());
+      return { text: "not json", toolCalls: [], toolResults: [], finishReason: "stop" } as any;
+    });
+    await ctx.run();
+    expect(ctx.emitted.filter((event) => event.type === "message.created")).toHaveLength(0);
+    expect(ctx.emitted.at(-1)).toMatchObject({ type: "agent.turn.completed", payload: { cancelled: true } });
+  });
 });
 
 describe("CLASSIC empty final output", () => {

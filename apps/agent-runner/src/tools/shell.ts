@@ -92,7 +92,43 @@ const processes = new Map<
 >();
 
 const PROCESS_EVENT_SOURCE = "system:process-runner";
-const PROCESS_SHUTDOWN_TIMEOUT_MS = 5000;
+// Each phase of a shutdown (SIGTERM, then SIGKILL) runs for all processes at once, so the whole
+// shutdown fits in the runner's 4 s exit deadline.
+const PROCESS_SHUTDOWN_TIMEOUT_MS = 1500;
+/** How long a cancelled turn's processes get to exit after SIGTERM before SIGKILL. */
+export const TURN_CANCEL_KILL_GRACE_MS = 2000;
+// Each command runs as its own process group, so signals reach the processes it started too.
+const USE_PROCESS_GROUPS = process.platform !== "win32";
+// Process groups by process id. A group outlives its shell when the shell exits or dies first
+// (`npm run dev` dying while node keeps serving), so it is tracked until it is gone.
+const processGroups = new Map<string, number>();
+const GROUP_POLL_MS = 25;
+
+function groupAlive(pgid: number): boolean {
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+function forgetGroupIfGone(processId: string) {
+  const pgid = processGroups.get(processId);
+  if (pgid !== undefined && !groupAlive(pgid)) processGroups.delete(processId);
+}
+
+function signalTree(child: ReturnType<typeof spawn>, signal: NodeJS.Signals): boolean {
+  if (USE_PROCESS_GROUPS && child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+      return true;
+    } catch {
+      // The group is gone or was never created; fall back to the direct child.
+    }
+  }
+  return child.kill(signal);
+}
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -107,6 +143,15 @@ async function waitForFinalization(
   return Promise.race([complete, timeout]);
 }
 
+async function waitForGroupExit(pgid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (groupAlive(pgid)) {
+    if (Date.now() >= deadline) return false;
+    await sleep(GROUP_POLL_MS);
+  }
+  return true;
+}
+
 async function signalAndWaitForExit(
   processId: string,
   signal: NodeJS.Signals,
@@ -118,39 +163,68 @@ async function signalAndWaitForExit(
     return waitForFinalization(entry.finalized, timeoutMs);
   }
   try {
-    entry.proc.kill(signal);
+    signalTree(entry.proc, signal);
   } catch {
     // Process may already be gone.
   }
   return waitForFinalization(entry.finalized, timeoutMs);
 }
 
+type StopOutcome = "gone" | "terminated" | "killed" | "survived";
+
+async function stopGroup(processId: string, pgid: number, graceMs: number): Promise<StopOutcome> {
+  if (!groupAlive(pgid)) {
+    processGroups.delete(processId);
+    return "gone";
+  }
+  let outcome: StopOutcome = "survived";
+  for (const signal of ["SIGTERM", "SIGKILL"] as const) {
+    try {
+      process.kill(-pgid, signal);
+    } catch {
+      // Already gone.
+    }
+    if (await waitForGroupExit(pgid, graceMs)) {
+      outcome = signal === "SIGTERM" ? "terminated" : "killed";
+      break;
+    }
+  }
+  if (outcome !== "survived") processGroups.delete(processId);
+  // Let the shell's exit report land before the caller moves on (a cancelled turn ends after it).
+  const entry = processes.get(processId);
+  if (entry) await waitForFinalization(entry.finalized, graceMs);
+  return outcome;
+}
+
+async function stopTracked(processId: string, graceMs: number): Promise<StopOutcome> {
+  const pgid = processGroups.get(processId);
+  if (pgid !== undefined) return stopGroup(processId, pgid, graceMs);
+  if (!processes.has(processId)) return "gone";
+  if (await signalAndWaitForExit(processId, "SIGTERM", graceMs)) return "terminated";
+  return (await signalAndWaitForExit(processId, "SIGKILL", graceMs)) ? "killed" : "survived";
+}
+
+/**
+ * Stops a tracked process and the processes it started: SIGTERM, then SIGKILL after `graceMs`.
+ * Works on the whole process group, also after its shell already exited.
+ */
+export async function stopProcessTree(
+  processId: string,
+  graceMs = TURN_CANCEL_KILL_GRACE_MS,
+): Promise<void> {
+  await stopTracked(processId, graceMs);
+}
+
 export async function stopAllRunningProcesses(
   timeoutMs = PROCESS_SHUTDOWN_TIMEOUT_MS,
 ): Promise<{ processCount: number; terminated: number; killed: number }> {
-  const snapshot = [...processes.keys()];
-  let terminated = 0;
-  let killed = 0;
-  for (const processId of snapshot) {
-    const terminatedGracefully = await signalAndWaitForExit(
-      processId,
-      "SIGTERM",
-      timeoutMs,
-    );
-    if (terminatedGracefully) {
-      terminated += 1;
-      continue;
-    }
-    const terminatedAfterKill = await signalAndWaitForExit(
-      processId,
-      "SIGKILL",
-      timeoutMs,
-    );
-    if (terminatedAfterKill) {
-      killed += 1;
-    }
-  }
-  return { processCount: snapshot.length, terminated, killed };
+  const snapshot = [...new Set([...processes.keys(), ...processGroups.keys()])];
+  const outcomes = await Promise.all(snapshot.map((processId) => stopTracked(processId, timeoutMs)));
+  return {
+    processCount: snapshot.length,
+    terminated: outcomes.filter((outcome) => outcome === "terminated").length,
+    killed: outcomes.filter((outcome) => outcome === "killed").length,
+  };
 }
 
 function spawnTrackedProcess(
@@ -186,6 +260,7 @@ function spawnTrackedProcess(
     cwd: input.cwd,
     env: mergedEnv,
     stdio: ["ignore", "pipe", "pipe"],
+    detached: USE_PROCESS_GROUPS,
   });
 
   let finalize = () => {};
@@ -193,6 +268,9 @@ function spawnTrackedProcess(
     finalize = resolve;
   });
   processes.set(processId, { proc: child, seq: 0, finalized });
+  if (USE_PROCESS_GROUPS && child.pid) processGroups.set(processId, child.pid);
+  // Stopping the turn stops what it started; processes from earlier turns keep running.
+  ctx.onTurnCancel?.(() => stopProcessTree(processId));
   const registrationPromise = (async () => {
     await ctx.apiFetch("/api/processes", {
       method: "POST",
@@ -262,13 +340,15 @@ function spawnTrackedProcess(
       });
     } finally {
       processes.delete(processId);
+      // Keep tracking the group while processes the shell started still run.
+      forgetGroupIfGone(processId);
       finalize();
     }
   });
 
   const ready = registrationPromise.catch((error) => {
     try {
-      child.kill("SIGKILL");
+      signalTree(child, "SIGKILL");
     } catch {
       // no-op
     }
@@ -312,7 +392,7 @@ export async function execute(
     const entry = processes.get(processId);
     if (!entry) return { error: "Process not found" };
     try {
-      entry.proc.kill("SIGTERM");
+      signalTree(entry.proc, "SIGTERM");
     } catch {
       // no-op
     }
@@ -405,7 +485,7 @@ export async function execute(
     }
     targetChunks.push(normalized.subarray(0, remaining));
     bufferExceeded = true;
-    child.kill("SIGKILL");
+    signalTree(child, "SIGKILL");
     return DEFAULT_MAX_BUFFER;
   };
   child.stdout?.on("data", (chunk: Buffer | string) => {
@@ -429,7 +509,7 @@ export async function execute(
   const timer = setTimeout(() => {
     timedOut = true;
     try {
-      const killSent = child.kill("SIGKILL");
+      const killSent = signalTree(child, "SIGKILL");
       timeoutKillFailed = !killSent;
       if (!killSent) {
         timeoutKillError =
@@ -480,6 +560,14 @@ export async function execute(
       stdout,
       stderr: [stderr, String(result.error)].filter(Boolean).join("\n"),
       exitCode: 1,
+    };
+  }
+  // The turn's cancellation stopped the command (see onTurnCancel in spawnTrackedProcess).
+  if (ctx.abortSignal?.aborted) {
+    return {
+      stdout,
+      stderr: `${stderr}\nCommand stopped because the turn was cancelled.`,
+      exitCode: 130,
     };
   }
   if (timedOut || result.forcedTimeout) {

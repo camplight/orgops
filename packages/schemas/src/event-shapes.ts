@@ -476,6 +476,7 @@ const coreEventShapes: EventShapeDefinition[] = [
           eventCount: z.number().int().positive().optional(),
           completedWithFallback: z.boolean().optional(),
           noReply: z.boolean().optional(),
+          cancelled: z.boolean().optional(),
         })
         .passthrough(),
     }),
@@ -494,6 +495,23 @@ const coreEventShapes: EventShapeDefinition[] = [
           error: z.string().min(1),
         })
         .passthrough(),
+    }),
+  },
+  {
+    type: "agent.turn.cancel_requested",
+    description:
+      "A participant asked the agent to stop its running turn in this channel. Never wakes agents.",
+    source: "core",
+    eventSchema: z.object({
+      channelId: z.string().min(1),
+      source: sourceSchema,
+      payload: z
+        .object({
+          targetAgentName: z.string().min(1),
+          triggerEventId: z.string().min(1),
+          requestedBy: z.string().min(1),
+        })
+        .strict(),
     }),
   },
   {

@@ -11,6 +11,8 @@ type PullInjectedEventsInput = {
   seenEventIds: Set<string>;
   shouldInclude: (agent: Agent, event: Event) => boolean;
   shouldSuppress?: (agent: Agent, event: Event) => boolean;
+  // Leaves these events out of this pull (and out of the turn's handled events); a separate read takes them.
+  excludeTypePrefix?: string;
   maxChars?: number;
 };
 
@@ -25,7 +27,9 @@ export async function pullInjectedEventMessages(
 > {
   const query =
     `agentName=${encodeURIComponent(input.agent.name)}` +
-    `&status=PENDING&channelId=${encodeURIComponent(input.channelId)}&limit=50`;
+    `&status=PENDING&channelId=${encodeURIComponent(input.channelId)}` +
+    (input.excludeTypePrefix ? `&excludeTypePrefix=${encodeURIComponent(input.excludeTypePrefix)}` : "") +
+    `&limit=50`;
   const res = await input.apiFetch(`/api/events?${query}`);
   const raw = await res.json();
   const events = Array.isArray(raw) ? (raw as Event[]) : [];

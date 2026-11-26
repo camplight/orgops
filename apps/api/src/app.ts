@@ -48,6 +48,7 @@ import { registerCollabRoutes } from "./routes/collab";
 import { registerEventsRoutes } from "./routes/events";
 import { registerMemoryRoutes } from "./routes/memory";
 import { registerContextRoutes } from "./routes/context";
+import { registerTurnRoutes } from "./routes/turns";
 import { registerRuntimeRoutes } from "./routes/runtime";
 import { registerSkillsRoutes } from "./routes/skills";
 import { registerSecretsRoutes } from "./routes/secrets";
@@ -842,6 +843,13 @@ export function createApp(config: AppConfig = {}) {
 
   registerMemoryRoutes(app as any, { orm, jsonResponse, access });
   registerContextRoutes(app as any, {
+    orm,
+    jsonResponse,
+    eventRowToApi,
+    insertEvent,
+    access,
+  });
+  registerTurnRoutes(app as any, {
     orm,
     jsonResponse,
     eventRowToApi,
