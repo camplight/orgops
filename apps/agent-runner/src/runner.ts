@@ -201,6 +201,10 @@ const workspacePublicationSync = createWorkspacePublicationSync({
 });
 
 const channelLoopManager = createChannelLoopManager({
+  maxConcurrentBatches: (() => {
+    const value = Number(process.env.ORGOPS_RUNNER_MAX_CONCURRENT_TURNS);
+    return Number.isSafeInteger(value) && value > 0 ? value : Infinity;
+  })(),
   processBatch: async (agent, channelId, channelEvents) => {
     const key = agentChannelKey(agent.name, channelId);
     const startedAt = Date.now();

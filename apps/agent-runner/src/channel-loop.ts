@@ -10,6 +10,7 @@ type WorkerState = {
 };
 
 type CreateChannelLoopManagerInput = {
+  maxConcurrentBatches?: number;
   processBatch: (agent: Agent, channelId: string, events: Event[]) => Promise<void>;
   onBatchError?: (
     agent: Agent,
@@ -24,6 +25,21 @@ function workerKey(agentName: string, channelId: string) {
 }
 
 export function createChannelLoopManager(input: CreateChannelLoopManagerInput) {
+  const limit = input.maxConcurrentBatches ?? Infinity;
+  if (limit !== Infinity && (!Number.isInteger(limit) || limit < 1)) {
+    throw new Error("maxConcurrentBatches must be a positive integer");
+  }
+  let activeBatches = 0;
+  const waiting: Array<() => void> = [];
+  const acquire = async () => {
+    if (activeBatches >= limit) await new Promise<void>(resolve => waiting.push(resolve));
+    else activeBatches += 1;
+  };
+  const release = () => {
+    const next = waiting.shift();
+    if (next) next();
+    else activeBatches -= 1;
+  };
   const workers = new Map<string, WorkerState>();
   const workerStartCounts = new Map<string, number>();
 
@@ -34,20 +50,25 @@ export function createChannelLoopManager(input: CreateChannelLoopManagerInput) {
     state.starts += 1;
     workerStartCounts.set(key, (workerStartCounts.get(key) ?? 0) + 1);
     void (async () => {
-      while (true) {
-        const batch = [...state.queue.values()].sort((left, right) => {
-          const leftTs = left.createdAt ?? 0;
-          const rightTs = right.createdAt ?? 0;
-          return leftTs - rightTs;
-        });
-        state.queue.clear();
-        if (batch.length === 0) break;
+      while (state.queue.size > 0) {
+        await acquire();
         try {
-          await input.processBatch(state.agent, state.channelId, batch);
-        } catch (error) {
-          if (input.onBatchError) {
-            await input.onBatchError(state.agent, state.channelId, batch, error);
+          const batch = [...state.queue.values()].sort((left, right) => {
+            const leftTs = left.createdAt ?? 0;
+            const rightTs = right.createdAt ?? 0;
+            return leftTs - rightTs;
+          });
+          state.queue.clear();
+          if (batch.length === 0) break;
+          try {
+            await input.processBatch(state.agent, state.channelId, batch);
+          } catch (error) {
+            if (input.onBatchError) {
+              await input.onBatchError(state.agent, state.channelId, batch, error);
+            }
           }
+        } finally {
+          release();
         }
       }
     })().finally(() => {

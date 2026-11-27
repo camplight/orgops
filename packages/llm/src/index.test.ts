@@ -387,3 +387,23 @@ describe("llm", () => {
     ).rejects.toThrow("does not support transcription");
   });
 });
+
+
+describe("deployment output budget", () => {
+  it.each([
+    ["8192", undefined, 8192],
+    ["8192", 131072, 8192],
+    ["8192", 1200, 1200],
+    ["invalid", 1200, 1200],
+    ["0", undefined, undefined],
+    ["1.5", undefined, undefined],
+  ])("applies cap %s to requested %s", async (cap, requested, expected) => {
+    vi.stubEnv("ORGOPS_LLM_MAX_OUTPUT_TOKENS", cap);
+    try {
+      await generate("openrouter:test/model", [{role: "user", content: "test"}], {maxTokens: requested, env: {OPENROUTER_API_KEY: "test-only"}});
+      expect(mocks.generateText.mock.calls.at(-1)?.[0].maxOutputTokens).toBe(expected);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
