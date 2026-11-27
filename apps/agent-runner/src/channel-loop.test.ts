@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createChannelLoopManager } from "./channel-loop";
 import type { Agent, Event } from "./types";
 
@@ -170,5 +170,48 @@ describe("channel loop manager", () => {
       await sleep(10);
     }
     expect(manager.isChannelBusy("zoro", "chan-1")).toBe(false);
+  });
+});
+
+
+describe("runner batch budget", () => {
+  it("admits FIFO across agents, coalesces queued events, and releases failed slots", async () => {
+    const releases: Array<() => void> = [];
+    const batches: string[][] = [];
+    let active = 0;
+    let peak = 0;
+    const manager = createChannelLoopManager({
+      maxConcurrentBatches: 1,
+      processBatch: async (_agent, _channel, events) => {
+        active += 1;
+        peak = Math.max(peak, active);
+        batches.push(events.map(e => e.id));
+        await new Promise<void>(resolve => releases.push(resolve));
+        active -= 1;
+        if (events[0].id === "a") throw new Error("provider unavailable");
+      },
+      onBatchError: async () => {},
+    });
+    const agent = (name: string) => ({name, workspacePath: "/tmp", modelId: "stub", desiredState: "RUNNING", runtimeState: "RUNNING"}) as Agent;
+    const event = (id: string, channelId: string, createdAt: number) => ({id, channelId, createdAt, type: "message.created", source: "human:test", payload: {text: id}}) as Event;
+    manager.enqueue(agent("one"), [event("a", "one", 1)]);
+    manager.enqueue(agent("two"), [event("b", "two", 2)]);
+    manager.enqueue(agent("three"), [event("c", "three", 3)]);
+    manager.enqueue(agent("two"), [event("b2", "two", 4)]);
+    await vi.waitFor(() => expect(batches).toEqual([["a"]]));
+    expect(manager.isChannelBusy("two", "two")).toBe(true);
+    releases.shift()!();
+    await vi.waitFor(() => expect(batches).toEqual([["a"], ["b", "b2"]]));
+    releases.shift()!();
+    await vi.waitFor(() => expect(batches).toEqual([["a"], ["b", "b2"], ["c"]]));
+    releases.shift()!();
+    await vi.waitFor(() => expect(manager.activeWorkerCount()).toBe(0));
+    expect(peak).toBe(1);
+  });
+
+  it("rejects invalid explicit concurrency instead of leaving queued turns stuck", () => {
+    for (const maxConcurrentBatches of [0, -1, 1.5, NaN]) {
+      expect(() => createChannelLoopManager({maxConcurrentBatches, processBatch: async () => {}})).toThrow();
+    }
   });
 });

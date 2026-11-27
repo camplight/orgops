@@ -478,7 +478,11 @@ export async function generate(
     model,
     ...buildPromptArgs(splitMessages),
     ...(shouldSendTemperature ? { temperature: options.temperature } : {}),
-    maxOutputTokens: options.maxTokens,
+    maxOutputTokens: (() => {
+      const cap = Number(process.env.ORGOPS_LLM_MAX_OUTPUT_TOKENS);
+      if (!Number.isSafeInteger(cap) || cap < 1) return options.maxTokens;
+      return options.maxTokens === undefined ? cap : Math.min(options.maxTokens, cap);
+    })(),
     ...(options.maxSteps !== undefined && Number.isFinite(options.maxSteps) && options.maxSteps > 0
       ? { stopWhen: stepCountIs(Math.floor(options.maxSteps)) }
       : {}),

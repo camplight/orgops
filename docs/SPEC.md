@@ -1270,3 +1270,21 @@ must configure their own compatible policy at their deployment boundary; see
 `docs/DEPLOYMENT_SECURITY.md`. An API middleware cannot fix a host nginx rule that
 routes `/health` to the SPA, and shipping a controller source file does not install
 it on a host.
+
+### Optional deployment request budgets
+
+`ORGOPS_RUNNER_MAX_CONCURRENT_TURNS` limits concurrent channel batches across
+agents on one runner. Unset/invalid values preserve unlimited concurrency.
+Queued channels remain busy and coalesce events while waiting; slots are released
+on success and failure, with FIFO admission between batches. Startup events keep
+their existing semantics but their turns share this budget. This does not limit
+maintenance jobs, detached shell processes, or external harness subagents, and
+queues remain in memory as before.
+
+`ORGOPS_LLM_MAX_OUTPUT_TOKENS` is a positive integer deployment ceiling for text
+requests through `@orgops/llm`. It supplies missing output limits and caps explicit
+ones, while preserving smaller limits. Unset/invalid values preserve existing
+behavior. It does not cap prompt tokens, total spend, realtime sessions or model
+calls made by external harnesses. For a small host, operators can start with two
+concurrent turns and 8192 output tokens, then measure actual usage. A 402 response
+still requires provider-budget diagnosis; these controls do not add credits.
